@@ -26,6 +26,11 @@ export const handler = Effect.fn("cli.web-ui.handler")(function* (options?: {
         return yield* api.pipe(
           Effect.catchIf(isRouteNotFound, () => Effect.succeed(HttpServerResponse.empty({ status: 404 }))),
         )
+      // Anysola Code: the browser UI is not shipped in this release.
+      if (!process.env.ANYSOLA_ENABLE_WEB_UI)
+        return HttpServerResponse.text("The web UI is not available in Anysola Code. Use the `anysola` terminal app.\n", {
+          status: 404,
+        })
       return yield* assets.pipe(Effect.flatMap((loaded) => serveUI(request, url, loaded.files, loaded.brotli)))
     })
 })

@@ -12,6 +12,9 @@ import { ServiceConfig } from "../../services/service-config"
 export default Runtime.handler(
   Commands.commands.pair,
   Effect.fn("cli.pair")(function* (input: Runtime.Input<typeof Commands.commands.pair>) {
+    // Anysola Code: pairing opens the web UI on another device; the web UI is not part of this release.
+    if (!process.env.ANYSOLA_ENABLE_WEB_UI)
+      return yield* Effect.fail(new Error("Pairing and the web UI are not available in Anysola Code. Use the terminal app."))
     const config = yield* ServiceConfig.read()
     if (config.disabled === true)
       return yield* Effect.fail(

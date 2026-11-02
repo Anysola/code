@@ -575,7 +575,7 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
       globalFlags: ServerFlags,
     }),
     Spec.make("pair", {
-      description: "Print one-time links to connect a browser or app",
+      description: "Not available in Anysola Code (connects the web UI)",
       params: {
         url: Flag.String("url").pipe(
           Flag.withDescription("Use an external HTTP(S) server URL in pairing links"),

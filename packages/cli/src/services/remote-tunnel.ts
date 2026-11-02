@@ -17,6 +17,11 @@ export const run = Effect.fnUntraced(function* (input: {
   readonly target: string
   readonly onURL: (url: string | undefined) => void
 }) {
+  // Anysola Code: remote access goes through the third-party OpenTunnel service; it is off in this release.
+  if (!process.env.ANYSOLA_ENABLE_REMOTE_TUNNEL) {
+    input.onURL(undefined)
+    return yield* Effect.logWarning("remote access is not available in Anysola Code")
+  }
   const { OpenTunnelClient, OpenTunnelAttachError } = yield* Effect.promise(() => import("@opentunnel/client/effect"))
   const fatal = (error: OpenTunnelError) =>
     error._tag === "OpenTunnelClientError" &&
