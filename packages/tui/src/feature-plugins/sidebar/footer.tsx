@@ -54,10 +54,7 @@ export function SidebarOnboarding(props: { context: Plugin.Context; sessionID: s
               ✕
             </text>
           </box>
-          <text fg={props.context.theme.text.muted}>OpenCode includes free models so you can start immediately.</text>
-          <text fg={props.context.theme.text.muted}>
-            Connect from 75+ providers to use other models, including Claude, GPT, Gemini etc
-          </text>
+          <text fg={props.context.theme.text.muted}>Sign in with your Anysola account to start.</text>
           <box
             id="sidebar.footer.getting-started.connect"
             flexDirection="row"
@@ -65,7 +62,7 @@ export function SidebarOnboarding(props: { context: Plugin.Context; sessionID: s
             justifyContent="space-between"
             onMouseUp={() => props.context.keymap.dispatch("provider.connect")}
           >
-            <text fg={props.context.theme.text.base}>Connect provider</text>
+            <text fg={props.context.theme.text.base}>Sign in</text>
             <text fg={props.context.theme.text.muted}>/connect</text>
           </box>
         </box>

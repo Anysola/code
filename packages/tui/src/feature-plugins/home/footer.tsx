@@ -1,3 +1,4 @@
+declare const ANYSOLA_VERSION: string | undefined
 import { Plugin } from "@opencode/plugin/tui"
 import { createMemo, Match, Show, Switch } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
@@ -96,7 +97,7 @@ function View(props: { context: Plugin.Context }) {
         <box flexGrow={1} />
         <Show when={visibility().version}>
           <box flexShrink={0}>
-            <text fg={props.context.theme.text.muted}>{props.context.app.version}</text>
+            <text fg={props.context.theme.text.muted}>{typeof ANYSOLA_VERSION === "string" ? ANYSOLA_VERSION : props.context.app.version}</text>
           </box>
         </Show>
       </box>

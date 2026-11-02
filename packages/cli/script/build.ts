@@ -194,7 +194,9 @@ export default { path: file, version: ${JSON.stringify(opencodePty.version)}, sh
     },
     define: {
       OPENCODE_VERSION: `'${Script.version}'`,
-      OPENCODE_CLI_NAME: "'opencode'",
+      OPENCODE_CLI_NAME: "'anysola'",
+      // Anysola Code release version, shown by `--version` next to the upstream OPENCODE_VERSION.
+      ANYSOLA_VERSION: JSON.stringify(process.env.ANYSOLA_VERSION ?? "0.0.0-dev"),
       OPENCODE_CHANNEL: `'${Script.channel}'`,
       OPENCODE_ARTIFACT: `'cli'`,
       ...(highlights ? { OPENCODE_RELEASE_HIGHLIGHTS: JSON.stringify(highlights) } : {}),

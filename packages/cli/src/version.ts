@@ -4,6 +4,7 @@ declare const OPENCODE_VERSION: string
 declare const OPENCODE_CHANNEL: string
 declare const OPENCODE_ARTIFACT: string
 declare const OPENCODE_RELEASE_HIGHLIGHTS: string
+declare const ANYSOLA_VERSION: string
 
 const version = typeof OPENCODE_VERSION === "string" ? OPENCODE_VERSION : "local"
 const channel = typeof OPENCODE_CHANNEL === "string" ? OPENCODE_CHANNEL : "local"
@@ -26,3 +27,8 @@ export {
   highlights as OPENCODE_HIGHLIGHTS,
 }
 export const OPENCODE_LOCAL = channel === "local"
+
+// Anysola Code's own release version; OPENCODE_VERSION stays the upstream version it is built from.
+const anysolaVersion = typeof ANYSOLA_VERSION === "string" ? ANYSOLA_VERSION : "local"
+export { anysolaVersion as ANYSOLA_VERSION }
+export const ANYSOLA_VERSION_LINE = `Anysola Code ${anysolaVersion} (OpenCode ${version})`

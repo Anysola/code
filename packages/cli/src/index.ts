@@ -8,7 +8,7 @@ import { Commands } from "./commands/commands"
 import { Runtime } from "./framework/runtime"
 import { Observability } from "@opencode/util/observability"
 import { Updater } from "./services/updater"
-import { OPENCODE_ARTIFACT, OPENCODE_CHANNEL, OPENCODE_LOCAL, OPENCODE_VERSION } from "./version"
+import { ANYSOLA_VERSION_LINE, OPENCODE_ARTIFACT, OPENCODE_CHANNEL, OPENCODE_LOCAL, OPENCODE_VERSION } from "./version"
 import { LayerNode } from "@opencode/util/effect/layer-node"
 import { Global } from "@opencode/util/global"
 import { AppProcess } from "@opencode/util/process"
@@ -33,6 +33,12 @@ process.env.NO_PROXY = noProxy
 process.env.no_proxy = noProxy
 
 ensurePluginRuntime()
+
+// Anysola Code: `--version` names both the product and the upstream OpenCode release (MIT attribution).
+if (process.argv.length === 3 && ["--version", "-v"].includes(process.argv[2]!)) {
+  process.stdout.write(ANYSOLA_VERSION_LINE + "\n")
+  process.exit(0)
+}
 
 if (process.env.OPENCODE_SSH_ASKPASS_PORT) {
   const { askpass } = await import("./ssh-askpass")
