@@ -100,6 +100,7 @@ import { PlanPlugin } from "./plan.js"
 import { GoalPlugin } from "./goal.js"
 import { McpCodeModeDefaultsPlugin } from "./mcp-codemode-defaults.js"
 import { AnysolaPlugin } from "./provider/anysola.js"
+import { AnysolaAccountPlugin } from "./provider/anysola-account.js"
 import { DynamicProviderPlugin } from "./provider/dynamic.js"
 import { OpencodePlugin } from "./provider/opencode.js"
 import { WebSearchPlugins } from "./websearch/index.js"
@@ -238,6 +239,7 @@ const pre = [
   VcsHgPlugin.Plugin,
   // Anysola Code: the models.dev catalog and every other provider plugin are left out; Anysola is the only provider.
   AnysolaPlugin,
+  AnysolaAccountPlugin,
   ...WebSearchPlugins,
   PatchTool.Plugin,
   // Render model prompts after the patch plugin selects the available editing tools.

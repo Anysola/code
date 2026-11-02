@@ -22,7 +22,7 @@ import { KV } from "../../kv.js"
 const methodID = Integration.MethodID.make("device")
 const integrationID = Integration.ID.make(Anysola.integrationID)
 const requestTimeout = 15_000
-const cacheKey = "anysola:config"
+export const cacheKey = "anysola:config"
 const signedOut = "Run `anysola login` to sign in to Anysola"
 
 type Json = Record<string, unknown>
@@ -31,7 +31,7 @@ type Reply = { status: number; body: Json }
 const str = (value: unknown) => (typeof value === "string" && value ? value : undefined)
 const num = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : undefined)
 
-function call(method: "GET" | "POST", route: string, options: { body?: unknown; token?: string } = {}) {
+export function call(method: "GET" | "POST", route: string, options: { body?: unknown; token?: string } = {}) {
   return Effect.tryPromise({
     try: async (): Promise<Reply> => {
       const headers: Record<string, string> = { accept: "application/json" }
@@ -58,7 +58,7 @@ function call(method: "GET" | "POST", route: string, options: { body?: unknown; 
 }
 
 /** `{error, error_description}` from device endpoints or the Anthropic-style envelope from the gateway. */
-function errorOf(reply: Reply) {
+export function errorOf(reply: Reply) {
   const error = reply.body.error
   const code = typeof error === "string" ? error : str((error as Json | undefined)?.type)
   const message =
