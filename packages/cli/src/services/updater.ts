@@ -619,8 +619,21 @@ const make = Effect.gen(function* () {
     Effect.catch((error) => Effect.logWarning("update check failed", { error }).pipe(Effect.as(undefined))),
   )
 
-  return Service.of({ run, check, apply, method, latest, upgrade, removal })
+  // Anysola Code ships through npm (`@anysola/code`); the upstream self-updater never runs. `removal` stays for uninstall.
+  void [run, check, apply, latest, upgrade]
+  const disabled = Effect.fail(new Error(UPDATE_HINT))
+  return Service.of({
+    run: () => Effect.succeed(undefined),
+    check: () => Effect.succeed({ type: "unavailable" as const, message: UPDATE_HINT }),
+    apply: () => disabled,
+    method,
+    latest: () => disabled,
+    upgrade: () => disabled,
+    removal,
+  })
 })
+
+export const UPDATE_HINT = "Update Anysola Code with: npm i -g @anysola/code@latest"
 
 export const layer = Layer.effect(Service, make)
 
