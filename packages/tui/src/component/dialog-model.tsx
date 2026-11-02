@@ -1,3 +1,4 @@
+import { Account, formatCredits } from "../anysola/store"
 import type { ModelInfo } from "@opencode/client"
 import { createMemo, createSignal, onMount, Show } from "solid-js"
 import { useLocal } from "../context/local"
@@ -84,6 +85,9 @@ function DialogConnectedModels(props: {
     local.model.favorite().some((item) => item.providerID === value.providerID && item.modelID === value.modelID)
   // Under new designs the detail row shows the price, so the trailing slot only marks favorites.
   const trailing = (model: ModelInfo, favorite: boolean) => {
+    // Anysola Code: the remote config's per-turn credit estimate, when the server sends one.
+    const estimate = Account.estimates()[model.id]
+    if (estimate !== undefined) return `~${formatCredits(estimate)} credits/turn`
     if (newDesigns()) return favorite ? <FavoriteMarker /> : undefined
     return isFreeModel(model) ? "Free" : undefined
   }

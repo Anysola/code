@@ -18,6 +18,7 @@
     "./config/v1/keybind": "./src/config/v1/keybind.ts",
     "./plugin/discovery": "./src/plugin/discovery.ts",
     "./editor": "./src/editor.ts",
+    "./anysola/format": "./src/anysola/format.ts",
     "./mini": "./src/mini/index.ts",
     "./mini/tool": "./src/mini/tool.public.ts",
     "./model-preference": "./src/model-preference.ts",

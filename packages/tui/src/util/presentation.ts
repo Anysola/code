@@ -1,4 +1,5 @@
 import { logo } from "../logo"
+import { exitSummary } from "../anysola/store"
 
 const reset = "\x1b[0m"
 const bold = "\x1b[1m"
@@ -17,8 +18,8 @@ function wordmark(pad = "") {
       .join("")
 
   return logo.left.map((line, index) => {
-    const left = draw(line, dim, "\x1b[38;5;235m", "\x1b[48;5;235m")
-    const right = draw(logo.right[index] ?? "", reset, "\x1b[38;5;238m", "\x1b[48;5;238m")
+    const left = draw(line, reset, "\x1b[38;5;238m", "\x1b[48;5;238m")
+    const right = draw(logo.right[index] ?? "", dim, "\x1b[38;5;235m", "\x1b[48;5;235m")
     return `${pad}${left} ${right}`
   })
 }
@@ -33,10 +34,15 @@ export function epilogue(input: { readonly session?: SessionEpilogue; readonly u
     ...wordmark("  "),
     "",
     ...(input.updatedVersion
-      ? [`  ${dim}Run ${reset}${bold}opencode${reset}${dim} to use ${reset}${bold}${input.updatedVersion}${reset}`, ""]
+      ? [`  ${dim}Run ${reset}${bold}anysola${reset}${dim} to use ${reset}${bold}${input.updatedVersion}${reset}`, ""]
       : []),
     ...(input.session
-      ? [row("Session", input.session.title), row("Continue", `opencode -s ${input.session.sessionID}`), ""]
+      ? [
+          row("Session", input.session.title),
+          ...(exitSummary(input.session.sessionID) ? [row("Spent", exitSummary(input.session.sessionID)!)] : []),
+          row("Continue", `anysola -s ${input.session.sessionID}`),
+          "",
+        ]
       : []),
   ].join("\n")
 }
