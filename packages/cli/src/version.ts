@@ -32,3 +32,9 @@ export const OPENCODE_LOCAL = channel === "local"
 const anysolaVersion = typeof ANYSOLA_VERSION === "string" ? ANYSOLA_VERSION : "local"
 export { anysolaVersion as ANYSOLA_VERSION }
 export const ANYSOLA_VERSION_LINE = `Anysola Code ${anysolaVersion} (OpenCode ${version})`
+
+/**
+ * Version the background service registers and reports. It names both releases so updating Anysola Code on the same
+ * upstream base still replaces a running older service (its plugins and RPCs differ).
+ */
+export const SERVICE_VERSION = `${version}+anysola.${anysolaVersion}`

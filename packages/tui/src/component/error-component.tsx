@@ -43,7 +43,7 @@ export function ErrorComponent(props: { error: Error; reset: () => void; mode?: 
 
   const message = props.error.message || "An unknown error occurred."
   const stack = props.error.stack || "No stack trace available."
-  const issueURL = buildIssueURL(message, stack, app.version)
+  const issueURL = buildIssueURL(message, stack, versionLine(app.version))
 
   const copyReport = () => {
     void clipboard
@@ -210,7 +210,7 @@ export function ErrorComponent(props: { error: Error; reset: () => void; mode?: 
                   ? "Clipboard write failed. Try again or report the crash manually."
                   : "Copy the report and open a GitHub issue to help us fix this."}
             </text>
-            <text fg={colors.muted}>Anysola Code {app.version}</text>
+            <text fg={colors.muted}>{versionLine(app.version)}</text>
           </box>
         </Show>
       </box>
@@ -255,4 +255,12 @@ function buildIssueURL(message: string, stack: string, version: string) {
   }
   setBody(stack.slice(0, lo) + marker)
   return url
+}
+
+declare const ANYSOLA_VERSION: string | undefined
+
+/** "Anysola Code 0.3.1 (OpenCode 2.2.5)": the product release first, then the upstream base it runs on. */
+function versionLine(upstream: string) {
+  const anysola = typeof ANYSOLA_VERSION === "string" ? ANYSOLA_VERSION : "dev"
+  return `Anysola Code ${anysola} (OpenCode ${upstream})`
 }

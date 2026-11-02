@@ -3,7 +3,7 @@
 // version-mismatched background service before the TUI attaches.
 import { createCliRenderer, RGBA, TextAttributes, type CliRenderer } from "@opentui/core"
 import { render, useTerminalDimensions } from "@opentui/solid"
-import { OPENCODE_VERSION } from "../version"
+import { ANYSOLA_VERSION } from "../version"
 import "@opencode/tui/component/spinner-renderable"
 import { SPINNER_FRAMES } from "@opencode/tui/component/spinner"
 import { go } from "@opencode/tui/logo"
@@ -336,12 +336,12 @@ function UpdateFooter(props: {
           ] as const)
         : []),
       ["to", colors.muted],
-      [OPENCODE_VERSION, colors.accent],
+      [ANYSOLA_VERSION, colors.accent],
     )
   const completedHeader = phrase(
     ["Anysola Code", colors.muted, true],
     ["updated to", colors.muted],
-    [OPENCODE_VERSION, colors.accent],
+    [ANYSOLA_VERSION, colors.accent],
   )
   const pausedHeader = phrase(["Anysola Code", colors.muted, true], ["update paused", colors.muted])
   const outcomeStatus = () =>

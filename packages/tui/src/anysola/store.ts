@@ -44,7 +44,9 @@ export const Account = {
     const fromSession = sessionID ? sessions[sessionID]?.remaining : undefined
     if (typeof fromSession === "number") return fromSession
     const latest = Object.values(sessions).find((item) => typeof item.remaining === "number")?.remaining
-    return typeof latest === "number" ? latest : me()?.credits?.available
+    if (typeof latest === "number") return latest
+    const available = me()?.credits?.available
+    return typeof available === "number" && Number.isFinite(available) ? available : undefined
   },
   low(sessionID?: string) {
     const remaining = Account.remaining(sessionID)

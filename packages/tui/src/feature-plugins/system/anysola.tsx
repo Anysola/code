@@ -25,10 +25,24 @@ function errorText(reply: Reply) {
   return message || (reply.status ? `Request failed (HTTP ${reply.status})` : "Cannot reach Anysola")
 }
 
+function detail(error: unknown): string {
+  if (error instanceof Error) return error.message
+  const value = record(error)
+  const nested = record(value.error)
+  const text = str(value.message) || str(nested.message) || str(value.reason) || str(value._tag) || str(nested._tag)
+  if (text) return text
+  try {
+    return JSON.stringify(error).slice(0, 120)
+  } catch {
+    return String(error)
+  }
+}
+
 export default Plugin.define({
   id: "anysola.account",
   setup(context) {
-    const rpc = context.client.rpc(AnysolaRpc.Definition) as unknown as {
+    const [meError, setMeError] = createSignal<string>()
+    const raw = context.client.rpc(AnysolaRpc.Definition) as unknown as {
       session: (input: { sessionID: string }) => Promise<AnysolaRpc.SessionCredits | null>
       me: (input: Record<string, never>) => Promise<Reply>
       usage: (input: { days: number }) => Promise<Reply>
@@ -37,15 +51,51 @@ export default Plugin.define({
       estimates: (input: Record<string, never>) => Promise<Record<string, number>>
       events: Rpc["events"]
     }
+    // Every call resolves: a failed RPC (for example an older background service that has no `anysola.account`)
+    // becomes an inline message instead of an error that reaches the crash screen.
+    const settle = (promise: () => Promise<unknown>): Promise<Reply> =>
+      Promise.resolve()
+        .then(promise)
+        .then(
+          (value) => {
+            const reply = record(value)
+            return typeof reply.ok === "boolean" && typeof reply.status === "number"
+              ? (reply as Reply)
+              : { ok: false, status: 0, body: { error: { message: "Unexpected reply from the Anysola Code server" } } }
+          },
+          (error: unknown) => ({
+            ok: false,
+            status: 0,
+            body: {
+              error: {
+                message: `Account details are unavailable (${detail(error)}). If you just updated, run \`anysola service restart\`.`,
+              },
+            },
+          }),
+        )
+    const rpc = {
+      events: raw.events,
+      me: () => settle(() => raw.me({})),
+      usage: (days: number) => settle(() => raw.usage({ days })),
+      tokens: () => settle(() => raw.tokens({})),
+      revoke: (id: string) => settle(() => raw.revoke({ id })),
+      estimates: () =>
+        Promise.resolve()
+          .then(() => raw.estimates({}))
+          .then(
+            (value) => (value && typeof value === "object" ? value : {}),
+            () => ({}),
+          ),
+    }
 
     const refreshMe = () =>
-      rpc.me({}).then(
-        (reply) => {
-          if (reply.ok) Account.setMe(reply.body as Me)
-        },
-        () => undefined,
-      )
-    const refreshEstimates = () => rpc.estimates({}).then((value) => Account.setEstimates(value ?? {}), () => undefined)
+      rpc.me().then((reply) => {
+        if (reply.ok && reply.body && typeof reply.body === "object") {
+          Account.setMe(reply.body as Me)
+          setMeError(undefined)
+        } else setMeError(errorText(reply))
+      })
+    const refreshEstimates = () => rpc.estimates().then((value) => Account.setEstimates(value as Record<string, number>))
     let pending: ReturnType<typeof setTimeout> | undefined
     const refreshSoon = () => {
       if (pending) clearTimeout(pending)
@@ -55,11 +105,18 @@ export default Plugin.define({
     const subscribe = () => {
       void refreshMe()
       void refreshEstimates()
+      const listen = () => {
+        try {
+          return rpc.events.on("credits", (event: { data: AnysolaRpc.SessionCredits }) => {
+            if (event?.data && typeof event.data.sessionID === "string") Account.setSession(event.data)
+            refreshSoon()
+          })
+        } catch {
+          return undefined
+        }
+      }
       const unsubscribe = [
-        rpc.events.on("credits", (event: { data: AnysolaRpc.SessionCredits }) => {
-          Account.setSession(event.data)
-          refreshSoon()
-        }),
+        listen(),
         context.data.on("server.connected", () => {
           void refreshMe()
           void refreshEstimates()
@@ -177,7 +234,7 @@ export default Plugin.define({
       void refreshMe()
       const rows = () => {
         const me = Account.me()
-        if (!me) return [["Account", "Loading…"]]
+        if (!me) return [["Account", meError() ?? "Loading…"]]
         const session = context.ui.router.current()
         const sessionID = session.type === "session" ? session.sessionID : undefined
         const spent = sessionID ? Account.sessions[sessionID] : undefined
@@ -224,7 +281,7 @@ export default Plugin.define({
     function UsageDialog() {
       const theme = useTheme().surface("dialog")
       const [days, setDays] = createSignal(7)
-      const [reply] = createResource(days, (value) => rpc.usage({ days: value }))
+      const [reply] = createResource(days, (value) => rpc.usage(value))
       Keymap.createLayer(() => ({
         mode: "modal",
         commands: [
@@ -257,7 +314,7 @@ export default Plugin.define({
     }
 
     function DevicesDialog() {
-      const [reply, { refetch }] = createResource(() => rpc.tokens({}))
+      const [reply, { refetch }] = createResource(() => rpc.tokens())
       const tokens = () => {
         const value = reply()
         if (!value?.ok) return []
@@ -295,7 +352,7 @@ export default Plugin.define({
                   message={`Sign out "${option.title}"? It will need to log in again.`}
                   label={{ confirm: "Revoke" }}
                   onConfirm={() =>
-                    void rpc.revoke({ id: option.value }).then((result) => {
+                    void rpc.revoke(option.value).then((result) => {
                       context.ui.toast.show({
                         message: result.ok ? "Device signed out" : errorText(result),
                         variant: result.ok ? "success" : "error",
