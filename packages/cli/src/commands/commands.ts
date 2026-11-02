@@ -67,6 +67,25 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
     prompt: Flag.String("prompt").pipe(Flag.withDescription("Prompt to use"), Flag.optional),
   },
   commands: [
+    Spec.make("login", {
+      description: "Sign in with your Anysola account",
+      globalFlags: ServerFlags,
+      params: {
+        force: Flag.Boolean("force").pipe(
+          Flag.withAlias("f"),
+          Flag.withDescription("Replace the current token with a new one"),
+          Flag.withDefault(false),
+        ),
+      },
+    }),
+    Spec.make("logout", {
+      description: "Revoke the Anysola token and remove it from this machine",
+      globalFlags: ServerFlags,
+    }),
+    Spec.make("status", {
+      description: "Show your Anysola plan and credits",
+      globalFlags: ServerFlags,
+    }),
     Spec.make("upgrade", {
       description: "Show how to update Anysola Code",
       aliases: ["update"],

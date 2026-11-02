@@ -15,6 +15,9 @@ import { Service } from "@opencode/client/effect/service"
 import { OpenCode } from "@opencode/client/promise"
 import { findSession } from "../../session-target"
 import { errorMessage } from "../../util/error"
+import { OpenCode as Client } from "@opencode/client"
+import { log } from "@clack/prompts"
+import { ensureSignedIn } from "./anysola/account"
 
 export default Runtime.handler(Commands, (input) =>
   Effect.gen(function* () {
@@ -50,6 +53,20 @@ export default Runtime.handler(Commands, (input) =>
         Effect.promise(() => preflight.fail("Anysola Code update could not start the new background service")),
       ),
     )
+    // Anysola Code: the first start signs in with the Anysola device flow before the TUI opens.
+    const signedIn = yield* ensureSignedIn(
+      Client.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) }),
+    ).pipe(
+      Effect.as(true),
+      Effect.catch((error) =>
+        Effect.sync(() => {
+          log.error(errorMessage(error))
+          process.exitCode = 1
+          return false
+        }),
+      ),
+    )
+    if (!signedIn) return
     const session = Option.getOrUndefined(input.session)
     // A missing --session ID becomes the ID of the session the first prompt creates.
     const sessionExists =
