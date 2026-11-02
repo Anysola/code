@@ -86,6 +86,32 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
       description: "Show your Anysola plan and credits",
       globalFlags: ServerFlags,
     }),
+    Spec.make("usage", {
+      description: "Show Anysola usage: totals, by day and by model",
+      globalFlags: ServerFlags,
+      params: {
+        days: Flag.Literals("days", ["7", "30"]).pipe(
+          Flag.withDescription("Period in days"),
+          Flag.withDefault("7"),
+        ),
+        format: Flag.Literals("format", ["default", "json"]).pipe(
+          Flag.withDescription("Output format"),
+          Flag.withDefault("default"),
+        ),
+      },
+    }),
+    Spec.make("devices", {
+      description: "List the devices signed in to your Anysola account",
+      globalFlags: ServerFlags,
+      commands: [
+        Spec.make("revoke", {
+          description: "Sign a device out",
+          params: {
+            id: Argument.String("id").pipe(Argument.withDescription("Device ID from `anysola devices`")),
+          },
+        }),
+      ],
+    }),
     Spec.make("upgrade", {
       description: "Show how to update Anysola Code",
       aliases: ["update"],

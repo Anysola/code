@@ -50,6 +50,11 @@ const Handlers = Runtime.handlers(Commands, {
   login: () => import("./commands/handlers/anysola/login"),
   logout: () => import("./commands/handlers/anysola/logout"),
   status: () => import("./commands/handlers/anysola/status"),
+  usage: () => import("./commands/handlers/anysola/usage"),
+  devices: {
+    $: () => import("./commands/handlers/anysola/devices"),
+    revoke: () => import("./commands/handlers/anysola/devices-revoke"),
+  },
   upgrade: () => import("./commands/handlers/upgrade"),
   uninstall: () => import("./commands/handlers/uninstall"),
   acp: () => import("./commands/handlers/acp"),
