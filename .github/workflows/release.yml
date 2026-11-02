@@ -166,7 +166,7 @@ jobs:
           tag=latest
           case "$VERSION" in *-*) tag=next ;; esac
           # Platform packages first: the main package's postinstall installs one of them by exact version.
-          for file in npm/anysola-code-*-"$VERSION".tgz; do
+          for file in ./npm/anysola-code-*-"$VERSION".tgz; do
             npm publish "$file" --access public --tag "$tag"
           done
-          npm publish "npm/anysola-code-$VERSION.tgz" --access public --tag "$tag"
+          npm publish "./npm/anysola-code-$VERSION.tgz" --access public --tag "$tag"
