@@ -18,9 +18,11 @@ import { errorMessage } from "../../util/error"
 import { OpenCode as Client } from "@opencode/client"
 import { log } from "@clack/prompts"
 import { ensureSignedIn } from "./anysola/account"
+import { AnysolaVersion } from "../../services/anysola-version"
 
 export default Runtime.handler(Commands, (input) =>
   Effect.gen(function* () {
+    yield* Effect.promise(() => AnysolaVersion.enforceMinimum())
     const requestedDirectory = Option.getOrUndefined(input.directory)
     const requestedServer = Option.getOrUndefined(input.server)
     if (requestedDirectory !== undefined) process.chdir(requestedDirectory)

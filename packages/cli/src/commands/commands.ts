@@ -1,7 +1,6 @@
 import { Argument, Flag, GlobalFlag } from "effect/cli"
 import { Schema } from "effect"
 import { Spec } from "../framework/spec"
-import { Updater } from "../services/updater"
 
 export const PrintLogs = GlobalFlag.Setting("print-logs")({
   flag: Flag.Boolean("print-logs").pipe(
@@ -112,18 +111,14 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
         }),
       ],
     }),
-    Spec.make("upgrade", {
-      description: "Show how to update Anysola Code",
-      aliases: ["update"],
+    Spec.make("update", {
+      description: "Update Anysola Code from npm (npm i -g @anysola/code@latest)",
+      aliases: ["upgrade"],
       params: {
-        target: Argument.String("target").pipe(
-          Argument.withDescription("Version to upgrade to (with or without a leading v)"),
-          Argument.optional,
-        ),
-        method: Flag.Literals("method", Updater.methods).pipe(
-          Flag.withAlias("m"),
-          Flag.withDescription("Installation method to use"),
-          Flag.optional,
+        print: Flag.Boolean("print").pipe(Flag.withDescription("Only print the npm command"), Flag.withDefault(false)),
+        force: Flag.Boolean("force").pipe(
+          Flag.withDescription("Reinstall even when up to date"),
+          Flag.withDefault(false),
         ),
       },
     }),

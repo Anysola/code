@@ -55,7 +55,7 @@ const Handlers = Runtime.handlers(Commands, {
     $: () => import("./commands/handlers/anysola/devices"),
     revoke: () => import("./commands/handlers/anysola/devices-revoke"),
   },
-  upgrade: () => import("./commands/handlers/upgrade"),
+  update: () => import("./commands/handlers/upgrade"),
   uninstall: () => import("./commands/handlers/uninstall"),
   acp: () => import("./commands/handlers/acp"),
   api: () => import("./commands/handlers/api"),

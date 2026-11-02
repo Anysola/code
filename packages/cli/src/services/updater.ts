@@ -1,7 +1,9 @@
 import { Global } from "@opencode/util/global"
 import { AppProcess } from "@opencode/util/process"
 import { EffectFlock } from "@opencode/util/effect-flock"
-import { OPENCODE_ARTIFACT, OPENCODE_CHANNEL, OPENCODE_LOCAL, OPENCODE_VERSION } from "../version"
+import { ANYSOLA_VERSION, OPENCODE_ARTIFACT, OPENCODE_CHANNEL, OPENCODE_LOCAL, OPENCODE_VERSION } from "../version"
+import { spawn } from "node:child_process"
+import { AnysolaVersion } from "./anysola-version"
 import { Context, Duration, Effect, FileSystem, Layer, Option, Ref, Schema } from "effect"
 import { ChildProcess } from "effect/process"
 import { parse, type ParseError } from "jsonc-parser"
@@ -619,21 +621,45 @@ const make = Effect.gen(function* () {
     Effect.catch((error) => Effect.logWarning("update check failed", { error }).pipe(Effect.as(undefined))),
   )
 
-  // Anysola Code ships through npm (`@anysola/code`); the upstream self-updater never runs. `removal` stays for uninstall.
+  // Anysola Code: releases come from npm (`@anysola/code`); GET /v1/code/version says which one is latest. The
+  // upstream update server and installers are never contacted. `removal` stays for uninstall.
   void [run, check, apply, latest, upgrade]
-  const disabled = Effect.fail(new Error(UPDATE_HINT))
+  const anysolaCheck = Effect.promise(() => AnysolaVersion.fetchInfo()).pipe(
+    Effect.map((info) =>
+      info && AnysolaVersion.released() && AnysolaVersion.compare(info.latest, ANYSOLA_VERSION) > 0
+        ? { type: "available" as const, version: info.latest }
+        : undefined,
+    ),
+  )
+  const npmInstall = (version: string) =>
+    Effect.tryPromise({
+      try: () =>
+        new Promise<void>((resolve, reject) => {
+          const [command, ...args] = AnysolaVersion.UPDATE_COMMAND
+          const child = spawn(command, [...args.slice(0, -1), `${AnysolaVersion.NPM_PACKAGE}@${version}`], {
+            stdio: "ignore",
+            shell: process.platform === "win32",
+          })
+          child.on("error", reject)
+          child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`npm exited with ${code}`))))
+        }),
+      catch: (cause) => new Error(`${AnysolaVersion.UPDATE_HINT} (${cause instanceof Error ? cause.message : cause})`),
+    })
   return Service.of({
-    run: () => Effect.succeed(undefined),
-    check: () => Effect.succeed({ type: "unavailable" as const, message: UPDATE_HINT }),
-    apply: () => disabled,
+    run: () => anysolaCheck,
+    check: () => anysolaCheck,
+    apply: npmInstall,
     method,
-    latest: () => disabled,
-    upgrade: () => disabled,
+    latest: () =>
+      Effect.promise(() => AnysolaVersion.fetchInfo()).pipe(
+        Effect.flatMap((info) => (info ? Effect.succeed(info.latest) : Effect.fail(new Error(AnysolaVersion.UPDATE_HINT)))),
+      ),
+    upgrade: (_method, version) => npmInstall(version),
     removal,
   })
 })
 
-export const UPDATE_HINT = "Update Anysola Code with: npm i -g @anysola/code@latest"
+export const UPDATE_HINT = AnysolaVersion.UPDATE_HINT
 
 export const layer = Layer.effect(Service, make)
 

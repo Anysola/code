@@ -1,3 +1,4 @@
+import { AnysolaVersion } from "../../services/anysola-version"
 import { Effect, Option } from "effect"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
@@ -5,6 +6,7 @@ import { ServerConnection } from "../../services/server-connection"
 
 export default Runtime.handler(Commands.commands.run, (input) =>
   Effect.gen(function* () {
+    yield* Effect.promise(() => AnysolaVersion.enforceMinimum())
     const { reportRunError, runNonInteractive } = yield* Effect.promise(() => import("../../run/run"))
     const separator = process.argv.indexOf("--", 2)
     const server = yield* ServerConnection.resolve().pipe(

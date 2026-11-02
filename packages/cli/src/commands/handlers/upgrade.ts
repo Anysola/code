@@ -1,86 +1,44 @@
-import { intro, log, outro, spinner } from "@clack/prompts"
-import { Effect, Option } from "effect"
+import { spawnSync } from "node:child_process"
+import { intro, log, outro } from "@clack/prompts"
+import { Effect } from "effect"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
-import { Updater } from "../../services/updater"
+import { AnysolaVersion } from "../../services/anysola-version"
 import { handlePromptErrors } from "../../ui/prompt"
-import { OPENCODE_VERSION } from "../../version"
-import { stripVTControlCharacters } from "node:util"
+import { ANYSOLA_VERSION } from "../../version"
 
+// Anysola Code: `anysola update` installs the latest @anysola/code from npm (`--print` only shows the command).
 export default Runtime.handler(
-  Commands.commands.upgrade,
-  Effect.fn("cli.upgrade")(
+  Commands.commands.update,
+  Effect.fn("cli.update")(
     function* (input) {
-      // Anysola Code: updates ship through npm only.
-      if (input) {
-        log.info(Updater.UPDATE_HINT)
+      intro("Update Anysola Code")
+      const info = yield* Effect.promise(() => AnysolaVersion.fetchInfo())
+      const command = AnysolaVersion.UPDATE_COMMAND.join(" ")
+      if (info) {
+        log.info(`Installed ${ANYSOLA_VERSION}, latest ${info.latest}`)
+        if (info.notes) log.message(info.notes)
+        if (AnysolaVersion.released() && AnysolaVersion.compare(info.latest, ANYSOLA_VERSION) <= 0 && !input.force) {
+          outro("Already up to date")
+          return
+        }
+      }
+      if (input.print) {
+        log.message(command)
+        outro("Run the command above to update")
         return
       }
-      intro("Upgrade")
-      const updater = yield* Updater.Service
-      const method = Option.getOrUndefined(input.method) ?? (yield* updater.method())
-      if (!method)
-        return yield* Effect.fail(
-          new Error("Could not detect the installation method. Pass --method to choose how to upgrade Anysola Code."),
-        )
-
-      log.info(`Using method: ${method}`)
-      const target = Option.getOrUndefined(input.target) ?? (yield* updater.latest(method))
-      const version = target.trim().replace(/^v/, "")
-      if (version === OPENCODE_VERSION) {
-        log.warn(`Anysola Code upgrade skipped: ${version} is already installed`)
-        outro("Done")
+      log.step(command)
+      const [bin, ...args] = AnysolaVersion.UPDATE_COMMAND
+      const result = spawnSync(bin, args, { stdio: "inherit", shell: process.platform === "win32" })
+      if (result.error || result.status !== 0) {
+        log.error(`npm failed${result.error ? `: ${result.error.message}` : ` with exit code ${result.status}`}`)
+        log.info(`Run it yourself: ${command}`)
+        process.exitCode = 1
         return
       }
-
-      log.info(`From ${OPENCODE_VERSION} → ${version}`)
-      const progress = spinner()
-      progress.start("Upgrading...")
-      yield* updater.upgrade(method, target).pipe(
-        Effect.tap(() => Effect.sync(() => progress.stop("Upgrade complete"))),
-        Effect.tapCause(() => Effect.sync(() => progress.stop("Upgrade failed", 1))),
-      )
-      outro("Done")
+      outro("Updated. Restart Anysola Code to use the new version.")
     },
-    (effect) =>
-      handlePromptErrors(
-        effect.pipe(
-          Effect.mapError((error) =>
-            error instanceof Updater.UpgradeError ? new Error(formatUpgradeError(error), { cause: error }) : error,
-          ),
-        ),
-      ),
+    (effect) => handlePromptErrors(effect),
   ),
 )
-
-function formatUpgradeError(error: Updater.UpgradeError) {
-  const clean = (value: string) => stripVTControlCharacters(value).replaceAll("\r", "").trim()
-  const line = (value: string) => clean(value).replace(/\s+/g, " ")
-  const detail = wrap(clean(error.detail), Math.max(24, (process.stdout.columns ?? 80) - 7)).join("\n")
-  return [
-    line(error.title),
-    "",
-    detail,
-    ...(error.command ? ["", field("Command", line(error.command))] : []),
-    field("Retry", line(error.retry)),
-  ].join("\n")
-}
-
-function field(label: string, value: string) {
-  const prefix = label.padEnd(9)
-  const width = Math.max(24, Math.min(61, (process.stdout.columns ?? 80) - prefix.length - 10))
-  const lines = wrap(value, width)
-  return lines.map((line, index) => `${index === 0 ? prefix : " ".repeat(prefix.length)}${line}`).join("\n")
-}
-
-function wrap(value: string, width: number) {
-  return value.split("\n").flatMap((source) => {
-    if (source.length <= width) return [source]
-    return source.split(/\s+/).reduce<string[]>((result, word) => {
-      const index = result.length - 1
-      if (index < 0 || result[index].length + word.length + 1 > width) result.push(word)
-      else result[index] += ` ${word}`
-      return result
-    }, [])
-  })
-}
