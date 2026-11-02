@@ -172,6 +172,8 @@ const layer = Layer.effect(
       add: Effect.fn("WellKnown.add")(
         function* (value) {
           const origin = value.replace(/\/+$/, "")
+          // Anysola Code signs in to Anysola only; run `anysola login`.
+          if (origin) return yield* Effect.fail(new Error("Anysola Code signs in with `anysola login` only"))
           const entry = yield* loadEntry(origin)
           if (!entry.manifest.auth) return yield* Effect.fail(new Error(`No authentication method found at ${origin}`))
           const sources = yield* kv.get(sourcesKey)

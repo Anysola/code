@@ -17,6 +17,7 @@ import { Credential } from "@opencode/schema/credential"
 import { Location } from "./location.js"
 import { freeze } from "immer"
 import { AISDKNative } from "./aisdk-native.js"
+import { Anysola } from "./anysola.js"
 
 export const ID = Provider.ID
 export type ID = typeof ID.Type
@@ -489,6 +490,7 @@ const layer = Layer.effect(
         const byID = new Map(connections.map((integration) => [integration.id, integration]))
         const available = Array.from(records.values()).filter((record) => {
           if (record.provider.activation === "disabled") return false
+          if (!Anysola.isAllowedProvider(record.provider.id)) return false
           const integration = byID.get(record.provider.integrationID ?? Integration.ID.make(record.provider.id))
           // Never combine the previous account's discovered endpoints/models with a new connection.
           if (

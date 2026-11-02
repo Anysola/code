@@ -24,6 +24,7 @@ import { Connection } from "@opencode/schema/connection"
 import { WellKnown } from "./wellknown.js"
 import { AppProcess } from "@opencode/util/process"
 import { ChildProcess } from "effect/process"
+import { Anysola } from "./anysola.js"
 
 export function latest<K extends keyof Info>(entries: readonly Entry[], key: K): Info[K] | undefined {
   return entries.findLast((entry): entry is Document => entry.type === "document" && entry.info[key] !== undefined)
@@ -156,7 +157,7 @@ export const layer = (options?: Options) =>
         )
         if (result.type === "rejected") return
         const info = Option.getOrUndefined(decodeInfo(result.encoded))
-        if (info) return info
+        if (info) return Anysola.sanitize(info)
         yield* Effect.logWarning("configuration normalization diagnostic", {
           source,
           path: "$",

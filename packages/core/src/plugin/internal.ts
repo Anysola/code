@@ -98,9 +98,8 @@ import { CommandPlugin } from "./command.js"
 import { IdentityPlugin } from "./identity.js"
 import { PlanPlugin } from "./plan.js"
 import { GoalPlugin } from "./goal.js"
-import { ModelsDevPlugin } from "./models-dev.js"
 import { McpCodeModeDefaultsPlugin } from "./mcp-codemode-defaults.js"
-import { ProviderPlugins } from "./provider.js"
+import { AnysolaPlugin } from "./provider/anysola.js"
 import { DynamicProviderPlugin } from "./provider/dynamic.js"
 import { OpencodePlugin } from "./provider/opencode.js"
 import { WebSearchPlugins } from "./websearch/index.js"
@@ -111,7 +110,6 @@ import { OptimizePlugin } from "./optimize.js"
 import { VcsGitPlugin } from "./vcs/git.js"
 import { VerbosityPlugin } from "./verbosity.js"
 import { WarmingPlugin } from "./warming.js"
-import { WellKnownPlugin } from "../wellknown/plugin.js"
 
 const services = [
   Agent.Service,
@@ -230,7 +228,7 @@ const pre = [
   ConfigWorktreePlugin.Plugin,
   ConfigMcpPlugin.Plugin,
   McpCodeModeDefaultsPlugin.Plugin,
-  WellKnownPlugin.Plugin,
+  // Anysola Code: no well-known login sources; Anysola is built in.
   VcsGitPlugin.Plugin,
   AgentPlugin.Plugin,
   PlanPlugin.Plugin,
@@ -238,8 +236,8 @@ const pre = [
   GoalPlugin.Plugin,
   SkillPlugin.Plugin,
   VcsHgPlugin.Plugin,
-  ModelsDevPlugin,
-  ...ProviderPlugins,
+  // Anysola Code: the models.dev catalog and every other provider plugin are left out; Anysola is the only provider.
+  AnysolaPlugin,
   ...WebSearchPlugins,
   PatchTool.Plugin,
   // Render model prompts after the patch plugin selects the available editing tools.

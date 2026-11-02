@@ -26,6 +26,7 @@ import { IntegrationConnection } from "./integration/connection.js"
 import { AppProcess } from "@opencode/util/process"
 import { ChildProcess } from "effect/process"
 import { Form } from "./form.js"
+import { Anysola } from "./anysola.js"
 
 export const ID = Integration.ID
 export type ID = Integration.ID
@@ -733,7 +734,9 @@ const layer = Layer.effect(
       }),
       list: Effect.fn("Integration.list")(function* () {
         const saved = Map.groupBy(yield* credentials.all(), (credential) => credential.integrationID)
-        return sortedEntries().map((entry) => project(entry, resolveConnections(entry, saved.get(entry.ref.id) ?? [])))
+        return sortedEntries()
+          .filter((entry) => Anysola.isAllowedIntegration(entry.ref.id, entry.ref.metadata))
+          .map((entry) => project(entry, resolveConnections(entry, saved.get(entry.ref.id) ?? [])))
       }),
       connection: {
         active: Effect.fn("Integration.connection.active")(function* (id) {
