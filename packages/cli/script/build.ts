@@ -17,7 +17,9 @@ import { NativeArch } from "../../../script/native-arch"
 import { bundledModelsSnapshot, modelsSnapshotPlugin } from "../../core/script/models-snapshot"
 
 const dir = path.resolve(import.meta.dirname, "..")
-const binary = "opencode"
+// Anysola Code: the executable is `anysola`; platform packages are `@anysola/code-<os>-<arch>`.
+const binary = "anysola"
+const anysolaVersion = process.env.ANYSOLA_VERSION ?? "0.0.0-dev"
 const outdir = path.resolve(
   dir,
   process.argv.find((arg) => arg.startsWith("--outdir="))?.slice("--outdir=".length) ?? "dist",
@@ -154,7 +156,7 @@ export default { path: file, version: ${JSON.stringify(opencodePty.version)}, sh
     },
   }
   const target = targetName(item)
-  const name = target.replace(binary, "cli")
+  const name = target.replace(binary, "code")
   const executablePath = await compileExecutable(item)
   console.log(`building ${name}`)
   const result = await Bun.build({
@@ -196,7 +198,7 @@ export default { path: file, version: ${JSON.stringify(opencodePty.version)}, sh
       OPENCODE_VERSION: `'${Script.version}'`,
       OPENCODE_CLI_NAME: "'anysola'",
       // Anysola Code release version, shown by `--version` next to the upstream OPENCODE_VERSION.
-      ANYSOLA_VERSION: JSON.stringify(process.env.ANYSOLA_VERSION ?? "0.0.0-dev"),
+      ANYSOLA_VERSION: JSON.stringify(anysolaVersion),
       OPENCODE_CHANNEL: `'${Script.channel}'`,
       OPENCODE_ARTIFACT: `'cli'`,
       ...(highlights ? { OPENCODE_RELEASE_HIGHLIGHTS: JSON.stringify(highlights) } : {}),
@@ -218,10 +220,11 @@ export default { path: file, version: ${JSON.stringify(opencodePty.version)}, sh
     path.join(outdir, name, "package.json"),
     JSON.stringify(
       {
-        name: `@opencode/${name}`,
-        version: Script.version,
+        name: `@anysola/${name}`,
+        version: anysolaVersion,
+        description: "Anysola Code binary, based on OpenCode (MIT)",
         license: "MIT",
-        repository: { type: "git", url: "git+https://github.com/anomalyco/opencode.git" },
+        repository: { type: "git", url: "git+https://github.com/Anysola/code.git" },
         os: [item.os],
         cpu: [item.arch],
       },
@@ -229,6 +232,9 @@ export default { path: file, version: ${JSON.stringify(opencodePty.version)}, sh
       2,
     ),
   )
+  // MIT: every published package carries the upstream copyright and permission notice.
+  await Bun.write(path.join(outdir, name, "LICENSE"), Bun.file(path.resolve(dir, "../../LICENSE")))
+  await Bun.write(path.join(outdir, name, "NOTICE"), Bun.file(path.resolve(dir, "../../NOTICE")))
   await verifyArtifact(path.join(outdir, name))
 }
 

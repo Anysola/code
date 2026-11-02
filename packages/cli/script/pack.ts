@@ -15,13 +15,14 @@ process.chdir(dir)
 await mkdir(npmDir, { recursive: true })
 await mkdir(archiveDir, { recursive: true })
 
+// Anysola Code: `@anysola/code` with `@anysola/code-<os>-<arch>` platform packages and the `anysola` command.
+const anysolaVersion = process.env.ANYSOLA_VERSION ?? "0.0.0-dev"
 await packDistribution({
   root,
-  name: pkg.name,
-  command: "opencode",
-  legacyCommand: "opencode2",
-  binary: "opencode",
-  packagePrefix: "@opencode/cli-",
+  name: "@anysola/code",
+  command: "anysola",
+  binary: "anysola",
+  packagePrefix: "@anysola/code-",
   archive: (target) => target.startsWith("linux-"),
 })
 if (existsSync(path.join(root, "node"))) {
@@ -55,10 +56,11 @@ async function packDistribution(input: {
   if (versions.size > 1) throw new Error(`Binary package versions do not match for ${input.name}`)
   const version = versions.values().next().value
   if (!version) throw new Error(`No binary packages found for ${input.name}`)
-  if (version !== Script.version) throw new Error(`Expected ${Script.version}, got ${version} for ${input.name}`)
+  if (version !== anysolaVersion) throw new Error(`Expected ${anysolaVersion}, got ${version} for ${input.name}`)
 
   await $`mkdir -p ${input.root}/${input.name}/bin`
   await $`cp ./script/postinstall.mjs ${input.root}/${input.name}/postinstall.mjs`
+  await $`cp ../../LICENSE ../../NOTICE ${input.root}/${input.name}/`
   await Bun.file(`${input.root}/${input.name}/bin/${input.command}.exe`).write(
     [
       `echo "Error: ${input.name}'s postinstall script was not run." >&2`,
@@ -80,8 +82,10 @@ async function packDistribution(input: {
         ...(input.command !== input.binary ? { opencodeSourceBinary: input.binary } : {}),
         scripts: { postinstall: "node ./postinstall.mjs" },
         version,
+        description: "Anysola Code: the Anysola coding agent for your terminal, based on OpenCode (MIT)",
         license: pkg.license,
-        repository: { type: "git", url: "git+https://github.com/anomalyco/opencode.git" },
+        repository: { type: "git", url: "git+https://github.com/Anysola/code.git" },
+        homepage: "https://anysola.com",
         os: ["darwin", "linux", "win32"],
         cpu: ["arm64", "x64"],
         optionalDependencies: binaries,
@@ -91,7 +95,7 @@ async function packDistribution(input: {
     ),
   )
 
-  await Promise.all(Object.keys(binaries).map((name) => pack(`${input.root}/${name.replace("@opencode/", "")}`)))
+  await Promise.all(Object.keys(binaries).map((name) => pack(`${input.root}/${name.replace(/^@[^/]+\//, "")}`)))
   await pack(`${input.root}/${input.name}`)
   await Promise.all(
     Object.keys(binaries)
@@ -99,7 +103,7 @@ async function packDistribution(input: {
       .filter(input.archive)
       .map((target) =>
         archive(
-          path.join(input.root, `${input.packagePrefix.replace("@opencode/", "")}${target}`, "bin"),
+          path.join(input.root, `${input.packagePrefix.replace(/^@[^/]+\//, "")}${target}`, "bin"),
           target,
           input.binary,
         ),
