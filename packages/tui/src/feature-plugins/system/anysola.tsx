@@ -1,6 +1,6 @@
 import { Plugin } from "@opencode/plugin/tui"
 import { AnysolaRpc } from "@opencode/schema/anysola"
-import { createResource, createSignal, For, Show } from "solid-js"
+import { createResource, createSignal, For, onCleanup, Show } from "solid-js"
 import { Account, BILLING_URL, statusText, type Me } from "../../anysola/store"
 import { formatCredits, formatDate, usageLines } from "../../anysola/format"
 import { Keymap } from "../../context/keymap"
@@ -51,17 +51,27 @@ export default Plugin.define({
       if (pending) clearTimeout(pending)
       pending = setTimeout(() => void refreshMe(), 1500)
     }
-    void refreshMe()
-    void refreshEstimates()
-    rpc.events.on("credits", (event: { data: AnysolaRpc.SessionCredits }) => {
-      Account.setSession(event.data)
-      refreshSoon()
-    })
-    context.data.on("server.connected", () => {
+    // Subscriptions live as long as the app slot, so they close with the TUI instead of outliving its server.
+    const subscribe = () => {
       void refreshMe()
       void refreshEstimates()
-    })
-    setInterval(() => void refreshMe(), 5 * 60_000).unref?.()
+      const unsubscribe = [
+        rpc.events.on("credits", (event: { data: AnysolaRpc.SessionCredits }) => {
+          Account.setSession(event.data)
+          refreshSoon()
+        }),
+        context.data.on("server.connected", () => {
+          void refreshMe()
+          void refreshEstimates()
+        }),
+      ]
+      const timer = setInterval(() => void refreshMe(), 5 * 60_000)
+      onCleanup(() => {
+        clearInterval(timer)
+        if (pending) clearTimeout(pending)
+        for (const stop of unsubscribe) if (typeof stop === "function") stop()
+      })
+    }
 
     const showCredits = () => context.ui.dialog.show(() => <CreditsDialog />)
     const showUsage = () => context.ui.dialog.show(() => <UsageDialog />)
@@ -128,6 +138,7 @@ export default Plugin.define({
     context.ui.slot({
       append: "app",
       render() {
+        subscribe()
         context.keymap.layer(() => ({
           mode: "global",
           commands: [
