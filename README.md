@@ -1,114 +1,135 @@
-<p align="center">
-  <a href="https://opencode.ai">
-    <picture>
-      <source srcset="packages/console/app/src/asset/logo-ornate-dark.svg" media="(prefers-color-scheme: dark)">
-      <source srcset="packages/console/app/src/asset/logo-ornate-light.svg" media="(prefers-color-scheme: light)">
-      <img src="packages/console/app/src/asset/logo-ornate-light.svg" alt="OpenCode logo">
-    </picture>
-  </a>
-</p>
-<p align="center">The open source AI coding agent.</p>
-<p align="center">
-  <a href="https://opencode.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
-  <a href="https://www.npmjs.com/package/@opencode/cli"><img alt="npm" src="https://img.shields.io/npm/v/@opencode/cli?style=flat-square" /></a>
-  <a href="https://github.com/anomalyco/opencode/actions/workflows/release.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/opencode/release.yml?style=flat-square&branch=dev" /></a>
-</p>
+# Anysola Code
 
-<p align="center">
-  <a href="README.md">English</a> |
-  <a href="README.zh.md">简体中文</a> |
-  <a href="README.zht.md">繁體中文</a> |
-  <a href="README.ko.md">한국어</a> |
-  <a href="README.de.md">Deutsch</a> |
-  <a href="README.es.md">Español</a> |
-  <a href="README.fr.md">Français</a> |
-  <a href="README.it.md">Italiano</a> |
-  <a href="README.da.md">Dansk</a> |
-  <a href="README.ja.md">日本語</a> |
-  <a href="README.pl.md">Polski</a> |
-  <a href="README.ru.md">Русский</a> |
-  <a href="README.bs.md">Bosanski</a> |
-  <a href="README.ar.md">العربية</a> |
-  <a href="README.no.md">Norsk</a> |
-  <a href="README.br.md">Português (Brasil)</a> |
-  <a href="README.th.md">ไทย</a> |
-  <a href="README.tr.md">Türkçe</a> |
-  <a href="README.uk.md">Українська</a> |
-  <a href="README.bn.md">বাংলা</a> |
-  <a href="README.gr.md">Ελληνικά</a> |
-  <a href="README.vi.md">Tiếng Việt</a>
-</p>
+[![npm](https://img.shields.io/npm/v/@anysola/code)](https://www.npmjs.com/package/@anysola/code)
 
-[![OpenCode Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://opencode.ai)
+A terminal coding agent for Anysola accounts, based on [OpenCode](https://github.com/anomalyco/opencode) v2.2.5.
 
----
+Product page: https://anysola.com/code. Account: https://account.anysola.com.
 
-### Installation
+## Install
 
-```bash
-# YOLO
-curl -fsSL https://opencode.ai/v2/install | bash
+Requires Node 20 or newer. Runs on Linux, macOS and Windows (x64 and arm64).
 
-# Package managers
-npm i -g @opencode/cli@latest      # or bun/pnpm/yarn
-brew install anomalyco/tap/opencode-v2 # macOS and Linux (recommended, always up to date)
-brew install opencode              # macOS and Linux (official brew formula, updated less)
-sudo pacman -S opencode            # Arch Linux (Stable)
-paru -S opencode-beta              # Arch Linux (Latest from AUR)
-mise use -g opencode               # Any OS
-nix run github:anomalyco/opencode  # Nix
+```sh
+npm i -g @anysola/code
 ```
 
-> [!TIP]
-> Remove versions older than 0.1.x before installing.
+## First run
 
-### Desktop App (BETA)
-
-OpenCode is also available as a desktop application. Download it from [opencode.ai/download](https://opencode.ai/download).
-
-| Platform              | Download                           |
-| --------------------- | ---------------------------------- |
-| macOS (Apple Silicon) | `opencode-desktop-mac-arm64.dmg`   |
-| macOS (Intel)         | `opencode-desktop-mac-x64.dmg`     |
-| Windows               | `opencode-desktop-win-x64.exe`     |
-| Linux                 | `.deb`, `.rpm`, or `.AppImage`     |
-
-```bash
-# macOS (Homebrew)
-brew install --cask opencode-desktop
+```sh
+anysola
 ```
 
-#### Installation Directory
+The first run opens a device sign-in at https://account.anysola.com/device. After you approve it, the TUI starts.
 
-The install script installs OpenCode to `$HOME/.opencode/bin`.
+## Commands
 
-### Agents
+| Command | What it does |
+|---|---|
+| `anysola` | Start the TUI in the current directory |
+| `anysola login` | Sign in with the device flow |
+| `anysola logout` | Sign out |
+| `anysola status` | Show the sign-in state |
+| `anysola usage [--days 7\|30]` | Show credit usage for the last 7 or 30 days |
+| `anysola devices` | List signed-in devices |
+| `anysola devices revoke <id>` | Sign out a device |
+| `anysola update` | Install the latest release from npm |
+| `anysola --version` | Print the Anysola Code and OpenCode versions |
 
-OpenCode includes two built-in agents you can switch between with the `Tab` key.
+In the TUI: `/credits` (balance), `/usage` (recent usage), `/devices` (signed-in devices).
 
-- **build** - Default, full-access agent for development work
-- **plan** - Read-only agent for analysis and code exploration
-  - Denies file edits by default
-  - Asks permission before running bash commands
-  - Ideal for exploring unfamiliar codebases or planning changes
+## Credits and billing
 
-Also included is a **general** subagent for complex searches and multistep tasks.
-This is used internally and can be invoked using `@general` in messages.
+Usage is billed to the credits of your Anysola subscription (Pro or Team); free accounts get a daily quota. The
+status line shows the credits remaining, the cost of the current turn and the total for the session.
 
-Learn more about [agents](https://opencode.ai/v2/docs/agents).
+## Models
 
-### Documentation
+The model list comes from the Anysola server. Sonnet 5.5 is the default, Haiku 5.5 is the small model, and Opus
+5.5 can be selected in the model picker.
 
-For more info on how to configure OpenCode, [**head over to our docs**](https://opencode.ai/v2/docs).
+## Differences from OpenCode
 
-### Contributing
+- Anysola is the only provider. Other providers and models.dev are not loaded.
+- Sign-in is built in (`anysola login`, or the first run) and uses your Anysola account.
+- No telemetry, no session sharing, no web UI, no remote tunnel.
+- Self-update is disabled. Updates come from npm (`anysola update` or `npm i -g @anysola/code@latest`).
 
-If you're interested in contributing to OpenCode, please read our [contributing docs](./CONTRIBUTING.md) before submitting a pull request.
+## Based on OpenCode
 
-### Building on OpenCode
+Anysola Code is a fork of [OpenCode](https://github.com/anomalyco/opencode), used under the MIT License. The
+`anysola` branch is upstream tag `v2.2.5` plus a series of Anysola commits. The upstream copyright and permission
+notice are in [LICENSE](LICENSE) and must be kept with every copy; [NOTICE](NOTICE) describes the fork. Anysola
+Code is not affiliated with or endorsed by the OpenCode project. OpenCode's own release notes up to 2.2.5 are in
+[UPSTREAM-CHANGELOG.md](UPSTREAM-CHANGELOG.md).
 
-If you are working on a project that's related to OpenCode and is using "opencode" as part of its name, for example "opencode-dashboard" or "opencode-mobile", please add a note to your README to clarify that it is not built by the OpenCode team and is not affiliated with us in any way.
+## Development
 
----
+Bun 1.4.4 is required (the root `packageManager`).
 
-**Join our community** [Discord](https://discord.gg/opencode) | [X.com](https://x.com/opencode)
+```sh
+bun install --frozen-lockfile
+bun dev [directory]          # run the CLI and TUI from source
+```
+
+`ANYSOLA_API_URL` (default `https://api.anysola.com`) points the device flow, config and provider at another API.
+
+Build the platform binaries and the npm packages:
+
+```sh
+cd packages/cli
+export ANYSOLA_VERSION=0.3.0 OPENCODE_CHANNEL=latest
+export OPENCODE_VERSION="$(node -p "require('./package.json').version")"
+bun run build --skip-web-ui                              # all targets; OPENCODE_TARGET=linux-x64 for one
+rm -f dist/SHA256SUMS && bun run pack                    # tarballs in dist/npm (ANYSOLA_NPM_DIR to change)
+dist/code-linux-x64/bin/anysola --version
+```
+
+### Merging an upstream tag
+
+```sh
+git fetch upstream --tags
+git checkout anysola
+git merge vX.Y.Z             # or: git rebase --onto vX.Y.Z v2.2.5 anysola
+```
+
+Conflicts usually land in the files the Anysola commits touch:
+
+- `packages/core/src/plugin/internal.ts`: keep upstream's new plugins, leave `ModelsDevPlugin`,
+  `...ProviderPlugins` and `WellKnownPlugin` out and `AnysolaPlugin` in.
+- `packages/core/src/provider.ts`, `integration.ts`, `config.ts`: re-apply the single `Anysola.*` line if the
+  surrounding code moved.
+- `packages/cli/script/build.ts`, `pack.ts`: keep `binary = "anysola"`, the `@anysola/` names, `ANYSOLA_VERSION`,
+  the LICENSE/NOTICE copy and the `opencode/` User-Agent (the Anysola gateway allowlists it).
+- `packages/tui/src/logo.ts`, `component/logo.tsx`: keep ours.
+- Docs and `.github` files deleted on this branch: keep them deleted (`git rm`).
+- If upstream changed the provider or credential APIs, compare `plugin/provider/anysola.ts` with upstream's
+  `plugin/provider/opencode.ts`, which uses the same calls.
+
+Then sweep for new branding strings, typecheck and rebuild:
+
+```sh
+git grep -n -E 'OpenCode|opencode\.ai|`opencode [a-z]' -- 'packages/tui/src' 'packages/cli/src' \
+  ':!*test*' | grep -v -E 'OpenCode(Client|Event|\.make)|@opencode/'
+(cd packages/core && ../../node_modules/.bin/tsc -p tsconfig.json --noEmit)
+```
+
+Kept as upstream on purpose: config and data paths (`~/.config/opencode`), `OPENCODE_*` environment variables,
+`@opencode/*` workspace package names and plugin APIs. `packages/cli/package.json` `version` is the upstream
+OpenCode version and changes only with a merge.
+
+## Release
+
+The Anysola Code version is not stored in any `package.json`; it comes from the tag.
+
+1. Add the release to [CHANGELOG.md](CHANGELOG.md) and push `anysola`.
+2. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+3. `.github/workflows/release.yml` builds every platform, smoke-tests linux-x64, signs the macOS binaries ad hoc,
+   packs, and publishes `@anysola/code` and the platform packages to npm with the `NPM_TOKEN` secret. A version
+   with a `-` suffix goes to the `next` dist-tag.
+
+Running the workflow by hand (`workflow_dispatch`, `dry_run` on by default) builds and packs without publishing.
+
+## License
+
+MIT. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
