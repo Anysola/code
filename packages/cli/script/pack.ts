@@ -2,7 +2,7 @@
 import { $ } from "bun"
 import pkg from "../package.json"
 import { Script } from "@opencode/script"
-import { archiveDir, npmDir } from "@opencode/script/pack"
+import { archiveDir as defaultArchiveDir, npmDir as defaultNpmDir } from "@opencode/script/pack"
 import { existsSync } from "fs"
 import { chmod, mkdir, rm, utimes } from "node:fs/promises"
 import path from "node:path"
@@ -12,6 +12,9 @@ import path from "node:path"
 const dir = path.resolve(import.meta.dir, "..")
 const root = path.join(dir, "dist")
 process.chdir(dir)
+// Anysola Code: ANYSOLA_NPM_DIR / ANYSOLA_ARCHIVE_DIR keep a new release apart from tarballs still being published.
+const npmDir = process.env.ANYSOLA_NPM_DIR ? path.resolve(process.env.ANYSOLA_NPM_DIR) : defaultNpmDir
+const archiveDir = process.env.ANYSOLA_ARCHIVE_DIR ? path.resolve(process.env.ANYSOLA_ARCHIVE_DIR) : defaultArchiveDir
 await mkdir(npmDir, { recursive: true })
 await mkdir(archiveDir, { recursive: true })
 
