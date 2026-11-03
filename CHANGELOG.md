@@ -3,6 +3,12 @@
 Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](UPSTREAM-CHANGELOG.md).
 
+## Unreleased
+
+- `anysola run` ends with what the run spent and the balance left.
+- MCP sign-ins name Anysola Code: OAuth client metadata from www.anysola.com and an Anysola callback page.
+- Daily upstream tracking: a workflow tries each new OpenCode v2 release and opens a PR or a conflict issue.
+
 ## 0.4.0
 
 - Install without npm: `curl -fsSL https://www.anysola.com/install | sh` (macOS, Linux) and

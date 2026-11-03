@@ -138,6 +138,7 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
   }
 
   const budget = input.budget === undefined ? undefined : await watchBudget(client, target.session.id, input.budget)
+  const spend = input.format === "json" ? undefined : await watchSpend(client, target.session.id)
   if (budget?.stopped) {
     reportRunError(input, budget.message(), target.session.id)
     return
@@ -164,8 +165,35 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
       // Stopping at the budget interrupts the Session; report that instead of the interruption.
       if (!budget?.stopped) reportRunError(input, errorMessage(error), target.session.id)
     })
-    .finally(() => budget?.stop())
+    .finally(() => {
+      budget?.stop()
+      spend?.stop()
+    })
   if (budget?.stopped) reportRunError(input, budget.message(), target.session.id)
+  const summary = spend?.summary()
+  if (summary) UI.println(UI.Style.TEXT_DIM + summary + UI.Style.TEXT_NORMAL)
+}
+
+/** What this run spent, from the server's per-Session credits: "Anysola · 3 credits · 770 left". */
+async function watchSpend(client: OpenCodeClient, sessionID: string) {
+  const rpc = client.rpc(AnysolaRpc.Definition)
+  // An older background service has no account RPC: the run just prints no summary.
+  const start = await rpc.session({ sessionID }).catch(() => undefined)
+  if (start === undefined) return undefined
+  const state = { total: start?.total ?? 0, remaining: start?.remaining ?? null }
+  const stop = rpc.events.on("credits", (event) => {
+    if (event.data.sessionID !== sessionID) return
+    state.total = event.data.total
+    if (event.data.remaining !== null) state.remaining = event.data.remaining
+  })
+  return {
+    stop,
+    summary: () => {
+      const spent = state.total - (start?.total ?? 0)
+      if (spent <= 0) return undefined
+      return `Anysola · ${spent} credit${spent === 1 ? "" : "s"}${state.remaining === null ? "" : ` · ${state.remaining} left`}`
+    },
+  }
 }
 
 /**
