@@ -65,11 +65,9 @@ import { PermissionProvider } from "./context/permission"
 import { DialogModel } from "./component/dialog-model"
 import { useConnected } from "./component/use-connected"
 import { DialogMcp } from "./component/dialog-mcp"
-import { DialogUsage } from "./component/usage"
 import { DialogStatus } from "./component/dialog-status"
 import { DialogConfig } from "./component/dialog-config"
 import { DialogDebug } from "./component/dialog-debug"
-import { DialogPair } from "./component/dialog-pair"
 import { DialogHighlights } from "./component/dialog-highlights"
 import { claim } from "./util/highlights"
 import { DialogThemeList } from "./component/dialog-theme-list"
@@ -156,7 +154,6 @@ const appBindingCommands = [
   "model.cycle_favorite_reverse",
   "agent.list",
   "mcp.list",
-  "usage.show",
   "agent.cycle",
   "agent.cycle.reverse",
   "variant.cycle",
@@ -165,7 +162,6 @@ const appBindingCommands = [
   "opencode.settings",
   "opencode.status",
   "opencode.update",
-  "server.pair",
   "service.restart",
   "location.reload",
   "opencode.debug",
@@ -955,15 +951,6 @@ function App() {
         },
       },
       {
-        name: "usage.show",
-        title: "View usage",
-        category: "Agent",
-        slash: { name: "usage" },
-        run: () => {
-          dialog.replace(() => <DialogUsage />)
-        },
-      },
-      {
         name: "mcp.list",
         title: "MCP servers",
         category: "Agent",
@@ -1070,15 +1057,6 @@ function App() {
             },
           ]
         : []),
-      {
-        name: "server.pair",
-        title: "Pair device",
-        slash: { name: "pair", aliases: ["web"] },
-        run: () => {
-          dialog.replace(() => <DialogPair />)
-        },
-        category: "System",
-      },
       ...(client.restart
         ? [
             {

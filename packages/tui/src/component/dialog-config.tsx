@@ -331,16 +331,6 @@ export const settings: Setting[] = [
     keywords: ["sound volume", "audio volume"],
   },
   {
-    title: "Release highlights",
-    category: "Alerts",
-    path: ["highlights"],
-    description: "Whether release highlights are shown after an update",
-    default: true,
-    values: [false, true],
-    labels: ["off", "on"],
-    keywords: ["what's new", "changelog", "release notes"],
-  },
-  {
     title: "Window title",
     category: "Terminal",
     path: ["terminal", "title"],
