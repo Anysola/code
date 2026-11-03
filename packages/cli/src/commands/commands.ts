@@ -112,7 +112,7 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
       ],
     }),
     Spec.make("update", {
-      description: "Update Anysola Code from npm (npm i -g @anysola/code@latest)",
+      description: "Update Anysola Code the way it was installed (install script or npm)",
       aliases: ["upgrade"],
       params: {
         print: Flag.Boolean("print").pipe(Flag.withDescription("Only print the npm command"), Flag.withDefault(false)),

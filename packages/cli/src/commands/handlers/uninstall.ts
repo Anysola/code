@@ -2,6 +2,7 @@ import { confirm, intro, log, outro, spinner } from "@clack/prompts"
 import { Service } from "@opencode/client/effect/service"
 import { Global } from "@opencode/util/global"
 import { Effect, FileSystem, Schedule } from "effect"
+import { spawnSync } from "node:child_process"
 import path from "node:path"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
@@ -36,6 +37,7 @@ export default Runtime.handler(
     )
     shell.forEach((file) => log.info(`  Shell PATH: ${file}`))
     if (removal) log.info(`  Package: ${removal.command.join(" ")}`)
+    if (method === "curl" && process.platform === "win32") log.info(`  User PATH entry: ${path.dirname(process.execPath)}`)
     if (method === "curl") log.info(`  Binary (manual removal): ${process.execPath}`)
     if (!method) log.warn("Could not detect the installation method. Remove the installation manually after cleanup.")
 
@@ -108,9 +110,16 @@ export default Runtime.handler(
         ),
       )
     }
+    if (method === "curl" && process.platform === "win32") {
+      const removed = removeWindowsPath(path.dirname(process.execPath))
+      if (removed) errors.push(removed)
+    }
     if (method === "curl") {
+      // The running binary cannot delete itself on Windows; the same command works everywhere else.
       log.message("To finish removing the binary, run:")
-      log.info(`  rm '${process.execPath.replaceAll("'", "'\\''")}'`)
+      if (process.platform === "win32")
+        log.info(`  Remove-Item -Recurse -Force '${path.dirname(path.dirname(process.execPath)).replaceAll("'", "''")}'`)
+      else log.info(`  rm -rf '${path.dirname(path.dirname(process.execPath)).replaceAll("'", "'\\''")}'`)
     }
     if (errors.length) yield* Effect.fail(new Error(errors.join("\n")))
     outro("Done")
@@ -154,8 +163,20 @@ const shellConfigs = Effect.fnUntraced(function* (home: string) {
 function cleanShellConfig(content: string) {
   const lines = content.split("\n")
   const entry = (line: string) =>
-    /^(?:export PATH=|fish_add_path\s)/.test(line.trim()) && line.includes(".opencode/bin")
+    /^(?:export PATH=|fish_add_path\s)/.test(line.trim()) && line.includes(".anysola/bin")
   return lines
-    .filter((line, index) => !entry(line) && !(line.trim() === "# opencode" && entry(lines[index + 1] ?? "")))
+    .filter((line, index) => !entry(line) && !(line.trim() === "# anysola" && entry(lines[index + 1] ?? "")))
     .join("\n")
+}
+
+/** Drops the install script's directory from the user PATH; returns an error message on failure. */
+function removeWindowsPath(directory: string) {
+  const script = [
+    `$dir = '${directory.replaceAll("'", "''")}'`,
+    `$path = [Environment]::GetEnvironmentVariable('Path', 'User')`,
+    `$kept = @($path -split ';' | Where-Object { $_ -and $_ -ne $dir })`,
+    `[Environment]::SetEnvironmentVariable('Path', ($kept -join ';'), 'User')`,
+  ].join("; ")
+  const result = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], { stdio: "ignore" })
+  return result.error || result.status !== 0 ? `User PATH: remove ${directory} yourself` : undefined
 }

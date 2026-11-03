@@ -1,4 +1,5 @@
-# Anysola Code release: build every platform binary on a tag push and publish the npm packages.
+# Anysola Code release: build every platform binary on a tag push, publish the npm packages, and create the GitHub
+# release the install scripts download from (archives, SHA256SUMS, install.sh, install.ps1).
 #
 # Lives at .github/workflows/release.yml in the Anysola Code fork (branch `anysola`).
 # Tag format: v<anysola version>, for example v0.2.0. The upstream OpenCode version the fork is built
@@ -141,7 +142,7 @@ jobs:
         with:
           name: archives
           path: dist/archives
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   publish:
     needs: [build, pack]
@@ -170,3 +171,33 @@ jobs:
             npm publish "$file" --access public --tag "$tag"
           done
           npm publish "./npm/anysola-code-$VERSION.tgz" --access public --tag "$tag"
+
+  github-release:
+    # After npm, so `anysola update` from either install finds the same version.
+    needs: [build, publish]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: archives
+          path: release
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          cp install release/install.sh
+          cp install.ps1 release/install.ps1
+          (cd release && sha256sum anysola-* install.sh install.ps1 > SHA256SUMS && cat SHA256SUMS)
+          flags=()
+          case "$VERSION" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "v$VERSION" release/* --repo "$GITHUB_REPOSITORY" --title "Anysola Code $VERSION" \
+            --notes "Install: \`curl -fsSL https://www.anysola.com/install | sh\` (macOS, Linux) or \`irm https://www.anysola.com/install.ps1 | iex\` (Windows), or \`npm i -g @anysola/code\`. Changes: CHANGELOG.md." \
+            --verify-tag "${flags[@]}"

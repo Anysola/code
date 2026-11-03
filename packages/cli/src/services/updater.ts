@@ -48,7 +48,7 @@ const decodeVpPackages = Schema.decodeUnknownOption(
 )
 
 const installNames: Record<Method, string> = {
-  curl: "The OpenCode installer",
+  curl: "The Anysola install script",
   npm: "npm",
   pnpm: "pnpm",
   bun: "Bun",
@@ -189,12 +189,8 @@ const make = Effect.gen(function* () {
       )
   })
 
-  const curlPath = path.resolve(
-    global.home,
-    ".opencode",
-    "bin",
-    process.platform === "win32" ? "opencode.exe" : "opencode",
-  )
+  // Anysola Code: the install script's binary (~/.anysola/bin/anysola).
+  const curlPath = AnysolaVersion.scriptInstallPath()
   const curlBinary = yield* fs.realPath(curlPath).pipe(Effect.orElseSucceed(() => curlPath))
 
   // On Windows a bare `bash` may be the WSL launcher, which cannot run the installer against Windows paths.
@@ -635,13 +631,13 @@ const make = Effect.gen(function* () {
     Effect.tryPromise({
       try: () =>
         new Promise<void>((resolve, reject) => {
-          const [command, ...args] = AnysolaVersion.UPDATE_COMMAND
-          const child = spawn(command, [...args.slice(0, -1), `${AnysolaVersion.NPM_PACKAGE}@${version}`], {
+          const [command, ...args] = AnysolaVersion.updateCommand(version)
+          const child = spawn(command!, args, {
             stdio: "ignore",
-            shell: process.platform === "win32",
+            shell: process.platform === "win32" && command === "npm",
           })
           child.on("error", reject)
-          child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`npm exited with ${code}`))))
+          child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`${command} exited with ${code}`))))
         }),
       catch: (cause) => new Error(`${AnysolaVersion.UPDATE_HINT} (${cause instanceof Error ? cause.message : cause})`),
     })

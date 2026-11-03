@@ -1,10 +1,46 @@
+import { realpathSync } from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import { ANYSOLA_VERSION } from "../version"
 
-// Anysola Code updates: `GET /v1/code/version` names the latest and the minimum supported release; npm installs it.
+// Anysola Code updates: `GET /v1/code/version` names the latest and the minimum supported release. An install from
+// the install script (~/.anysola/bin) updates by running that script again; anything else updates through npm.
 
 export const NPM_PACKAGE = "@anysola/code"
-export const UPDATE_COMMAND = ["npm", "i", "-g", `${NPM_PACKAGE}@latest`] as const
-export const UPDATE_HINT = `Update Anysola Code with: ${UPDATE_COMMAND.join(" ")}`
+export const INSTALL_URL = "https://www.anysola.com/install"
+export const UPDATE_HINT = "Update Anysola Code with: anysola update"
+
+/** Where the install scripts put the binary. */
+export function scriptInstallDir() {
+  return process.env.ANYSOLA_INSTALL_DIR || path.join(os.homedir(), ".anysola", "bin")
+}
+
+export function scriptInstallPath() {
+  return path.join(scriptInstallDir(), process.platform === "win32" ? "anysola.exe" : "anysola")
+}
+
+const real = (file: string) => {
+  try {
+    return realpathSync(file)
+  } catch {
+    return path.resolve(file)
+  }
+}
+
+/** True when this binary is the one the install script manages. */
+export function installedByScript() {
+  return real(process.execPath).toLowerCase() === real(scriptInstallPath()).toLowerCase()
+}
+
+/** The command that installs `version` (default: latest) the way this copy was installed. */
+export function updateCommand(version?: string): string[] {
+  if (!installedByScript()) return ["npm", "i", "-g", `${NPM_PACKAGE}@${version ?? "latest"}`]
+  if (process.platform === "win32") {
+    const pin = version ? `$env:ANYSOLA_VERSION='${version}'; ` : ""
+    return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `${pin}irm ${INSTALL_URL}.ps1 | iex`]
+  }
+  return ["sh", "-c", `curl -fsSL ${INSTALL_URL} | sh -s -- --no-modify-path${version ? ` --version ${version}` : ""}`]
+}
 
 export type Info = { readonly latest: string; readonly minimum?: string; readonly notes?: string }
 

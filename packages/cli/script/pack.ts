@@ -26,7 +26,8 @@ await packDistribution({
   command: "anysola",
   binary: "anysola",
   packagePrefix: "@anysola/code-",
-  archive: (target) => target.startsWith("linux-"),
+  // Every target: the GitHub release carries them for the install scripts (tar.gz on Linux, zip elsewhere).
+  archive: () => true,
 })
 if (existsSync(path.join(root, "node"))) {
   await packDistribution({

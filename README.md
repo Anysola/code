@@ -8,7 +8,24 @@ Product page: https://www.anysola.com/code. Account: https://account.anysola.com
 
 ## Install
 
-Requires Node 20 or newer. Runs on Linux, macOS and Windows (x64 and arm64).
+macOS and Linux (x64 and arm64, glibc or musl):
+
+```sh
+curl -fsSL https://www.anysola.com/install | sh
+```
+
+Windows (x64 and arm64), in PowerShell:
+
+```powershell
+irm https://www.anysola.com/install.ps1 | iex
+```
+
+The scripts download the binary from this repository's GitHub release, check its SHA-256 against `SHA256SUMS`,
+install it to `~/.anysola/bin` (`%USERPROFILE%\.anysola\bin` on Windows) and add that directory to `PATH`. A
+specific version: `sh -s -- --version 0.4.0` on macOS and Linux, `$env:ANYSOLA_VERSION = "0.4.0"` before the
+command on Windows. `anysola update` reruns the script; `anysola uninstall` removes the `PATH` entry.
+
+With npm (Node 20 or newer):
 
 ```sh
 npm i -g @anysola/code
@@ -139,7 +156,9 @@ The Anysola Code version is not stored in any `package.json`; it comes from the 
 2. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. `.github/workflows/release.yml` builds every platform, smoke-tests linux-x64, signs the macOS binaries ad hoc,
    packs, and publishes `@anysola/code` and the platform packages to npm with the `NPM_TOKEN` secret. A version
-   with a `-` suffix goes to the `next` dist-tag.
+   with a `-` suffix goes to the `next` dist-tag. Then it creates the GitHub release the install scripts read
+   (archives, `SHA256SUMS`, `install.sh`, `install.ps1`; a `-` version is a prerelease); www.anysola.com/install
+   serves the latest release's scripts.
 
 Running the workflow by hand (`workflow_dispatch`, `dry_run` on by default) builds and packs without publishing.
 

@@ -3,7 +3,11 @@
 Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](UPSTREAM-CHANGELOG.md).
 
-## Unreleased
+## 0.4.0
+
+- Install without npm: `curl -fsSL https://www.anysola.com/install | sh` (macOS, Linux) and
+  `irm https://www.anysola.com/install.ps1 | iex` (Windows) install the binary from the GitHub release into
+  `~/.anysola/bin`, checked against `SHA256SUMS`. `anysola update` and `anysola uninstall` know this install.
 
 - Session budgets: `/budget <credits>`, `/budget off`, `/budget default <credits>` in the TUI and
   `anysola run --budget <credits>`; the status line shows `session spent/budget`, and a session over its budget

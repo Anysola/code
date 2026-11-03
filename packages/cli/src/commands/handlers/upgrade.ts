@@ -7,14 +7,16 @@ import { AnysolaVersion } from "../../services/anysola-version"
 import { handlePromptErrors } from "../../ui/prompt"
 import { ANYSOLA_VERSION } from "../../version"
 
-// Anysola Code: `anysola update` installs the latest @anysola/code from npm (`--print` only shows the command).
+// Anysola Code: `anysola update` installs the latest release the way this copy was installed: the install script
+// again, or npm (`--print` only shows the command).
 export default Runtime.handler(
   Commands.commands.update,
   Effect.fn("cli.update")(
     function* (input) {
       intro("Update Anysola Code")
       const info = yield* Effect.promise(() => AnysolaVersion.fetchInfo())
-      const command = AnysolaVersion.UPDATE_COMMAND.join(" ")
+      const [bin, ...args] = AnysolaVersion.updateCommand()
+      const command = [bin, ...args.map((arg) => (/\s/.test(arg) ? JSON.stringify(arg) : arg))].join(" ")
       if (info) {
         log.info(`Installed ${ANYSOLA_VERSION}, latest ${info.latest}`)
         if (info.notes) log.message(info.notes)
@@ -29,10 +31,10 @@ export default Runtime.handler(
         return
       }
       log.step(command)
-      const [bin, ...args] = AnysolaVersion.UPDATE_COMMAND
-      const result = spawnSync(bin, args, { stdio: "inherit", shell: process.platform === "win32" })
+      // npm on Windows is npm.cmd, which only runs through a shell.
+      const result = spawnSync(bin!, args, { stdio: "inherit", shell: process.platform === "win32" && bin === "npm" })
       if (result.error || result.status !== 0) {
-        log.error(`npm failed${result.error ? `: ${result.error.message}` : ` with exit code ${result.status}`}`)
+        log.error(`${bin} failed${result.error ? `: ${result.error.message}` : ` with exit code ${result.status}`}`)
         log.info(`Run it yourself: ${command}`)
         process.exitCode = 1
         return
