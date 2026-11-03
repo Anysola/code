@@ -8,6 +8,7 @@ import { HttpClientError } from "effect/http"
 import { Form } from "../../form.js"
 import { Permission } from "../../permission.js"
 import { WebSearch } from "../../websearch.js"
+import { WebSearchAnysola } from "../../plugin/websearch/anysola.js"
 
 export const name = "websearch"
 export const NO_RESULTS = "No search results found. Please try a different query."
@@ -166,6 +167,9 @@ export const Plugin = {
               Effect.mapError((error) => {
                 const fallback = `Unable to search the web for ${input.query}`
                 if (!Schema.is(WebSearch.RequestError)(error)) return new ToolFailure({ message: fallback, error })
+                // Anysola Code: the Anysola provider's failures are written for the user (sign-in, credits, rate limit).
+                if (error.cause instanceof WebSearchAnysola.Failure)
+                  return new ToolFailure({ message: error.cause.message, error, metadata: { provider: error.providerID } })
                 const status = HttpClientError.isHttpClientError(error.cause) ? error.cause.response?.status : undefined
                 return new ToolFailure({
                   message:

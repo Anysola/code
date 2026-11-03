@@ -1,13 +1,5 @@
-import { WebSearchExa } from "./exa.js"
-import { WebSearchFirecrawl } from "./firecrawl.js"
-import { WebSearchParallel } from "./parallel.js"
-import { WebSearchTavily } from "./tavily.js"
-import { WebSearchTinyFish } from "./tinyfish.js"
+import { WebSearchAnysola } from "./anysola.js"
 
-export const WebSearchPlugins = [
-  WebSearchExa.Plugin,
-  WebSearchFirecrawl.Plugin,
-  WebSearchParallel.Plugin,
-  WebSearchTavily.Plugin,
-  WebSearchTinyFish.Plugin,
-] as const
+// Anysola Code: Anysola's gateway is the only web search provider; the third-party ones (Exa, Firecrawl, Parallel,
+// Tavily, TinyFish) are removed.
+export const WebSearchPlugins = [WebSearchAnysola.Plugin] as const

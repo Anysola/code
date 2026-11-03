@@ -11,6 +11,7 @@ import { Session } from "@opencode/core/session"
 import { toSessionError } from "@opencode/core/session/to-session-error"
 import { Tool } from "@opencode/core/tool"
 import { WebSearchTool } from "@opencode/core/tool/plugin/websearch"
+import { WebSearchAnysola } from "@opencode/core/plugin/websearch/anysola"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { Image } from "@opencode/core/image"
 import { testEffect } from "./lib/effect"
@@ -44,7 +45,7 @@ class Fixture {
   formResponse: Form.TerminalState = { status: "cancelled" }
   formResponses: Form.TerminalState[] = []
   formWait = Effect.void
-  error: HttpClientError.HttpClientError | undefined
+  error: HttpClientError.HttpClientError | WebSearchAnysola.Failure | undefined
   results: readonly WebSearch.Result[] = [
     { url: "https://example.com", title: "Search results", content: "search results", time: {} },
   ]
@@ -467,6 +468,26 @@ describe("WebSearchTool registration", () => {
           }),
         { discard: true },
       )
+    }),
+  )
+
+  it.effect("shows the Anysola provider's own failure message", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      const tools = yield* fixture.registry.snapshot()
+      yield* fixture.websearch.select(WebSearch.ID.make("exa"))
+      const message = "Out of Anysola credits for web search. Add credits at https://account.anysola.com/billing"
+      fixture.error = new WebSearchAnysola.Failure({ status: 402, message })
+      const error = yield* tools
+        .execute({
+          sessionID,
+          ...toolIdentity,
+          call: { type: "tool-call", id: "call-anysola", name: "websearch", input: { query: "effect" } },
+          progress: () => Effect.void,
+        })
+        .pipe(Effect.flip)
+      expect(toSessionError(error)).toEqual({ type: "tool.execution", message })
+      expect(error.metadata).toEqual({ provider: "exa" })
     }),
   )
 })
