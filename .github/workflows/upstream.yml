@@ -1,0 +1,179 @@
+# Upstream tracking: once a day, look for a newer OpenCode v2 release tag and try merging it into `anysola`.
+#
+# - Nothing newer than the version in packages/cli/package.json: done.
+# - A clean merge (files this branch deleted are kept deleted): push `upstream/vX.Y.Z` and open a PR into
+#   `anysola` with the branding sweep in its body. If Actions may not open PRs here, an issue links the branch.
+# - Conflicts: open an issue listing the conflicting files and the commands to merge by hand
+#   (README "Merging an upstream tag").
+# One PR or issue per upstream tag; later runs skip a tag that already has one.
+
+name: upstream
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Upstream tag to try (default: the newest stable v2 tag)"
+        required: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: upstream
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: anysola
+          fetch-depth: 0
+
+      - name: Find the upstream tag
+        id: tag
+        env:
+          WANTED: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/anomalyco/opencode.git
+          # Upstream's tags go to their own namespace: its old v0.x tags clash with Anysola's.
+          git fetch --no-tags upstream '+refs/tags/v2.*:refs/upstream-tags/v2.*'
+          current="v$(node -p "require('./packages/cli/package.json').version")"
+          latest="${WANTED:-$(git for-each-ref --format='%(refname:lstrip=2)' refs/upstream-tags \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)}"
+          echo "current=$current latest=$latest"
+          git rev-parse -q --verify "refs/upstream-tags/$latest" >/dev/null || { echo "No upstream tag $latest"; exit 1; }
+          newest=$(printf '%s\n%s\n' "$current" "$latest" | sort -V | tail -n 1)
+          if [ "$latest" = "$current" ] || [ "$newest" = "$current" ]; then
+            echo "Up to date with upstream ($current)"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+
+      - name: Skip a tag that already has a PR or issue
+        id: seen
+        if: steps.tag.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LATEST: ${{ steps.tag.outputs.latest }}
+        run: |
+          set -euo pipefail
+          title="Upstream OpenCode $LATEST"
+          prs=$(gh pr list --repo "$GITHUB_REPOSITORY" --state all --search "\"$title\" in:title" --json number --jq length)
+          issues=$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --search "\"$title\" in:title" --json number --jq length)
+          if [ "$prs" != "0" ] || [ "$issues" != "0" ]; then
+            echo "$title already has a PR or issue"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Try the merge
+        id: merge
+        if: steps.tag.outputs.skip == 'false' && steps.seen.outputs.skip == 'false'
+        env:
+          LATEST: ${{ steps.tag.outputs.latest }}
+        run: |
+          set -euo pipefail
+          git config user.name "anysola-bot"
+          git config user.email "contact@anysola.com"
+          git checkout -b "upstream/$LATEST"
+          if git merge --no-edit "refs/upstream-tags/$LATEST" -m "merge: upstream OpenCode $LATEST"; then
+            echo "clean=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Files this branch deleted and upstream changed: keep them deleted.
+          git status --porcelain | awk '$1 == "DU" { print substr($0, 4) }' | while IFS= read -r file; do
+            git rm -q -- "$file"
+          done
+          left=$(git diff --name-only --diff-filter=U)
+          if [ -z "$left" ]; then
+            git commit --no-edit -q
+            echo "clean=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          {
+            echo "conflicts<<EOF"
+            echo "$left"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          git merge --abort
+          echo "clean=false" >> "$GITHUB_OUTPUT"
+
+      - name: Branding sweep
+        if: steps.merge.outputs.clean == 'true'
+        run: |
+          set -uo pipefail
+          git grep -n -E 'OpenCode|opencode\.ai|`opencode [a-z]' -- 'packages/tui/src' 'packages/cli/src' ':!*test*' \
+            | grep -v -E 'OpenCode(Client|Event|\.make)|@opencode/|based on OpenCode|\(OpenCode ' > sweep.txt || true
+          wc -l < sweep.txt
+
+      - name: Open the PR
+        if: steps.merge.outputs.clean == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LATEST: ${{ steps.tag.outputs.latest }}
+          CURRENT: ${{ steps.tag.outputs.current }}
+        run: |
+          set -euo pipefail
+          git push origin "upstream/$LATEST"
+          {
+            echo "OpenCode $CURRENT → $LATEST merged into \`anysola\` without conflicts."
+            echo
+            echo "Before merging: typecheck, build one target, run the TUI and a short \`anysola run\`, and add the"
+            echo "release to CHANGELOG.md (README: \"Merging an upstream tag\")."
+            echo
+            echo "Upstream notes: https://github.com/anomalyco/opencode/releases/tag/$LATEST"
+            echo
+            echo "Branding sweep (new upstream strings to check):"
+            echo
+            echo '```'
+            head -n 200 sweep.txt
+            echo '```'
+          } > body.md
+          title="Upstream OpenCode $LATEST"
+          if ! gh pr create --repo "$GITHUB_REPOSITORY" --base anysola --head "upstream/$LATEST" \
+            --title "$title" --body-file body.md; then
+            # Actions may not open PRs in this repository: leave an issue pointing at the branch.
+            {
+              echo "Branch \`upstream/$LATEST\` is ready: https://github.com/$GITHUB_REPOSITORY/compare/anysola...upstream/$LATEST"
+              echo
+              cat body.md
+            } > issue.md
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file issue.md
+          fi
+
+      - name: Open the conflict issue
+        if: steps.merge.outputs.clean == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LATEST: ${{ steps.tag.outputs.latest }}
+          CURRENT: ${{ steps.tag.outputs.current }}
+          CONFLICTS: ${{ steps.merge.outputs.conflicts }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Merging OpenCode $LATEST into \`anysola\` (now on $CURRENT) conflicts in:"
+            echo
+            printf '%s\n' "$CONFLICTS" | sed 's/^/- `/; s/$/`/'
+            echo
+            echo "Merge by hand (README: \"Merging an upstream tag\"):"
+            echo
+            echo '```sh'
+            echo "git fetch --no-tags upstream '+refs/tags/$LATEST:refs/upstream-tags/$LATEST'"
+            echo "git checkout anysola && git merge refs/upstream-tags/$LATEST"
+            echo '```'
+            echo
+            echo "Upstream notes: https://github.com/anomalyco/opencode/releases/tag/$LATEST"
+          } > body.md
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "Upstream OpenCode $LATEST" --body-file body.md
