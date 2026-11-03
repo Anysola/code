@@ -8,6 +8,7 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 - The model picker says what each model is for ("Auto: Picks Haiku or Sonnet per turn", "Default", "Fastest")
   instead of repeating Anysola, and "~1 credit/turn" is singular.
 - The theme setting's default reads `anysola`.
+- Web search credits count toward the session total in the status line and the `anysola run` summary.
 - An `install-test` workflow runs the install scripts on Linux, macOS and Windows after each release.
 
 ## 0.5.0

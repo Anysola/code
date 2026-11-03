@@ -6,6 +6,7 @@ import { Anysola } from "../../anysola.js"
 import { KV } from "../../kv.js"
 import { cacheKey, call, errorOf } from "./anysola.js"
 import { creditsStream } from "./anysola-credits-stream.js"
+import { AnysolaSearchCredits } from "../websearch/anysola-credits.js"
 
 // Anysola account features that live inside the binary: credits per turn and per session from the gateway's
 // `x-credits-*` headers (or, on a stream, its closing `anysola_credits` event), the out-of-credits message, and proxies for /me, /usage and /tokens so clients (TUI, CLI)
@@ -208,6 +209,16 @@ export const AnysolaAccountPlugin = define<KV.Service | Scope.Scope>({
         }
       })
     yield* ctx.session.hook("http.response", onResponse, { providerID: Anysola.providerID })
+
+    // A web search is charged by its own request; its credits count toward the Session that ran the tool.
+    yield* ctx.tool.hook("execute.after", (event) =>
+      Effect.gen(function* () {
+        if (event.tool !== "websearch" || event.status !== "completed") return
+        const query = (event.input as { query?: unknown } | undefined)?.query
+        const credits = typeof query === "string" ? AnysolaSearchCredits.take(query) : undefined
+        if (credits) yield* record(event.sessionID, credits, undefined)
+      }).pipe(Effect.catchCause((cause) => Effect.logWarning("failed to count Anysola search credits", { cause }))),
+    )
 
     // A turn ends when the Session goes idle; the status line keeps showing that turn until the next one charges.
     yield* ctx.session.hook("experimental.idle", (event) =>

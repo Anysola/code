@@ -4,6 +4,7 @@ import { define } from "@opencode/plugin/effect/plugin"
 import { Duration, Effect, Option, Schema, Scope } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/http"
 import { Anysola } from "../../anysola.js"
+import { AnysolaSearchCredits } from "./anysola-credits.js"
 import { collectBoundedResponseBody } from "../../tool/http-body.js"
 import { BILLING_URL } from "../provider/anysola-account.js"
 import { errorOf } from "../provider/anysola.js"
@@ -27,6 +28,7 @@ const SearchResponse = Schema.fromJsonString(
         published: Schema.NullOr(Schema.Finite).pipe(Schema.optional),
       }),
     ),
+    credits: Schema.NullOr(Schema.Finite).pipe(Schema.optional),
   }),
 )
 
@@ -51,8 +53,14 @@ export function failure(status: number, text: string) {
 }
 
 /** Maps a successful reply to search results; `published` is milliseconds since the epoch. */
-export function results(text: string) {
+export function results(text: string, query?: string) {
   return Schema.decodeUnknownEffect(SearchResponse)(text).pipe(
+    // The account plugin adds the charge to the Session that ran the websearch tool.
+    Effect.tap((response) =>
+      Effect.sync(() => {
+        if (query !== undefined && response.credits) AnysolaSearchCredits.note(query, response.credits)
+      }),
+    ),
     Effect.map((response) =>
       response.results.map((item) => ({
         url: item.url,
@@ -113,7 +121,7 @@ export const Plugin = define<HttpClient.HttpClient | Scope.Scope>({
                 ),
               )
             if (reply.status < 200 || reply.status >= 300) return yield* failure(reply.status, reply.text)
-            return yield* results(reply.text)
+            return yield* results(reply.text, input.query)
           }),
       })
       editor.default.set(id)
