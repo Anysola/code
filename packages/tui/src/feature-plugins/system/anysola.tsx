@@ -3,6 +3,7 @@ import { AnysolaRpc } from "@opencode/schema/anysola"
 import { createEffect, createResource, createSignal, For, onCleanup, Show } from "solid-js"
 import { Account, BILLING_URL, statusText, type Me } from "../../anysola/store"
 import { formatCredits, formatDate, formatShortDate, planName, usageLines } from "../../anysola/format"
+import { openUrl } from "@opencode/util/open"
 import { Keymap } from "../../context/keymap"
 import { useTheme } from "../../context/theme"
 import { DialogConfirm } from "../../ui/dialog-confirm"
@@ -11,6 +12,10 @@ import { DialogSelect } from "../../ui/dialog-select"
 
 // Anysola account features in the TUI: the credits status line, low-balance and event banners, the /credits,
 // /usage and /devices dialogs, and /budget with the question asked before a turn once a Session is over budget. All calls go through the server's `anysola.account` RPC, which holds the token.
+
+const ACCOUNT_URL = "https://account.anysola.com"
+// Account's support page with a new ticket open.
+const FEEDBACK_URL = "https://www.anysola.com/contact"
 
 type Rpc = ReturnType<Plugin.Context["client"]["rpc"]>
 type Reply = { ok: boolean; status: number; body: unknown }
@@ -232,6 +237,12 @@ export default Plugin.define({
     const showCredits = () => context.ui.dialog.show(() => <CreditsDialog />)
     const showUsage = () => context.ui.dialog.show(() => <UsageDialog />)
     const showDevices = () => context.ui.dialog.show(() => <DevicesDialog />)
+    // Over SSH there may be no browser to open: the toast keeps the link visible either way.
+    const openLink = (url: string) =>
+      openUrl(url).then(
+        () => context.ui.toast.show({ message: url, variant: "info" }),
+        () => context.ui.toast.show({ message: `Open ${url}`, variant: "info" }),
+      )
 
     // Status line beside the session status: balance, this turn, this session. Hover shows the renewal date.
     context.ui.slot({
@@ -365,6 +376,22 @@ export default Plugin.define({
               slash: { name: "devices" },
               palette: true,
               run: showDevices,
+            },
+            {
+              id: "anysola.account",
+              title: "Open your Anysola account",
+              group: "Anysola",
+              slash: { name: "account" },
+              palette: true,
+              run: () => void openLink(ACCOUNT_URL),
+            },
+            {
+              id: "anysola.feedback",
+              title: "Send feedback or report a problem",
+              group: "Anysola",
+              slash: { name: "feedback" },
+              palette: true,
+              run: () => void openLink(FEEDBACK_URL),
             },
           ],
         }))

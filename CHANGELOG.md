@@ -6,6 +6,7 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 ## Unreleased
 
 - `anysola run` ends with what the run spent and the balance left.
+- `/account` opens account.anysola.com; `/feedback` opens a support ticket on Anysola.
 - MCP sign-ins name Anysola Code: OAuth client metadata from www.anysola.com and an Anysola callback page.
 - Daily upstream tracking: a workflow tries each new OpenCode v2 release and opens a PR or a conflict issue.
 - The home screen draws the ANYSOLA wordmark (both A's are the brand symbol) with "Code" under it; narrow terminals
