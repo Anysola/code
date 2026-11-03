@@ -88,7 +88,7 @@ async function packDistribution(input: {
         description: "Anysola Code: the Anysola coding agent for your terminal, based on OpenCode (MIT)",
         license: pkg.license,
         repository: { type: "git", url: "git+https://github.com/Anysola/code.git" },
-        homepage: "https://anysola.com",
+        homepage: "https://www.anysola.com/code",
         os: ["darwin", "linux", "win32"],
         cpu: ["arm64", "x64"],
         optionalDependencies: binaries,

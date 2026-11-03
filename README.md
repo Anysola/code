@@ -4,7 +4,7 @@
 
 A terminal coding agent for Anysola accounts, based on [OpenCode](https://github.com/anomalyco/opencode) v2.2.5.
 
-Product page: https://anysola.com/code. Account: https://account.anysola.com.
+Product page: https://www.anysola.com/code. Account: https://account.anysola.com.
 
 ## Install
 

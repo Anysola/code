@@ -3,6 +3,14 @@
 Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](UPSTREAM-CHANGELOG.md).
 
+## 0.3.2
+
+- Links to the product page (Open docs, package homepage, web fetch user agent) use https://www.anysola.com/code.
+
+## 0.3.1
+
+- Fixes /usage, /credits and /devices crashing after an update; older background services are restarted.
+
 ## 0.3.0
 
 - Status line shows credits remaining, the cost of the current turn and the session total.

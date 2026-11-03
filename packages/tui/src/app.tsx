@@ -1169,7 +1169,7 @@ function App() {
         name: "docs.open",
         title: "Open docs",
         run: () => {
-          openUrl("https://anysola.com").catch(() => {})
+          openUrl("https://www.anysola.com/code").catch(() => {})
           dialog.clear()
         },
         category: "System",
