@@ -25,8 +25,11 @@ import { OauthCallbackPage } from "../oauth/page.js"
 import type { Integration } from "../integration.js"
 import { ErrorSummary } from "../util/error-summary.js"
 
-/** Client ID Metadata Document: servers that support CIMD accept this URL as the client_id without registration. */
-export const CLIENT_METADATA_URL = "https://opencode.ai/oauth/opencode/client.json"
+/**
+ * Client ID Metadata Document: servers that support CIMD accept this URL as the client_id without registration.
+ * Anysola Code: served by www.anysola.com with the same redirect URIs as upstream's, named Anysola Code.
+ */
+export const CLIENT_METADATA_URL = "https://www.anysola.com/oauth/anysola-code/client.json"
 
 // Refresh tokens rotate, so concurrent refreshes of the same token share one request or the second gets invalid_grant.
 const refreshes = new Map<string, ReturnType<FetchLike>>()
@@ -182,8 +185,8 @@ export const provider = (options: Options): OAuthClientProvider => {
     ...(redirect ? { state: () => redirect.state } : {}),
     clientMetadata: {
       redirect_uris: [redirectUrl],
-      client_name: "opencode",
-      client_uri: "https://opencode.ai",
+      client_name: "Anysola Code",
+      client_uri: "https://www.anysola.com/code",
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: client?.client_secret ? "client_secret_post" : "none",
