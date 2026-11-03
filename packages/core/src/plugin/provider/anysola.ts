@@ -36,7 +36,7 @@ const num = (value: unknown) => (typeof value === "number" && Number.isFinite(va
 export function call(method: "GET" | "POST", route: string, options: { body?: unknown; token?: string } = {}) {
   return Effect.tryPromise({
     try: async (): Promise<Reply> => {
-      const headers: Record<string, string> = { accept: "application/json" }
+      const headers: Record<string, string> = { accept: "application/json", "x-anysola-version": Anysola.version }
       if (options.body !== undefined) headers["content-type"] = "application/json"
       if (options.token) headers.authorization = `Bearer ${options.token}`
       const response = await fetch(Anysola.apiURL() + route, {
@@ -195,7 +195,13 @@ function pin(providers: ProviderEditor) {
     provider.integrationID = integrationID
     provider.package = "@opencode/ai/providers/anthropic-compatible"
     provider.settings = { ...provider.settings, baseURL: `${Anysola.apiURL()}/v1/code` }
-    provider.headers = { ...provider.headers, "x-anysola-client": "opencode", [creditsEventHeader]: "1" }
+    // x-anysola-version: Admin's versions panel follows updates, not the version a device signed in with.
+    provider.headers = {
+      ...provider.headers,
+      "x-anysola-client": "opencode",
+      "x-anysola-version": Anysola.version,
+      [creditsEventHeader]: "1",
+    }
   })
 }
 

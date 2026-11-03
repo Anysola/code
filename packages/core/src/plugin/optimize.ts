@@ -4,6 +4,7 @@ import { define, type Context } from "@opencode/plugin/effect/plugin"
 import type { SessionHooks } from "@opencode/plugin/effect/session"
 import { Model } from "@opencode/schema/model"
 import { Effect } from "effect"
+import { Anysola } from "../anysola.js"
 import { SessionSystemPrompt } from "../session/system-prompt.js"
 
 import PROMPT_GPT from "./system-prompt/gpt.txt"
@@ -23,7 +24,8 @@ export const AnthropicPlugin = make(
   "opencode.prompt.anthropic",
   (model) => {
     const id = model.id.toLowerCase()
-    if (!id.includes("claude")) return undefined
+    // Anysola Code: every Anysola model is Claude, `auto` included.
+    if (!id.includes("claude") && model.providerID !== Anysola.providerID) return undefined
     return PROMPT_ANTHROPIC
   },
   "append",

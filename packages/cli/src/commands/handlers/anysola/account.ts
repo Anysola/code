@@ -3,6 +3,7 @@
 // token lands in the regular credential store; these commands drive it and talk to the account endpoints.
 import { intro, log, outro } from "@clack/prompts"
 import { Effect } from "effect"
+import { ANYSOLA_VERSION } from "../../../version"
 import type { IntegrationInfo, OpenCodeClient } from "@opencode/client"
 import { oauthLogin } from "../auth/login"
 import { loadIntegrations, location, request, resolveIntegration } from "../auth/shared"
@@ -48,7 +49,7 @@ export const call = (method: "GET" | "POST", route: string, token: string) =>
     try: async (): Promise<Reply> => {
       const response = await fetch(apiURL() + route, {
         method,
-        headers: { accept: "application/json", authorization: `Bearer ${token}` },
+        headers: { accept: "application/json", authorization: `Bearer ${token}`, "x-anysola-version": ANYSOLA_VERSION },
         signal: AbortSignal.timeout(15_000),
       })
       const text = await response.text()

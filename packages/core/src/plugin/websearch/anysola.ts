@@ -85,7 +85,11 @@ export const Plugin = define<HttpClient.HttpClient | Scope.Scope>({
             if (!value) return yield* new Failure({ message: "Web search needs an Anysola sign-in. Run `anysola login`." })
             const request = HttpClientRequest.post(Anysola.apiURL() + route).pipe(
               HttpClientRequest.acceptJson,
-              HttpClientRequest.setHeaders({ authorization: `Bearer ${value}`, "x-anysola-client": "opencode" }),
+              HttpClientRequest.setHeaders({
+                authorization: `Bearer ${value}`,
+                "x-anysola-client": "opencode",
+                "x-anysola-version": Anysola.version,
+              }),
               HttpClientRequest.bodyJsonUnsafe({ query: input.query }),
             )
             const reply = yield* HttpClient.withScope(http)

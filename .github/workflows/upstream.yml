@@ -96,8 +96,9 @@ jobs:
           git status --porcelain | awk '$1 == "DU" { print substr($0, 4) }' | while IFS= read -r file; do
             git rm -q -- "$file"
           done
-          # Anysola's own docs replaced upstream's (upstream's changelog lives in UPSTREAM-CHANGELOG.md).
-          for file in CHANGELOG.md README.md CONTRIBUTING.md SECURITY.md; do
+          # Anysola's own docs replaced upstream's (upstream's changelog lives in UPSTREAM-CHANGELOG.md); bun.lock is
+          # regenerated below, never merged by hand.
+          for file in CHANGELOG.md README.md CONTRIBUTING.md SECURITY.md bun.lock; do
             if git diff --name-only --diff-filter=U | grep -qx "$file"; then
               git checkout --ours -- "$file" && git add -- "$file"
             fi
@@ -115,6 +116,26 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           git merge --abort
           echo "clean=false" >> "$GITHUB_OUTPUT"
+
+      - uses: oven-sh/setup-bun@v2
+        if: steps.merge.outputs.clean == 'true'
+        with:
+          bun-version: "1.4.4"
+
+      - name: Keep deleted paths deleted, regenerate bun.lock
+        if: steps.merge.outputs.clean == 'true'
+        run: |
+          set -euo pipefail
+          grep -v '^#' script/anysola-deleted.txt | while IFS= read -r path; do
+            [ -n "$path" ] && git rm -r -q --ignore-unmatch -- "$path"
+          done
+          git ls-files -z '*sst-env.d.ts' | xargs -0 -r git rm -q --
+          bun install --ignore-scripts
+          git add -A bun.lock
+          if ! git diff --cached --quiet; then
+            git commit -q -m "merge: keep Anysola's deleted paths deleted and regenerate bun.lock"
+          fi
+          bun install --frozen-lockfile --ignore-scripts
 
       - name: Branding sweep
         if: steps.merge.outputs.clean == 'true'
