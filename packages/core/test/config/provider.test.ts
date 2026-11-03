@@ -10,10 +10,6 @@ import { Model } from "@opencode/core/model"
 import { ModelResolver } from "@opencode/core/model-resolver"
 import { Plugin } from "@opencode/core/plugin"
 import { PluginHost } from "@opencode/core/plugin/host"
-import { AzurePlugin } from "@opencode/core/plugin/provider/azure"
-import { OpenAIPlugin } from "@opencode/core/plugin/provider/openai"
-import { PromptCacheKeyPlugin } from "@opencode/core/plugin/provider/prompt-cache-key"
-import { XAIPlugin } from "@opencode/core/plugin/provider/xai"
 import { Provider } from "@opencode/core/provider"
 import { withEnv } from "../fixture/env"
 import { testEffect } from "../lib/effect"
@@ -129,46 +125,6 @@ describe("ConfigProviderPlugin.Plugin", () => {
       expect(required(yield* models.get(providerID, Model.ID.make("alias"))).compatibility).toEqual({
         requireFinishReason: false,
         supportsPromptCacheKey: false,
-      })
-    }),
-  )
-
-  it.effect("lets configured provider compatibility override built-in provider defaults", () =>
-    Effect.gen(function* () {
-      const plugin = yield* Plugin.Service
-      const providers = yield* Provider.Service
-      const models = yield* Model.Service
-      const providerID = Provider.ID.make("venice")
-      yield* providers.transform((editor) => {
-        editor.update(providerID, (provider) => {
-          provider.package = "@opencode/ai/providers/openai-compatible"
-        })
-        editor.models.update(providerID, Model.ID.make("chat"), () => {})
-        editor.models.update(providerID, Model.ID.make("keyed"), () => {})
-      })
-      yield* PromptCacheKeyPlugin.effect(yield* PluginHost.make(plugin))
-      expect(required(yield* models.get(providerID, Model.ID.make("chat"))).compatibility).toEqual({
-        supportsPromptCacheKey: true,
-      })
-
-      yield* addPlugin([
-        new Document({
-          type: "document",
-          info: decode({
-            providers: {
-              venice: {
-                compatibility: { supportsPromptCacheKey: false },
-                models: { keyed: { compatibility: { supportsPromptCacheKey: true } } },
-              },
-            },
-          }),
-        }),
-      ])
-      expect(required(yield* models.get(providerID, Model.ID.make("chat"))).compatibility).toEqual({
-        supportsPromptCacheKey: false,
-      })
-      expect(required(yield* models.get(providerID, Model.ID.make("keyed"))).compatibility).toEqual({
-        supportsPromptCacheKey: true,
       })
     }),
   )
@@ -296,52 +252,6 @@ describe("ConfigProviderPlugin.Plugin", () => {
       expect(untouched.settings?.transport).toBeUndefined()
     }),
   )
-
-  for (const builtin of [
-    { id: "openai", model: "gpt-5.6-sol", package: "@opencode/ai/providers/openai/responses", plugin: OpenAIPlugin },
-    { id: "xai", model: "grok-4.6", package: "@opencode/ai/providers/xai", plugin: XAIPlugin },
-    { id: "azure", model: "gpt-5.6-sol", package: "@opencode/ai/providers/azure/responses", plugin: AzurePlugin },
-    { id: "custom-azure", model: "deployment", package: "@opencode/ai/providers/azure/responses", plugin: AzurePlugin },
-  ]) {
-    it.live(`configured provider transport overrides ${builtin.id} defaults`, () =>
-      Effect.gen(function* () {
-        const providers = yield* Provider.Service
-        const models = yield* Model.Service
-        const plugin = yield* Plugin.Service
-        const host = yield* PluginHost.make(plugin)
-        const providerID = Provider.ID.make(builtin.id)
-        const modelID = Model.ID.make(builtin.model)
-        yield* providers.transform((editor) => {
-          editor.update(providerID, (provider) => {
-            provider.activation = "enabled"
-            provider.package = builtin.package
-          })
-          editor.models.update(providerID, modelID, () => {})
-        })
-        yield* builtin.plugin.effect(host)
-        expect((yield* providers.get(providerID))?.settings?.transport).toBe("websocket")
-        expect((yield* models.get(providerID, modelID))?.settings?.transport).toBeUndefined()
-
-        yield* addPlugin([
-          new Document({
-            type: "document",
-            info: decode({
-              providers: {
-                [builtin.id]: {
-                  settings: { transport: "http" },
-                  models: { override: { modelID: builtin.model } },
-                },
-              },
-            }),
-          }),
-        ])
-
-        expect((yield* providers.get(providerID))?.settings?.transport).toBe("http")
-        expect((yield* models.get(providerID, modelID))?.settings?.transport).toBeUndefined()
-        expect((yield* models.get(providerID, Model.ID.make("override")))?.settings?.transport).toBeUndefined()
-      }),
-    )
-  }
 
   it.effect("adds key auth for custom providers without env credentials", () =>
     Effect.gen(function* () {

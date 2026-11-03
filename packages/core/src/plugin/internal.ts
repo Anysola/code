@@ -99,12 +99,10 @@ import { IdentityPlugin } from "./identity.js"
 import { PlanPlugin } from "./plan.js"
 import { GoalPlugin } from "./goal.js"
 import { McpCodeModeDefaultsPlugin } from "./mcp-codemode-defaults.js"
-import { AnysolaPlugin } from "./provider/anysola.js"
+import { AnysolaPlugin, AnysolaProviderLockPlugin } from "./provider/anysola.js"
 import { AnysolaAccountPlugin } from "./provider/anysola-account.js"
 import { DynamicProviderPlugin } from "./provider/dynamic.js"
-import { OpencodePlugin } from "./provider/opencode.js"
 import { WebSearchPlugins } from "./websearch/index.js"
-import { SkillPlugin } from "./skill.js"
 import { VcsHgPlugin } from "./vcs/hg.js"
 import { ToolInputRepairPlugin } from "./tool-input-repair.js"
 import { OptimizePlugin } from "./optimize.js"
@@ -235,7 +233,7 @@ const pre = [
   PlanPlugin.Plugin,
   CommandPlugin.Plugin,
   GoalPlugin.Plugin,
-  SkillPlugin.Plugin,
+  // Anysola Code: no built-in skills (upstream's OpenCode docs and GitHub issue report skills).
   VcsHgPlugin.Plugin,
   // Anysola Code: the models.dev catalog and every other provider plugin are left out; Anysola is the only provider.
   AnysolaPlugin,
@@ -286,11 +284,18 @@ const post = [
   DynamicProviderPlugin,
   ConfigWebSearchPlugin.Plugin,
   ConfigPolicyPlugin.Plugin,
+  // Anysola Code: last, so no package plugin or config can add a model provider or move Anysola's endpoint.
+  AnysolaProviderLockPlugin,
 ] as const satisfies readonly InternalPlugin[]
 
-// Repository config must not switch off policy enforcement or the Console connection that delivers
-// organization statements, so plugin remove operations skip these IDs.
-export const guarded: ReadonlySet<string> = new Set([OpencodePlugin.id, ConfigPolicyPlugin.Plugin.id])
+// Repository config must not switch off policy enforcement or the Anysola provider and its lock, so plugin remove
+// operations skip these IDs.
+export const guarded: ReadonlySet<string> = new Set([
+  AnysolaPlugin.id,
+  AnysolaAccountPlugin.id,
+  AnysolaProviderLockPlugin.id,
+  ConfigPolicyPlugin.Plugin.id,
+])
 
 export const list = Effect.fn("PluginInternal.list")(function* () {
   // Capture only services; activation supplies the child Scope and batching context.

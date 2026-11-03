@@ -1,6 +1,7 @@
 import os from "node:os"
 import { Clock, Duration, Effect, FiberHandle, Option, Schema, Scope, Semaphore, Stream } from "effect"
 import type { IntegrationOAuthMethodRegistration } from "@opencode/plugin/effect/integration"
+import type { ProviderEditor } from "@opencode/plugin/effect/provider"
 import { define } from "@opencode/plugin/effect/plugin"
 import { Config as ConfigSchema } from "@opencode/schema/config"
 import { Anysola } from "../../anysola.js"
@@ -176,6 +177,68 @@ function document(body: unknown, connection: { readonly type: string; readonly i
   })
 }
 
+const endpointKeys = ["baseURL", "apiKey", "authToken", "accessToken"]
+
+type Endpoint = { package?: string; canonical?: string; settings: Record<string, unknown> }
+const endpoint = (value: { package?: string; canonical?: string; settings?: Readonly<Record<string, unknown>> }) => ({
+  package: value.package,
+  canonical: value.canonical,
+  settings: Object.fromEntries(Object.entries(value.settings ?? {}).filter(([key]) => endpointKeys.includes(key))),
+})
+/** Anysola's provider and model endpoints as the built-in plugin and the Anysola remote config left them. */
+let trusted: { provider: Endpoint; models: Map<string, Endpoint> } | undefined
+
+/** Sets the Anysola provider's endpoint, package, sign-in and gateway headers. */
+function pin(providers: ProviderEditor) {
+  providers.update(Anysola.providerID, (provider) => {
+    provider.name = "Anysola"
+    provider.integrationID = integrationID
+    provider.package = "@opencode/ai/providers/anthropic-compatible"
+    provider.settings = { ...provider.settings, baseURL: `${Anysola.apiURL()}/v1/code` }
+    provider.headers = { ...provider.headers, "x-anysola-client": "opencode", [creditsEventHeader]: "1" }
+  })
+}
+
+function restore<Value extends { package?: string; canonical?: string; settings?: Record<string, unknown> }>(
+  value: Value,
+  saved: Endpoint | undefined,
+) {
+  value.package = saved?.package
+  value.canonical = saved?.canonical
+  if (!value.settings && !saved) return
+  value.settings = {
+    ...Object.fromEntries(Object.entries(value.settings ?? {}).filter(([key]) => !endpointKeys.includes(key))),
+    ...saved?.settings,
+  }
+}
+
+/**
+ * Runs last, after package plugins and config: drops every provider but Anysola and puts back the endpoints the
+ * built-in plugin and the Anysola remote config set, so a plugin cannot add a model provider or point Anysola's
+ * models at another server or package.
+ */
+export const AnysolaProviderLockPlugin = define({
+  id: "anysola.provider-lock",
+  effect: Effect.fn(function* (ctx) {
+    yield* ctx.provider.transform((providers) => {
+      for (const record of providers.list())
+        if (!Anysola.isAllowedProvider(record.provider.id)) providers.remove(record.provider.id)
+      const record = providers.get(Anysola.providerID)
+      if (!record || !trusted) return
+      const saved = trusted
+      providers.update(Anysola.providerID, (provider) => {
+        provider.integrationID = integrationID
+        restore(provider as Parameters<typeof restore>[0], saved.provider)
+      })
+      pin(providers)
+      for (const model of record.models.values())
+        providers.models.update(Anysola.providerID, model.id, (item) =>
+          restore(item as Parameters<typeof restore>[0], saved.models.get(model.id)),
+        )
+    })
+  }),
+})
+
 export const AnysolaPlugin = define<Bus.Service | Config.Service | KV.Service | Scope.Scope>({
   id: "anysola.provider",
   effect: Effect.fn(function* (ctx) {
@@ -201,14 +264,13 @@ export const AnysolaPlugin = define<Bus.Service | Config.Service | KV.Service | 
 
     // The provider is always wired in; it becomes available once the Anysola integration has a connection.
     yield* ctx.provider.transform((providers) => {
-      providers.update(Anysola.providerID, (provider) => {
-        provider.name = "Anysola"
-        provider.integrationID = integrationID
-        provider.package = "@opencode/ai/providers/anthropic-compatible"
-        provider.settings = { ...provider.settings, baseURL: `${Anysola.apiURL()}/v1/code` }
-        provider.headers = { ...provider.headers, "x-anysola-client": "opencode", [creditsEventHeader]: "1" }
-      })
+      pin(providers)
       if (integrated) ConfigProviderPlugin.integrate(providers, integrated)
+      const record = providers.get(Anysola.providerID)
+      trusted = record && {
+        provider: endpoint(record.provider),
+        models: new Map([...record.models.values()].map((model) => [model.id, endpoint(model)])),
+      }
     })
 
     const load = Effect.fn("AnysolaPlugin.load")(function* (): Effect.fn.Return<typeof current> {
