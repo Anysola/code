@@ -58,19 +58,8 @@ const Handlers = Runtime.handlers(Commands, {
   update: () => import("./commands/handlers/upgrade"),
   uninstall: () => import("./commands/handlers/uninstall"),
   acp: () => import("./commands/handlers/acp"),
-  api: () => import("./commands/handlers/api"),
-  auth: {
-    list: () => import("./commands/handlers/auth/list"),
-    login: () => import("./commands/handlers/auth/login"),
-    logout: () => import("./commands/handlers/auth/logout"),
-    export: () => import("./commands/handlers/auth/export"),
-    import: () => import("./commands/handlers/auth/import"),
-    switch: () => import("./commands/handlers/auth/switch"),
-  },
   debug: {
-    agents: () => import("./commands/handlers/debug/agents"),
     config: () => import("./commands/handlers/debug/config"),
-    "heap-dump": () => import("./commands/handlers/debug/heap-dump"),
     paths: () => import("./commands/handlers/debug/paths"),
   },
   mcp: {
@@ -87,10 +76,7 @@ const Handlers = Runtime.handlers(Commands, {
     remove: () => import("./commands/handlers/plugin/remove"),
   },
   models: () => import("./commands/handlers/models"),
-  stats: () => import("./commands/handlers/stats"),
-  mini: () => import("./commands/handlers/mini"),
   run: () => import("./commands/handlers/run"),
-  pair: () => import("./commands/handlers/pair"),
   reload: () => import("./commands/handlers/reload"),
   session: {
     list: () => import("./commands/handlers/session/list"),

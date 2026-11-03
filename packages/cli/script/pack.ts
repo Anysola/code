@@ -3,7 +3,6 @@ import { $ } from "bun"
 import pkg from "../package.json"
 import { Script } from "@opencode/script"
 import { archiveDir as defaultArchiveDir, npmDir as defaultNpmDir } from "@opencode/script/pack"
-import { existsSync } from "fs"
 import { chmod, mkdir, rm, utimes } from "node:fs/promises"
 import path from "node:path"
 
@@ -29,16 +28,6 @@ await packDistribution({
   // Every target: the GitHub release carries them for the install scripts (tar.gz on Linux, zip elsewhere).
   archive: () => true,
 })
-if (existsSync(path.join(root, "node"))) {
-  await packDistribution({
-    root: path.join(root, "node"),
-    name: "@opencode/cli-node",
-    command: "opencode2-node",
-    binary: "opencode2-node",
-    packagePrefix: "@opencode/cli-node-",
-    archive: () => true,
-  })
-}
 
 async function packDistribution(input: {
   root: string

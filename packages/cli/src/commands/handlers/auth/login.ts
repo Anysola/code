@@ -1,10 +1,8 @@
 import { intro, log, outro, select, spinner, text } from "@clack/prompts"
-import { Effect, Option } from "effect"
+import { Effect } from "effect"
 import type { FormAnswer, IntegrationInfo, OpenCodeClient } from "@opencode/client"
-import { Commands } from "../../commands"
-import { Runtime } from "../../../framework/runtime"
 import { selectIntegration, type IntegrationChoice } from "../../../ui/integration-picker"
-import { handlePromptErrors, openUrl, prompt, requireInteractive } from "../../../ui/prompt"
+import { openUrl, prompt, requireInteractive } from "../../../ui/prompt"
 import { answerForm, secret } from "./form"
 import {
   createClient,
@@ -26,18 +24,9 @@ const integrationPriority = new Map([
   ["google", 5],
 ])
 
-export default Runtime.handler(
-  Commands.commands.auth.commands.login,
-  Effect.fn("cli.auth.login")((input) =>
-    login({
-      target: Option.getOrUndefined(input.target),
-      method: Option.getOrUndefined(input.method),
-      answer: input.answer,
-    }).pipe(handlePromptErrors),
-  ),
-)
-
-const login = Effect.fn("cli.auth.login.run")(function* (input: {
+// Anysola Code: the `auth` command is removed (`anysola login` and `anysola mcp auth` cover sign-in); this module
+// stays as the OAuth and form helpers those commands share.
+export const login = Effect.fn("cli.auth.login.run")(function* (input: {
   target?: string
   method?: string
   answer?: ReadonlyArray<string>

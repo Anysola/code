@@ -140,43 +140,15 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
       description: "Start an Agent Client Protocol server",
       params: {
         login: Flag.Boolean("login").pipe(
-          Flag.withDescription("Run auth login instead of starting the server"),
+          Flag.withDescription("Sign in to Anysola instead of starting the server"),
           Flag.withDefault(false),
         ),
-      },
-    }),
-    Spec.make("api", {
-      description: "Make a request to the running server",
-      globalFlags: ServerFlags,
-      params: {
-        request: Argument.String("operation | method path").pipe(
-          Argument.withDescription("OpenAPI operation ID, or an HTTP method followed by a path"),
-          Argument.variadic({ min: 1, max: 2 }),
-        ),
-        data: Flag.String("data").pipe(Flag.withAlias("d"), Flag.withDescription("Request body"), Flag.optional),
-        header: Flag.String("header").pipe(
-          Flag.withAlias("H"),
-          Flag.withDescription("Request header in name:value form"),
-          Flag.atMost(100),
-        ),
-        param: Flag.KeyValuePair("param").pipe(Flag.withDescription("OpenAPI path or query parameter"), Flag.optional),
       },
     }),
     Spec.make("debug", {
       description: "Debugging and troubleshooting tools",
       commands: [
-        Spec.make("agents", { description: "List all agents", globalFlags: ServerFlags }),
         Spec.make("config", { description: "List configuration sources", globalFlags: ServerFlags }),
-        Spec.make("heap-dump", {
-          description: "Write a heap snapshot of the running server and print its path",
-          globalFlags: [Server],
-          params: {
-            directory: Flag.String("directory").pipe(
-              Flag.withDescription("Directory to write the snapshot into instead of the server's log directory"),
-              Flag.optional,
-            ),
-          },
-        }),
         Spec.make("paths", {
           description: "Show global paths (data, config, cache, state)",
           params: {
@@ -195,79 +167,6 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
               Argument.withDescription(
                 "Print only one path: db, home, data, config, cache, state, tmp, bin, log, repos",
               ),
-              Argument.optional,
-            ),
-          },
-        }),
-      ],
-    }),
-    Spec.make("auth", {
-      description: "manage integrations and credentials",
-      globalFlags: ServerFlags,
-      commands: [
-        Spec.make("list", {
-          description: "list integrations and credentials",
-          params: {
-            format: Flag.Literals("format", ["default", "json"]).pipe(
-              Flag.withDescription("Output format"),
-              Flag.withDefault("default"),
-            ),
-          },
-        }),
-        Spec.make("login", {
-          description: "connect an integration",
-          params: {
-            target: Argument.String("target").pipe(
-              Argument.withDescription("Integration ID, name, or well-known provider URL"),
-              Argument.optional,
-            ),
-            method: Flag.String("method").pipe(Flag.withDescription("Authentication method ID"), Flag.optional),
-            answer: Flag.String("answer").pipe(
-              Flag.withDescription("Provider form answer (key=value; repeat for multiple fields)"),
-              Flag.atMost(100),
-            ),
-          },
-        }),
-        Spec.make("logout", {
-          description: "log out of a saved account",
-          params: {
-            target: Argument.String("target").pipe(
-              Argument.withDescription("Integration ID or name"),
-              Argument.optional,
-            ),
-            credential: Argument.String("credential").pipe(
-              Argument.withDescription("Credential ID or label (opens an account picker when omitted)"),
-              Argument.optional,
-            ),
-          },
-        }),
-        Spec.make("export", {
-          description: "print stored credentials, including secrets, as JSON",
-          params: {
-            target: Argument.String("target").pipe(
-              Argument.withDescription("Integration ID or name (exports every integration when omitted)"),
-              Argument.optional,
-            ),
-          },
-        }),
-        Spec.make("import", {
-          description: "import credentials exported by auth export",
-          params: {
-            file: Argument.String("file").pipe(
-              Argument.withDescription("JSON file to import (reads stdin when omitted)"),
-              Argument.optional,
-            ),
-          },
-        }),
-        Spec.make("switch", {
-          description: "switch the active account for an integration",
-          params: {
-            target: Argument.String("target").pipe(
-              Argument.withDescription("Integration ID or name"),
-              Argument.optional,
-            ),
-            credential: Argument.String("credential").pipe(
-              Argument.withDescription("Credential ID or label (opens an account picker when omitted)"),
               Argument.optional,
             ),
           },
@@ -368,73 +267,6 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
     Spec.make("models", {
       description: "List all available models",
       globalFlags: ServerFlags,
-    }),
-    Spec.make("stats", {
-      description: "Show shareable usage statistics",
-      globalFlags: ServerFlags,
-      params: {
-        days: Flag.Int("days").pipe(
-          Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
-          Flag.withDescription("Show the last N days; 0 means today"),
-          Flag.optional,
-        ),
-        year: Flag.Int("year").pipe(
-          Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1970, maximum: 9_999 }))),
-          Flag.withDescription("Show a calendar year"),
-          Flag.optional,
-        ),
-        all: Flag.Boolean("all").pipe(Flag.withDescription("Show lifetime statistics"), Flag.withDefault(false)),
-        project: Flag.String("project").pipe(
-          Flag.withDescription('Filter by project ID, or use "." for the current project'),
-          Flag.optional,
-        ),
-        models: Flag.Boolean("models").pipe(Flag.withDescription("Show model usage"), Flag.withDefault(false)),
-        tools: Flag.Boolean("tools").pipe(Flag.withDescription("Show tool reliability"), Flag.withDefault(false)),
-        cost: Flag.Boolean("cost").pipe(Flag.withDescription("Show cost and token details"), Flag.withDefault(false)),
-        full: Flag.Boolean("full").pipe(Flag.withDescription("Show every detailed section"), Flag.withDefault(false)),
-        limit: Flag.Int("limit").pipe(
-          Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
-          Flag.withDescription("Number of rows in detailed sections"),
-          Flag.withDefault(5),
-        ),
-        json: Flag.Boolean("json").pipe(Flag.withDescription("Output statistics as JSON"), Flag.withDefault(false)),
-      },
-    }),
-    Spec.make("mini", {
-      description: "Start the minimal interactive interface",
-      globalFlags: ServerFlags,
-      params: {
-        continue: Flag.Boolean("continue").pipe(
-          Flag.withAlias("c"),
-          Flag.withDescription("Continue the last session"),
-          Flag.withDefault(false),
-        ),
-        session: Flag.String("session").pipe(
-          Flag.withAlias("s"),
-          Flag.withDescription("Session ID to continue, or to create if it does not exist"),
-          Flag.optional,
-        ),
-        fork: Flag.Boolean("fork").pipe(
-          Flag.withDescription("Fork the session when continuing"),
-          Flag.withDefault(false),
-        ),
-        replay: Flag.Boolean("replay").pipe(
-          Flag.withDescription("Restore session history on resume and resize (disable with --no-replay)"),
-          Flag.optional,
-        ),
-        replayLimit: Flag.Int("replay-limit").pipe(
-          Flag.withDescription("Limit replay to the newest N messages (default: 200)"),
-          Flag.optional,
-        ),
-        model: Flag.String("model").pipe(
-          Flag.withAlias("m"),
-          Flag.withDescription("Model to use in the format provider/model"),
-          Flag.optional,
-        ),
-        agent: Flag.String("agent").pipe(Flag.withDescription("Agent to use"), Flag.optional),
-        prompt: Flag.String("prompt").pipe(Flag.withDescription("Prompt to use"), Flag.optional),
-        demo: Flag.Boolean("demo").pipe(Flag.withDefault(false), Flag.withHidden),
-      },
     }),
     Spec.make("run", {
       description: "Run Anysola Code with a message",
@@ -579,39 +411,8 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
       description: "Reload configuration",
       globalFlags: ServerFlags,
     }),
-    Spec.make("pair", {
-      description: "Not available in Anysola Code (connects the web UI)",
-      params: {
-        url: Flag.String("url").pipe(
-          Flag.withDescription("Use an external HTTP(S) server URL in pairing links"),
-          Flag.mapTryCatch(
-            (value) => {
-              const url = new URL(value)
-              if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash)
-                throw new Error("Invalid pairing URL")
-              return url.href.replace(/\/+$/, "")
-            },
-            () => "Expected an HTTP(S) server URL without credentials, query parameters, or a fragment",
-          ),
-          Flag.optional,
-        ),
-        remote: Flag.Boolean("remote").pipe(
-          Flag.withDescription(
-            "Pair through the OpenTunnel remote address, enabling remote access if needed (exposes the server to the internet)",
-          ),
-          Flag.withDefault(false),
-        ),
-        yes: Flag.Boolean("yes").pipe(
-          Flag.withAlias("y"),
-          Flag.withDescription(
-            "Accept exposing the server to the internet when --remote enables remote access for the first time (required without an interactive terminal)",
-          ),
-          Flag.withDefault(false),
-        ),
-      },
-    }),
     Spec.make("serve", {
-      description: "Start the v2 API and web server",
+      description: "Run the server the TUI connects to (started for you; internal)",
       params: {
         hostname: Flag.String("hostname").pipe(Flag.optional),
         port: Flag.Int("port").pipe(Flag.optional),

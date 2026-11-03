@@ -2,7 +2,7 @@ import { MessageTooLargeError, ndJsonStream } from "@agentclientprotocol/sdk"
 import { OpenCode } from "@opencode/client/effect"
 import { Service } from "@opencode/client/effect/service"
 import { CrossSpawnSpawner } from "@opencode/util/cross-spawn-spawner"
-import { Effect, Option } from "effect"
+import { Effect } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http"
 import { Writable } from "node:stream"
 import { ACP } from "../../acp/agent"
@@ -14,12 +14,9 @@ export default Runtime.handler(
   Commands.commands.acp,
   Effect.fn("cli.acp")(function* (input) {
     if (input.login) {
-      const login = yield* Effect.promise(() => import("./auth/login"))
-      return yield* login.default({
-        target: Option.none(),
-        method: Option.none(),
-        answer: [],
-      })
+      // Anysola Code: an editor's terminal sign-in (`anysola acp --login`) is the Anysola device flow.
+      const login = yield* Effect.promise(() => import("./anysola/login"))
+      return yield* login.default({ force: false })
     }
     process.env.OPENCODE_CLIENT = "acp"
     const endpoint = yield* Standalone.start()

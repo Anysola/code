@@ -107,7 +107,7 @@ export function make(input: {
       yield* Ref.set(input.capabilities, ACPCapabilities.parse(params.clientCapabilities))
       const authMethod: AuthMethod = {
         description: "Run `anysola login` in the terminal",
-        name: "Login with opencode",
+        name: "Login with Anysola",
         id: AuthMethodID,
         ...(params.clientCapabilities?.auth?.terminal ? { type: "terminal" as const, args: ["--login"] } : {}),
       }

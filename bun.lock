@@ -108,7 +108,6 @@
       "version": "2.2.5",
       "bin": {
         "opencode": "./bin/opencode.cjs",
-        "opencode2": "./bin/opencode2.cjs",
       },
       "dependencies": {
         "@agentclientprotocol/sdk": "1.6.0",
