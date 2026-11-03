@@ -147,6 +147,9 @@ Conflicts usually land in the files the Anysola commits touch:
 - `packages/cli/src/commands/commands.ts` and `src/index.ts`: a new upstream command needs a decision; the removed
   ones stay out. `packages/cli/src/services/updater.ts` keeps only `method`, `removal` and the Anysola update path.
 - `packages/cli/script/build.ts`: keep `modelsSnapshotPlugin("{}")` and no release highlights define.
+- `bun.lock` and the root `package.json` conflict on most merges now that this branch dropped about 1,100
+  packages: take upstream's changes that concern kept packages, keep the deleted workspaces and patches out, then
+  regenerate the lockfile with `bun install` (never merge `bun.lock` by hand) and check `bun install --frozen-lockfile`.
 - If upstream changed the provider or credential APIs, compare `plugin/provider/anysola.ts` with upstream's
   `plugin/provider/opencode.ts`, which uses the same calls.
 
