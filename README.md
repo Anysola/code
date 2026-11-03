@@ -51,11 +51,11 @@ The first run opens a device sign-in at https://account.anysola.com/device. Afte
 | `anysola devices` | List signed-in devices |
 | `anysola devices revoke <id>` | Sign out a device |
 | `anysola run --budget <credits> "<message>"` | Run once; stop when the session has spent that many credits |
-| `anysola update` | Install the latest release from npm |
+| `anysola update` | Install the latest release the way this copy was installed (install script or npm) |
 | `anysola --version` | Print the Anysola Code and OpenCode versions |
 
 In the TUI: `/credits` (balance), `/usage` (recent usage and cache hit rate), `/devices` (signed-in devices),
-`/budget` (session budget, below).
+`/budget` (session budget, below), `/account` (opens account.anysola.com), `/feedback` (opens a support ticket).
 
 ## Credits and billing
 
@@ -75,8 +75,17 @@ starts after the budget is reached, exits with code 1 and prints how to continue
 
 ## Models
 
-The model list comes from the Anysola server. Sonnet 5.5 is the default, Haiku 5.5 is the small model, and Opus
-5.5 can be selected in the model picker.
+The model list comes from the Anysola server and depends on your plan. Sonnet 5.5 is the default and Haiku 5.5 the
+small model. When Anysola turns them on, `Auto` uses Haiku for short questions in a small session and Sonnet for
+everything else (a session moves to Sonnet once and stays there, so the prompt cache keeps working), and the
+`economy` variant runs a model at lower effort. Each request is billed at the model that answered it.
+
+## CI
+
+Make a token in [Account > Apps > Code](https://account.anysola.com) ("New CI token") and store it as the GitHub
+secret `ANYSOLA_TOKEN`. Anysola Code reads it from the environment, so `anysola run --budget 100 "…"` works in any
+CI. For GitHub, [`Anysola/code-action`](https://github.com/Anysola/code-action) reviews pull requests and answers
+`/anysola` on issues (opening a PR when it changes files).
 
 ## Differences from OpenCode
 
@@ -89,7 +98,7 @@ The model list comes from the Anysola server. Sonnet 5.5 is the default, Haiku 5
   OpenCode Console `/usage` and limits, and release highlights. No built-in OpenCode docs or issue report skills.
 - Sign-in is built in (`anysola login`, or the first run) and uses your Anysola account.
 - No telemetry, no session sharing, no web UI, no remote tunnel.
-- Self-update is disabled. Updates come from npm (`anysola update` or `npm i -g @anysola/code@latest`).
+- Upstream's updater is removed. `anysola update` reruns the install script, or npm for an npm install.
 
 ## Based on OpenCode
 
