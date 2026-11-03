@@ -22,7 +22,16 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 - `/credits` writes the plan capitalised and the renewal as a date ("23 Nov"); the status line drops "this turn 0"
   after a session is reopened.
 - Dialog group headings are grey; the sand accent is kept for the selected row.
-- `anysola mini` ends with the A symbol beside the resume command.
+- Web search goes through the Anysola gateway and your credits; Exa, Firecrawl, Parallel, Tavily and TinyFish are
+  removed. It is on by default (each search still asks for permission); `"websearch": false` turns it off. Running out
+  of credits, an expired sign-in or a rate limit shows as a readable tool error.
+- Removed commands: `anysola pair`, `auth` (use `login`, `logout`, `status`, and `mcp auth` for MCP servers), `api`,
+  `mini`, `stats` (use `anysola usage`), `debug agents` and `debug heap-dump`. `anysola acp --login` signs in to
+  Anysola.
+- Removed from the TUI: `/pair` (`/web`), `/stats`, the OpenCode Console usage limits (`/usage` is Anysola's) and the
+  release highlights setting. The built-in OpenCode docs and issue report skills are gone.
+- Plugins cannot add a model provider or point Anysola's models at another server.
+- The binary is about 18 MB smaller (the unused models.dev catalog is no longer bundled).
 
 ## 0.4.0
 

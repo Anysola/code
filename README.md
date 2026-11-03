@@ -80,7 +80,13 @@ The model list comes from the Anysola server. Sonnet 5.5 is the default, Haiku 5
 
 ## Differences from OpenCode
 
-- Anysola is the only provider. Other providers and models.dev are not loaded.
+- Anysola is the only provider. Other providers and models.dev are not loaded, and plugins cannot add a provider or
+  move Anysola's endpoint.
+- Web search goes through the Anysola gateway (`POST /v1/code/search`, billed to your credits) instead of Exa,
+  Firecrawl, Parallel, Tavily or TinyFish. `"websearch": false` in the config turns it off.
+- Removed commands: `pair`, `auth` (use `anysola login`, `logout`, `status` and `anysola mcp auth`), `api`, `mini`,
+  `stats` (use `anysola usage`), `debug agents`, `debug heap-dump`; in the TUI `/pair` (`/web`), `/stats`, the
+  OpenCode Console `/usage` and limits, and release highlights. No built-in OpenCode docs or issue report skills.
 - Sign-in is built in (`anysola login`, or the first run) and uses your Anysola account.
 - No telemetry, no session sharing, no web UI, no remote tunnel.
 - Self-update is disabled. Updates come from npm (`anysola update` or `npm i -g @anysola/code@latest`).
@@ -111,6 +117,7 @@ cd packages/cli
 export ANYSOLA_VERSION=0.3.0 OPENCODE_CHANNEL=latest
 export OPENCODE_VERSION="$(node -p "require('./package.json').version")"
 bun run build --skip-web-ui                              # all targets; OPENCODE_TARGET=linux-x64 for one
+                                                         # --skip-web-ui is required: packages/app is deleted
 rm -f dist/SHA256SUMS && bun run pack                    # tarballs in dist/npm (ANYSOLA_NPM_DIR to change)
 dist/code-linux-x64/bin/anysola --version
 ```
@@ -126,15 +133,44 @@ git merge vX.Y.Z             # or: git rebase --onto vX.Y.Z v2.2.5 anysola
 Conflicts usually land in the files the Anysola commits touch:
 
 - `packages/core/src/plugin/internal.ts`: keep upstream's new plugins, leave `ModelsDevPlugin`,
-  `...ProviderPlugins` and `WellKnownPlugin` out and `AnysolaPlugin` in.
+  `...ProviderPlugins`, `WellKnownPlugin` and `SkillPlugin` out, `AnysolaPlugin` and `AnysolaAccountPlugin` in, and
+  `AnysolaProviderLockPlugin` as the last `post` entry; `guarded` lists the Anysola plugins instead of
+  `OpencodePlugin`. New upstream provider plugins stay unregistered; new upstream web search providers too.
 - `packages/core/src/provider.ts`, `integration.ts`, `config.ts`: re-apply the single `Anysola.*` line if the
   surrounding code moved.
 - `packages/cli/script/build.ts`, `pack.ts`: keep `binary = "anysola"`, the `@anysola/` names, `ANYSOLA_VERSION`,
   the LICENSE/NOTICE copy and the `opencode/` User-Agent (the Anysola gateway allowlists it).
 - `packages/tui/src/logo.ts`, `component/logo.tsx`: keep ours.
 - Docs and `.github` files deleted on this branch: keep them deleted (`git rm`).
+- Everything listed under "Deleted on this branch" below: keep it deleted (`git rm`; the upstream workflow does this
+  for modify/delete conflicts). A new upstream file inside a deleted package directory goes too.
+- `packages/cli/src/commands/commands.ts` and `src/index.ts`: a new upstream command needs a decision; the removed
+  ones stay out. `packages/cli/src/services/updater.ts` keeps only `method`, `removal` and the Anysola update path.
+- `packages/cli/script/build.ts`: keep `modelsSnapshotPlugin("{}")` and no release highlights define.
 - If upstream changed the provider or credential APIs, compare `plugin/provider/anysola.ts` with upstream's
   `plugin/provider/opencode.ts`, which uses the same calls.
+
+#### Deleted on this branch
+
+Keep these deleted when merging; none of them is part of the CLI build or the release:
+
+- Repo: `infra/`, `sst.config.ts`, every `sst-env.d.ts`, `salesforce/`, `nix/`, `flake.nix`, `flake.lock`,
+  `sdks/`, `perf/`, `specs/`, `screenshot-uk.png`, `services/`, `.github/release/`, `.github/nix-hashes/`,
+  `.github/actions/`, `.github/workflows/check.yml`, `check-test.yml`, `check-nix.yml`, `check-bot-scope.yml`,
+  `script/sdk-docs.ts`, `script/ast-grep/gui-plugins/`, `.opencode/skills/app-e2e-tests`, `component-tests`, and the
+  patches of packages no longer installed.
+- Packages: `app`, `desktop`, `web`, `console/*`, `stats/*`, `session-ui`, `gui-plugins`, `patchmark`, `stories`,
+  `posts`, `function`, `plugins/figma`, `sdk`, `identity`, `effect-drizzle-sqlite`.
+- CLI (`packages/cli`): `bin/opencode2.cjs`, `Dockerfile`, `vite.node.config.ts`, `script/build-node.ts`,
+  `script/node-assets.ts`, `src/node/`, `src/mini.ts`, `src/mini-host.ts`, handlers `api`, `stats`, `mini`, `pair`,
+  `auth/{account,export,import,list,logout,switch}`, `debug/{agents,heap-dump}`, and their tests.
+- TUI (`packages/tui`): `src/mini/*` except `tool.ts`, `tool.public.ts`, `types.ts`, `splash.ts`, `mono.ts`,
+  `theme.ts`; `feature-plugins/system/stats*.ts(x)`, `feature-plugins/sidebar/limit.tsx`,
+  `component/dialog-pair.tsx`, and their tests.
+- Core (`packages/core`): `src/plugin/provider.ts`, every `src/plugin/provider/*` except `anysola*.ts`,
+  `dynamic.ts` and `sdk-factory.ts` (with `claude-agent/`), `src/github-copilot/`, `src/modal/`,
+  `src/plugin/models-dev.ts`, `src/plugin/skill.ts` and `src/plugin/skill/`, `src/plugin/websearch/*` except
+  `anysola.ts` and `index.ts`, and their tests.
 
 Then sweep for new branding strings, typecheck and rebuild:
 
