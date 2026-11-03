@@ -3,35 +3,25 @@
 Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](UPSTREAM-CHANGELOG.md).
 
-## Unreleased
+## 0.5.0
 
-- `anysola run` ends with what the run spent and the balance left.
-- `/account` opens account.anysola.com; `/feedback` opens a support ticket on Anysola.
-- MCP sign-ins name Anysola Code: OAuth client metadata from www.anysola.com and an Anysola callback page.
-- Daily upstream tracking: a workflow tries each new OpenCode v2 release and opens a PR or a conflict issue.
-- The home screen draws the ANYSOLA wordmark (both A's are the brand symbol) with "Code" under it; narrow terminals
-  show the A alone. The exit summary prints the same mark.
-- The Anysola theme follows the web's Grafit palette: warm graphite surfaces (page #110f0d, panels #1a1815, the
-  composer one step lighter), warm greys for text, one sand accent for the Build agent and selection, quieter syntax
-  and diff colours. The light variant uses the same warm greys.
-- Home: the latest three sessions of the directory under the composer (click to open; `ctrl+x l` lists all), and the
-  plan with its renewal date in the bottom bar ("Team · renews 23 Nov").
-- Prompt examples are Anysola's own ("Explain this project", "Fix the failing tests", "Review my last commit").
-- The event banner uses the info colour without a decorative marker.
-- The composer no longer repeats "Anysola" after the model name; Anysola is the only provider.
-- `/credits` writes the plan capitalised and the renewal as a date ("23 Nov"); the status line drops "this turn 0"
-  after a session is reopened.
-- Dialog group headings are grey; the sand accent is kept for the selected row.
-- Web search goes through the Anysola gateway and your credits; Exa, Firecrawl, Parallel, Tavily and TinyFish are
-  removed. It is on by default (each search still asks for permission); `"websearch": false` turns it off. Running out
-  of credits, an expired sign-in or a rate limit shows as a readable tool error.
-- Removed commands: `anysola pair`, `auth` (use `login`, `logout`, `status`, and `mcp auth` for MCP servers), `api`,
-  `mini`, `stats` (use `anysola usage`), `debug agents` and `debug heap-dump`. `anysola acp --login` signs in to
-  Anysola.
-- Removed from the TUI: `/pair` (`/web`), `/stats`, the OpenCode Console usage limits (`/usage` is Anysola's) and the
-  release highlights setting. The built-in OpenCode docs and issue report skills are gone.
+- New look: the ANYSOLA wordmark on the home screen and in the exit summary, the Anysola theme on the web's warm
+  graphite palette with one sand accent, the directory's latest sessions under the composer, and the plan with its
+  renewal date in the bottom bar.
+- Web search runs through Anysola and your credits (each search asks for permission; `"websearch": false` turns it
+  off). The third-party search providers are gone.
+- Models: `Auto` picks Haiku for light turns and Sonnet for real work, and an `economy` variant runs a model at lower
+  effort, when Anysola turns them on for your plan.
+- `anysola run` ends with what it spent and the balance left. `/account` opens your account, `/feedback` opens a
+  support ticket.
+- CI: tokens made in Account > Apps > Code (`ANYSOLA_TOKEN`) and the `Anysola/code-action` GitHub Action for PR
+  reviews and `/anysola` on issues.
+- MCP sign-ins name Anysola Code, with Anysola's OAuth client metadata and callback page.
+- Removed: `anysola pair`, `auth` (use `login`, `logout`, `status`; `mcp auth` for MCP servers), `api`, `mini`,
+  `stats` (use `anysola usage`), `debug agents`, `debug heap-dump`; in the TUI `/pair`, `/stats`, the OpenCode
+  Console limits and the release highlights. `anysola acp --login` signs in to Anysola.
 - Plugins cannot add a model provider or point Anysola's models at another server.
-- The binary is about 18 MB smaller (the unused models.dev catalog is no longer bundled).
+- About 18 MB smaller.
 
 ## 0.4.0
 
