@@ -5,7 +5,6 @@ import { createHash } from "node:crypto"
 import { mkdir, rm } from "fs/promises"
 import path from "path"
 import { Script } from "@opencode/script"
-import { embed } from "@opencode/script/highlights"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 import type { BunPlugin } from "bun"
 import pkg from "../package.json"
@@ -14,7 +13,7 @@ import { buildAppArchive } from "./app-assets"
 import { verifyArtifact, verifySimulationGraph } from "./verify-artifact"
 import { resolveOpencodePty } from "./opencode-pty"
 import { NativeArch } from "../../../script/native-arch"
-import { bundledModelsSnapshot, modelsSnapshotPlugin } from "../../core/script/models-snapshot"
+import { modelsSnapshotPlugin } from "../../core/script/models-snapshot"
 
 const dir = path.resolve(import.meta.dirname, "..")
 // Anysola Code: the executable is `anysola`; platform packages are `@anysola/code-<os>-<arch>`.
@@ -35,9 +34,10 @@ const requestedTarget = process.env.OPENCODE_TARGET
 const skipInstall = process.argv.includes("--skip-install")
 const skipWebUi = process.argv.includes("--skip-web-ui")
 const solidPlugin = createSolidTransformPlugin()
-const highlights = Script.preview ? undefined : embed(process.env.OPENCODE_RELEASE_NOTES)
 const releaseAssets = new Map<string, Promise<Map<string, string>>>()
-const modelsSnapshot = modelsSnapshotPlugin(await bundledModelsSnapshot())
+// Anysola Code: models come from the Anysola server, never from models.dev, so the ~8 MB catalog snapshot is
+// replaced with an empty one. Upstream release highlights are not embedded either.
+const modelsSnapshot = modelsSnapshotPlugin("{}")
 
 const allTargets: {
   os: string
@@ -201,7 +201,6 @@ export default { path: file, version: ${JSON.stringify(opencodePty.version)}, sh
       ANYSOLA_VERSION: JSON.stringify(anysolaVersion),
       OPENCODE_CHANNEL: `'${Script.channel}'`,
       OPENCODE_ARTIFACT: `'cli'`,
-      ...(highlights ? { OPENCODE_RELEASE_HIGHLIGHTS: JSON.stringify(highlights) } : {}),
       OPENCODE_LIBC: item.os === "linux" ? `'${item.abi ?? "glibc"}'` : "undefined",
       // FFF_LIBC selects the fff native lib variant: "musl" or "gnu".
       FFF_LIBC: item.os === "linux" ? `'${item.abi ?? "gnu"}'` : "undefined",
