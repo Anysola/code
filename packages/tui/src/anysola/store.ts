@@ -25,6 +25,7 @@ export const BILLING_URL = "https://account.anysola.com/billing"
 const [sessions, setSessions] = createStore<Record<string, AnysolaRpc.SessionCredits>>({})
 const [me, setMe] = createSignal<Me>()
 const [estimates, setEstimates] = createSignal<Record<string, number>>({})
+const [notes, setNotes] = createSignal<Record<string, string>>({})
 let budgetGate: ((sessionID: string) => Promise<boolean>) | undefined
 
 export const Account = {
@@ -39,6 +40,11 @@ export const Account = {
   },
   setEstimates(value: Record<string, number>) {
     setEstimates(value)
+  },
+  /** What each Anysola model is for, from the remote config. */
+  notes,
+  setNotes(value: Record<string, string>) {
+    setNotes(value)
   },
   /** Latest balance: the gateway headers of this process, else /me. */
   remaining(sessionID?: string) {

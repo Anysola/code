@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { symbol } from "../../src/anysola/wordmark"
 import { RGBA, TextAttributes, type ScrollbackWriter } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { entrySplash, entrySplashLayout, exitSplash } from "../../src/mini/splash"
@@ -175,22 +176,22 @@ test.each(
     exitSplash({ ...input, title: "Review mini layout", session_id: sessionID, theme }),
     input.width,
   )
-  const command = `opencode mini -s ${sessionID}`
+  const command = `anysola mini -s ${sessionID}`
   const commandRows =
-    input.width >= 80 ? [result.rows[2].slice(result.rows[2].indexOf("opencode"))] : result.rows.slice(1)
+    input.width >= 80 ? [result.rows[2].slice(result.rows[2].indexOf("anysola"))] : result.rows.slice(1)
   const reconstructed = commandRows
     .map((row, index) => (index < commandRows.length - 1 ? row.padEnd(input.width) : row))
     .join("")
   expect(reconstructed).toBe(command)
   if (input.width >= 80) {
-    expect(result.rows[1].startsWith(input.mono ? "[O]" : "█▀▀█")).toBe(true)
+    expect(result.rows[1].trimStart().startsWith(input.mono ? "[A]" : symbol[0]!.trim())).toBe(true)
     expect(result.rows[1].includes("Session  Review mini layout")).toBe(input.showSession)
     expect(result.rows[2]).toContain("Continue " + command)
   } else {
-    expect(result.rows.join("\n")).not.toMatch(/Session|Continue|Review mini layout|█|\[O\]/)
+    expect(result.rows.join("\n")).not.toMatch(/Session|Continue|Review mini layout|█|\[A\]/)
     expect(result.rows).toHaveLength(1 + Math.ceil(command.length / input.width))
   }
   if (input.mono) expect(result.rows.join("")).not.toMatch(/[^\x20-\x7e]/)
-  expect(result.spans.find((span) => span.text.includes("opencode"))?.fg.intent).toBe("default")
-  expect(result.spans.find((span) => span.text.includes("opencode"))?.fg.toInts()).toEqual(theme.right.toInts())
+  expect(result.spans.find((span) => span.text.includes("anysola"))?.fg.intent).toBe("default")
+  expect(result.spans.find((span) => span.text.includes("anysola"))?.fg.toInts()).toEqual(theme.right.toInts())
 })

@@ -83,11 +83,13 @@ function DialogConnectedModels(props: {
   const isFavorite = (value: { providerID: string; modelID: string } | undefined) =>
     value !== undefined &&
     local.model.favorite().some((item) => item.providerID === value.providerID && item.modelID === value.modelID)
+  // Anysola Code: what the model is for, from the remote config, instead of the (only) provider's name.
+  const modelNote = (model: ModelInfo) => Account.notes()[model.id]
   // Under new designs the detail row shows the price, so the trailing slot only marks favorites.
   const trailing = (model: ModelInfo, favorite: boolean) => {
     // Anysola Code: the remote config's per-turn credit estimate, when the server sends one.
     const estimate = Account.estimates()[model.id]
-    if (estimate !== undefined) return `~${formatCredits(estimate)} credits/turn`
+    if (estimate !== undefined) return `~${formatCredits(estimate)} credit${estimate === 1 ? "" : "s"}/turn`
     if (newDesigns()) return favorite ? <FavoriteMarker /> : undefined
     return isFreeModel(model) ? "Free" : undefined
   }
@@ -121,7 +123,7 @@ function DialogConnectedModels(props: {
             value: { providerID: model.providerID, modelID: model.id },
             title: model.name,
             releaseDate: model.time.released,
-            description: provider?.name ?? model.providerID,
+            description: modelNote(model) ?? provider?.name ?? model.providerID,
             category,
             footer: trailing(model, isFavorite(item)),
             detail: newDesigns() ? () => <ModelDetail model={model} usage={usage(model)} /> : undefined,
@@ -156,7 +158,7 @@ function DialogConnectedModels(props: {
             providerName: provider?.name ?? model.providerID,
             title: model.name,
             releaseDate: model.time.released,
-            description: newDesigns() ? undefined : favorite ? "(Favorite)" : undefined,
+            description: newDesigns() ? undefined : (modelNote(model) ?? (favorite ? "(Favorite)" : undefined)),
             category: connected() ? (freeGroup(model) ? "Free" : (provider?.name ?? model.providerID)) : undefined,
             footer: trailing(model, favorite),
             free: isFreeModel(model),
@@ -194,7 +196,11 @@ function DialogConnectedModels(props: {
       // Search results name the provider inline. Without a category, the trailing slot keeps the favorite marker
       // instead of falling back to the provider name.
       if (!newDesigns()) return results
-      return results.map((option) => ({ ...option, description: option.providerName, category: undefined }))
+      return results.map((option) => ({
+        ...option,
+        description: Account.notes()[option.value.modelID] ?? option.providerName,
+        category: undefined,
+      }))
     }
 
     return [

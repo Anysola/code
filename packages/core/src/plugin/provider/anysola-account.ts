@@ -140,6 +140,11 @@ export const AnysolaAccountPlugin = define<KV.Service | Scope.Scope>({
             Effect.map((body) => estimates(body)),
             Effect.orElseSucceed(() => ({})),
           ),
+        notes: () =>
+          kv.get(cacheKey).pipe(
+            Effect.map((body) => notes(body)),
+            Effect.orElseSucceed(() => ({})),
+          ),
       })
       .pipe(Effect.orDie)
 
@@ -219,6 +224,18 @@ export const AnysolaAccountPlugin = define<KV.Service | Scope.Scope>({
     )
   }),
 })
+
+function notes(body: unknown): Record<string, string> {
+  const providers = (body as { providers?: Record<string, { models?: Record<string, unknown> }> } | undefined)
+    ?.providers
+  const models = providers?.[Anysola.providerID]?.models ?? {}
+  return Object.fromEntries(
+    Object.entries(models).flatMap(([id, model]) => {
+      const value = (model as { description?: unknown } | undefined)?.description
+      return typeof value === "string" && value.trim() ? [[id, value.trim().slice(0, 160)]] : []
+    }),
+  )
+}
 
 function estimates(body: unknown): Record<string, number> {
   const providers = (body as { providers?: Record<string, { models?: Record<string, unknown> }> } | undefined)

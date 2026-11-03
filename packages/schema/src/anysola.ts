@@ -59,6 +59,11 @@ export const Definition = Rpc.define({
       input: standard(Schema.Struct({})),
       output: standard(Schema.Record(Schema.String, Schema.Number)),
     },
+    /** What each model is for (`description` in the remote config), per model ID; empty when the server sends none. */
+    notes: {
+      input: standard(Schema.Struct({})),
+      output: standard(Schema.Record(Schema.String, Schema.String)),
+    },
   },
   events: {
     credits: { schema: standard(SessionCredits) },

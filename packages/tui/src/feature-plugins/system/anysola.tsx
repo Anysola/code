@@ -56,6 +56,7 @@ export default Plugin.define({
       tokens: (input: Record<string, never>) => Promise<Reply>
       revoke: (input: { id: string }) => Promise<Reply>
       estimates: (input: Record<string, never>) => Promise<Record<string, number>>
+      notes: (input: Record<string, never>) => Promise<Record<string, string>>
       events: Rpc["events"]
     }
     // Every call resolves: a failed RPC (for example an older background service that has no `anysola.account`)
@@ -89,6 +90,14 @@ export default Plugin.define({
       estimates: () =>
         Promise.resolve()
           .then(() => raw.estimates({}))
+          .then(
+            (value) => (value && typeof value === "object" ? value : {}),
+            () => ({}),
+          ),
+      // An older background service has no `notes`: the picker then shows no notes.
+      notes: () =>
+        Promise.resolve()
+          .then(() => raw.notes({}))
           .then(
             (value) => (value && typeof value === "object" ? value : {}),
             () => ({}),
@@ -197,7 +206,11 @@ export default Plugin.define({
           setMeError(undefined)
         } else setMeError(errorText(reply))
       })
-    const refreshEstimates = () => rpc.estimates().then((value) => Account.setEstimates(value as Record<string, number>))
+    const refreshEstimates = () =>
+      Promise.all([
+        rpc.estimates().then((value) => Account.setEstimates(value as Record<string, number>)),
+        rpc.notes().then((value) => Account.setNotes(value as Record<string, string>)),
+      ])
     let pending: ReturnType<typeof setTimeout> | undefined
     const refreshSoon = () => {
       if (pending) clearTimeout(pending)

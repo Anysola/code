@@ -3,6 +3,13 @@
 Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](UPSTREAM-CHANGELOG.md).
 
+## 0.5.1
+
+- The model picker says what each model is for ("Auto: Picks Haiku or Sonnet per turn", "Default", "Fastest")
+  instead of repeating Anysola, and "~1 credit/turn" is singular.
+- The theme setting's default reads `anysola`.
+- An `install-test` workflow runs the install scripts on Linux, macOS and Windows after each release.
+
 ## 0.5.0
 
 - New look: the ANYSOLA wordmark on the home screen and in the exit summary, the Anysola theme on the web's warm

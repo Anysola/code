@@ -4,7 +4,7 @@ import { expect, test } from "bun:test"
 import { resolveThemeDocument } from "@opencode/theme/tui"
 import { ConfigProvider, useConfig, type Info } from "../../src/config"
 import { ThemeProvider, useTheme, useThemes } from "../../src/context/theme"
-import { getOpenCode2Theme, getOpenCodeTheme } from "../../src/theme"
+import { getAnysolaTheme, getOpenCode2Theme } from "../../src/theme"
 import { emptyThemeSource, tmpdir } from "../fixture/fixture"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
@@ -58,7 +58,8 @@ test("offers opencode2 only while the new designs experiment is enabled", async 
       draft.experimental = { "new-designs": false }
     })
     expect(themes.has("opencode2")).toBeFalse()
-    expect(theme.background.base.equals(resolveThemeDocument(getOpenCodeTheme(), "dark").background.base)).toBeTrue()
+    // Anysola Code: without the experiment the selection falls back to the default theme, Anysola's.
+    expect(theme.background.base.equals(resolveThemeDocument(getAnysolaTheme(), "dark").background.base)).toBeTrue()
     expect(themes.selected).toBe("opencode2")
     expect(settings.theme?.name).toBe("opencode2")
   } finally {
