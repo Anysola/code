@@ -1,6 +1,6 @@
 import { Plugin } from "@opencode/plugin/tui"
 import { AnysolaRpc } from "@opencode/schema/anysola"
-import { createResource, createSignal, For, onCleanup, Show } from "solid-js"
+import { createEffect, createResource, createSignal, For, onCleanup, Show } from "solid-js"
 import { Account, BILLING_URL, statusText, type Me } from "../../anysola/store"
 import { formatCredits, formatDate, usageLines } from "../../anysola/format"
 import { Keymap } from "../../context/keymap"
@@ -9,8 +9,8 @@ import { DialogConfirm } from "../../ui/dialog-confirm"
 import { DialogHeader, DialogLayout } from "../../ui/dialog"
 import { DialogSelect } from "../../ui/dialog-select"
 
-// Anysola account features in the TUI: the credits status line, low-balance and event banners, and the /credits,
-// /usage and /devices dialogs. All calls go through the server's `anysola.account` RPC, which holds the token.
+// Anysola account features in the TUI: the credits status line, low-balance and event banners, the /credits,
+// /usage and /devices dialogs, and /budget with the question asked before a turn once a Session is over budget. All calls go through the server's `anysola.account` RPC, which holds the token.
 
 type Rpc = ReturnType<Plugin.Context["client"]["rpc"]>
 type Reply = { ok: boolean; status: number; body: unknown }
@@ -44,6 +44,8 @@ export default Plugin.define({
     const [meError, setMeError] = createSignal<string>()
     const raw = context.client.rpc(AnysolaRpc.Definition) as unknown as {
       session: (input: { sessionID: string }) => Promise<AnysolaRpc.SessionCredits | null>
+      budget: (input: { sessionID: string; limit: number | null }) => Promise<AnysolaRpc.SessionCredits>
+      budgetDefault: (input: { limit?: number | null }) => Promise<{ limit: number | null }>
       me: (input: Record<string, never>) => Promise<Reply>
       usage: (input: { days: number }) => Promise<Reply>
       tokens: (input: Record<string, never>) => Promise<Reply>
@@ -88,6 +90,101 @@ export default Plugin.define({
           ),
     }
 
+    /** Latest credits of a Session from the server (it keeps them across restarts); undefined when unavailable. */
+    const loadSession = (sessionID: string) =>
+      Promise.resolve()
+        .then(() => raw.session({ sessionID }))
+        .then(
+          (value) => {
+            if (value && typeof value === "object" && typeof value.sessionID === "string") Account.setSession(value)
+            return value ?? undefined
+          },
+          () => undefined,
+        )
+    const setBudget = (sessionID: string, limit: number | null) =>
+      Promise.resolve()
+        .then(() => raw.budget({ sessionID, limit }))
+        .then((value) => {
+          Account.setSession(value)
+          return value
+        })
+    const budgetDefault = (limit?: number | null) =>
+      Promise.resolve()
+        .then(() => raw.budgetDefault(limit === undefined ? {} : { limit }))
+        .then((value) => value.limit)
+
+    // Asked before a turn starts once the Session has spent its budget; the turn in progress is never cut.
+    const budgetGate = async (sessionID: string) => {
+      const session = await loadSession(sessionID)
+      if (!session || typeof session.budget !== "number" || session.total < session.budget) return true
+      const budget = session.budget
+      const raised = Math.max(budget, session.total) + budget
+      const choice = await context.ui.dialog.select({
+        title: `Budget reached · ${formatCredits(session.total)}/${formatCredits(budget)} credits`,
+        options: [
+          { title: "Continue once", value: "once", description: "Ask again before the next prompt" },
+          { title: `Add ${formatCredits(budget)} credits`, value: "add", description: `Budget ${formatCredits(raised)}` },
+          { title: "Remove the budget", value: "off" },
+          { title: "Stop", value: "stop", description: "Keep the prompt in the composer" },
+        ],
+      })
+      if (choice === "once") return true
+      if (choice === "add" || choice === "off") {
+        await setBudget(sessionID, choice === "add" ? raised : null)
+        return true
+      }
+      return false
+    }
+
+    const budgetCommand = async (input?: string) => {
+      const route = context.ui.router.current()
+      const sessionID = route.type === "session" ? route.sessionID : undefined
+      const words = (input ?? "").trim().toLowerCase().split(/\s+/).filter(Boolean)
+      const toast = (message: string, variant: "info" | "success" | "warning" | "error" = "info") =>
+        context.ui.toast.show({ message, variant })
+      const parse = (word: string | undefined) => {
+        if (word === "off") return null
+        const value = Number(word)
+        return Number.isInteger(value) && value >= 1 ? value : undefined
+      }
+      try {
+        if (words[0] === "default") {
+          if (words.length === 1) {
+            const limit = await budgetDefault()
+            return toast(limit === null ? "No default budget" : `New sessions start with a ${formatCredits(limit)} credit budget`)
+          }
+          const limit = parse(words[1])
+          if (limit === undefined) return toast("Usage: /budget default <credits> | off", "warning")
+          await budgetDefault(limit)
+          return toast(
+            limit === null ? "Default budget removed" : `New sessions start with a ${formatCredits(limit)} credit budget`,
+            "success",
+          )
+        }
+        if (!sessionID) return toast("Open a session first, or set one for new sessions: /budget default <credits>", "warning")
+        if (words.length === 0) {
+          const session = await loadSession(sessionID)
+          const spent = formatCredits(session?.total ?? 0)
+          return toast(
+            typeof session?.budget === "number"
+              ? `Session budget ${spent}/${formatCredits(session.budget)} credits`
+              : `No budget · ${spent} credits spent. Set one: /budget <credits>`,
+          )
+        }
+        const limit = parse(words[0])
+        if (limit === undefined || words.length > 1) return toast("Usage: /budget <credits> | off | default <credits>", "warning")
+        const session = await setBudget(sessionID, limit)
+        toast(
+          limit === null
+            ? "Budget removed"
+            : `Session budget ${formatCredits(session.total)}/${formatCredits(limit)} credits`,
+          "success",
+        )
+      } catch (error) {
+        toast(`Budget unavailable (${detail(error)}). If you just updated, run \`anysola service restart\`.`, "error")
+      }
+    }
+
     const refreshMe = () =>
       rpc.me().then((reply) => {
         if (reply.ok && reply.body && typeof reply.body === "object") {
@@ -103,6 +200,8 @@ export default Plugin.define({
     }
     // Subscriptions live as long as the app slot, so they close with the TUI instead of outliving its server.
     const subscribe = () => {
+      Account.setBudgetGate(budgetGate)
+      onCleanup(() => Account.setBudgetGate(undefined))
       void refreshMe()
       void refreshEstimates()
       const listen = () => {
@@ -140,6 +239,10 @@ export default Plugin.define({
       render: (props) => {
         const theme = useTheme()
         const [hovered, setHovered] = createSignal(false)
+        // A reopened Session shows its stored total and budget before it spends anything in this process.
+        createEffect(() => {
+          if (props.sessionID) void loadSession(props.sessionID)
+        })
         const text = () => {
           const base = statusText(props.sessionID)
           if (!base || !hovered()) return base
@@ -156,7 +259,11 @@ export default Plugin.define({
             >
               <text
                 wrapMode="none"
-                fg={Account.low(props.sessionID) ? theme.text.feedback.warning.base : theme.text.muted}
+                fg={
+                  Account.low(props.sessionID) || Account.overBudget(props.sessionID)
+                    ? theme.text.feedback.warning.base
+                    : theme.text.muted
+                }
               >
                 {text()}
               </text>
@@ -214,6 +321,14 @@ export default Plugin.define({
               slash: { name: "usage" },
               palette: true,
               run: showUsage,
+            },
+            {
+              id: "anysola.budget",
+              title: "Session budget",
+              group: "Anysola",
+              slash: { name: "budget", arguments: true },
+              palette: true,
+              run: (input?: string) => void budgetCommand(input),
             },
             {
               id: "anysola.devices",

@@ -22,6 +22,8 @@ export const SessionCredits = Schema.Struct({
   total: Schema.Number,
   /** Finished turns that spent credits. */
   turns: Schema.Number,
+  /** The Session's credit budget (`/budget`), compared with `total`; null when there is none. */
+  budget: Schema.NullOr(Schema.Number),
 })
 export type SessionCredits = typeof SessionCredits.Type
 
@@ -37,6 +39,16 @@ export const Definition = Rpc.define({
     session: {
       input: standard(Schema.Struct({ sessionID: Schema.String })),
       output: standard(Schema.NullOr(SessionCredits)),
+    },
+    /** Sets (a positive number) or clears (null) a Session's budget. */
+    budget: {
+      input: standard(Schema.Struct({ sessionID: Schema.String, limit: Schema.NullOr(Schema.Number) })),
+      output: standard(SessionCredits),
+    },
+    /** The budget new Sessions start with. Reads it when `limit` is omitted; null clears it. */
+    budgetDefault: {
+      input: standard(Schema.Struct({ limit: Schema.optional(Schema.NullOr(Schema.Number)) })),
+      output: standard(Schema.Struct({ limit: Schema.NullOr(Schema.Number) })),
     },
     me: { input: standard(Schema.Struct({})), output: standard(Reply) },
     usage: { input: standard(Schema.Struct({ days: Schema.Number })), output: standard(Reply) },

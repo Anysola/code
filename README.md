@@ -33,15 +33,28 @@ The first run opens a device sign-in at https://account.anysola.com/device. Afte
 | `anysola usage [--days 7\|30]` | Show credit usage for the last 7 or 30 days |
 | `anysola devices` | List signed-in devices |
 | `anysola devices revoke <id>` | Sign out a device |
+| `anysola run --budget <credits> "<message>"` | Run once; stop when the session has spent that many credits |
 | `anysola update` | Install the latest release from npm |
 | `anysola --version` | Print the Anysola Code and OpenCode versions |
 
-In the TUI: `/credits` (balance), `/usage` (recent usage), `/devices` (signed-in devices).
+In the TUI: `/credits` (balance), `/usage` (recent usage and cache hit rate), `/devices` (signed-in devices),
+`/budget` (session budget, below).
 
 ## Credits and billing
 
 Usage is billed to the credits of your Anysola subscription (Pro or Team); free accounts get a daily quota. The
 status line shows the credits remaining, the cost of the current turn and the total for the session.
+
+### Session budget
+
+`/budget 50` caps the session at 50 credits and the status line shows `session 12/50`. Once the session has spent
+its budget, the next prompt asks first: continue once, add the same amount again, remove the budget, or stop. A
+turn already running is never cut. `/budget` shows the budget, `/budget off` removes it, and `/budget default 50`
+gives every new session a 50 credit budget (`/budget default off` to stop). The budget and the session's total
+survive restarts, so `anysola -s <id>` resumes against the same budget.
+
+`anysola run --budget 50` sets the same budget for a run. A run cannot ask, so it stops as the next model request
+starts after the budget is reached, exits with code 1 and prints how to continue.
 
 ## Models
 

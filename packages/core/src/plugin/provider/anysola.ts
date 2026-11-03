@@ -13,6 +13,7 @@ import { Credential } from "../../credential.js"
 import { Integration } from "../../integration.js"
 import { IntegrationConnection } from "../../integration/connection.js"
 import { KV } from "../../kv.js"
+import { creditsEventHeader } from "./anysola-credits-stream.js"
 
 // Anysola Code's built-in login and provider. Login is the Anysola device flow (account.anysola.com/device); the
 // resulting token is stored in the regular credential store as the `anysola` integration's OAuth credential, so
@@ -205,7 +206,7 @@ export const AnysolaPlugin = define<Bus.Service | Config.Service | KV.Service | 
         provider.integrationID = integrationID
         provider.package = "@opencode/ai/providers/anthropic-compatible"
         provider.settings = { ...provider.settings, baseURL: `${Anysola.apiURL()}/v1/code` }
-        provider.headers = { ...provider.headers, "x-anysola-client": "opencode" }
+        provider.headers = { ...provider.headers, "x-anysola-client": "opencode", [creditsEventHeader]: "1" }
       })
       if (integrated) ConfigProviderPlugin.integrate(providers, integrated)
     })

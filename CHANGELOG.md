@@ -3,6 +3,15 @@
 Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](UPSTREAM-CHANGELOG.md).
 
+## Unreleased
+
+- Session budgets: `/budget <credits>`, `/budget off`, `/budget default <credits>` in the TUI and
+  `anysola run --budget <credits>`; the status line shows `session spent/budget`, and a session over its budget
+  asks before the next turn.
+- The cost of the current turn and the session total now count streamed answers (they stayed at 0 before); the
+  totals are kept across restarts.
+- `/usage` and `anysola usage` show the cache hit rate.
+
 ## 0.3.2
 
 - Links to the product page (Open docs, package homepage, web fetch user agent) use https://www.anysola.com/code.

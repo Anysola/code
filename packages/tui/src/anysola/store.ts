@@ -25,6 +25,7 @@ export const BILLING_URL = "https://account.anysola.com/billing"
 const [sessions, setSessions] = createStore<Record<string, AnysolaRpc.SessionCredits>>({})
 const [me, setMe] = createSignal<Me>()
 const [estimates, setEstimates] = createSignal<Record<string, number>>({})
+let budgetGate: ((sessionID: string) => Promise<boolean>) | undefined
 
 export const Account = {
   sessions,
@@ -48,6 +49,20 @@ export const Account = {
     const available = me()?.credits?.available
     return typeof available === "number" && Number.isFinite(available) ? available : undefined
   },
+  /** The Session has spent its whole `/budget`. */
+  overBudget(sessionID?: string) {
+    const session = sessionID ? sessions[sessionID] : undefined
+    return typeof session?.budget === "number" && session.total >= session.budget
+  },
+  /** Installed by the `anysola` plugin: asks what to do when a Session is over budget. */
+  setBudgetGate(gate: typeof budgetGate) {
+    budgetGate = gate
+  },
+  /** Whether the composer may start another turn; a failing gate never blocks the prompt. */
+  allowTurn(sessionID: string) {
+    if (!budgetGate) return Promise.resolve(true)
+    return budgetGate(sessionID).catch(() => true)
+  },
   low(sessionID?: string) {
     const remaining = Account.remaining(sessionID)
     if (me()?.access === "free") return false
@@ -55,7 +70,7 @@ export const Account = {
   },
 }
 
-/** "835 credits · this turn 12 · session 40", or the free quota for free accounts. */
+/** "835 credits · this turn 12 · session 40" ("session 40/50" with a budget), or the free quota for free accounts. */
 export function statusText(sessionID: string | undefined) {
   const account = me()
   const session = sessionID ? sessions[sessionID] : undefined
@@ -66,7 +81,11 @@ export function statusText(sessionID: string | undefined) {
   const remaining = Account.remaining(sessionID)
   if (remaining === undefined) return undefined
   const parts = [`${formatCredits(remaining)} credits`]
-  if (session && session.total > 0) parts.push(`this turn ${formatCredits(session.turn)}`, `session ${formatCredits(session.total)}`)
+  if (session && session.total > 0) parts.push(`this turn ${formatCredits(session.turn)}`)
+  if (session && (session.total > 0 || typeof session.budget === "number"))
+    parts.push(
+      `session ${formatCredits(session.total)}${typeof session.budget === "number" ? `/${formatCredits(session.budget)}` : ""}`,
+    )
   return parts.join(" · ")
 }
 

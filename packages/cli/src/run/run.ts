@@ -1,5 +1,6 @@
 import { Service, type Endpoint } from "@opencode/client/effect/service"
-import { OpenCode, type SessionMessageAssistantTool } from "@opencode/client/promise"
+import { OpenCode, type OpenCodeClient, type SessionMessageAssistantTool } from "@opencode/client/promise"
+import { AnysolaRpc } from "@opencode/schema/anysola"
 import { FSUtil } from "@opencode/util/fs-util"
 import { noTimeoutFetch } from "@opencode/util/no-timeout-fetch"
 import { open } from "node:fs/promises"
@@ -26,6 +27,8 @@ export type RunCommandInput = {
   title?: string
   thinking?: boolean
   auto?: boolean
+  /** Anysola: credits the Session may spend; the run stops once it has. */
+  budget?: number
 }
 
 type FilePart = {
@@ -134,6 +137,12 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
     })
   }
 
+  const budget = input.budget === undefined ? undefined : await watchBudget(client, target.session.id, input.budget)
+  if (budget?.stopped) {
+    reportRunError(input, budget.message(), target.session.id)
+    return
+  }
+
   await runNonInteractivePrompt({
     client,
     sessionID: target.session.id,
@@ -150,7 +159,52 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
     compatibility: options.compatibility,
     renderTool: (part) => renderTool(part, target.location.directory),
     renderToolError: (part) => renderToolError(part, target.location.directory),
-  }).catch((error) => reportRunError(input, errorMessage(error), target.session.id))
+  })
+    .catch((error) => {
+      // Stopping at the budget interrupts the Session; report that instead of the interruption.
+      if (!budget?.stopped) reportRunError(input, errorMessage(error), target.session.id)
+    })
+    .finally(() => budget?.stop())
+  if (budget?.stopped) reportRunError(input, budget.message(), target.session.id)
+}
+
+/**
+ * Sets the Session's budget and, once its credits reach it, interrupts the Session as its next model request
+ * starts. A run cannot ask, so unlike the TUI it stops inside the turn; a turn that ends at the budget ends normally.
+ */
+async function watchBudget(client: OpenCodeClient, sessionID: string, limit: number) {
+  const rpc = client.rpc(AnysolaRpc.Definition)
+  const set = await rpc.budget({ sessionID, limit }).catch((error: unknown) => {
+    throw new Error(`Cannot set the budget (${errorMessage(error)}). If you just updated, run \`anysola service restart\`.`)
+  })
+  const state = { total: set.total, stopped: set.total >= limit }
+  const controller = new AbortController()
+  const stopCredits = state.stopped
+    ? () => {}
+    : rpc.events.on("credits", (event) => {
+        if (event.data.sessionID === sessionID) state.total = event.data.total
+      })
+  if (!state.stopped)
+    void (async () => {
+      for await (const event of client.event.subscribe({ signal: controller.signal })) {
+        if (event.type !== "session.step.started" || event.data.sessionID !== sessionID) continue
+        if (state.total < limit) continue
+        state.stopped = true
+        await client.session.interrupt({ sessionID }).catch(() => {})
+        return
+      }
+    })().catch(() => {})
+  return {
+    get stopped() {
+      return state.stopped
+    },
+    stop: () => {
+      stopCredits()
+      controller.abort()
+    },
+    message: () =>
+      `Budget reached: ${state.total}/${limit} credits. Continue with \`anysola run -s ${sessionID} --budget <credits>\`.`,
+  }
 }
 
 export function mergeInput(message: string | undefined, piped: string | undefined) {

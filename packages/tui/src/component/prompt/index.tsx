@@ -71,6 +71,7 @@ import { useWorkingDirectoryActions } from "../../ui/working-directory-actions"
 import { truncateFilePath } from "../../ui/file-path"
 import { PromptMetadataRow } from "./metadata"
 import { limitLabel, useUsageLimits } from "../usage"
+import { Account } from "../../anysola/store"
 
 export type PromptProps = {
   sessionID?: string
@@ -1178,6 +1179,17 @@ export function Prompt(props: PromptProps) {
       })
       return false
     }
+
+    // Anysola: a Session over its credit budget asks before another turn starts; "Stop" keeps the composer as it is.
+    // The local check keeps the usual path free of awaits before the snapshot below.
+    if (
+      trimmed &&
+      props.sessionID &&
+      store.mode !== "shell" &&
+      Account.overBudget(props.sessionID) &&
+      !(await Account.allowTurn(props.sessionID))
+    )
+      return false
 
     // Snapshot the composer and clear it synchronously, before the first await.
     // Everything below reads the snapshot: text typed while a request is in

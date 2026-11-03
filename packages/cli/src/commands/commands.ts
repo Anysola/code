@@ -475,6 +475,11 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
         ),
         title: Flag.String("title").pipe(Flag.withDescription("Session title"), Flag.optional),
         thinking: Flag.Boolean("thinking").pipe(Flag.withDescription("Show thinking blocks"), Flag.withDefault(false)),
+        budget: Flag.Int("budget").pipe(
+          Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+          Flag.withDescription("Stop once the session has spent this many credits"),
+          Flag.optional,
+        ),
         ...PermissionParams,
       },
     }),

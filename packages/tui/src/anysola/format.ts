@@ -36,6 +36,7 @@ export function usageLines(body: unknown) {
       ["", "requests", "credits"],
       [["all", formatCredits(num(totals.requests)), formatCredits(num(totals.credits))]],
     ).map((line) => `  ${line}`),
+    ...(typeof totals.cacheHitRate === "number" ? [`  Cache hit rate ${Math.round(totals.cacheHitRate * 100)}%`] : []),
     "",
     "By day",
     ...table(
