@@ -15,6 +15,11 @@ export function formatDate(value: string | null | undefined) {
   return date.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
 }
 
+/** "team" → "Team". */
+export function planName(plan: string) {
+  return plan.charAt(0).toUpperCase() + plan.slice(1)
+}
+
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 /** Calendar date as on the web: "18 Nov", with the year only when it is not this year ("5 Jan 2027"). */

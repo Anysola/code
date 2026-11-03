@@ -81,7 +81,7 @@ export function statusText(sessionID: string | undefined) {
   const remaining = Account.remaining(sessionID)
   if (remaining === undefined) return undefined
   const parts = [`${formatCredits(remaining)} credits`]
-  if (session && session.total > 0) parts.push(`this turn ${formatCredits(session.turn)}`)
+  if (session && session.turn > 0) parts.push(`this turn ${formatCredits(session.turn)}`)
   if (session && (session.total > 0 || typeof session.budget === "number"))
     parts.push(
       `session ${formatCredits(session.total)}${typeof session.budget === "number" ? `/${formatCredits(session.budget)}` : ""}`,

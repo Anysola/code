@@ -2,7 +2,7 @@ import { Plugin } from "@opencode/plugin/tui"
 import { AnysolaRpc } from "@opencode/schema/anysola"
 import { createEffect, createResource, createSignal, For, onCleanup, Show } from "solid-js"
 import { Account, BILLING_URL, statusText, type Me } from "../../anysola/store"
-import { formatCredits, formatDate, formatShortDate, usageLines } from "../../anysola/format"
+import { formatCredits, formatDate, formatShortDate, planName, usageLines } from "../../anysola/format"
 import { Keymap } from "../../context/keymap"
 import { useTheme } from "../../context/theme"
 import { DialogConfirm } from "../../ui/dialog-confirm"
@@ -303,9 +303,8 @@ export default Plugin.define({
       const text = () => {
         const me = Account.me()
         if (!me?.plan) return undefined
-        const plan = me.plan.charAt(0).toUpperCase() + me.plan.slice(1)
         const renews = formatShortDate(me.credits?.renewsAt)
-        return renews ? `${plan} · renews ${renews}` : plan
+        return renews ? `${planName(me.plan)} · renews ${renews}` : planName(me.plan)
       }
       return (
         <Show when={text()}>
@@ -383,9 +382,9 @@ export default Plugin.define({
         const sessionID = session.type === "session" ? session.sessionID : undefined
         const spent = sessionID ? Account.sessions[sessionID] : undefined
         return [
-          ["Plan", `${me.plan ?? "unknown"}${me.access === "free" ? " (free)" : ""}`],
+          ["Plan", `${planName(me.plan ?? "unknown")}${me.access === "free" ? " (free)" : ""}`],
           ...(me.credits ? [["Balance", `${formatCredits(Account.remaining(sessionID) ?? me.credits.available ?? 0)} credits`]] : []),
-          ...(me.credits?.renewsAt ? [["Renews", formatDate(me.credits.renewsAt)!]] : []),
+          ...(me.credits?.renewsAt ? [["Renews", formatShortDate(me.credits.renewsAt)!]] : []),
           ...(me.freeQuota
             ? [["Free quota", `${me.freeQuota.usedTurns ?? 0}/${me.freeQuota.dailyTurns ?? 0} turns today`]]
             : []),

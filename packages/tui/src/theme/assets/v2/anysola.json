@@ -259,7 +259,7 @@
         "800": "#f8f1ff",
         "900": "#fcf8ff"
       },
-      "accent": "$hue.sand",
+      "accent": "$hue.grafit",
       "interactive": "$hue.sand",
       "neutral": "$hue.grafit"
     },
@@ -407,7 +407,7 @@
         "800": "#211c2b",
         "900": "#130f1a"
       },
-      "accent": "$hue.sand",
+      "accent": "$hue.grafit",
       "interactive": "$hue.sand",
       "neutral": "$hue.grafit"
     }

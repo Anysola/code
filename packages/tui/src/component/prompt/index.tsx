@@ -1871,7 +1871,7 @@ export function Prompt(props: PromptProps) {
                 agent={agentLabel()}
                 auto={local.permission.mode === "autoaccept"}
                 model={promptDisplay().modelLabel}
-                provider={promptDisplay().providerLabel}
+                provider={promptDisplay().providerLabel === "Anysola" ? "" : promptDisplay().providerLabel}
                 variant={promptDisplay().variant}
                 limit={limit()}
                 muted={!!muted()}

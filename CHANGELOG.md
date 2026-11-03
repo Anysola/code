@@ -17,6 +17,10 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
   plan with its renewal date in the bottom bar ("Team · renews 23 Nov").
 - Prompt examples are Anysola's own ("Explain this project", "Fix the failing tests", "Review my last commit").
 - The event banner uses the info colour without a decorative marker.
+- The composer no longer repeats "Anysola" after the model name; Anysola is the only provider.
+- `/credits` writes the plan capitalised and the renewal as a date ("23 Nov"); the status line drops "this turn 0"
+  after a session is reopened.
+- Dialog group headings are grey; the sand accent is kept for the selected row.
 
 ## 0.4.0
 
