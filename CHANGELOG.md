@@ -21,6 +21,7 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 - `/credits` writes the plan capitalised and the renewal as a date ("23 Nov"); the status line drops "this turn 0"
   after a session is reopened.
 - Dialog group headings are grey; the sand accent is kept for the selected row.
+- `anysola mini` ends with the A symbol beside the resume command.
 
 ## 0.4.0
 
