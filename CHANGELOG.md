@@ -8,6 +8,15 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 - `anysola run` ends with what the run spent and the balance left.
 - MCP sign-ins name Anysola Code: OAuth client metadata from www.anysola.com and an Anysola callback page.
 - Daily upstream tracking: a workflow tries each new OpenCode v2 release and opens a PR or a conflict issue.
+- The home screen draws the ANYSOLA wordmark (both A's are the brand symbol) with "Code" under it; narrow terminals
+  show the A alone. The exit summary prints the same mark.
+- The Anysola theme follows the web's Grafit palette: warm graphite surfaces (page #110f0d, panels #1a1815, the
+  composer one step lighter), warm greys for text, one sand accent for the Build agent and selection, quieter syntax
+  and diff colours. The light variant uses the same warm greys.
+- Home: the latest three sessions of the directory under the composer (click to open; `ctrl+x l` lists all), and the
+  plan with its renewal date in the bottom bar ("Team · renews 23 Nov").
+- Prompt examples are Anysola's own ("Explain this project", "Fix the failing tests", "Review my last commit").
+- The event banner uses the info colour without a decorative marker.
 
 ## 0.4.0
 

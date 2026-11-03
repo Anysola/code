@@ -15,6 +15,27 @@ export function formatDate(value: string | null | undefined) {
   return date.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
 }
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+/** Calendar date as on the web: "18 Nov", with the year only when it is not this year ("5 Jan 2027"). */
+export function formatShortDate(value: string | number | null | undefined, now = Date.now()) {
+  if (value === null || value === undefined || value === "") return undefined
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return undefined
+  const day = `${date.getDate()} ${MONTHS[date.getMonth()]}`
+  return date.getFullYear() === new Date(now).getFullYear() ? day : `${day} ${date.getFullYear()}`
+}
+
+/** List time as on the web: relative within 7 days ("now", "40m ago", "5h ago", "2d ago"), then the date. */
+export function formatAgo(value: number, now = Date.now()) {
+  const minutes = Math.floor((now - value) / 60_000)
+  if (minutes < 1) return "now"
+  if (minutes < 60) return `${minutes}m ago`
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)}h ago`
+  if (minutes < 7 * 24 * 60) return `${Math.floor(minutes / (24 * 60))}d ago`
+  return formatShortDate(value, now)!
+}
+
 /** Left-aligned first column, right-aligned numbers. */
 export function table(header: string[], rows: string[][]) {
   const all = [header, ...rows]

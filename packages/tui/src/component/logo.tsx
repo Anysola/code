@@ -1,79 +1,32 @@
-import { RGBA, TextAttributes } from "@opentui/core"
-import { For, type JSX } from "solid-js"
+import { TextAttributes } from "@opentui/core"
+import { For, Show } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../context/theme"
-import { tint } from "../theme/color"
-import { logo, mark } from "../logo"
+import { product, symbol, wordmark } from "../anysola/wordmark"
 
+// Anysola Code: the ANYSOLA wordmark with the product name under its right edge; the A symbol alone on narrow
+// terminals, nothing on short ones.
 export function Logo() {
   const theme = useTheme()
   const dimensions = useTerminalDimensions()
-
-  const renderLine = (line: string, fg: RGBA, bold: boolean): JSX.Element[] => {
-    const shadow = tint(theme.background.base, fg, 0.25)
-    const attrs = bold ? TextAttributes.BOLD : undefined
-    return Array.from(line).map((char) => {
-      if (char === "_") {
-        return (
-          <text fg={fg} bg={shadow} attributes={attrs} selectable={false}>
-            {" "}
-          </text>
-        )
-      }
-      if (char === "^") {
-        return (
-          <text fg={fg} bg={shadow} attributes={attrs} selectable={false}>
-            ▀
-          </text>
-        )
-      }
-      if (char === "~") {
-        return (
-          <text fg={shadow} attributes={attrs} selectable={false}>
-            ▀
-          </text>
-        )
-      }
-      if (char === ",") {
-        return (
-          <text fg={shadow} attributes={attrs} selectable={false}>
-            ▄
-          </text>
-        )
-      }
-      return (
-        <text fg={fg} attributes={attrs} selectable={false}>
-          {char}
-        </text>
-      )
-    })
-  }
+  const art = () => (dimensions().width < wordmark[0]!.length + 4 ? symbol : wordmark)
 
   return (
-    <box>
-      {dimensions().height < 12 ? null : dimensions().width < 38 ? (
-        <For each={mark}>
-          {(line) => <box flexDirection="row">{renderLine(line, theme.text.base, true)}</box>}
-        </For>
-      ) : dimensions().width < 58 ? (
-        <>
-          <For each={logo.left.slice(1)}>
-            {(line) => <box flexDirection="row">{renderLine(line, theme.text.base, true)}</box>}
+    <Show when={dimensions().height >= 12}>
+      <box alignItems={art() === symbol ? "center" : "flex-end"}>
+        <box>
+          <For each={art()}>
+            {(line) => (
+              <text fg={theme.text.base} attributes={TextAttributes.BOLD} wrapMode="none" selectable={false}>
+                {line}
+              </text>
+            )}
           </For>
-          <For each={logo.right}>
-            {(line) => <box flexDirection="row">{renderLine(line, theme.text.muted, false)}</box>}
-          </For>
-        </>
-      ) : (
-        <For each={logo.left}>
-          {(line, index) => (
-            <box flexDirection="row" gap={1}>
-              <box flexDirection="row">{renderLine(line, theme.text.base, true)}</box>
-              <box flexDirection="row">{renderLine(logo.right[index()], theme.text.muted, false)}</box>
-            </box>
-          )}
-        </For>
-      )}
-    </box>
+        </box>
+        <text fg={theme.text.muted} wrapMode="none" selectable={false}>
+          {art() === symbol ? `Anysola ${product}` : product}
+        </text>
+      </box>
+    </Show>
   )
 }

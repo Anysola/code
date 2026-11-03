@@ -2,7 +2,7 @@ import { Plugin } from "@opencode/plugin/tui"
 import { AnysolaRpc } from "@opencode/schema/anysola"
 import { createEffect, createResource, createSignal, For, onCleanup, Show } from "solid-js"
 import { Account, BILLING_URL, statusText, type Me } from "../../anysola/store"
-import { formatCredits, formatDate, usageLines } from "../../anysola/format"
+import { formatCredits, formatDate, formatShortDate, usageLines } from "../../anysola/format"
 import { Keymap } from "../../context/keymap"
 import { useTheme } from "../../context/theme"
 import { DialogConfirm } from "../../ui/dialog-confirm"
@@ -246,7 +246,8 @@ export default Plugin.define({
         const text = () => {
           const base = statusText(props.sessionID)
           if (!base || !hovered()) return base
-          const renews = formatDate(Account.me()?.credits?.renewsAt ?? Account.me()?.freeQuota?.resetsAt)
+          const me = Account.me()
+          const renews = me?.credits?.renewsAt ? formatShortDate(me.credits.renewsAt) : formatDate(me?.freeQuota?.resetsAt)
           return renews ? `${base} · renews ${renews}` : base
         }
         return (
@@ -280,8 +281,8 @@ export default Plugin.define({
         <>
           <Show when={event()?.label}>
             <box flexDirection="row" flexShrink={0}>
-              <text fg={theme.hue.interactive[200]} wrapMode="none">
-                ◆ {event()!.label}
+              <text fg={theme.text.feedback.info.base} wrapMode="none">
+                {event()!.label}
                 {event()?.until ? ` · until ${formatDate(event()!.until)}` : ""}
               </text>
             </box>
@@ -296,8 +297,36 @@ export default Plugin.define({
         </>
       )
     }
+    // Home footer: the plan and when it renews ("Team · renews 23 Nov"); the balance sits in the composer footer.
+    const AccountLine = () => {
+      const theme = useTheme()
+      const text = () => {
+        const me = Account.me()
+        if (!me?.plan) return undefined
+        const plan = me.plan.charAt(0).toUpperCase() + me.plan.slice(1)
+        const renews = formatShortDate(me.credits?.renewsAt)
+        return renews ? `${plan} · renews ${renews}` : plan
+      }
+      return (
+        <Show when={text()}>
+          <box flexShrink={0} onMouseUp={showCredits}>
+            <text fg={theme.text.faint} wrapMode="none">
+              {text()}
+            </text>
+          </box>
+        </Show>
+      )
+    }
     context.ui.slot({ append: "session.composer.top", render: (props) => <Banner sessionID={props.sessionID} /> })
-    context.ui.slot({ append: "home.footer.status", render: () => <Banner /> })
+    context.ui.slot({
+      append: "home.footer.status",
+      render: () => (
+        <>
+          <AccountLine />
+          <Banner />
+        </>
+      ),
+    })
 
     context.ui.slot({
       append: "app",
