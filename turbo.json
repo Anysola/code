@@ -4,8 +4,6 @@
     "patches/**",
     "bunfig.toml",
     ".npmrc",
-    ".github/actions/setup-bun/**",
-    ".github/workflows/check-test.yml",
     "package.json"
   ],
   "globalEnv": ["CI", "OPENCODE_DISABLE_SHARE"],
@@ -24,9 +22,6 @@
       "dependsOn": ["transit"]
     },
     "@opencode/cli#typecheck:tsc": {
-      "dependsOn": ["transit", "@opencode/core#typecheck:tsc"]
-    },
-    "@opencode/sdk#typecheck:tsc": {
       "dependsOn": ["transit", "@opencode/core#typecheck:tsc"]
     },
     "@opencode/server#typecheck:tsc": {
@@ -55,13 +50,6 @@
     // Every package with a test script runs here, so a new suite cannot be left out of CI.
     "test": {
       "dependsOn": ["transit"],
-      "outputs": []
-    },
-    "@opencode/desktop#test": {
-      "outputs": [],
-      "cache": false
-    },
-    "@opencode/sdk#verify:package": {
       "outputs": []
     }
   }
