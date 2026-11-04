@@ -10,7 +10,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use super::gate::RuleGate;
-use super::lower::{Target, lower};
+use super::lower::{Entry, Target, lower};
 use super::message::{AssistantData, AssistantTime, Message, Part, StoredModel, ToolState, encode};
 use super::request::{Request, build, output_limit};
 use super::stream::{Action, Assembly};
@@ -122,7 +122,7 @@ fn history(shared: &Shared, session_id: &str) -> Vec<Message> {
 }
 
 /// Tokens of the last answered request plus a chars/4 estimate of what came after it.
-fn input_estimate(history: &[Message], messages: &[Value]) -> u64 {
+fn input_estimate(history: &[Message], messages: &[Entry]) -> u64 {
     let last = history
         .iter()
         .rposition(|m| matches!(m, Message::Assistant(a) if a.tokens.is_some()));
@@ -134,11 +134,13 @@ fn input_estimate(history: &[Message], messages: &[Value]) -> u64 {
         .map_or(0, |t| {
             t.input + t.output + t.reasoning + t.cache.read + t.cache.write
         });
-    let since = messages
-        .iter()
-        .rev()
-        .take_while(|m| m["role"] != "assistant");
-    let chars: usize = since.map(|m| crate::json::compact(m).len()).sum();
+    let since = messages.iter().rev().map_while(|e| match e {
+        Entry::Turn(m) if m["role"] == "assistant" => None,
+        Entry::Turn(m) => Some(crate::json::compact(m).len()),
+        Entry::Update { text, .. } => Some(text.len()),
+        Entry::Effort { .. } => Some(0),
+    });
+    let chars: usize = since.sum();
     measured + ((chars as f64 / 4.0) * 1.15).ceil() as u64
 }
 
@@ -232,9 +234,9 @@ async fn step(
     };
     let mut messages = lower(&history, &target);
     if capped {
-        messages.push(
+        messages.push(Entry::Turn(
             json!({"role": "assistant", "content": [{"type": "text", "text": MAX_STEPS_PROMPT}]}),
-        );
+        ));
     }
     let max_tokens = output_limit(&selection.model, input_estimate(&history, &messages));
     let variant = selection

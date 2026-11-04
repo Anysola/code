@@ -183,6 +183,16 @@ impl Model {
         })
     }
 
+    /// Mid-conversation effort changes: Claude Opus ≥ 5 and every Claude ≥ 5.1, or the gateway's
+    /// compatibility flag.
+    pub fn effort_updates(&self) -> bool {
+        self.supports_effort_updates.unwrap_or_else(|| {
+            claude_version(&self.id).is_some_and(|(family, major, minor)| {
+                (family == "opus" && major >= 5) || major > 5 || (major == 5 && minor >= 1)
+            })
+        })
+    }
+
     /// Instruction updates go out as native system messages only for Claude ≥ 5 ids.
     pub fn native_system_updates(&self) -> bool {
         claude_version(&self.id).is_some_and(|(family, major, minor)| {

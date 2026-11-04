@@ -226,3 +226,47 @@ fn max_steps_final_step() {
         2,
     );
 }
+
+#[test]
+fn effort_switch_mid_session() {
+    let gateway = gateway_logger(String::new());
+    let home = anysola_testkit::TestHome::new(&gateway.url);
+    let dir = proj(&home);
+    let sonnet = "anysola/claude-sonnet-5-5";
+    assert_eq!(run(&home, &dir, &["run", "-m", sonnet, "first"]).code, 0);
+    let high = format!("{sonnet}#high");
+    assert_eq!(
+        run(&home, &dir, &["run", "-c", "-m", &high, "second"]).code,
+        0
+    );
+    let main: Vec<_> = gateway
+        .messages()
+        .into_iter()
+        .filter(|r| !r.is_title())
+        .collect();
+    let body = main[1].json();
+    assert!(
+        body.get("output_config").is_none(),
+        "top-level effort stays the first one"
+    );
+    assert_eq!(
+        body["thinking"]["display"], "summarized",
+        "the request settings follow the variant"
+    );
+    assert_eq!(
+        body["messages"][2],
+        serde_json::json!({"role": "system", "content": [], "output_config": {"effort": "high"}})
+    );
+    assert_eq!(body["messages"][3]["content"][0]["text"], "second");
+    let beta = main[1]
+        .headers
+        .iter()
+        .find(|(k, _)| k == "anthropic-beta")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(
+        beta,
+        Some(
+            "interleaved-thinking-2025-05-14,thinking-binding-controls-2026-08-01,mid-conversation-output-config-2026-07-01"
+        )
+    );
+}

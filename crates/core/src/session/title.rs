@@ -73,9 +73,9 @@ async fn ask(
         variant: variant.and_then(|v| model.variant(v)),
         system: vec![crate::agent::PROMPT_TITLE.to_string()],
         tools: Vec::new(),
-        messages: vec![
+        messages: vec![super::lower::Entry::Turn(
             json!({"role": "user", "content": [{"type": "text", "text": prompt(text)}]}),
-        ],
+        )],
         max_tokens: 32_000,
         tools_disabled: false,
     });

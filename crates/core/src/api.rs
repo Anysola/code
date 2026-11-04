@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde_json::Value;
+use serde_json::{Value, json};
+
+use crate::time::now_ms;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
@@ -259,18 +261,37 @@ impl Core {
         Ok(self.shared.db.set_title(session_id, title)?)
     }
 
-    /// Selects the agent for the session's next turns.
+    /// Selects the agent for the session's next turns, recorded as an `agent-switched` message.
     pub fn select_agent(&self, session_id: &str, agent: &str) -> Result<(), CoreError> {
         if self.shared.agents.get(agent).is_none() {
             return Err(CoreError::AgentNotFound(agent.to_string()));
         }
-        Ok(self.shared.db.set_agent(session_id, agent)?)
+        let db = &self.shared.db;
+        let session = db.session(session_id)?.ok_or(CoreError::SessionNotFound)?;
+        let mut data = json!({"time": {"created": now_ms()}, "agent": agent});
+        if let Some(previous) = session.agent {
+            data["previous"] = Value::String(previous);
+        }
+        db.append_message(session_id, &crate::ids::message(), "agent-switched", &data)?;
+        Ok(db.set_agent(session_id, agent)?)
     }
 
-    /// Selects the model (and variant) for the session's next turns.
+    /// Selects the model (and variant) for the session's next turns. A change is recorded as a
+    /// `model-switched` message, which becomes an effort marker when only the effort changed.
     pub fn select_model(&self, session_id: &str, model: &ModelRef) -> Result<(), CoreError> {
         crate::model::resolve(&self.shared.models, model)?;
-        Ok(self.shared.db.set_model(session_id, &model.to_json())?)
+        let db = &self.shared.db;
+        let session = db.session(session_id)?.ok_or(CoreError::SessionNotFound)?;
+        let previous = session.model.as_ref().and_then(ModelRef::from_json);
+        if previous.as_ref() == Some(model) {
+            return Ok(());
+        }
+        let mut data = json!({"time": {"created": now_ms()}, "model": model.to_json()});
+        if let Some(previous) = &session.model {
+            data["previous"] = previous.clone();
+        }
+        db.append_message(session_id, &crate::ids::message(), "model-switched", &data)?;
+        Ok(db.set_model(session_id, &model.to_json())?)
     }
 
     pub fn credits(&self, session_id: &str) -> CreditsSnapshot {
