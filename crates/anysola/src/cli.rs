@@ -40,7 +40,6 @@ pub enum Format {
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
-    #[arg(trailing_var_arg = true)]
     pub message: Vec<String>,
     #[arg(long = "continue", short = 'c')]
     pub continue_last: bool,

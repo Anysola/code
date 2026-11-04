@@ -10,12 +10,8 @@ use base64::Engine;
 const ATTACH_MAX_BYTES: u64 = 10 * 1024 * 1024;
 const STDIN_WAIT: Duration = Duration::from_secs(3);
 
-/// Message arguments joined by single spaces; the `--` separator itself is not part of it.
+/// Message arguments joined by single spaces.
 pub fn message(args: &[String]) -> Option<String> {
-    let mut args = args.to_vec();
-    if let Some(separator) = args.iter().position(|a| a == "--") {
-        args.remove(separator);
-    }
     let joined = args.join(" ");
     (!joined.is_empty()).then_some(joined)
 }

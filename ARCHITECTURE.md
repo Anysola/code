@@ -67,7 +67,7 @@ credits). Nothing in core knows about the terminal.
 | Shell parsing for permissions | port of 0.5.1's hand-written scanner | same accept/reject behaviour |
 | Storage | rusqlite, bundled SQLite | identical engine on all platforms; reads the 0.5.x database for import |
 | Search | ripgrep's crates (grep-searcher, grep-regex, ignore, globset) | no bundled `rg`; results sorted by path |
-| Diff | similar | |
+| Diff | port of jsdiff (`tool/edit/diff.rs`) | edit metadata patches must equal 0.5.1's byte for byte; `similar` breaks ties differently |
 | Fuzzy matching | nucleo-matcher | |
 | HTML to Markdown | port of 0.5.1's converter | webfetch output must match the captured 0.5.1 output |
 | Images | image (png, jpeg, webp, gif only) | resize before sending, as photon did |
