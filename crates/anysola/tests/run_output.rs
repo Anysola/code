@@ -380,3 +380,63 @@ fn json_budget() {
     assert_eq!(again, expected);
     assert_eq!(out.code, 1);
 }
+
+/// Tool lines of the shared formatter in text mode, one tool per step: inline tools with their dim
+/// description, block tools (write, edit) framed by blank lines, a failed tool as
+/// `✗ <title> failed` + the error.
+#[test]
+fn text_tool_lines() {
+    let gateway = FakeGateway::start(|request: &Recorded, _| {
+        let body = request.json();
+        let model = body["model"].as_str().unwrap_or_default().to_string();
+        let calls = [
+            ("read", json!({"path": "a.txt", "offset": 1})),
+            ("glob", json!({"pattern": "*.txt"})),
+            ("grep", json!({"pattern": "a", "path": "."})),
+            ("write", json!({"path": "b.txt", "content": "b\n"})),
+            (
+                "edit",
+                json!({"path": "a.txt", "oldString": "a", "newString": "c"}),
+            ),
+            ("read", json!({"path": "missing.txt"})),
+        ];
+        let done = body.to_string().matches("tool_result").count();
+        let stream = match calls.get(done) {
+            Some((name, input)) if !request.is_title() => {
+                Stream::new().tool(&format!("t{done}"), name, input.clone())
+            }
+            _ => Stream::new().text("Done."),
+        };
+        Reply::Sse {
+            body: stream.finish(&model, None),
+            before: None,
+        }
+    });
+    let home = TestHome::new(&gateway.url);
+    std::fs::write(home.project().join("a.txt"), "a\n").unwrap();
+    let out = run_in(&home, &["run", "--standalone", "--auto", "go"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(out.stdout, "Done.\n");
+    let header = "> build · claude-sonnet-5-5\n";
+    assert_eq!(
+        out.stderr,
+        [
+            HEADER,
+            "\x1b[0m→ \x1b[0mRead a.txt \x1b[90m[offset=1]\x1b[0m\n",
+            HEADER,
+            "\x1b[0m✱ \x1b[0mGlob \"*.txt\" \x1b[90m1 match\x1b[0m\n",
+            HEADER,
+            "\x1b[0m✱ \x1b[0mGrep \"a\" \x1b[90min . · 1 match\x1b[0m\n",
+            HEADER,
+            "\x1b[0m← \x1b[0mWrite b.txt\nCreated file successfully: b.txt\n\x1b[0m\n",
+            header,
+            "\x1b[0m\n\x1b[0m← \x1b[0mEdit a.txt\n",
+            "Index: a.txt\n===================================================================\n--- a.txt\n+++ a.txt\n@@ -1,1 +1,1 @@\n-a\n+c\n\n\x1b[0m\n",
+            header,
+            "\x1b[0m\n\x1b[0m✗ \x1b[0mRead missing.txt failed\n",
+            "\x1b[91m\x1b[1mError: \x1b[0mFile not found: missing.txt\n",
+            HEADER,
+        ]
+        .concat()
+    );
+}
