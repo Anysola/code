@@ -138,14 +138,22 @@ impl Credits {
         }
     }
 
-    pub fn set_budget(&self, session_id: &str, budget: Option<u64>) -> CreditsSnapshot {
-        let state = self.with(session_id, |state| {
-            state.budget = budget.filter(|b| *b >= 1);
-            state.clone()
+    /// Sets (or clears) the session's budget; it is persisted before it applies.
+    pub fn set_budget(
+        &self,
+        session_id: &str,
+        budget: Option<u64>,
+    ) -> Result<CreditsSnapshot, crate::storage::StorageError> {
+        let mut state = self.with(session_id, |state| state.clone());
+        state.budget = budget.filter(|b| *b >= 1);
+        let value = json!({"total": state.total, "turns": state.turns, "budget": state.budget});
+        self.db.kv_set(&Self::key(session_id), &value)?;
+        let state = self.with(session_id, |current| {
+            current.budget = state.budget;
+            current.clone()
         });
-        self.save(session_id, &state);
         self.publish(session_id, &state);
-        snapshot(session_id, &state)
+        Ok(snapshot(session_id, &state))
     }
 }
 
@@ -186,8 +194,25 @@ mod tests {
             db.kv_get("anysola:session:s").unwrap().unwrap(),
             json!({"total": 3, "turns": 1, "budget": null})
         );
-        credits.set_budget("s", Some(5));
+        credits.set_budget("s", Some(5)).unwrap();
         let reloaded = Credits::new(db, broadcast::channel(1).0);
         assert_eq!(reloaded.snapshot("s").budget, Some(5));
+    }
+
+    #[test]
+    fn a_budget_that_cannot_be_stored_does_not_apply() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.db");
+        let db = Arc::new(Db::open(&path).unwrap());
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER full BEFORE INSERT ON kv BEGIN SELECT RAISE(FAIL, 'disk full'); END;",
+            )
+            .unwrap();
+        let credits = Credits::new(db, broadcast::channel(1).0);
+        let error = credits.set_budget("s", Some(5)).unwrap_err();
+        assert!(error.to_string().contains("disk full"));
+        assert_eq!(credits.snapshot("s").budget, None);
     }
 }

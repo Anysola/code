@@ -394,8 +394,12 @@ impl Core {
         self.shared.credits.snapshot(session_id)
     }
 
-    pub fn set_budget(&self, session_id: &str, budget: Option<u64>) -> CreditsSnapshot {
-        self.shared.credits.set_budget(session_id, budget)
+    pub fn set_budget(
+        &self,
+        session_id: &str,
+        budget: Option<u64>,
+    ) -> Result<CreditsSnapshot, CoreError> {
+        Ok(self.shared.credits.set_budget(session_id, budget)?)
     }
 
     /// Admits the prompt and runs the session until its inbox is empty. Fails fast when another

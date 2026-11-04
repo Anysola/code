@@ -116,7 +116,13 @@ pub async fn run(args: RunArgs) -> i32 {
         let _ = core.set_title(&session_id, &title);
     }
     if let Some(limit) = args.budget {
-        let credits = core.set_budget(&session_id, Some(limit));
+        let credits = match core.set_budget(&session_id, Some(limit)) {
+            Ok(credits) => credits,
+            Err(error) => {
+                let message = format!("Cannot set the budget ({error}).");
+                return report(mode, &message, &session_id);
+            }
+        };
         if credits.total >= limit {
             return report(
                 mode,
