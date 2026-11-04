@@ -151,6 +151,48 @@ mod tests {
         );
     }
 
+    fn run(dir: &Path, args: &[&str]) {
+        let ok = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "git {args:?}");
+    }
+
+    #[test]
+    fn git_ids() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("r");
+        std::fs::create_dir_all(repo.join("sub")).unwrap();
+        run(&repo, &["init", "-q"]);
+        assert_eq!(identify(&repo).id, "global", "no commit, no remote");
+        run(&repo, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        let first = git(&repo, &["rev-list", "--max-parents=0", "HEAD"]).unwrap();
+        let project = identify(&repo.join("sub"));
+        assert_eq!((project.id.as_str(), project.vcs), (first.as_str(), Some("git")));
+        assert_eq!(project.worktree, repo);
+        assert_eq!(
+            std::fs::read_to_string(repo.join(".git/opencode")).unwrap(),
+            first,
+            "the root commit is cached"
+        );
+        std::fs::write(repo.join(".git/opencode"), "cached-id").unwrap();
+        assert_eq!(identify(&repo).id, "cached-id");
+        run(&repo, &["remote", "add", "origin", "git@github.com:Anysola/code.git"]);
+        assert_eq!(identify(&repo).id, sha1_hex("git-remote:github.com/Anysola/code"));
+        std::fs::create_dir_all(root.path().join("h/.hg")).unwrap();
+        std::fs::write(root.path().join("h/.hg/opencode"), "hgnode\n").unwrap();
+        let hg = identify(&root.path().join("h"));
+        assert_eq!((hg.id.as_str(), hg.vcs), ("hgnode", Some("hg")));
+    }
+
     #[test]
     fn directory_id() {
         let p = identify(Path::new("/nonexistent-anysola/x"));
