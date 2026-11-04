@@ -323,3 +323,23 @@ fn skill_and_question_results() {
     };
     assert_eq!(results(&ours), results(&capture));
 }
+
+#[test]
+fn background_subagent_returns_at_once() {
+    let gateway = gateway_logger(String::new());
+    let home = anysola_testkit::TestHome::new(&gateway.url);
+    let dir = my_app(&home);
+    assert_eq!(run(&home, &dir, &["run", "SUBBACKGROUND", "go"]).code, 0);
+    let parent: Vec<_> = gateway
+        .messages()
+        .into_iter()
+        .filter(|r| !r.is_title() && r.header("x-opencode-parent-session-id").is_none())
+        .collect();
+    let body = parent[1].json();
+    let result = body["messages"].as_array().unwrap().last().unwrap()["content"][0]["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(result.starts_with("The subagent is working in the background (sessionID: ses_"));
+    assert!(result.ends_with("call subagent again with this sessionID."));
+}

@@ -53,6 +53,7 @@ pub fn logger(request: &Recorded, _index: usize, read_file: &str) -> Reply {
         "SUBEXPLORE",
         "SUBGENERAL",
         "SKILLQ",
+        "SUBBACKGROUND",
     ]
     .into_iter()
     .find(|m| all.contains(m));
@@ -95,6 +96,12 @@ pub fn logger(request: &Recorded, _index: usize, read_file: &str) -> Reply {
             "toolu_s1",
             "subagent",
             json!({"agent": agent, "description": "task", "prompt": prompt}),
+        )
+    } else if marker == Some("SUBBACKGROUND") && !after_tool {
+        stream.tool(
+            "toolu_s1",
+            "subagent",
+            json!({"agent": "general", "description": "bg", "prompt": "later", "background": true}),
         )
     } else if marker == Some("SKILLQ") && !after_tool {
         stream
