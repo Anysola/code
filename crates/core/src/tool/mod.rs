@@ -88,7 +88,9 @@ pub enum ToolErrorKind {
     Execution,
     /// `unknown`: a failure carrying an underlying error's own message.
     Unknown,
-    /// `permission.rejected`: denied by a rule or rejected with feedback.
+    /// `permission.rejected`: denied by a rule or a policy.
+    Blocked,
+    /// `permission.rejected`: rejected with feedback.
     PermissionRejected,
     /// `aborted`: the user declined without feedback; the step ends.
     Declined,
@@ -129,7 +131,7 @@ impl ToolError {
         match self.kind {
             ToolErrorKind::Execution => "tool.execution",
             ToolErrorKind::Unknown => "unknown",
-            ToolErrorKind::PermissionRejected => "permission.rejected",
+            ToolErrorKind::Blocked | ToolErrorKind::PermissionRejected => "permission.rejected",
             ToolErrorKind::Declined | ToolErrorKind::Interrupted => "aborted",
         }
     }
@@ -139,9 +141,8 @@ impl From<PermissionError> for ToolError {
     fn from(error: PermissionError) -> Self {
         let kind = match error {
             PermissionError::Declined => ToolErrorKind::Declined,
-            PermissionError::Blocked { .. } | PermissionError::Corrected(_) => {
-                ToolErrorKind::PermissionRejected
-            }
+            PermissionError::Blocked { .. } => ToolErrorKind::Blocked,
+            PermissionError::Corrected(_) => ToolErrorKind::PermissionRejected,
         };
         ToolError {
             kind,

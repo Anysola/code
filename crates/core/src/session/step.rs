@@ -355,6 +355,7 @@ async fn step(
         compaction::Outcome::Failed(error) => return StepEnd::Failed(error),
     }
     let mut messages = lower(&history, &target);
+    super::plan_context(shared, &session.id, &selection.agent.id, &mut messages);
     if capped {
         messages.push(Entry::Turn(
             json!({"role": "assistant", "content": [{"type": "text", "text": MAX_STEPS_PROMPT}]}),
@@ -1093,6 +1094,20 @@ async fn execute(
     let result = tokio::select! {
         result = tool.execute(input, ctx) => result,
         _ = ctx.cancel.cancelled() => Err(ToolError::interrupted()),
+    };
+    let result = match result {
+        Err(error)
+            if ctx.agent == "plan"
+                && error.kind == ToolErrorKind::Blocked
+                && matches!(tool.name(), "edit" | "write" | "patch") =>
+        {
+            Err(ToolError::execution(format!(
+                "Cannot use {} to modify files outside the Plan directory: {}",
+                tool.name(),
+                ctx.paths.plan_dir().display()
+            )))
+        }
+        result => result,
     };
     match (result, alias) {
         (Ok(mut output), Some(note)) => {

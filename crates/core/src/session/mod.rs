@@ -134,6 +134,47 @@ fn plan_reminders(shared: &Shared, session_id: &str, agent: &str) {
     }
 }
 
+/// Plan mode per request: compaction or a committed revert can strip the reminders while the
+/// agent stays put. A missing enter reminder (or a stale one after leaving plan) is added before
+/// the user's prompt and recorded.
+fn plan_context(shared: &Shared, session_id: &str, agent: &str, entries: &mut Vec<lower::Entry>) {
+    let enter = plan_enter(&shared.paths.plan_dir().display().to_string());
+    let user = |entry: &lower::Entry| match entry {
+        lower::Entry::Turn(message) => {
+            message["role"] == "user"
+                && message["content"]
+                    .as_array()
+                    .is_some_and(|c| c.iter().any(|b| b["type"] != "tool_result"))
+        }
+        _ => false,
+    };
+    let last = entries.iter().rev().find_map(|entry| match entry {
+        lower::Entry::Turn(message) if user(entry) => match message["content"].as_array() {
+            Some(content) if content.len() == 1 && content[0]["type"] == "text" => {
+                content[0]["text"]
+                    .as_str()
+                    .filter(|t| *t == enter || *t == PLAN_LEAVE)
+            }
+            _ => None,
+        },
+        _ => None,
+    });
+    let text = match (agent == "plan", last == Some(enter.as_str())) {
+        (true, false) => enter,
+        (false, true) => PLAN_LEAVE.to_string(),
+        _ => return,
+    };
+    let at = match entries.last() {
+        Some(entry) if user(entry) => entries.len() - 1,
+        _ => entries.len(),
+    };
+    entries.insert(
+        at,
+        lower::Entry::Turn(json!({"role": "user", "content": [{"type": "text", "text": text}]})),
+    );
+    synthetic(shared, session_id, text);
+}
+
 /// The `<subagent>` message a parent receives when a child session ends: the child's last
 /// assistant text, or the failure or cancellation note.
 pub(crate) fn subagent_completion(

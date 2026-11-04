@@ -264,3 +264,72 @@ fn malformed_and_cut_off_tool_input_is_not_executed() {
     let requests = gateway.messages().iter().filter(|r| !r.is_title()).count();
     assert_eq!(requests, 2, "the model sees the failed call and continues");
 }
+
+#[test]
+fn plan_mode_reminder_survives_compaction_and_guards_edits() {
+    let gateway = FakeGateway::start(|request, _| {
+        if request.is_title() {
+            return text(request, "title");
+        }
+        if request.body.contains("You MUST summarize") {
+            return text(request, "## Objective\n- plan");
+        }
+        if request.body.contains("PLANSECOND") && !request.body.contains("toolu_w") {
+            return sse(
+                request,
+                Stream::new().tool(
+                    "toolu_w",
+                    "write",
+                    json!({"path": "notes.md", "content": "x"}),
+                ),
+            );
+        }
+        text(request, "ok")
+    });
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    core.select_agent(&session.id, "plan").unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("first"), TurnOptions::default()))
+        .unwrap();
+    runtime.block_on(core.compact(&session.id)).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("PLANSECOND"), TurnOptions::default()))
+        .unwrap();
+    let plan_dir = env.home.home().join(".opencode/plan");
+    let enter = format!(
+        "user: <system-reminder>\nYou are in Plan mode. Discuss the plan with the user directly in the conversation. Do not create or update plan files unless the user explicitly asks you to; when they do, write them only in:\n{}\n",
+        plan_dir.display()
+    );
+    let main: Vec<_> = gateway
+        .messages()
+        .into_iter()
+        .filter(|r| !r.is_title() && !r.body.contains("You MUST summarize"))
+        .collect();
+    let after = transcript(&main[1]);
+    assert!(
+        after[0].starts_with("user: <conversation-checkpoint>"),
+        "{after:?}"
+    );
+    assert!(after[1].starts_with(&enter), "{after:?}");
+    assert_eq!(after[2], "user: PLANSECOND");
+    // Recorded after the prompt, so the next request finds it in the history and adds no other.
+    let next = transcript(&main[2]);
+    assert!(
+        next[1] == "user: PLANSECOND" && next[2].starts_with(&enter),
+        "{next:?}"
+    );
+    assert_eq!(next.len(), 5, "{next:?}");
+    let parts = assistant_parts(&env, &session.id);
+    let write = parts
+        .iter()
+        .flatten()
+        .find(|p| p["name"] == "write")
+        .unwrap();
+    assert_eq!(
+        write["state"]["error"],
+        json!({"type": "tool.execution", "message": format!("Cannot use write to modify files outside the Plan directory: {}", plan_dir.display())})
+    );
+}
