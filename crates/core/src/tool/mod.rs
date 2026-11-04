@@ -16,6 +16,9 @@ pub mod stubs;
 pub mod websearch;
 pub mod write;
 
+#[cfg(test)]
+pub mod test_support;
+
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
