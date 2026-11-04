@@ -1,12 +1,12 @@
 //! Git worktrees of a project, as the `opencode.worktree_*` tools manage them. The project's own
 //! checkout is an unowned row; worktrees created here are `git` rows under
-//! `~/.anysola/worktree/<project id prefix>/<name>`.
+//! `~/.anysola/worktree/<project id prefix>/<name>` unless config `worktree.directory` names
+//! another base.
 
 use std::path::{Path, PathBuf};
 
 use tokio::process::Command;
 
-use crate::paths::Paths;
 use crate::storage::Db;
 
 const STRATEGY: &str = "git";
@@ -78,11 +78,11 @@ async fn toplevel(directory: &Path) -> Option<PathBuf> {
     Some(PathBuf::from(out.trim()))
 }
 
-/// Creates a detached worktree of the project checkout at `HEAD`; `-2`…`-10` suffixes avoid
-/// existing directories.
+/// Creates a detached worktree of the project checkout at `HEAD` under `base`; `-2`…`-10`
+/// suffixes avoid existing directories.
 pub async fn create(
     db: &Db,
-    paths: &Paths,
+    base: &Path,
     project_id: &str,
     root: &Path,
     name: &str,
@@ -94,11 +94,7 @@ pub async fn create(
     if !known {
         return Err("project directory is not a known worktree".into());
     }
-    let base = paths
-        .data
-        .join("worktree")
-        .join(project_id.chars().take(6).collect::<String>());
-    std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(base).map_err(|e| e.to_string())?;
     let mut target = base.join(name);
     let mut suffix = 1;
     while target.exists() {
@@ -212,14 +208,14 @@ mod tests {
         let project = root.join("proj");
         std::fs::create_dir_all(&project).unwrap();
         repo(&project);
-        let paths = Paths::isolated(root.join("home"));
+        let base = root.join("home/.anysola/worktree/abc");
         let db = Db::open(&root.join("db.sqlite")).unwrap();
         db.upsert_project(&crate::project::identify(&project))
             .unwrap();
         let id = crate::project::identify(&project).id;
 
-        let first = create(&db, &paths, &id, &project, "wt").await.unwrap();
-        let second = create(&db, &paths, &id, &project, "wt").await.unwrap();
+        let first = create(&db, &base, &id, &project, "wt").await.unwrap();
+        let second = create(&db, &base, &id, &project, "wt").await.unwrap();
         assert!(first.ends_with("wt"));
         assert!(second.ends_with("wt-2"));
         let listed = list(&db, &id);

@@ -198,7 +198,7 @@ async fn worktree_create(
     }
     let created = crate::worktree::create(
         ctx.host.db(),
-        &ctx.paths,
+        &worktree_base(ctx),
         &ctx.project_id,
         &ctx.worktree,
         name,
@@ -208,6 +208,27 @@ async fn worktree_create(
     let directory = created.display().to_string();
     Ok(Called::output(json!({"directory": directory}))
         .with_text(format!("Created worktree in {directory}.")))
+}
+
+/// Config `worktree.directory` (`~/` is home, relative is the project root), else the data dir.
+fn worktree_base(ctx: &ToolContext) -> PathBuf {
+    let configured = ctx
+        .host
+        .config()
+        .get("worktree")
+        .and_then(|w| w.get("directory"))
+        .and_then(Value::as_str);
+    match configured {
+        Some(directory) => match directory.strip_prefix("~/") {
+            Some(rest) => ctx.paths.home.join(rest),
+            None => crate::paths::normalize(&ctx.worktree.join(directory)),
+        },
+        None => ctx
+            .paths
+            .data
+            .join("worktree")
+            .join(ctx.project_id.chars().take(6).collect::<String>()),
+    }
 }
 
 fn worktree_list(ctx: &ToolContext) -> Called {

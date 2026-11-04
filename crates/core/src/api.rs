@@ -87,6 +87,10 @@ impl crate::codemode::Host for Shared {
     fn models(&self) -> &[Model] {
         &self.models
     }
+
+    fn config(&self) -> &Config {
+        &self.config
+    }
 }
 
 #[derive(Clone)]

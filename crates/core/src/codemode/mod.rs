@@ -81,6 +81,7 @@ impl Called {
 pub trait Host: Send + Sync {
     fn db(&self) -> &crate::storage::Db;
     fn models(&self) -> &[crate::model::Model];
+    fn config(&self) -> &crate::config::Config;
 }
 
 pub trait NamespaceTool: Send + Sync {
