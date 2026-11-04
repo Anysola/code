@@ -176,7 +176,11 @@ pub(crate) fn subagent_completion(
     )
 }
 
-fn is_fallback_title(session: &SessionRow) -> bool {
+pub(crate) async fn regenerate_title(shared: Arc<Shared>, session: SessionRow) {
+    title::generate(shared, session).await;
+}
+
+pub(crate) fn is_fallback_title(session: &SessionRow) -> bool {
     session.parent_id.is_none()
         && session.title == format!("New session - {}", crate::time::iso(session.time_created))
 }
@@ -306,14 +310,8 @@ async fn turn(
         Ok(None) => return Outcome::Succeeded,
         Err(error) => return Outcome::Failed(storage(error)),
     };
-    let title = match promoted.first() {
-        Some(first) if is_fallback_title(session) => Some(tokio::spawn(title::generate(
-            shared.clone(),
-            session.clone(),
-            first.0.clone(),
-        ))),
-        _ => None,
-    };
+    let title = (promoted > 0 && is_fallback_title(session))
+        .then(|| tokio::spawn(title::generate(shared.clone(), session.clone())));
     let outcome = step::drive(shared, session, &selection, options, cancel).await;
     if let Some(title) = title {
         let _ = title.await;

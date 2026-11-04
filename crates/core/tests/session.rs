@@ -296,3 +296,51 @@ fn prompt_images_are_normalized() {
     assert_eq!(image["source"]["media_type"], "image/jpeg");
     assert!(image["source"]["data"].as_str().unwrap().len() <= 5 * 1024 * 1024);
 }
+
+#[test]
+fn titles_fall_back_to_the_session_model_and_regenerate() {
+    let gateway = FakeGateway::start(|request, _| {
+        let body = request.json();
+        if request.is_title() && body["model"] == "claude-haiku-5-5" {
+            return anysola_testkit::Reply::Json {
+                status: 400,
+                body: json!({"type": "error", "error": {"type": "invalid_request_error", "message": "no"}}),
+                headers: vec![],
+            };
+        }
+        if request.body.contains("Here is the conversation so far") {
+            return text(request, "Renamed title");
+        }
+        text(
+            request,
+            if request.is_title() {
+                "First title"
+            } else {
+                "ok"
+            },
+        )
+    });
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("hello"), TurnOptions::default()))
+        .unwrap();
+    let titled = core.session(&session.id).unwrap().unwrap();
+    assert_eq!(titled.title, "First title");
+    let titles: Vec<String> = gateway
+        .messages()
+        .into_iter()
+        .filter(|r| r.is_title())
+        .map(|r| r.json()["model"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(titles, vec!["claude-haiku-5-5", "claude-sonnet-5-5"]);
+    runtime
+        .block_on(core.regenerate_title(&session.id))
+        .unwrap();
+    assert_eq!(
+        core.session(&session.id).unwrap().unwrap().title,
+        "Renamed title"
+    );
+}

@@ -106,28 +106,22 @@ pub fn next(db: &Db, session_id: &str, scope: Scope) -> Result<Option<InboxRow>>
     })
 }
 
-fn publish(db: &Db, session_id: &str, rows: &[InboxRow]) -> Result<Vec<UserText>> {
-    let mut promoted = Vec::new();
+fn publish(db: &Db, session_id: &str, rows: &[InboxRow]) -> Result<usize> {
+    let mut promoted = 0;
     for row in rows {
         // A concurrent cancel wins; the item is then gone.
         if db.inbox_remove(&row.id)? {
             db.append_message(session_id, &row.id, &row.kind, &row.payload)?;
-            promoted.push(UserText(
-                row.payload["text"].as_str().unwrap_or_default().to_string(),
-            ));
+            promoted += 1;
         }
     }
     Ok(promoted)
 }
 
-/// The text of a promoted prompt.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UserText(pub String);
-
 /// Moves pending input into the transcript: every steer up to the first control item, or with an
-/// idle scope and no steers, the oldest queued item and the steers that arrived meanwhile. `None`
-/// when a control item comes first.
-pub fn promote(db: &Db, session_id: &str, scope: Scope) -> Result<Option<Vec<UserText>>> {
+/// idle scope and no steers, the oldest queued item and the steers that arrived meanwhile. Returns
+/// how many were promoted; `None` when a control item comes first.
+pub fn promote(db: &Db, session_id: &str, scope: Scope) -> Result<Option<usize>> {
     let steers = |db: &Db| -> Result<Vec<InboxRow>> {
         Ok(db
             .inbox(session_id)?
@@ -150,14 +144,15 @@ pub fn promote(db: &Db, session_id: &str, scope: Scope) -> Result<Option<Vec<Use
         .into_iter()
         .find(|r| r.delivery == "queue")
     else {
-        return Ok(Some(Vec::new()));
+        return Ok(Some(0));
     };
     if is_control(&queued) {
         return Ok(None);
     }
-    let mut promoted = publish(db, session_id, &[queued])?;
-    promoted.extend(publish(db, session_id, &before_control(steers(db)?))?);
-    Ok(Some(promoted))
+    let promoted = publish(db, session_id, &[queued])?;
+    Ok(Some(
+        promoted + publish(db, session_id, &before_control(steers(db)?))?,
+    ))
 }
 
 #[cfg(test)]
@@ -193,8 +188,16 @@ mod tests {
         }
     }
 
-    fn texts(promoted: Option<Vec<UserText>>) -> Vec<String> {
-        promoted.unwrap().into_iter().map(|t| t.0).collect()
+    /// Promotes and returns the texts of the messages that appeared.
+    fn texts(db: &Db, scope: Scope) -> Vec<String> {
+        let before = db.messages("ses_1").unwrap().len();
+        let count = promote(db, "ses_1", scope).unwrap().unwrap();
+        let rows = db.messages("ses_1").unwrap();
+        assert_eq!(rows.len(), before + count);
+        rows[before..]
+            .iter()
+            .map(|r| r.data["text"].as_str().unwrap().to_string())
+            .collect()
     }
 
     #[test]
@@ -203,20 +206,11 @@ mod tests {
         enqueue(&db, "ses_1", &prompt("q1"), Delivery::Queue).unwrap();
         enqueue(&db, "ses_1", &prompt("s1"), Delivery::Steer).unwrap();
         let q2 = enqueue(&db, "ses_1", &prompt("q2"), Delivery::Queue).unwrap();
-        assert_eq!(
-            texts(promote(&db, "ses_1", Scope::Steer).unwrap()),
-            vec!["s1"]
-        );
-        assert!(texts(promote(&db, "ses_1", Scope::Steer).unwrap()).is_empty());
-        assert_eq!(
-            texts(promote(&db, "ses_1", Scope::Input).unwrap()),
-            vec!["q1"]
-        );
+        assert_eq!(texts(&db, Scope::Steer), vec!["s1"]);
+        assert!(texts(&db, Scope::Steer).is_empty());
+        assert_eq!(texts(&db, Scope::Input), vec!["q1"]);
         assert!(db.inbox_set_delivery(&q2, "steer").unwrap());
-        assert_eq!(
-            texts(promote(&db, "ses_1", Scope::Steer).unwrap()),
-            vec!["q2"]
-        );
+        assert_eq!(texts(&db, Scope::Steer), vec!["q2"]);
         let rows = db.messages("ses_1").unwrap();
         assert_eq!(
             rows.iter().map(|r| r.kind.as_str()).collect::<Vec<_>>(),
@@ -231,10 +225,7 @@ mod tests {
         enqueue(&db, "ses_1", &prompt("a"), Delivery::Steer).unwrap();
         enqueue_compaction(&db, "ses_1").unwrap();
         enqueue(&db, "ses_1", &prompt("b"), Delivery::Steer).unwrap();
-        assert_eq!(
-            texts(promote(&db, "ses_1", Scope::Steer).unwrap()),
-            vec!["a"]
-        );
+        assert_eq!(texts(&db, Scope::Steer), vec!["a"]);
         assert_eq!(promote(&db, "ses_1", Scope::Steer).unwrap(), None);
         assert_eq!(
             next(&db, "ses_1", Scope::Steer).unwrap().unwrap().kind,
@@ -248,6 +239,6 @@ mod tests {
         let id = enqueue(&db, "ses_1", &prompt("a"), Delivery::Queue).unwrap();
         assert!(db.inbox_remove(&id).unwrap());
         assert!(!db.inbox_remove(&id).unwrap());
-        assert!(texts(promote(&db, "ses_1", Scope::Input).unwrap()).is_empty());
+        assert!(texts(&db, Scope::Input).is_empty());
     }
 }

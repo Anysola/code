@@ -178,7 +178,7 @@ pub(crate) async fn drive(
             }
             if let Ok(Some(promoted)) =
                 super::inbox::promote(&shared.db, &session.id, super::inbox::Scope::Steer)
-                && !promoted.is_empty()
+                && promoted > 0
             {
                 number = 1;
             }

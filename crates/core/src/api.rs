@@ -344,6 +344,15 @@ impl Core {
         Ok(row)
     }
 
+    /// Names the session again from its conversation so far.
+    pub async fn regenerate_title(&self, session_id: &str) -> Result<(), CoreError> {
+        let session = self
+            .session(session_id)?
+            .ok_or(CoreError::SessionNotFound)?;
+        crate::session::regenerate_title(self.shared.clone(), session).await;
+        Ok(())
+    }
+
     pub fn set_title(&self, session_id: &str, title: &str) -> Result<(), CoreError> {
         Ok(self.shared.db.set_title(session_id, title)?)
     }
