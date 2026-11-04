@@ -79,6 +79,20 @@ pub(crate) struct Shared {
     pub turns: Mutex<std::collections::HashMap<String, CancellationToken>>,
 }
 
+impl crate::codemode::Host for Shared {
+    fn db(&self) -> &Db {
+        &self.db
+    }
+
+    fn models(&self) -> &[Model] {
+        &self.models
+    }
+
+    fn config(&self) -> &Config {
+        &self.config
+    }
+}
+
 #[derive(Clone)]
 pub struct Core {
     pub(crate) shared: Arc<Shared>,
@@ -129,7 +143,7 @@ impl Core {
         let agents = Agents::load(&config, &paths);
         let models = crate::model::catalog(&config);
         let project = crate::project::identify(directory);
-        db.upsert_project(&project, directory)?;
+        db.upsert_project(&project)?;
         let (events, _) = broadcast::channel(4096);
         let credits = Arc::new(Credits::new(db.clone(), events.clone()));
         let env = std::env::vars_os()

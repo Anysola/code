@@ -91,8 +91,12 @@ fn context(shared: &Shared, session: &SessionRow, selection: &Selection) -> Cont
         directory,
         worktree,
     };
+    let catalog = shared
+        .registry
+        .code_mode(&rules)
+        .map(|inventory| crate::codemode::catalog::render(&inventory.summary()));
     let block2 = instructions::block(
-        names.contains(&"execute"),
+        catalog.as_deref(),
         &files,
         &crate::time::date_string(),
         &environment,
@@ -174,6 +178,9 @@ pub(crate) async fn drive(
             }
         }
         let capped = selection.agent.steps == Some(number);
+        // A tool may have moved the session; the next step runs in its new directory.
+        let current = shared.db.session(&session.id).ok().flatten();
+        let session = current.as_ref().unwrap_or(session);
         match step(shared, session, selection, capped, cancel).await {
             StepEnd::Continue if capped => return Outcome::Succeeded,
             StepEnd::Continue => {}
@@ -843,6 +850,7 @@ fn handle(
                     shared.gateway.clone(),
                     shared.credits.clone(),
                 )),
+                host: shared.clone(),
             };
             let tools = ctx.tools.clone();
             let output_dir = shared.paths.tool_output_dir();

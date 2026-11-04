@@ -57,6 +57,38 @@ impl WebSearch for NoSearch {
     }
 }
 
+/// A database outside the test directory, so it never shows up in listings.
+struct TestHost {
+    db: crate::storage::Db,
+    config: crate::config::Config,
+    _dir: tempfile::TempDir,
+}
+
+impl TestHost {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().expect("temp dir");
+        TestHost {
+            db: crate::storage::Db::open(&dir.path().join("test.db")).expect("test database"),
+            config: crate::config::Config::default(),
+            _dir: dir,
+        }
+    }
+}
+
+impl crate::codemode::Host for TestHost {
+    fn db(&self) -> &crate::storage::Db {
+        &self.db
+    }
+
+    fn models(&self) -> &[crate::model::Model] {
+        &[]
+    }
+
+    fn config(&self) -> &crate::config::Config {
+        &self.config
+    }
+}
+
 pub struct TestContext {
     pub ctx: ToolContext,
     pub gate: Arc<RecordingGate>,
@@ -87,6 +119,7 @@ pub fn context(dir: &Path) -> TestContext {
         locks: Arc::new(PathLocks::default()),
         notifier: notifier.clone(),
         web_search: Arc::new(NoSearch),
+        host: Arc::new(TestHost::new()),
     };
     TestContext {
         ctx,

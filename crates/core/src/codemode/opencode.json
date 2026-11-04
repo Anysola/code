@@ -1,0 +1,530 @@
+[
+  {
+    "name": "session_rename",
+    "description": "Rename a session, or omit sessionID to rename the current session. Use a short, specific title that summarizes the work being done.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "sessionID": {
+          "type": "string",
+          "pattern": "^ses",
+          "description": "Omit to rename the current session."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "New session title."
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "additionalProperties": false
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "sessionID": {
+          "type": "string",
+          "pattern": "^ses"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionID",
+        "title"
+      ]
+    }
+  },
+  {
+    "name": "session_move",
+    "description": "Move a session to another directory, or omit sessionID to move the current session. The current session moves at the next safe boundary; do not run destination-dependent tools in the same execute call.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "sessionID": {
+          "type": "string",
+          "pattern": "^ses",
+          "description": "Omit to move the current session."
+        },
+        "directory": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Destination directory, relative to the target session's directory or absolute. Supports ~."
+        }
+      },
+      "required": [
+        "directory"
+      ],
+      "additionalProperties": false
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "sessionID": {
+          "type": "string",
+          "pattern": "^ses"
+        },
+        "directory": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionID",
+        "directory"
+      ]
+    },
+    "pinned": true
+  },
+  {
+    "name": "worktree_create",
+    "description": "Create a named worktree. Returns its directory.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "directory": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "directory"
+      ]
+    },
+    "pinned": true
+  },
+  {
+    "name": "worktree_list",
+    "description": "List a repository's worktrees.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "worktrees": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "directory": {
+                "type": "string"
+              },
+              "strategy": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "directory"
+            ]
+          }
+        }
+      },
+      "required": [
+        "worktrees"
+      ]
+    },
+    "pinned": true
+  },
+  {
+    "name": "worktree_remove",
+    "description": "Remove a worktree. The repository location selects configuration; directory identifies the worktree to remove.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "directory": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the worktree to remove."
+        },
+        "force": {
+          "type": "boolean",
+          "description": "Discard modified and untracked files. Only set this when the user has confirmed forced removal."
+        }
+      },
+      "required": [
+        "directory"
+      ],
+      "additionalProperties": false
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "directory": {
+          "type": "string"
+        },
+        "removed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "directory",
+        "removed"
+      ]
+    },
+    "pinned": true,
+    "permission": "edit"
+  },
+  {
+    "name": "models",
+    "description": "Search the models available to use. Use this to turn a model name the user mentions into an exact reference for a tool that takes a model. Check your own provider first.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Text to search for in model names and IDs."
+        },
+        "provider": {
+          "type": "string",
+          "description": "Provider ID or name to filter by. Try your own provider first."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "chat",
+            "image"
+          ],
+          "description": "Which kind of model to list. Defaults to \"chat\".\n\"chat\": a language model (LLM). Powers sessions, agents and subagents, and can call tools.\n\"image\": generates or edits images from a prompt. It can't chat or call tools."
+        },
+        "all": {
+          "type": "boolean",
+          "description": "Include older versions of each model family. By default only the newest version is listed."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Maximum number of models to return. Defaults to 20."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of models to skip, for paging through results."
+        }
+      },
+      "additionalProperties": false
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "providers": {
+          "type": "array",
+          "description": "Matching models grouped by provider. Your own provider comes first.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "models": {
+                "type": "array",
+                "description": "Newest first.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "providerID/modelID"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "released": {
+                      "type": "number",
+                      "description": "Release date as a Unix timestamp in milliseconds, or 0 when unknown."
+                    },
+                    "variants": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "cost": {
+                      "type": "array",
+                      "description": "Pricing in USD per million tokens.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "tier": {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "const": "context"
+                              },
+                              "size": {
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "size"
+                            ]
+                          },
+                          "input": {
+                            "type": "number"
+                          },
+                          "output": {
+                            "type": "number"
+                          },
+                          "cache": {
+                            "type": "object",
+                            "properties": {
+                              "read": {
+                                "type": "number"
+                              },
+                              "write": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "read",
+                              "write"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "input",
+                          "output",
+                          "cache"
+                        ]
+                      }
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "alpha",
+                        "beta",
+                        "deprecated",
+                        "active"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "released",
+                    "variants",
+                    "cost",
+                    "status"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "models"
+            ]
+          }
+        },
+        "total": {
+          "type": "integer",
+          "description": "Number of matching models across all pages."
+        },
+        "next": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Offset of the next page, or null on the last page."
+        }
+      },
+      "required": [
+        "providers",
+        "total",
+        "next"
+      ]
+    }
+  },
+  {
+    "name": "list_mcp_resources",
+    "description": "List documents, records, and other data exposed by MCP servers. Use this when the user refers to something that is not a local file, such as a URI with a custom scheme, then load a match with read_mcp_resource. Each entry names the server to read it from. Templates are resources addressed by a parameter such as a record ID; fill in the uriTemplate placeholders before reading.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "server": {
+          "type": "string",
+          "description": "MCP server name as configured. Omit to list every server."
+        }
+      },
+      "additionalProperties": false
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "resources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "server": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "uri": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "server",
+              "name",
+              "uri"
+            ]
+          }
+        },
+        "templates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "server": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "uriTemplate": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "server",
+              "name",
+              "uriTemplate"
+            ]
+          }
+        }
+      },
+      "required": [
+        "resources",
+        "templates"
+      ]
+    }
+  },
+  {
+    "name": "read_mcp_resource",
+    "description": "Read one MCP resource by server and URI. Not for local files. Always return the full contents rather than slicing or filtering them; oversized output is truncated automatically and the full content is saved to a file you can read. Images and PDFs are shown to you directly.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "server": {
+          "type": "string",
+          "description": "The server field of the discovered resource."
+        },
+        "uri": {
+          "type": "string",
+          "description": "Exact resource URI from discovery, an expanded uriTemplate, or the user."
+        }
+      },
+      "required": [
+        "server",
+        "uri"
+      ],
+      "additionalProperties": false
+    },
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "server": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "contents": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "const": "text"
+                  },
+                  "uri": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "mimeType": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "uri",
+                  "text"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "const": "blob"
+                  },
+                  "uri": {
+                    "type": "string"
+                  },
+                  "blob": {
+                    "type": "string"
+                  },
+                  "mimeType": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "uri",
+                  "blob"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "server",
+        "uri",
+        "contents"
+      ]
+    }
+  }
+]
