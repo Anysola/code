@@ -225,3 +225,39 @@ fn output_limit_continuations() {
         "user: Your last response hit the output token limit (stop reason: length). Do not apologize, recap, or repeat yourself. Break the remaining work into smaller pieces."
     );
 }
+
+#[test]
+fn forks_and_children() {
+    let gateway = FakeGateway::start(|request, _| text(request, "ok"));
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    assert!(session.title.starts_with("New session - "));
+    let empty = core
+        .open(&Target::Id(session.id.clone()), true)
+        .unwrap_err();
+    assert_eq!(
+        empty.to_string(),
+        format!("Cannot fork empty session: {}", session.id)
+    );
+    runtime
+        .block_on(core.prompt(&session.id, prompt("one"), TurnOptions::default()))
+        .unwrap();
+    let db = Db::open(&env.home.home().join(".anysola/anysola.db")).unwrap();
+    let last = db.messages(&session.id).unwrap().pop().unwrap();
+    let (fork, _) = core.open(&Target::Id(session.id.clone()), true).unwrap();
+    assert_eq!(fork.fork_session_id.as_deref(), Some(session.id.as_str()));
+    assert_eq!(
+        fork.fork_boundary,
+        Some(json!({"type": "through", "messageID": last.id}))
+    );
+    assert!(fork.title.ends_with(" (fork #1)"));
+    assert_eq!(
+        db.messages(&fork.id).unwrap().len(),
+        db.messages(&session.id).unwrap().len()
+    );
+    let child = core.create_child(&session.id, None).unwrap();
+    assert_eq!(child.parent_id.as_deref(), Some(session.id.as_str()));
+    assert!(child.title.starts_with("Child session - "));
+}

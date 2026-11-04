@@ -27,6 +27,8 @@ use crate::storage::{Db, SessionRow};
 use crate::tool::registry::Registry;
 use crate::tool::{PathLocks, SessionNotifier};
 
+mod commands;
+
 const CONFIG_CACHE_KEY: &str = "anysola:config";
 
 #[derive(Debug, thiserror::Error)]
@@ -41,6 +43,10 @@ pub enum CoreError {
     AgentNotFound(String),
     #[error(transparent)]
     Model(#[from] crate::model::ModelError),
+    #[error("Cannot fork empty session: {0}")]
+    ForkEmpty(String),
+    #[error("Command not found: \"{0}\"")]
+    CommandNotFound(String),
 }
 
 /// Which session a front end works on.
@@ -51,6 +57,21 @@ pub enum Target {
     Continue,
     /// This id; a new session with exactly this id when it does not exist.
     Id(String),
+}
+
+/// What a new session is.
+enum Kind {
+    Root,
+    Child {
+        parent: String,
+        title: Option<String>,
+    },
+    Fork {
+        source: String,
+        title: String,
+        /// The source's last message, which the fork copies through.
+        through: String,
+    },
 }
 
 /// A user prompt.
@@ -69,6 +90,7 @@ pub(crate) struct Shared {
     pub credits: Arc<Credits>,
     pub config: Config,
     pub agents: Agents,
+    pub commands: crate::command::Commands,
     pub models: Vec<Model>,
     pub registry: Registry,
     pub asks: Arc<Asks>,
@@ -132,6 +154,7 @@ impl Core {
             crate::log::warn(warning, &[]);
         }
         let agents = Agents::load(&config, &paths);
+        let commands = crate::command::Commands::load(&config);
         let remote_instructions =
             crate::instructions::fetch_remote(&gateway, &config.instructions).await;
         let models = crate::model::catalog(&config);
@@ -152,6 +175,7 @@ impl Core {
             events,
             credits,
             config,
+            commands,
             agents,
             models,
             registry: Registry::builtin(),
@@ -209,29 +233,37 @@ impl Core {
                     Target::Id(id) => id.clone(),
                     _ => crate::ids::session(),
                 };
-                Ok((self.create(id, None)?, false))
+                Ok((self.create(id, Kind::Root)?, false))
             }
         }
     }
 
-    fn create(
-        &self,
-        id: String,
-        fork: Option<(&SessionRow, String)>,
-    ) -> Result<SessionRow, CoreError> {
+    fn create(&self, id: String, kind: Kind) -> Result<SessionRow, CoreError> {
         let now = crate::time::now_ms();
-        let (title, fork_session_id, fork_boundary) = match fork {
-            Some((source, title)) => (title, Some(source.id.clone()), None),
-            None => (
-                format!("New session - {}", crate::time::iso(now)),
+        let iso = crate::time::iso(now);
+        let (title, parent_id, fork_session_id, fork_boundary) = match kind {
+            Kind::Root => (format!("New session - {iso}"), None, None, None),
+            Kind::Child { parent, title } => (
+                title.unwrap_or_else(|| format!("Child session - {iso}")),
+                Some(parent),
                 None,
                 None,
+            ),
+            Kind::Fork {
+                source,
+                title,
+                through,
+            } => (
+                title,
+                None,
+                Some(source),
+                Some(serde_json::json!({"type": "through", "messageID": through})),
             ),
         };
         let row = SessionRow {
             id,
             project_id: self.shared.project.id.clone(),
-            parent_id: None,
+            parent_id,
             fork_session_id,
             fork_boundary,
             slug: crate::slug::create(),
@@ -247,10 +279,38 @@ impl Core {
         Ok(row)
     }
 
+    /// A child session of `parent` (subagents, subagent commands); without a title it is
+    /// `Child session - <ISO>`.
+    pub fn create_child(
+        &self,
+        parent: &str,
+        title: Option<String>,
+    ) -> Result<SessionRow, CoreError> {
+        self.create(
+            crate::ids::session(),
+            Kind::Child {
+                parent: parent.to_string(),
+                title,
+            },
+        )
+    }
+
     fn fork(&self, source: &SessionRow) -> Result<SessionRow, CoreError> {
         let number = self.shared.db.fork_count(&source.id)? + 1;
         let title = format!("{} (fork #{number})", source.title);
-        let mut row = self.create(crate::ids::session(), Some((source, title)))?;
+        let through = self
+            .shared
+            .db
+            .messages(&source.id)?
+            .pop()
+            .ok_or_else(|| CoreError::ForkEmpty(source.id.clone()))?
+            .id;
+        let kind = Kind::Fork {
+            source: source.id.clone(),
+            title,
+            through,
+        };
+        let mut row = self.create(crate::ids::session(), kind)?;
         row.agent = source.agent.clone();
         row.model = source.model.clone();
         if let Some(agent) = &row.agent {

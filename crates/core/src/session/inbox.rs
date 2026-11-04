@@ -67,6 +67,20 @@ pub fn enqueue(db: &Db, session_id: &str, prompt: &Prompt, delivery: Delivery) -
     Ok(id)
 }
 
+/// Admits a synthetic message (a background completion) that wakes the session.
+pub fn enqueue_synthetic(
+    db: &Db,
+    session_id: &str,
+    text: &str,
+    description: &str,
+    delivery: Delivery,
+) -> Result<String> {
+    let id = crate::ids::message();
+    let payload = json!({"time": {"created": now_ms()}, "text": text, "description": description});
+    db.inbox_push(session_id, &id, "synthetic", &payload, delivery.as_str())?;
+    Ok(id)
+}
+
 pub fn enqueue_compaction(db: &Db, session_id: &str) -> Result<String> {
     let id = crate::ids::message();
     let payload = json!({"time": {"created": now_ms()}});

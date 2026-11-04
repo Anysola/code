@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod api;
+pub mod command;
 pub mod config;
 pub mod credits;
 pub mod events;

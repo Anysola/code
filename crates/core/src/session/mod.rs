@@ -128,6 +128,54 @@ fn plan_reminders(shared: &Shared, session_id: &str, agent: &str) {
     }
 }
 
+const NO_TEXT: &str = "Subagent completed without a text response.";
+
+/// The `<subagent>` message a parent receives when a child session ends: the child's last
+/// assistant text, or the failure or cancellation note.
+pub(crate) fn subagent_completion(
+    shared: &Shared,
+    child_id: &str,
+    description: &str,
+    outcome: &Outcome,
+) -> String {
+    let (state, text) = match outcome {
+        Outcome::Succeeded => {
+            let last = shared
+                .db
+                .messages(child_id)
+                .unwrap_or_default()
+                .into_iter()
+                .rev()
+                .map(|row| Message::decode(&row.kind, &row.data))
+                .find(|m| matches!(m, Message::Assistant(_)));
+            let text = match last {
+                Some(Message::Assistant(data)) => data
+                    .content
+                    .iter()
+                    .filter_map(|p| match p {
+                        message::Part::Text { text, .. } if !text.is_empty() => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+                _ => String::new(),
+            };
+            let text = if text.is_empty() {
+                NO_TEXT.to_string()
+            } else {
+                text
+            };
+            ("completed", text)
+        }
+        Outcome::Failed(error) if !error.message.is_empty() => ("error", error.message.clone()),
+        Outcome::Failed(_) => ("error", "Subagent failed".to_string()),
+        Outcome::Interrupted(_) => ("cancelled", "Subagent cancelled".to_string()),
+    };
+    format!(
+        "<subagent sessionID=\"{child_id}\" state=\"{state}\" description=\"{description}\">\n{text}\n</subagent>"
+    )
+}
+
 fn is_fallback_title(session: &SessionRow) -> bool {
     session.parent_id.is_none()
         && session.title == format!("New session - {}", crate::time::iso(session.time_created))

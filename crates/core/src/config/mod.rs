@@ -39,6 +39,8 @@ pub struct Config {
     pub permissions: Vec<Rule>,
     /// `instructions` of every document, deduplicated.
     pub instructions: Vec<String>,
+    /// `commands.<name>`, later documents replacing whole entries.
+    pub commands: Map<String, Value>,
     /// `providers.anysola` merged.
     pub provider: Map<String, Value>,
     /// Directories that hold markdown definitions (`agent/`, `command/`, …), lowest precedence first.
@@ -105,6 +107,9 @@ impl Config {
                     self.instructions.push(item);
                 }
             }
+        }
+        if let Some(Value::Object(commands)) = data.remove("commands") {
+            self.commands.extend(commands);
         }
         if let Some(Value::Object(agents)) = data.remove("agents") {
             for (id, agent) in agents {
