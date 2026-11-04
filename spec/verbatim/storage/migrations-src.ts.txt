@@ -1,0 +1,1784 @@
+// ===== migration/20260127222353_familiar_lady_ursula.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260127222353_familiar_lady_ursula",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        CREATE TABLE \`project\` (
+          \`id\` text PRIMARY KEY,
+          \`worktree\` text NOT NULL,
+          \`vcs\` text,
+          \`name\` text,
+          \`icon_url\` text,
+          \`icon_color\` text,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          \`time_initialized\` integer,
+          \`sandboxes\` text NOT NULL
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`message\` (
+          \`id\` text PRIMARY KEY,
+          \`session_id\` text NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          \`data\` text NOT NULL,
+          CONSTRAINT \`fk_message_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`part\` (
+          \`id\` text PRIMARY KEY,
+          \`message_id\` text NOT NULL,
+          \`session_id\` text NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          \`data\` text NOT NULL,
+          CONSTRAINT \`fk_part_message_id_message_id_fk\` FOREIGN KEY (\`message_id\`) REFERENCES \`message\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`permission\` (
+          \`project_id\` text PRIMARY KEY,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          \`data\` text NOT NULL,
+          CONSTRAINT \`fk_permission_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`session\` (
+          \`id\` text PRIMARY KEY,
+          \`project_id\` text NOT NULL,
+          \`parent_id\` text,
+          \`slug\` text NOT NULL,
+          \`directory\` text NOT NULL,
+          \`title\` text NOT NULL,
+          \`version\` text NOT NULL,
+          \`share_url\` text,
+          \`summary_additions\` integer,
+          \`summary_deletions\` integer,
+          \`summary_files\` integer,
+          \`summary_diffs\` text,
+          \`revert\` text,
+          \`permission\` text,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          \`time_compacting\` integer,
+          \`time_archived\` integer,
+          CONSTRAINT \`fk_session_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`todo\` (
+          \`session_id\` text NOT NULL,
+          \`content\` text NOT NULL,
+          \`status\` text NOT NULL,
+          \`priority\` text NOT NULL,
+          \`position\` integer NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          CONSTRAINT \`todo_pk\` PRIMARY KEY(\`session_id\`, \`position\`),
+          CONSTRAINT \`fk_todo_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`session_share\` (
+          \`session_id\` text PRIMARY KEY,
+          \`id\` text NOT NULL,
+          \`secret\` text NOT NULL,
+          \`url\` text NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          CONSTRAINT \`fk_session_share_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`CREATE INDEX \`message_session_idx\` ON \`message\` (\`session_id\`);`)
+      yield* tx.run(`CREATE INDEX \`part_message_idx\` ON \`part\` (\`message_id\`);`)
+      yield* tx.run(`CREATE INDEX \`part_session_idx\` ON \`part\` (\`session_id\`);`)
+      yield* tx.run(`CREATE INDEX \`session_project_idx\` ON \`session\` (\`project_id\`);`)
+      yield* tx.run(`CREATE INDEX \`session_parent_idx\` ON \`session\` (\`parent_id\`);`)
+      yield* tx.run(`CREATE INDEX \`todo_session_idx\` ON \`todo\` (\`session_id\`);`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260211171708_add_project_commands.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260211171708_add_project_commands",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`ALTER TABLE \`project\` ADD \`commands\` text;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260213144116_wakeful_the_professor.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260213144116_wakeful_the_professor",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        CREATE TABLE \`control_account\` (
+          \`email\` text NOT NULL,
+          \`url\` text NOT NULL,
+          \`access_token\` text NOT NULL,
+          \`refresh_token\` text NOT NULL,
+          \`token_expiry\` integer,
+          \`active\` integer NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          CONSTRAINT \`control_account_pk\` PRIMARY KEY(\`email\`, \`url\`)
+        );
+      `)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260225215848_workspace.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260225215848_workspace",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        CREATE TABLE \`workspace\` (
+          \`id\` text PRIMARY KEY,
+          \`branch\` text,
+          \`project_id\` text NOT NULL,
+          \`config\` text NOT NULL,
+          CONSTRAINT \`fk_workspace_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260227213759_add_session_workspace_id.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260227213759_add_session_workspace_id",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`ALTER TABLE \`session\` ADD \`workspace_id\` text;`)
+      yield* tx.run(`CREATE INDEX \`session_workspace_idx\` ON \`session\` (\`workspace_id\`);`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260228203230_blue_harpoon.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260228203230_blue_harpoon",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        CREATE TABLE \`account\` (
+          \`id\` text PRIMARY KEY,
+          \`email\` text NOT NULL,
+          \`url\` text NOT NULL,
+          \`access_token\` text NOT NULL,
+          \`refresh_token\` text NOT NULL,
+          \`token_expiry\` integer,
+          \`selected_org_id\` text,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`account_state\` (
+          \`id\` integer PRIMARY KEY NOT NULL,
+          \`active_account_id\` text,
+          FOREIGN KEY (\`active_account_id\`) REFERENCES \`account\`(\`id\`) ON UPDATE no action ON DELETE set null
+        );
+      `)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260303231226_add_workspace_fields.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260303231226_add_workspace_fields",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`ALTER TABLE \`workspace\` ADD \`type\` text NOT NULL;`)
+      yield* tx.run(`ALTER TABLE \`workspace\` ADD \`name\` text;`)
+      yield* tx.run(`ALTER TABLE \`workspace\` ADD \`directory\` text;`)
+      yield* tx.run(`ALTER TABLE \`workspace\` ADD \`extra\` text;`)
+      yield* tx.run(`ALTER TABLE \`workspace\` DROP COLUMN \`config\`;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260309230000_move_org_to_state.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260309230000_move_org_to_state",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`ALTER TABLE \`account_state\` ADD \`active_org_id\` text;`)
+      yield* tx.run(
+        `UPDATE \`account_state\` SET \`active_org_id\` = (SELECT \`selected_org_id\` FROM \`account\` WHERE \`account\`.\`id\` = \`account_state\`.\`active_account_id\`);`,
+      )
+      yield* tx.run(`ALTER TABLE \`account\` DROP COLUMN \`selected_org_id\`;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260312043431_session_message_cursor.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260312043431_session_message_cursor",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`DROP INDEX IF EXISTS \`message_session_idx\`;`)
+      yield* tx.run(`DROP INDEX IF EXISTS \`part_message_idx\`;`)
+      yield* tx.run(
+        `CREATE INDEX \`message_session_time_created_id_idx\` ON \`message\` (\`session_id\`,\`time_created\`,\`id\`);`,
+      )
+      yield* tx.run(`CREATE INDEX \`part_message_id_id_idx\` ON \`part\` (\`message_id\`,\`id\`);`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260323234822_events.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260323234822_events",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        CREATE TABLE \`event_sequence\` (
+          \`aggregate_id\` text PRIMARY KEY,
+          \`seq\` integer NOT NULL
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`event\` (
+          \`id\` text PRIMARY KEY,
+          \`aggregate_id\` text NOT NULL,
+          \`seq\` integer NOT NULL,
+          \`type\` text NOT NULL,
+          \`data\` text NOT NULL,
+          CONSTRAINT \`fk_event_aggregate_id_event_sequence_aggregate_id_fk\` FOREIGN KEY (\`aggregate_id\`) REFERENCES \`event_sequence\`(\`aggregate_id\`) ON DELETE CASCADE
+        );
+      `)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260410174513_workspace-name.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260410174513_workspace-name",
+  up(tx) {
+    return Effect.gen(function* () {
+      const columns = yield* tx.all<{ name: string }>(`PRAGMA table_info(\`workspace\`)`)
+      const name = columns.some((column) => column.name === "name") ? "`name`" : "''"
+
+      yield* tx.run(`PRAGMA foreign_keys=OFF;`)
+      yield* tx.run(`
+        CREATE TABLE \`__new_workspace\` (
+          \`id\` text PRIMARY KEY,
+          \`type\` text NOT NULL,
+          \`name\` text DEFAULT '' NOT NULL,
+          \`branch\` text,
+          \`directory\` text,
+          \`extra\` text,
+          \`project_id\` text NOT NULL,
+          CONSTRAINT \`fk_workspace_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(
+        `INSERT INTO \`__new_workspace\`(\`id\`, \`type\`, \`branch\`, \`name\`, \`directory\`, \`extra\`, \`project_id\`) SELECT \`id\`, \`type\`, \`branch\`, ${name}, \`directory\`, \`extra\`, \`project_id\` FROM \`workspace\`;`,
+      )
+      yield* tx.run(`DROP TABLE \`workspace\`;`)
+      yield* tx.run(`ALTER TABLE \`__new_workspace\` RENAME TO \`workspace\`;`)
+      yield* tx.run(`PRAGMA foreign_keys=ON;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260413175956_chief_energizer.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260413175956_chief_energizer",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        CREATE TABLE \`session_entry\` (
+          \`id\` text PRIMARY KEY,
+          \`session_id\` text NOT NULL,
+          \`type\` text NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          \`data\` text NOT NULL,
+          CONSTRAINT \`fk_session_entry_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`CREATE INDEX \`session_entry_session_idx\` ON \`session_entry\` (\`session_id\`);`)
+      yield* tx.run(`CREATE INDEX \`session_entry_session_type_idx\` ON \`session_entry\` (\`session_id\`,\`type\`);`)
+      yield* tx.run(`CREATE INDEX \`session_entry_time_created_idx\` ON \`session_entry\` (\`time_created\`);`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260423070820_add_icon_url_override.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260423070820_add_icon_url_override",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        ALTER TABLE \`project\` ADD \`icon_url_override\` text;
+        UPDATE \`project\` SET \`icon_url_override\` = \`icon_url\` WHERE \`icon_url\` IS NOT NULL;
+      `)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260427172553_slow_nightmare.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260427172553_slow_nightmare",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        CREATE TABLE \`session_message\` (
+          \`id\` text PRIMARY KEY,
+          \`session_id\` text NOT NULL,
+          \`type\` text NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          \`data\` text NOT NULL,
+          CONSTRAINT \`fk_session_message_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`DROP INDEX IF EXISTS \`session_entry_session_idx\`;`)
+      yield* tx.run(`DROP INDEX IF EXISTS \`session_entry_session_type_idx\`;`)
+      yield* tx.run(`DROP INDEX IF EXISTS \`session_entry_time_created_idx\`;`)
+      yield* tx.run(`CREATE INDEX \`session_message_session_idx\` ON \`session_message\` (\`session_id\`);`)
+      yield* tx.run(
+        `CREATE INDEX \`session_message_session_type_idx\` ON \`session_message\` (\`session_id\`,\`type\`);`,
+      )
+      yield* tx.run(`CREATE INDEX \`session_message_time_created_idx\` ON \`session_message\` (\`time_created\`);`)
+      yield* tx.run(`DROP TABLE \`session_entry\`;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260428004200_add_session_path.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260428004200_add_session_path",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`ALTER TABLE \`session\` ADD \`path\` text;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260501142318_next_venus.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260501142318_next_venus",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`ALTER TABLE \`session\` ADD \`agent\` text;`)
+      yield* tx.run(`ALTER TABLE \`session\` ADD \`model\` text;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260504145000_add_sync_owner.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260504145000_add_sync_owner",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`ALTER TABLE \`event_sequence\` ADD \`owner_id\` text;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260507164347_add_workspace_time.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260507164347_add_workspace_time",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`ALTER TABLE \`workspace\` ADD \`time_used\` integer NOT NULL DEFAULT 0;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260510033149_session_usage.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260510033149_session_usage",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`ALTER TABLE \`session\` ADD \`cost\` real DEFAULT 0 NOT NULL;`)
+      yield* tx.run(`ALTER TABLE \`session\` ADD \`tokens_input\` integer DEFAULT 0 NOT NULL;`)
+      yield* tx.run(`ALTER TABLE \`session\` ADD \`tokens_output\` integer DEFAULT 0 NOT NULL;`)
+      yield* tx.run(`ALTER TABLE \`session\` ADD \`tokens_reasoning\` integer DEFAULT 0 NOT NULL;`)
+      yield* tx.run(`ALTER TABLE \`session\` ADD \`tokens_cache_read\` integer DEFAULT 0 NOT NULL;`)
+      yield* tx.run(`ALTER TABLE \`session\` ADD \`tokens_cache_write\` integer DEFAULT 0 NOT NULL;`)
+      yield* tx.run(`
+        UPDATE session
+        SET
+          cost = coalesce((
+            SELECT sum(coalesce(json_extract(message.data, '$.cost'), 0))
+            FROM message
+            WHERE message.session_id = session.id
+              AND json_extract(message.data, '$.role') = 'assistant'
+          ), 0),
+          tokens_input = coalesce((
+            SELECT sum(coalesce(json_extract(message.data, '$.tokens.input'), 0))
+            FROM message
+            WHERE message.session_id = session.id
+              AND json_extract(message.data, '$.role') = 'assistant'
+          ), 0),
+          tokens_output = coalesce((
+            SELECT sum(coalesce(json_extract(message.data, '$.tokens.output'), 0))
+            FROM message
+            WHERE message.session_id = session.id
+              AND json_extract(message.data, '$.role') = 'assistant'
+          ), 0),
+          tokens_reasoning = coalesce((
+            SELECT sum(coalesce(json_extract(message.data, '$.tokens.reasoning'), 0))
+            FROM message
+            WHERE message.session_id = session.id
+              AND json_extract(message.data, '$.role') = 'assistant'
+          ), 0),
+          tokens_cache_read = coalesce((
+            SELECT sum(coalesce(json_extract(message.data, '$.tokens.cache.read'), 0))
+            FROM message
+            WHERE message.session_id = session.id
+              AND json_extract(message.data, '$.role') = 'assistant'
+          ), 0),
+          tokens_cache_write = coalesce((
+            SELECT sum(coalesce(json_extract(message.data, '$.tokens.cache.write'), 0))
+            FROM message
+            WHERE message.session_id = session.id
+              AND json_extract(message.data, '$.role') = 'assistant'
+          ), 0)
+      `)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260511000411_data_migration_state.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260511000411_data_migration_state",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        CREATE TABLE \`data_migration\` (
+          \`name\` text PRIMARY KEY,
+          \`time_completed\` integer NOT NULL
+        );
+      `)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260511173437_session-metadata.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260511173437_session-metadata",
+  up(tx) {
+    return Effect.gen(function* () {
+      // This column briefly shipped again under 20260530232709_lovely_romulus.
+      if (
+        (yield* tx.all<{ name: string }>(`PRAGMA table_info(\`session\`)`)).some((column) => column.name === "metadata")
+      )
+        return
+      yield* tx.run(`ALTER TABLE \`session\` ADD \`metadata\` text;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260601010001_normalize_storage_paths.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260601010001_normalize_storage_paths",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(
+        `UPDATE project SET worktree = REPLACE(worktree, char(92), '/') WHERE worktree GLOB '[A-Za-z]:' || char(92) || '*' OR worktree LIKE char(92) || char(92) || '%';`,
+      )
+      yield* tx.run(
+        `UPDATE project SET sandboxes = REPLACE(sandboxes, char(92) || char(92), '/') WHERE instr(sandboxes, char(92)) > 0 AND (worktree GLOB '[A-Za-z]:*' OR worktree LIKE '//%');`,
+      )
+      yield* tx.run(
+        `UPDATE session SET directory = REPLACE(directory, char(92), '/') WHERE directory GLOB '[A-Za-z]:' || char(92) || '*' OR directory LIKE char(92) || char(92) || '%';`,
+      )
+      yield* tx.run(
+        `UPDATE session SET path = REPLACE(path, char(92), '/') WHERE path IS NOT NULL AND instr(path, char(92)) > 0 AND (directory GLOB '[A-Za-z]:*' OR directory LIKE '//%');`,
+      )
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260601202201_amazing_prowler.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260601202201_amazing_prowler",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`DROP TABLE \`permission\`;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260602002951_lowly_union_jack.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260602002951_lowly_union_jack",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        CREATE TABLE \`permission\` (
+          \`id\` text PRIMARY KEY,
+          \`project_id\` text NOT NULL,
+          \`action\` text NOT NULL,
+          \`resource\` text NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          CONSTRAINT \`fk_permission_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`permission_project_action_resource_idx\` ON \`permission\` (\`project_id\`,\`action\`,\`resource\`);`,
+      )
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260602182828_add_project_directories.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260602182828_add_project_directories",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        CREATE TABLE \`project_directory\` (
+          \`project_id\` text NOT NULL,
+          \`directory\` text NOT NULL,
+          \`type\` text NOT NULL,
+          \`time_created\` integer NOT NULL,
+          CONSTRAINT \`project_directory_pk\` PRIMARY KEY(\`project_id\`, \`directory\`),
+          CONSTRAINT \`fk_project_directory_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260603001617_session_message_projection_indexes.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260603001617_session_message_projection_indexes",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`DROP INDEX IF EXISTS \`session_message_session_idx\`;`)
+      yield* tx.run(`DROP INDEX IF EXISTS \`session_message_session_type_idx\`;`)
+      yield* tx.run(`CREATE INDEX \`event_aggregate_seq_idx\` ON \`event\` (\`aggregate_id\`,\`seq\`);`)
+      yield* tx.run(
+        `CREATE INDEX \`session_message_session_time_created_id_idx\` ON \`session_message\` (\`session_id\`,\`time_created\`,\`id\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`session_message_session_type_time_created_id_idx\` ON \`session_message\` (\`session_id\`,\`type\`,\`time_created\`,\`id\`);`,
+      )
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260603040000_session_message_projection_order.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260603040000_session_message_projection_order",
+  up(tx) {
+    return Effect.gen(function* () {
+      // Pre-launch Session projections were written before durable event persistence
+      // became unconditional, so they cannot be assigned truthful aggregate order.
+      yield* tx.run(`DELETE FROM \`session_message\`;`)
+      yield* tx.run(`ALTER TABLE \`session_message\` ADD COLUMN \`seq\` integer NOT NULL;`)
+      yield* tx.run(`DROP INDEX IF EXISTS \`session_message_session_type_time_created_id_idx\`;`)
+      yield* tx.run(`CREATE INDEX \`session_message_session_seq_idx\` ON \`session_message\` (\`session_id\`,\`seq\`);`)
+      yield* tx.run(
+        `CREATE INDEX \`session_message_session_type_seq_idx\` ON \`session_message\` (\`session_id\`,\`type\`,\`seq\`);`,
+      )
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260603141458_session_input_inbox.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260603141458_session_input_inbox",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        CREATE TABLE \`session_input\` (
+          \`seq\` integer PRIMARY KEY AUTOINCREMENT,
+          \`id\` text NOT NULL UNIQUE,
+          \`session_id\` text NOT NULL,
+          \`prompt\` text NOT NULL,
+          \`delivery\` text NOT NULL,
+          \`promoted_seq\` integer,
+          \`time_created\` integer NOT NULL,
+          CONSTRAINT \`fk_session_input_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(
+        `CREATE INDEX \`session_input_session_pending_seq_idx\` ON \`session_input\` (\`session_id\`,\`promoted_seq\`,\`seq\`);`,
+      )
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260603160727_jittery_ezekiel_stane.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260603160727_jittery_ezekiel_stane",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`DROP INDEX IF EXISTS \`session_input_session_pending_seq_idx\`;`)
+      yield* tx.run(
+        `CREATE INDEX IF NOT EXISTS \`event_aggregate_type_seq_idx\` ON \`event\` (\`aggregate_id\`,\`type\`,\`seq\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX IF NOT EXISTS \`session_input_session_pending_delivery_seq_idx\` ON \`session_input\` (\`session_id\`,\`promoted_seq\`,\`delivery\`,\`seq\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX IF NOT EXISTS \`session_message_session_time_created_id_idx\` ON \`session_message\` (\`session_id\`,\`time_created\`,\`id\`);`,
+      )
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260604172448_event_sourced_session_input.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260604172448_event_sourced_session_input",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`DELETE FROM \`session_input\`;`)
+      yield* tx.run(`DELETE FROM \`session_message\`;`)
+      yield* tx.run(`DELETE FROM \`event\`;`)
+      yield* tx.run(`DELETE FROM \`event_sequence\`;`)
+      yield* tx.run(`UPDATE \`session\` SET \`workspace_id\` = NULL;`)
+      yield* tx.run(`DELETE FROM \`workspace\`;`)
+      yield* tx.run(`DROP INDEX IF EXISTS \`event_aggregate_seq_idx\`;`)
+      yield* tx.run(`CREATE UNIQUE INDEX \`event_aggregate_seq_idx\` ON \`event\` (\`aggregate_id\`,\`seq\`);`)
+      yield* tx.run(`DROP INDEX IF EXISTS \`session_message_session_seq_idx\`;`)
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`session_message_session_seq_idx\` ON \`session_message\` (\`session_id\`,\`seq\`);`,
+      )
+      yield* tx.run(`PRAGMA foreign_keys=OFF;`)
+      yield* tx.run(`
+        CREATE TABLE \`__new_session_input\` (
+          \`id\` text PRIMARY KEY,
+          \`session_id\` text NOT NULL,
+          \`prompt\` text NOT NULL,
+          \`delivery\` text NOT NULL,
+          \`admitted_seq\` integer NOT NULL,
+          \`promoted_seq\` integer,
+          \`time_created\` integer NOT NULL,
+          CONSTRAINT \`fk_session_input_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`DROP TABLE \`session_input\`;`)
+      yield* tx.run(`ALTER TABLE \`__new_session_input\` RENAME TO \`session_input\`;`)
+      yield* tx.run(`PRAGMA foreign_keys=ON;`)
+      yield* tx.run(
+        `CREATE INDEX \`session_input_session_pending_delivery_seq_idx\` ON \`session_input\` (\`session_id\`,\`promoted_seq\`,\`delivery\`,\`admitted_seq\`);`,
+      )
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`session_input_session_admitted_seq_idx\` ON \`session_input\` (\`session_id\`,\`admitted_seq\`);`,
+      )
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`session_input_session_promoted_seq_idx\` ON \`session_input\` (\`session_id\`,\`promoted_seq\`);`,
+      )
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260605003541_add_session_context_snapshot.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260605003541_add_session_context_snapshot",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        CREATE TABLE \`session_context_epoch\` (
+          \`session_id\` text PRIMARY KEY,
+          \`baseline\` text NOT NULL,
+          \`snapshot\` text NOT NULL,
+          \`baseline_seq\` integer NOT NULL,
+          \`replacement_seq\` integer,
+          \`revision\` integer DEFAULT 0 NOT NULL,
+          CONSTRAINT \`fk_session_context_epoch_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260605042240_add_context_epoch_agent.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260605042240_add_context_epoch_agent",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`ALTER TABLE \`session_context_epoch\` ADD \`agent\` text DEFAULT 'build' NOT NULL;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260611035744_credential.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260611035744_credential",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        CREATE TABLE \`credential\` (
+          \`id\` text PRIMARY KEY,
+          \`connector_id\` text NOT NULL,
+          \`method_id\` text NOT NULL,
+          \`label\` text NOT NULL,
+          \`value\` text NOT NULL,
+          \`active\` integer DEFAULT false NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL
+        );
+      `)
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`credential_connector_active_idx\` ON \`credential\` (\`connector_id\`) WHERE "credential"."active" = 1;`,
+      )
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260611192811_lush_chimera.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260611192811_lush_chimera",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`DROP INDEX IF EXISTS \`credential_connector_active_idx\`;`)
+      yield* tx.run(`DROP TABLE \`credential\`;`)
+      yield* tx.run(`
+        CREATE TABLE \`credential\` (
+          \`id\` text PRIMARY KEY,
+          \`integration_id\` text,
+          \`label\` text NOT NULL,
+          \`value\` text NOT NULL,
+          \`connector_id\` text,
+          \`method_id\` text,
+          \`active\` integer,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL
+        );
+      `)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260612174303_project_dir_strategy.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260612174303_project_dir_strategy",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`ALTER TABLE \`project_directory\` ADD \`strategy\` text;`)
+      yield* tx.run(`PRAGMA foreign_keys=OFF;`)
+      yield* tx.run(`
+        CREATE TABLE \`__new_project_directory\` (
+          \`project_id\` text NOT NULL,
+          \`directory\` text NOT NULL,
+          \`type\` text,
+          \`strategy\` text,
+          \`time_created\` integer NOT NULL,
+          CONSTRAINT \`project_directory_pk\` PRIMARY KEY(\`project_id\`, \`directory\`),
+          CONSTRAINT \`fk_project_directory_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(
+        `INSERT INTO \`__new_project_directory\`(\`project_id\`, \`directory\`, \`type\`, \`time_created\`) SELECT \`project_id\`, \`directory\`, \`type\`, \`time_created\` FROM \`project_directory\`;`,
+      )
+      yield* tx.run(`DROP TABLE \`project_directory\`;`)
+      yield* tx.run(`ALTER TABLE \`__new_project_directory\` RENAME TO \`project_directory\`;`)
+      yield* tx.run(`PRAGMA foreign_keys=ON;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260622142730_simplify_session_context_epoch.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260622142730_simplify_session_context_epoch",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`ALTER TABLE \`session_context_epoch\` DROP COLUMN \`agent\`;`)
+      yield* tx.run(`ALTER TABLE \`session_context_epoch\` DROP COLUMN \`replacement_seq\`;`)
+      yield* tx.run(`ALTER TABLE \`session_context_epoch\` DROP COLUMN \`revision\`;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260622170816_reset_v2_session_state.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260622170816_reset_v2_session_state",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`DELETE FROM \`session_context_epoch\`;`)
+      yield* tx.run(`DELETE FROM \`session_input\`;`)
+      yield* tx.run(`DELETE FROM \`session_message\`;`)
+      yield* tx.run(`DELETE FROM \`event\`;`)
+      yield* tx.run(`DELETE FROM \`event_sequence\`;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260622202450_simplify_session_input.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260622202450_simplify_session_input",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`DELETE FROM \`session_context_epoch\`;`)
+      yield* tx.run(`DELETE FROM \`session_input\`;`)
+      yield* tx.run(`DELETE FROM \`session_message\`;`)
+      yield* tx.run(`DELETE FROM \`event\`;`)
+      yield* tx.run(`DELETE FROM \`event_sequence\`;`)
+      yield* tx.run(`UPDATE \`session\` SET \`workspace_id\` = NULL WHERE \`workspace_id\` IS NOT NULL;`)
+      yield* tx.run(`DELETE FROM \`workspace\`;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260804233008_loose_psylocke.ts =====
+import { Effect } from "effect"
+import { sql } from "drizzle-orm"
+import type { DatabaseMigration } from "../migration.js"
+
+const previousV2Marker = "20260730195856_optional_session_title"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260804233008_loose_psylocke",
+  up(tx) {
+    return Effect.gen(function* () {
+      // This marker identifies the completed pre-split V2 lineage. Its V2 tables
+      // are canonical, so rename them in place instead of replaying the V1 squash.
+      if (yield* tx.get(sql`SELECT id FROM migration WHERE id = ${previousV2Marker}`)) {
+        const v1Only = yield* tx.get(sql`
+          SELECT 1
+          FROM message
+          WHERE NOT EXISTS (
+            SELECT 1 FROM session_message WHERE session_message.session_id = message.session_id
+          )
+          LIMIT 1
+        `)
+        if (v1Only) return yield* Effect.die(new Error("Previous V2 database contains V1-only session history"))
+
+        yield* tx.run(`DROP INDEX IF EXISTS \`session_project_idx\`;`)
+        yield* tx.run(`DROP INDEX IF EXISTS \`session_workspace_idx\`;`)
+        yield* tx.run(`DROP INDEX IF EXISTS \`session_parent_idx\`;`)
+        yield* tx.run(`DROP INDEX IF EXISTS \`session_time_suspended_idx\`;`)
+        yield* tx.run(`ALTER TABLE \`session\` RENAME TO \`session_v2\`;`)
+        yield* tx.run(`CREATE INDEX \`session_v2_project_idx\` ON \`session_v2\` (\`project_id\`);`)
+        yield* tx.run(`CREATE INDEX \`session_v2_workspace_idx\` ON \`session_v2\` (\`workspace_id\`);`)
+        yield* tx.run(`CREATE INDEX \`session_v2_parent_idx\` ON \`session_v2\` (\`parent_id\`);`)
+        yield* tx.run(
+          `CREATE INDEX \`session_v2_time_suspended_idx\` ON \`session_v2\` (\`time_suspended\`) WHERE "session_v2"."time_suspended" is not null;`,
+        )
+        yield* tx.run(`DROP TABLE IF EXISTS \`data_migration\`;`)
+        yield* tx.run(`DROP TABLE IF EXISTS \`session_context_epoch\`;`)
+        yield* tx.run(`DROP TABLE IF EXISTS \`session_input\`;`)
+        return
+      }
+
+      yield* tx.run(`
+        CREATE TABLE IF NOT EXISTS \`kv\` (
+          \`key\` text PRIMARY KEY,
+          \`value\` text NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE IF NOT EXISTS \`instruction_blob\` (
+          \`hash\` text PRIMARY KEY,
+          \`value\` text
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE IF NOT EXISTS \`instruction_entry\` (
+          \`session_id\` text NOT NULL,
+          \`key\` text NOT NULL,
+          \`value\` text,
+          \`removed\` integer DEFAULT false NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          CONSTRAINT \`instruction_entry_pk\` PRIMARY KEY(\`session_id\`, \`key\`),
+          CONSTRAINT \`fk_instruction_entry_session_id_session_v2_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session_v2\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE IF NOT EXISTS \`instruction_state\` (
+          \`session_id\` text PRIMARY KEY,
+          \`epoch_start\` integer NOT NULL,
+          \`through_seq\` integer NOT NULL,
+          \`initial_values\` text NOT NULL,
+          \`current_values\` text NOT NULL,
+          CONSTRAINT \`fk_instruction_state_session_id_session_v2_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session_v2\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE IF NOT EXISTS \`session_pending\` (
+          \`id\` text PRIMARY KEY,
+          \`session_id\` text NOT NULL,
+          \`type\` text NOT NULL,
+          \`data\` text NOT NULL,
+          \`delivery\` text,
+          \`admitted_seq\` integer NOT NULL,
+          \`time_created\` integer NOT NULL,
+          CONSTRAINT \`fk_session_pending_session_id_session_v2_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session_v2\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE IF NOT EXISTS \`session_v2\` (
+          \`id\` text PRIMARY KEY,
+          \`project_id\` text NOT NULL,
+          \`workspace_id\` text,
+          \`parent_id\` text,
+          \`fork_session_id\` text,
+          \`fork_boundary\` text,
+          \`slug\` text NOT NULL,
+          \`directory\` text NOT NULL,
+          \`path\` text,
+          \`title\` text,
+          \`version\` text NOT NULL,
+          \`share_url\` text,
+          \`summary_additions\` integer,
+          \`summary_deletions\` integer,
+          \`summary_files\` integer,
+          \`summary_diffs\` text,
+          \`metadata\` text,
+          \`cost\` real DEFAULT 0 NOT NULL,
+          \`tokens_input\` integer DEFAULT 0 NOT NULL,
+          \`tokens_output\` integer DEFAULT 0 NOT NULL,
+          \`tokens_reasoning\` integer DEFAULT 0 NOT NULL,
+          \`tokens_cache_read\` integer DEFAULT 0 NOT NULL,
+          \`tokens_cache_write\` integer DEFAULT 0 NOT NULL,
+          \`revert\` text,
+          \`permission\` text,
+          \`agent\` text,
+          \`model\` text,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          \`time_compacting\` integer,
+          \`time_archived\` integer,
+          \`time_suspended\` integer,
+          CONSTRAINT \`fk_session_v2_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`ALTER TABLE \`event\` ADD \`created\` integer DEFAULT 0 NOT NULL;`)
+      yield* tx.run(`
+        CREATE TABLE IF NOT EXISTS \`__new_session_message\` (
+          \`id\` text PRIMARY KEY,
+          \`session_id\` text NOT NULL,
+          \`type\` text NOT NULL,
+          \`seq\` integer NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          \`data\` text NOT NULL,
+          CONSTRAINT \`fk_session_message_session_id_session_v2_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session_v2\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`DROP TABLE \`session_message\`;`)
+      yield* tx.run(`ALTER TABLE \`__new_session_message\` RENAME TO \`session_message\`;`)
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`session_message_session_seq_idx\` ON \`session_message\` (\`session_id\`,\`seq\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`session_message_session_type_seq_idx\` ON \`session_message\` (\`session_id\`,\`type\`,\`seq\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`session_message_session_time_created_id_idx\` ON \`session_message\` (\`session_id\`,\`time_created\`,\`id\`);`,
+      )
+      yield* tx.run(`CREATE INDEX \`session_message_time_created_idx\` ON \`session_message\` (\`time_created\`);`)
+      yield* tx.run(
+        `CREATE INDEX \`session_pending_session_delivery_seq_idx\` ON \`session_pending\` (\`session_id\`,\`delivery\`,\`admitted_seq\`);`,
+      )
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`session_pending_session_compaction_idx\` ON \`session_pending\` (\`session_id\`) WHERE "session_pending"."type" = 'compaction';`,
+      )
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`session_pending_session_admitted_seq_idx\` ON \`session_pending\` (\`session_id\`,\`admitted_seq\`);`,
+      )
+      yield* tx.run(`CREATE INDEX \`session_v2_project_idx\` ON \`session_v2\` (\`project_id\`);`)
+      yield* tx.run(`CREATE INDEX \`session_v2_workspace_idx\` ON \`session_v2\` (\`workspace_id\`);`)
+      yield* tx.run(`CREATE INDEX \`session_v2_parent_idx\` ON \`session_v2\` (\`parent_id\`);`)
+      yield* tx.run(
+        `CREATE INDEX \`session_v2_time_suspended_idx\` ON \`session_v2\` (\`time_suspended\`) WHERE "session_v2"."time_suspended" is not null;`,
+      )
+      yield* tx.run(`DROP TABLE \`data_migration\`;`)
+      yield* tx.run(`DROP TABLE \`session_context_epoch\`;`)
+      yield* tx.run(`DROP TABLE \`session_input\`;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260805200742_import_legacy_credentials.ts =====
+import { readFile } from "node:fs/promises"
+import path from "node:path"
+import { sql } from "drizzle-orm"
+import { Effect, Option, Schema } from "effect"
+import { Credential } from "@opencode/schema/credential"
+import { Integration } from "@opencode/schema/integration"
+import { NonNegativeInt } from "@opencode/schema/schema"
+import { Global } from "@opencode/util/global"
+import type { DatabaseMigration } from "../migration.js"
+
+const LegacyOAuth = Schema.Struct({
+  type: Schema.Literal("oauth"),
+  refresh: Schema.String,
+  access: Schema.String,
+  expires: NonNegativeInt,
+  accountId: Schema.optional(Schema.String),
+  enterpriseUrl: Schema.optional(Schema.String),
+})
+const LegacyKey = Schema.Struct({
+  type: Schema.Literal("api"),
+  key: Schema.String,
+  metadata: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+})
+const LegacyWellKnown = Schema.Struct({
+  type: Schema.Literal("wellknown"),
+  key: Schema.String,
+  token: Schema.String,
+})
+const LegacyValue = Schema.Union([LegacyOAuth, LegacyKey, LegacyWellKnown])
+const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
+const decodeValue = Schema.decodeUnknownOption(LegacyValue)
+const wellKnownSourcesKey = "wellknown:sources"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260805200742_import_legacy_credentials",
+  up(tx) {
+    return Effect.gen(function* () {
+      const global = yield* Global.Service
+      return yield* importLegacyCredentials(tx, path.join(global.data, "auth.json"))
+    })
+  },
+}
+
+export default migration
+
+export function importLegacyCredentials(tx: Parameters<DatabaseMigration.Migration["up"]>[0], filepath: string) {
+  return Effect.gen(function* () {
+    const content = yield* Effect.promise(() => readFile(filepath, "utf8").catch(() => undefined))
+    if (content === undefined) return
+    const input = Option.getOrUndefined(decodeJson(content))
+    if (typeof input !== "object" || input === null || Array.isArray(input)) {
+      return yield* Effect.fail(new Error("Legacy credential file must contain an object"))
+    }
+
+    const origins: string[] = []
+    for (const [id, raw] of Object.entries(input)) {
+      const value = Option.getOrUndefined(decodeValue(raw))
+      if (!value) continue
+      const integrationID = id.replace(/\/+$/, "")
+      if (!integrationID) continue
+      if (value.type === "wellknown") origins.push(integrationID)
+      if (yield* tx.get(sql`SELECT id FROM credential WHERE integration_id = ${integrationID}`)) continue
+
+      const credential =
+        value.type === "api"
+          ? Credential.Key.make({ type: "key", key: value.key, metadata: value.metadata })
+          : value.type === "wellknown"
+            ? Credential.Key.make({ type: "key", key: value.token })
+            : Credential.OAuth.make({
+                type: "oauth",
+                methodID: Integration.MethodID.make(methodID(integrationID)),
+                refresh: value.refresh,
+                access: value.access,
+                expires: value.expires,
+                metadata:
+                  value.accountId || value.enterpriseUrl
+                    ? {
+                        ...(value.accountId ? { accountID: value.accountId } : {}),
+                        ...(value.enterpriseUrl ? { enterpriseUrl: value.enterpriseUrl } : {}),
+                      }
+                    : undefined,
+              })
+      const label = credential.type === "oauth" ? "OAuth" : "API key"
+      const now = Date.now()
+      yield* tx.run(sql`
+        INSERT INTO credential (id, integration_id, label, value, time_created, time_updated)
+        VALUES (${Credential.ID.create()}, ${integrationID}, ${label}, ${JSON.stringify(credential)}, ${now}, ${now})
+      `)
+    }
+
+    if (!origins.length) return
+    const stored = yield* tx.get<{ value: string }>(sql`SELECT value FROM kv WHERE key = ${wellKnownSourcesKey}`)
+    const decoded = stored ? Option.getOrUndefined(decodeJson(stored.value)) : undefined
+    const current = Array.isArray(decoded) ? decoded.filter((item): item is string => typeof item === "string") : []
+    const value = JSON.stringify(Array.from(new Set([...current, ...origins])))
+    const now = Date.now()
+    yield* tx.run(sql`
+      INSERT INTO kv (key, value, time_created, time_updated)
+      VALUES (${wellKnownSourcesKey}, ${value}, ${now}, ${now})
+      ON CONFLICT (key) DO UPDATE SET value = excluded.value, time_updated = excluded.time_updated
+    `)
+  })
+}
+
+function methodID(integrationID: string) {
+  if (integrationID === "openai") return "chatgpt-browser"
+  if (["github-copilot", "opencode", "xai"].includes(integrationID)) return "device"
+  return "oauth"
+}
+
+// ===== migration/20260808023530_workspace_domain.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260808023530_workspace_domain",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`DROP TABLE \`workspace\`;`)
+      yield* tx.run(`
+        CREATE TABLE \`workspace\` (
+          \`id\` text PRIMARY KEY,
+          \`provider\` text NOT NULL,
+          \`binding\` text NOT NULL,
+          \`created_at\` integer NOT NULL,
+          \`last_used_at\` integer NOT NULL
+        );
+      `)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260811161259_execution_claim_attempts.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260811161259_execution_claim_attempts",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`ALTER TABLE \`session_v2\` ADD \`resume_attempts\` integer DEFAULT 0 NOT NULL;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260812181746_session_inbox.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260812181746_session_inbox",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        CREATE TABLE \`session_inbox\` (
+          \`id\` text PRIMARY KEY,
+          \`session_id\` text NOT NULL,
+          \`type\` text NOT NULL,
+          \`payload\` text NOT NULL,
+          \`delivery\` text NOT NULL,
+          \`enqueued_seq\` integer NOT NULL,
+          \`time_created\` integer NOT NULL,
+          CONSTRAINT \`fk_session_inbox_session_id_session_v2_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session_v2\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(
+        `CREATE INDEX \`session_inbox_session_delivery_seq_idx\` ON \`session_inbox\` (\`session_id\`,\`delivery\`,\`enqueued_seq\`);`,
+      )
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`session_inbox_session_enqueued_seq_idx\` ON \`session_inbox\` (\`session_id\`,\`enqueued_seq\`);`,
+      )
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260812213948_worktree.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260812213948_worktree",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        CREATE TABLE \`worktree\` (
+          \`project_id\` text NOT NULL,
+          \`directory\` text NOT NULL,
+          \`strategy\` text,
+          \`time_created\` integer NOT NULL,
+          CONSTRAINT \`worktree_pk\` PRIMARY KEY(\`project_id\`, \`directory\`),
+          CONSTRAINT \`fk_worktree_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        INSERT INTO \`worktree\` (\`project_id\`, \`directory\`, \`strategy\`, \`time_created\`)
+        SELECT
+          \`project_id\`,
+          \`directory\`,
+          CASE
+            WHEN \`strategy\` = 'git_worktree' THEN 'git'
+            WHEN \`strategy\` IS NOT NULL THEN \`strategy\`
+            WHEN \`type\` = 'git_worktree' THEN 'git'
+          END,
+          \`time_created\`
+        FROM \`project_directory\`;
+      `)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260819222447_session_viewed_state.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260819222447_session_viewed_state",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`ALTER TABLE \`session_v2\` ADD \`time_idle\` integer;`)
+      yield* tx.run(`ALTER TABLE \`session_v2\` ADD \`time_viewed\` integer;`)
+      yield* tx.run(`ALTER TABLE \`session_v2\` ADD \`idle_outcome\` text;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260823191254_nullable_workspace_binding.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260823191254_nullable_workspace_binding",
+  foreignKeys: false,
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        CREATE TABLE \`__new_workspace\` (
+          \`id\` text PRIMARY KEY,
+          \`provider\` text NOT NULL,
+          \`binding\` text,
+          \`created_at\` integer NOT NULL,
+          \`last_used_at\` integer NOT NULL
+        );
+      `)
+      yield* tx.run(
+        `INSERT INTO \`__new_workspace\`(\`id\`, \`provider\`, \`binding\`, \`created_at\`, \`last_used_at\`) SELECT \`id\`, \`provider\`, \`binding\`, \`created_at\`, \`last_used_at\` FROM \`workspace\`;`,
+      )
+      yield* tx.run(`DROP TABLE \`workspace\`;`)
+      yield* tx.run(`ALTER TABLE \`__new_workspace\` RENAME TO \`workspace\`;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260910120000_clear_v1_session_permission.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260910120000_clear_v1_session_permission",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`UPDATE \`session_v2\` SET \`permission\` = NULL;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20260923013825_project_time_active.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20260923013825_project_time_active",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`ALTER TABLE \`project\` ADD \`time_active\` integer DEFAULT 0 NOT NULL;`)
+      yield* tx.run(`UPDATE \`project\` SET \`time_active\` = \`time_updated\`;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20261007190000_azure_cli_external_credential.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+// Azure CLI connections were OAuth credentials holding a copy of the CLI's token; they now reference the CLI as an
+// external credential source. Dropping the token fields keeps the method and the resource in metadata.
+const migration: DatabaseMigration.Migration = {
+  id: "20261007190000_azure_cli_external_credential",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        UPDATE \`credential\`
+        SET \`value\` = json_remove(json_set(\`value\`, '$.type', 'external'), '$.access', '$.refresh', '$.expires')
+        WHERE \`integration_id\` = 'azure'
+          AND json_extract(\`value\`, '$.type') = 'oauth'
+          AND json_extract(\`value\`, '$.methodID') = 'azure-cli'
+      `)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20261010180456_project_time_archived.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20261010180456_project_time_archived",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`ALTER TABLE \`project\` ADD \`time_archived\` integer;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20261024002554_session_allowance.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20261024002554_session_allowance",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`ALTER TABLE \`session_v2\` ADD \`allowance\` real DEFAULT 0 NOT NULL;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20261024175301_drop_session_allowance.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20261024175301_drop_session_allowance",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`ALTER TABLE \`session_v2\` DROP COLUMN \`allowance\`;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20261025123711_blob.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20261025123711_blob",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        CREATE TABLE \`blob_ref\` (
+          \`session_id\` text NOT NULL,
+          \`message_id\` text NOT NULL,
+          \`hash\` text NOT NULL,
+          \`seq\` integer NOT NULL,
+          CONSTRAINT \`blob_ref_pk\` PRIMARY KEY(\`session_id\`, \`message_id\`, \`hash\`),
+          CONSTRAINT \`fk_blob_ref_session_id_session_v2_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session_v2\`(\`id\`) ON DELETE CASCADE,
+          CONSTRAINT \`fk_blob_ref_hash_blob_hash_fk\` FOREIGN KEY (\`hash\`) REFERENCES \`blob\`(\`hash\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`blob\` (
+          \`hash\` text PRIMARY KEY,
+          \`mime\` text NOT NULL,
+          \`bytes\` integer NOT NULL,
+          \`width\` integer,
+          \`height\` integer,
+          \`data\` blob NOT NULL,
+          \`time_created\` integer NOT NULL
+        );
+      `)
+      yield* tx.run(`CREATE INDEX \`blob_ref_hash_idx\` ON \`blob_ref\` (\`hash\`);`)
+      yield* tx.run(`CREATE INDEX \`blob_ref_session_seq_idx\` ON \`blob_ref\` (\`session_id\`,\`seq\`);`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20261025154125_drop_session_pending.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20261025154125_drop_session_pending",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`DROP INDEX IF EXISTS \`session_pending_session_delivery_seq_idx\`;`)
+      yield* tx.run(`DROP INDEX IF EXISTS \`session_pending_session_compaction_idx\`;`)
+      yield* tx.run(`DROP INDEX IF EXISTS \`session_pending_session_admitted_seq_idx\`;`)
+      yield* tx.run(`DROP TABLE IF EXISTS \`session_pending\`;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20261026223005_schedule.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20261026223005_schedule",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        CREATE TABLE \`schedule\` (
+          \`id\` text PRIMARY KEY,
+          \`session_id\` text,
+          \`name\` text,
+          \`action\` text NOT NULL,
+          \`when\` text NOT NULL,
+          \`tz\` text NOT NULL,
+          \`status\` text DEFAULT 'active' NOT NULL,
+          \`next_due_at\` integer,
+          \`ends_at\` integer,
+          \`remaining_runs\` integer,
+          \`run_count\` integer DEFAULT 0 NOT NULL,
+          \`last_fired_at\` integer,
+          \`last_message_id\` text,
+          \`last_outcome\` text,
+          \`retry_at\` integer,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          CONSTRAINT \`fk_schedule_session_id_session_v2_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session_v2\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`CREATE INDEX \`schedule_session_idx\` ON \`schedule\` (\`session_id\`);`)
+      yield* tx.run(
+        `CREATE INDEX \`schedule_due_idx\` ON \`schedule\` (\`next_due_at\`) WHERE "schedule"."status" = 'active' and "schedule"."next_due_at" is not null;`,
+      )
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20261029002625_session_part.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20261029002625_session_part",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        CREATE TABLE \`session_part\` (
+          \`message_id\` text NOT NULL,
+          \`session_id\` text NOT NULL,
+          \`ordinal\` integer NOT NULL,
+          \`type\` text NOT NULL,
+          \`call_id\` text,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL,
+          \`data\` text NOT NULL,
+          CONSTRAINT \`session_part_pk\` PRIMARY KEY(\`message_id\`, \`ordinal\`),
+          CONSTRAINT \`fk_session_part_message_id_session_message_id_fk\` FOREIGN KEY (\`message_id\`) REFERENCES \`session_message\`(\`id\`) ON DELETE CASCADE,
+          CONSTRAINT \`fk_session_part_session_id_session_v2_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session_v2\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(
+        `CREATE INDEX \`session_part_session_message_idx\` ON \`session_part\` (\`session_id\`,\`message_id\`,\`ordinal\`);`,
+      )
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20261029073502_session_time_busy.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20261029073502_session_time_busy",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`ALTER TABLE \`session_v2\` ADD \`time_busy\` integer;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20261029165540_schedule_checks.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20261029165540_schedule_checks",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`ALTER TABLE \`schedule\` ADD \`check\` text;`)
+      yield* tx.run(`ALTER TABLE \`schedule\` ADD \`checks\` integer DEFAULT 0 NOT NULL;`)
+      yield* tx.run(`ALTER TABLE \`schedule\` ADD \`failures\` integer DEFAULT 0 NOT NULL;`)
+      yield* tx.run(`ALTER TABLE \`schedule\` ADD \`state\` text;`)
+    })
+  },
+}
+
+export default migration
+
+// ===== migration/20261030054400_job.ts =====
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration.js"
+
+const migration: DatabaseMigration.Migration = {
+  id: "20261030054400_job",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        CREATE TABLE \`job\` (
+          \`notification_id\` text PRIMARY KEY,
+          \`id\` text NOT NULL,
+          \`session_id\` text NOT NULL,
+          \`child_session_id\` text,
+          \`kind\` text NOT NULL,
+          \`title\` text,
+          \`status\` text NOT NULL,
+          \`output\` text,
+          \`error\` text,
+          \`recovery\` text NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`time_updated\` integer NOT NULL
+        );
+      `)
+      yield* tx.run(`CREATE INDEX \`job_session_idx\` ON \`job\` (\`session_id\`);`)
+      yield* tx.run(`CREATE INDEX \`job_child_session_idx\` ON \`job\` (\`child_session_id\`);`)
+      yield* tx.run(`CREATE INDEX \`job_id_idx\` ON \`job\` (\`id\`);`)
+      yield* tx.run(`
+        INSERT OR IGNORE INTO \`job\` (
+          \`notification_id\`, \`id\`, \`session_id\`, \`child_session_id\`, \`kind\`, \`title\`,
+          \`status\`, \`output\`, \`error\`, \`recovery\`, \`time_created\`, \`time_updated\`
+        )
+        SELECT
+          json_extract(\`value\`, '$.notificationID'),
+          json_extract(\`value\`, '$.id'),
+          COALESCE(json_extract(\`value\`, '$.recovery.sessionID'), json_extract(\`value\`, '$.recovery.parentSessionID')),
+          json_extract(\`value\`, '$.recovery.childSessionID'),
+          json_extract(\`value\`, '$.recovery.kind'),
+          COALESCE(
+            json_extract(\`value\`, '$.recovery.command'),
+            json_extract(\`value\`, '$.recovery.description'),
+            json_extract(\`value\`, '$.recovery.path')
+          ),
+          json_extract(\`value\`, '$.status'),
+          json_extract(\`value\`, '$.output'),
+          json_extract(\`value\`, '$.error'),
+          json_extract(\`value\`, '$.recovery'),
+          \`time_created\`,
+          \`time_updated\`
+        FROM \`kv\`
+        WHERE \`key\` LIKE 'job.background/%'
+          AND json_extract(\`value\`, '$.notificationID') IS NOT NULL
+          AND json_extract(\`value\`, '$.id') IS NOT NULL
+          AND COALESCE(json_extract(\`value\`, '$.recovery.sessionID'), json_extract(\`value\`, '$.recovery.parentSessionID')) IS NOT NULL;
+      `)
+      yield* tx.run(`DELETE FROM \`kv\` WHERE \`key\` LIKE 'job.background/%';`)
+    })
+  },
+}
+
+export default migration
+

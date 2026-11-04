@@ -1,0 +1,59 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                       ┃ /new         New session                                                ┃
+                       ┃ /open        Open session or project                                    ┃
+                       ┃ /plugins     Plugins                                                    ┃
+                       ┃ /project     Open session or project                                    ┃
+                       ┃ /projects    Open session or project                                    ┃
+                       ┃ /q           Exit the app                                               ┃
+                       ┃ /quit        Exit the app                                               ┃
+                       ┃ /reload      Reload configuration                                       ┃
+                       ┃ /resume      Switch session                                             ┃
+                       ┃ /review      review changes [commit|branch|pr], defaults to uncommitted ┃
+                       ┃
+                       ┃  /
+                       ┃
+                       ┃  Build · Claude Sonnet 5.5
+                       ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                       ~/my-app:master              731 credits  shift+tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Team · renews 23 Nov                                                                                           0.5.1

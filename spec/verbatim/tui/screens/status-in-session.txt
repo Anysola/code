@@ -1,0 +1,35 @@
+   Fix typo in hello.txt           Fix typo in hello.txt         +
+  ┃
+  ┃  ← Edit hello.txt
+  ┃
+  ┃    1 - Helo wrold
+  ┃    1 + Hello world
+  ┃
+
+     + Thought · 4ms
+
+     Fixed                       Status                                             esc
+
+     The typo in hello.txt is    No MCP servers
+
+     - before: Helo wrold
+     - after: Hello world
+
+     export const greet = (name: string) => `Hello ${name}`
+
+     ┌─────────────────────────────────────────────────────────┬─────────────────────────────────────────────────────┐
+     │ file                                                    │ change                                              │
+     ├─────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────┤
+     │ hello.txt                                               │ 1 line                                              │
+     └─────────────────────────────────────────────────────────┴─────────────────────────────────────────────────────┘
+
+     │ Run bun test to check.
+
+     Build · Claude Sonnet 5.5 · 7.1s · 638.3 tok/s
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · Claude Sonnet 5.5
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  ~/my-app:master                                                 731 credits · session 12  1.3K (0%)  ctrl+p commands

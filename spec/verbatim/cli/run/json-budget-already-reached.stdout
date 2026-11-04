@@ -1,0 +1,1 @@
+{"type":"error","timestamp":1793800608304,"sessionID":"ses_e5926f6bfffeopbQFFitUadRa3","error":{"type":"unknown","message":"Budget reached: 1/1 credits. Continue with `anysola run -s ses_e5926f6bfffeopbQFFitUadRa3 --budget <credits>`."}}

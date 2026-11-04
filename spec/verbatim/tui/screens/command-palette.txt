@@ -1,0 +1,35 @@
+
+
+
+
+
+
+
+
+
+
+                                  Commands                                         esc
+
+                                  Search
+
+                                  Suggested
+                                  Switch model                                ctrl+x m
+                                  Open settings
+
+                       ┃          Session
+                       ┃  Ask     Switch session                              ctrl+x l
+                       ┃          New session                                 ctrl+x n
+                       ┃  Buil    Clear session
+                       ╹▀▀▀▀▀▀    Open session or project                       ctrl+o    ▀▀▀▀▀▀▀▀
+                       ~/my-ap    Close tab                                   ctrl+x w    commands
+                                  Reopen closed tab                       ctrl+shift+t
+                                  Open editor                                 ctrl+x e
+
+
+
+
+
+
+
+
+  Team · renews 23 Nov                                                                                           0.5.1

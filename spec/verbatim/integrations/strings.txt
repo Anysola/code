@@ -1,0 +1,160 @@
+# Verbatim user/model-visible strings, integrations area. Source paths relative to /home/ubuntu/anysola-code/build/fork.
+# ${x} = interpolation.
+
+## MCP core (packages/core/src/mcp/index.ts)
+:56   MCP server not found: ${server}
+:69   MCP server "${server}" is not connected: ${status.error}. Reconnect it from /mcps.
+:71   MCP server "${server}" needs authentication: ${status.error}. Sign in from /mcps.
+:73   MCP server "${server}" is disabled.
+:75   MCP server "${server}" is not connected.
+:278  ${input.server} is requesting input                       (elicitation form title)
+:635  Connection closed
+:833  MCP tool "${input.name}" on client "${server}" failed: ${error.message}
+:855  MCP tool "${input.name}" on server "${target.name}" failed: ${error.message}
+
+## MCP client (packages/core/src/mcp/client.ts)
+:51   ${error.message} (HTTP ${status})  |  ${error.message} (${code})          (describe())
+:88   MCP server session expired: ${server}
+:189  ${describe(error)}: ${lastError}                                          (Connection closed + cause)
+:314  Invalid MCP URL for "${server}"
+:439  Connection closed: ${lastError}  |  Connection closed
+:462  ${error.message}; the server supports ${supported.join(", ")}. Set "protocol" for this server to one of those or to "legacy".
+
+## MCP stdio (packages/core/src/mcp/stdio.ts)
+:84   Stdio transport already started
+:112  Not connected
+:146  Invalid MCP stdio message from ${server}: ${cause}
+:155  MCP server ${server} wrote more than 16 MiB to stdout without a message boundary
+:197  MCP server process exited
+:198  MCP server process exited with code ${code}
+:201  ${exited}: ${stderrTail}            (stderr tail = last 1000 chars, trimmed)
+Observed spawn failure status text: NotFound: ChildProcess.spawn (/nonexistent/cmd --flag)
+Observed network failure status text: ECONNREFUSED: Unable to connect. Is the computer able to access the url?
+
+## MCP OAuth (packages/core/src/mcp/oauth.ts)
+:119  HTTP ${status} trying to load OAuth authorization server metadata
+:158  MCP server "${url}" requires a login before it can register a client
+:158  MCP server "${url}" requires user authorization
+:176  Protected resource ${resource} does not cover ${identity}
+:207  MCP server "${url}" returned a ${protocol} authorization URL; only http and https are supported
+:214  Missing PKCE code verifier for MCP OAuth flow
+:367  Not found                              (callback server, wrong path, 404 text/plain)
+:386  Missing authorization code             (callback with no params -> 400 error page, flow keeps waiting)
+:389  OAuth state mismatch                   (400 page, flow fails)
+:390  Missing authorization code             (400 page, flow fails)
+:395  OAuth callback already received        (409)
+:407  Could not determine MCP OAuth callback port
+:473  MCP server "${name}" did not return OAuth tokens
+:489  MCP server "${name}" did not provide an authorization URL
+:534  Authorize ${name} in your browser. This window will close automatically.
+Callback HTML: oauth-callback-page.ts (rendered samples: oauth-callback-success.html, oauth-callback-error-missing-code.html).
+Titles "Authorization successful · Anysola Code" / "Authorization failed · Anysola Code";
+"Anysola Code is now connected to ${provider}." / "You can close this window." /
+"Anysola Code couldn't finish connecting to ${provider}." / "Close this window and try again from Anysola Code.";
+success page auto-closes after 2500 ms.
+
+## MCP model-visible (packages/core/src/mcp/instructions.ts)
+:19   <mcp_instructions> / <server name="${server}"> ... </server> (see codemode-catalog-with-mcp.txt)
+:22   Use tools from this server through `execute` under `tools[${JSON.stringify(namespace)}]`.
+:41   The available MCP server instructions have changed. This list supersedes the previous one.
+:47   New MCP server instructions are available in addition to those previously listed:
+:51   The following MCP server instructions have changed. Each entry replaces the previously listed server with the same name:
+:57   Instructions for the following MCP servers are no longer available: ${names}.
+:84   MCP server instructions are no longer available.
+
+## MCP tool wrapper (packages/core/src/tool/mcp.ts)
+:81   MCP server "${server}" is not available
+:91   MCP tool returned an error                 (isError with no text parts)
+:114  Unable to execute ${server_tool}
+:156  [Resource ${uri|"content"} (${mimeType})]\n${utf8 text}
+:161  [Binary resource ${uri|"content"} (${mimeType}, ${n} bytes) saved to ${file}]
+
+## MCP resource tools (packages/core/src/tool/plugin/mcp-resource.ts), namespace "opencode", Code Mode only
+:19   list_mcp_resources  (description at :22, copy exactly)
+:25   server: MCP server name as configured. Omit to list every server.
+:51   read_mcp_resource   (description at :54, copy exactly)
+:57   server: The server field of the discovered resource.
+:60   uri: Exact resource URI from discovery, an expanded uriTemplate, or the user.
+:78   MCP server "${server}" is not connected or does not expose resources
+:95   Unable to read MCP resource ${server}:${uri}: ${message}
+
+## MCP prompts as commands (packages/core/src/plugin/command.ts)
+:69   MCP prompt not found: ${server}:${name}
+command name = sanitize(server) + ":" + sanitize(prompt)   (sanitize: /[^a-zA-Z0-9_-]/g -> "_"), description = prompt.description
+
+## anysola mcp CLI (packages/cli/src/commands/handlers/mcp/*.ts) - observed outputs in mcp-observed-output.txt
+add.ts:23  Provide either --url <url> or a command after --, not both
+add.ts:24  Provide either --url <url> or a command after --
+add.ts:25  Invalid URL: ${url}
+add.ts:26  --env is only valid for local MCP servers
+add.ts:27  --header is only valid for remote MCP servers
+add.ts:36  MCP server "${name}" added to ${configPath}
+list.ts:17 No MCP servers configured
+list.ts:22 ${icon} ${name.padEnd(width)}  ${describe}   icons ✓ connected, ⚠ needs_auth, ✗ failed, ○ other;
+           describe: "needs authentication" | "failed: ${error}" | raw status
+auth.ts:22 Pass an MCP server name when running without an interactive terminal
+auth.ts:23 Authenticate an MCP server   (clack intro)
+auth.ts:30 No OAuth-capable MCP servers configured
+auth.ts:32 Remote MCP servers support OAuth by default. Add one with `anysola mcp add` or in opencode.json:\n${exampleConfig :77-85}
+auth.ts:39 MCP server not found: ${name}
+auth.ts:48 MCP server "${name}" is not an OAuth-capable remote server
+auth.ts:52 ${integration.name} has expired credentials. Re-authenticating...
+auth.ts:55 ${integration.name} already has valid credentials. Re-authenticate?
+auth.ts:58 Cancelled
+auth.ts:74 Done
+auth/login.ts:163 Starting authorization...   :169 Authentication failed   :179 Authorization started
+auth/login.ts:205 Waiting for authorization...  :208 Connected to ${name}  :212 Authorization expired
+logout.ts:20,26 No stored credentials for ${name}
+logout.ts:35 Removed OAuth credentials for ${name}
+resolve.ts:12 MCP server not found: ${name}
+ui/prompt.ts handlePromptErrors: errors -> clack log.error(msg) + outro "Failed", exit 1; cancel -> "Cancelled", exit 130
+
+## TUI MCP (packages/tui/src)
+app.tsx:568  toast warning, title "MCP server needs authentication", message: Connect "${name}" to use its tools., action "Open MCP servers"
+app.tsx:575  toast error, title "MCP server failed: ${name}", message "Run /mcps to view details.", action "Open MCP servers"
+app.tsx:955  command "MCP servers", category "Agent", slash /mcps; keybind mcp.list = none (config/keybind.ts:172 "List MCP servers")
+config/keybind.ts:283 dialog.mcp.toggle = space ("Toggle MCP server")
+component/dialog-mcp.tsx:22-33  Connecting … | Connected ✓ | Failed ! | Sign in required → | Disabled ○
+component/dialog-mcp.tsx:87-90  action titles: disconnect | retry | sign in | connect
+component/dialog-mcp.tsx:140    title "MCP servers", placeholder "Search MCP servers", footer hint "view error" (enter)
+component/dialog-mcp.tsx:163    "MCP server: ${name}", "Unknown MCP connection error",
+                                context "Status: ${status}\nConfiguration: mcp.servers.${name}[\nIntegration: ${id}]"
+feature-plugins/home/footer.tsx:30,41,46   "⊙ ${n} MCP failed" | "⊙ ${n} MCP"; "/mcps" shown when width >= 64
+feature-plugins/sidebar/mcp.tsx:40-83  "MCP", " (${on} active[, ${bad} error|errors])" when collapsed; rows: Connected | Connecting | Error | Disabled | Sign in; ▼/▶ toggle only when > 2 servers
+context/client-mcp.tsx:83,90  (TUI experiment "client-mcp", off) tools tui.open_terminal / tui.write_terminal; "Opened terminal ${id}", "Wrote to terminal ${id}"
+
+## ACP (packages/cli/src/acp) - transcripts in acp-transcript-*.log
+service.ts:109  authMethod {description "Run `anysola login` in the terminal", name "Login with Anysola", id "opencode-login"} (+ type "terminal", args ["--login"] when clientCapabilities.auth.terminal)
+service.ts:116  _meta "terminal-auth": {command:"anysola", args:["login"], label:"Anysola Login"} (when client _meta terminal-auth true)
+service.ts:129  agentInfo {name:"Anysola Code", version:"0.5.1"}
+service.ts:249  Only stdio and HTTP MCP servers are supported
+error.ts:62     No models are available | No primary agents are available
+error.ts:91-128 session not found: ${id} | session ${id} does not belong to cwd: ${cwd} | unknown config option: ${id} |
+                model not found: ${id} | effort not found: ${e} | mode not found: ${m} |
+                additional directory must be an absolute path without glob characters: ${d} | provider authentication required |
+                unknown auth method: ${id} | Anysola Code server is unavailable | Internal service failure
+                wire form: JSON-RPC error -32602 message "Invalid params: <msg>", data = the fields; internal errors -32603
+client.ts:28    Invalid session ID
+directories.ts:28 cwd must be an absolute path: ${cwd}
+prompt.ts:23    image content has no data or uri
+turn.ts:381     Session already has an active ACP prompt: ${id}
+translate.ts:142 Anysola Code prompt failed
+compaction.ts:84 Compaction cancelled
+permission.ts:40 options: once/allow_once "Allow once", always/allow_always "Always allow", reject/reject_once "Reject"
+catalog.ts:10   builtin command compact: "Compact the session"
+config-option.ts:27-58 "Model" (category model), "Effort" + "Available effort levels for this model" (thought_level; values title-cased by _/- split, plus "default"), "Session Mode" (mode)
+handlers/acp.ts:37 incoming message exceeded the ${n} MiB limit
+handlers/acp.ts:47 server exited unexpectedly (${reason})   -> stderr "anysola acp: ${failure}", exit 1
+observed rejected-permission tool text: The user declined this tool call
+
+## Gated-off services
+cli/src/services/web-ui.ts:31  The web UI is not available in Anysola Code. Use the `anysola` terminal app.\n   (HTTP 404 text/plain)
+cli/src/services/remote-tunnel.ts:23  (log only) remote access is not available in Anysola Code
+
+## Plugins
+core/src/plugin/module.ts:118 Plugin entrypoint not found: ${target}
+core/src/plugin/module.ts:141 Plugin options must be JSON to reach its ./gui-experimental
+core/src/plugin/module.ts:181 Plugin must export a default definition with an id and an effect or setup function.
+core/src/plugin/supervisor.ts:63 Plugin failed to load
+core/src/plugin/supervisor.ts:115 Duplicate plugin ID: ${id}
+core/src/managed-policy.ts:19,25 Blocked by configuration policy | Blocked by ${org}'s policy | Blocked by your organization's policy

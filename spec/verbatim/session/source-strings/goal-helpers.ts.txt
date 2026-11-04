@@ -1,0 +1,31 @@
+// SOURCE: packages/core/src/plugin/goal.ts (render/escape/objectiveBlock/continuation helpers)
+439:function continuation(goal: State, feedback: ReadonlyArray<string | undefined>) {
+440-  return render(CONTINUATION, {
+441-    objective: escape(goal.objective),
+442-    feedback: feedback.filter(Boolean).join("\n"),
+443-  })
+444-}
+445-
+446-// Every goal prompt wraps the objective the same way, so this marks the objective as visible to the model.
+447:function objectiveBlock(objective: string) {
+448-  return `<untrusted_objective>\n${escape(objective)}\n</untrusted_objective>`
+449-}
+450-
+451-function textOf(message: Message) {
+452-  return message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")
+453-}
+454-
+455-function sameReason(previous: string | undefined, next: string) {
+--
+482:function render(template: string, values: Record<string, string>) {
+483-  return template.replace(/\$\{(\w+)\}/g, (match, key: string) => values[key] ?? match)
+484-}
+485-
+486-function truncate(text: string, length: number) {
+487-  const line = text.replace(/\s+/g, " ")
+488-  return line.length > length ? `${line.slice(0, length - 1)}…` : line
+489-}
+490-
+491:function escape(text: string) {
+492-  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+493-}

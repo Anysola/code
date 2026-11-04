@@ -1,0 +1,142 @@
+$ anysola mcp --help
+DESCRIPTION
+  Manage MCP (Model Context Protocol) servers
+
+USAGE
+  anysola mcp <subcommand> [flags]
+
+GLOBAL FLAGS
+  --help, -h                                                          Show help information
+  --version, -v                                                       Show version information
+  --wizard                                                            Start wizard mode for a command
+  --completions <bash|zsh|fish|powershell|sh|pwsh>                    Print shell completion script (choices: bash, zsh, fish, powershell, sh, pwsh)
+  --log-level <all|trace|debug|info|warn|warning|error|fatal|none>    Sets the minimum log level (choices: all, trace, debug, info, warn, warning, error, fatal, none)
+  --print-logs                                                        Print logs to stderr (server logs require --standalone)
+
+SUBCOMMANDS
+  list      List configured MCP servers and their status
+  add       Add an MCP server to your configuration
+  auth      Authenticate with an OAuth-capable remote MCP server
+  logout    Remove stored OAuth credentials for an MCP server
+
+$ anysola mcp list --help
+DESCRIPTION
+  List configured MCP servers and their status
+
+USAGE
+  anysola mcp list [flags]
+
+GLOBAL FLAGS
+  --help, -h                                                          Show help information
+  --version, -v                                                       Show version information
+  --wizard                                                            Start wizard mode for a command
+  --completions <bash|zsh|fish|powershell|sh|pwsh>                    Print shell completion script (choices: bash, zsh, fish, powershell, sh, pwsh)
+  --log-level <all|trace|debug|info|warn|warning|error|fatal|none>    Sets the minimum log level (choices: all, trace, debug, info, warn, warning, error, fatal, none)
+  --print-logs                                                        Print logs to stderr (server logs require --standalone)
+  --standalone                                                        Run with a private server instead of the background service
+  --server string                                                     Connect to a server URL instead of the background service
+
+$ anysola mcp add --help
+DESCRIPTION
+  Add an MCP server to your configuration
+
+USAGE
+  anysola mcp add [flags] <name> [<command...>]
+
+ARGUMENTS
+  name string          Name of the MCP server
+  command... string    Command and arguments for a local server, passed after -- (optional)
+
+FLAGS
+  --url string          URL for a remote MCP server
+  --header key=value    HTTP header for a remote server, as name=value
+  --env key=value       Environment variable for a local server, as name=value
+  --global              Write to the global config instead of the project config
+
+GLOBAL FLAGS
+  --help, -h                                                          Show help information
+  --version, -v                                                       Show version information
+  --wizard                                                            Start wizard mode for a command
+  --completions <bash|zsh|fish|powershell|sh|pwsh>                    Print shell completion script (choices: bash, zsh, fish, powershell, sh, pwsh)
+  --log-level <all|trace|debug|info|warn|warning|error|fatal|none>    Sets the minimum log level (choices: all, trace, debug, info, warn, warning, error, fatal, none)
+  --print-logs                                                        Print logs to stderr (server logs require --standalone)
+
+$ anysola mcp auth --help
+DESCRIPTION
+  Authenticate with an OAuth-capable remote MCP server
+
+USAGE
+  anysola mcp auth [flags] [<name>]
+
+ARGUMENTS
+  name string    Name of the MCP server (optional)
+
+GLOBAL FLAGS
+  --help, -h                                                          Show help information
+  --version, -v                                                       Show version information
+  --wizard                                                            Start wizard mode for a command
+  --completions <bash|zsh|fish|powershell|sh|pwsh>                    Print shell completion script (choices: bash, zsh, fish, powershell, sh, pwsh)
+  --log-level <all|trace|debug|info|warn|warning|error|fatal|none>    Sets the minimum log level (choices: all, trace, debug, info, warn, warning, error, fatal, none)
+  --print-logs                                                        Print logs to stderr (server logs require --standalone)
+  --standalone                                                        Run with a private server instead of the background service
+  --server string                                                     Connect to a server URL instead of the background service
+
+$ anysola mcp logout --help
+DESCRIPTION
+  Remove stored OAuth credentials for an MCP server
+
+USAGE
+  anysola mcp logout [flags] <name>
+
+ARGUMENTS
+  name string    Name of the MCP server
+
+GLOBAL FLAGS
+  --help, -h                                                          Show help information
+  --version, -v                                                       Show version information
+  --wizard                                                            Start wizard mode for a command
+  --completions <bash|zsh|fish|powershell|sh|pwsh>                    Print shell completion script (choices: bash, zsh, fish, powershell, sh, pwsh)
+  --log-level <all|trace|debug|info|warn|warning|error|fatal|none>    Sets the minimum log level (choices: all, trace, debug, info, warn, warning, error, fatal, none)
+  --print-logs                                                        Print logs to stderr (server logs require --standalone)
+  --standalone                                                        Run with a private server instead of the background service
+  --server string                                                     Connect to a server URL instead of the background service
+
+$ anysola acp --help
+DESCRIPTION
+  Start an Agent Client Protocol server
+
+USAGE
+  anysola acp [flags]
+
+FLAGS
+  --login    Sign in to Anysola instead of starting the server
+
+GLOBAL FLAGS
+  --help, -h                                                          Show help information
+  --version, -v                                                       Show version information
+  --wizard                                                            Start wizard mode for a command
+  --completions <bash|zsh|fish|powershell|sh|pwsh>                    Print shell completion script (choices: bash, zsh, fish, powershell, sh, pwsh)
+  --log-level <all|trace|debug|info|warn|warning|error|fatal|none>    Sets the minimum log level (choices: all, trace, debug, info, warn, warning, error, fatal, none)
+  --print-logs                                                        Print logs to stderr (server logs require --standalone)
+
+$ anysola plugin --help
+DESCRIPTION
+  Manage plugins
+
+USAGE
+  anysola plugin <subcommand> [flags]
+
+GLOBAL FLAGS
+  --help, -h                                                          Show help information
+  --version, -v                                                       Show version information
+  --wizard                                                            Start wizard mode for a command
+  --completions <bash|zsh|fish|powershell|sh|pwsh>                    Print shell completion script (choices: bash, zsh, fish, powershell, sh, pwsh)
+  --log-level <all|trace|debug|info|warn|warning|error|fatal|none>    Sets the minimum log level (choices: all, trace, debug, info, warn, warning, error, fatal, none)
+  --print-logs                                                        Print logs to stderr (server logs require --standalone)
+
+SUBCOMMANDS
+  list      List plugins
+  add       Install a plugin and add it to the global configuration
+  check     Check package plugins for updates
+  update    Update package plugins
+  remove    Remove a plugin from global configuration

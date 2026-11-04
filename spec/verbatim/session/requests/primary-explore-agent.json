@@ -1,0 +1,273 @@
+{
+  "method": "POST",
+  "url": "/v1/code/messages",
+  "headers": {
+    "content-type": "application/json",
+    "user-agent": "opencode/latest/2.2.5+anysola.0.5.1/cli",
+    "anthropic-beta": "interleaved-thinking-2025-05-14,thinking-binding-controls-2026-08-01",
+    "anthropic-version": "2023-06-01",
+    "b3": "e6d5e28c6be37b6d4ac7785634641428-2bd8afb332efc74c-1-2d539414b4926988",
+    "traceparent": "00-e6d5e28c6be37b6d4ac7785634641428-2bd8afb332efc74c-01",
+    "x-anysola-client": "opencode",
+    "x-anysola-credits-event": "1",
+    "x-anysola-version": "0.5.1",
+    "x-api-key": "x",
+    "x-opencode-client": "cli",
+    "x-opencode-project": "5a74c9edf46105cb2f4ff14b08ea97734062fa05",
+    "x-opencode-session": "ses_e59e79bf9ffeQU2MwhUW5njQHD",
+    "x-opencode-session-id": "ses_e59e79bf9ffeQU2MwhUW5njQHD",
+    "x-session-affinity": "ses_e59e79bf9ffeQU2MwhUW5njQHD",
+    "x-session-id": "ses_e59e79bf9ffeQU2MwhUW5njQHD",
+    "connection": "keep-alive",
+    "accept": "*/*",
+    "host": "127.0.0.1:8821",
+    "accept-encoding": "gzip, deflate, br, zstd",
+    "content-length": "8260"
+  },
+  "body": {
+    "model": "claude-sonnet-5-5",
+    "system": [
+      {
+        "type": "text",
+        "text": "You are a file search specialist. You excel at thoroughly navigating and exploring codebases.\n\nGuidelines:\n- Your role is EXCLUSIVELY to search and analyze\n- Parallelize independent tool calls for searches and reads whenever possible\n- Adapt your search approach based on the thoroughness level specified by the caller\n- Return file paths as absolute paths in your final response\n- You MUST NOT create, modify, delete, move, or copy files, including temporary files and reports\n- Shell commands MUST be read-only. NEVER run commands that write files or change system state\n\nComplete the user's search request efficiently and report your findings clearly.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      },
+      {
+        "type": "text",
+        "text": "# Your Model\n- Name: Claude Sonnet 5.5\n- Provider ID: anysola\n- Model ID: claude-sonnet-5-5"
+      },
+      {
+        "type": "text",
+        "text": "Instructions from: /home/ubuntu/anysola-code/rust/testing/runs/session/home/.config/opencode/AGENTS.md\nGlobal rule from ~/.config/opencode/AGENTS.md\n\n\nInstructions from: /tmp/claude-1001/-home-ubuntu/8ca5656e-d1fe-58c1-b843-42c4ccb2771b/scratchpad/proj/AGENTS.md\nProject rule: always answer in English.\n\n\nInstructions from: /tmp/claude-1001/-home-ubuntu/8ca5656e-d1fe-58c1-b843-42c4ccb2771b/scratchpad/proj/docs/rules.md\nDocs rule from instructions glob.\n\n\nToday's date: Wed Nov 04 2026\n\nHere is some useful information about the environment you are running in:\n<env>\n  Working directory: /tmp/claude-1001/-home-ubuntu/8ca5656e-d1fe-58c1-b843-42c4ccb2771b/scratchpad/proj\n  Workspace root folder: /tmp/claude-1001/-home-ubuntu/8ca5656e-d1fe-58c1-b843-42c4ccb2771b/scratchpad/proj\n  Is directory a git repo: yes\n  Platform: linux\n  Prefer /tmp/opencode over generic system temporary directories such as /tmp; it is pre-created and approved for external access.\n</env>"
+      },
+      {
+        "type": "text",
+        "text": "When you create a worktree outside the current working directory and intend to use it as your primary working directory, consider using `execute` to call `tools.opencode.session_move` and make the worktree the session's working directory.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "\"hi explore\"",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "name": "glob",
+        "description": "Search file paths using a glob pattern (examples: \"**/*.ts\", \"src/**/*.tsx\").",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "description": "Glob pattern to match files against"
+            },
+            "path": {
+              "type": "string",
+              "description": "Directory to search. Defaults to the current working directory."
+            },
+            "hidden": {
+              "type": "boolean",
+              "description": "Include hidden files and directories (default: false)."
+            },
+            "limit": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "description": "Maximum number of matching files to return (default: 100)"
+            }
+          },
+          "required": [
+            "pattern"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "grep",
+        "description": "Search file contents using ripgrep's regular expression syntax or literal text matching. Use it to locate specific code, symbols, or text patterns, and narrow searches with `path` or `include`. Returns matching file paths, line numbers, and line previews.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Regular expression or literal text to match in file contents."
+            },
+            "path": {
+              "type": "string",
+              "description": "File or directory to search. Defaults to the current working directory."
+            },
+            "include": {
+              "type": "string",
+              "description": "Glob pattern to filter files (for example, \"*.js\" or \"*.{ts,tsx}\")"
+            },
+            "literal": {
+              "type": "boolean",
+              "description": "Treat `pattern` as exact text instead of a regular expression (default: false)."
+            },
+            "caseSensitive": {
+              "type": "boolean",
+              "description": "Use case-sensitive matching (default: true)."
+            },
+            "limit": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "description": "Maximum number of matching lines to return (default: 100)"
+            }
+          },
+          "required": [
+            "pattern"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "read",
+        "description": "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. Prefer one larger read over many small slices, and use grep to find specific content in large files.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File or directory to read"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The line or directory entry to start reading from (1-based)"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The maximum number of lines or directory entries to read (defaults to and capped at 2000)"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "shell",
+        "description": "Execute a shell command and return its output. Commands run on Linux using bash. Quote file paths containing spaces or special characters. Prefer dedicated tools over shell commands when possible. When output is large, the full result is saved to a file and a truncated preview is returned. Rely on automatic truncation unless filtering the output is more useful. Commands accept an optional timeout, background commands have no timeout by default. Background commands return immediately, and you will be notified when they complete.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "Shell command string to execute"
+            },
+            "workdir": {
+              "type": "string",
+              "description": "Working directory to execute the command in. Defaults to the current working directory. When possible, avoid changing directories in the command and set the working directory here instead."
+            },
+            "timeout": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Timeout in milliseconds. Set to 0 to disable the timeout. Defaults to 120000 for foreground commands. Background commands have no timeout by default."
+            },
+            "background": {
+              "type": "boolean",
+              "description": "Run the command in the background and return immediately (useful for dev servers and long-running builds). You do not need to use '&' at the end of the command when using this parameter. You will be notified when it completes. DO NOT poll for completion."
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "skill",
+        "description": "Load a specialized skill's instructions and resources into the current conversation when the task at hand matches its description.\n\nThe skill ID must match an available skill or a skill explicitly referenced by the user.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "The ID of an available skill or a skill explicitly referenced by the user"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "webfetch",
+        "description": "Fetch content from an HTTP or HTTPS URL and return it as text, markdown, or HTML. Markdown is the default.\n\nUse a more targeted tool when one is available. This tool is read-only. Large text results may be replaced with a preview while the complete output is retained in managed storage.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "The HTTP or HTTPS URL to fetch content from"
+            },
+            "format": {
+              "type": "string",
+              "enum": [
+                "text",
+                "markdown",
+                "html"
+              ],
+              "description": "The format to return the content in. Defaults to markdown."
+            },
+            "timeout": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 120,
+              "description": "Optional timeout in seconds (maximum: 120)"
+            }
+          },
+          "required": [
+            "url"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "websearch",
+        "description": "Search the web using the user's selected search integration. Use this for current information beyond knowledge cutoff.\n\nThe current year is 2026. Use this year when searching for recent information or current events.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Websearch query"
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        },
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "stream": true,
+    "max_tokens": 32000,
+    "thinking": {
+      "type": "adaptive",
+      "block_binding": {
+        "prefix_mismatch_behavior": "drop_block"
+      }
+    }
+  }
+}

@@ -1,0 +1,59 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                       ┃ /agents      Switch agent                                               ┃
+                       ┃ /btw         One-shot answer from the session's context without adding  ┃
+                       ┃ /budget      Session budget                                             ┃
+                       ┃ /cd          Change working directory                                   ┃
+                       ┃ /clear       Clear session                                              ┃
+                       ┃ /connect     Connect an integration                                     ┃
+                       ┃ /continue    Switch session                                             ┃
+                       ┃ /credits     Credits and plan                                           ┃
+                       ┃ /debug       View debug info                                            ┃
+                       ┃ /devices     Signed-in devices                                          ┃
+                       ┃
+                       ┃  /
+                       ┃
+                       ┃  Build · Claude Sonnet 5.5
+                       ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                       ~/my-app:master              731 credits  shift+tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Team · renews 23 Nov                                                                                           0.5.1

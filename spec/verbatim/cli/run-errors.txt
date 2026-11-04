@@ -1,0 +1,41 @@
+# Source: packages/cli/src/run/run.ts, run/ui.ts, session-target.ts, server side for model/agent errors.
+# Text format: stderr line "\x1b[91m\x1b[1mError: \x1b[0m<message>" (ui.ts:370-373; a leading "Error: " in the message is stripped first).
+# JSON format: one stdout line {"type":"error","timestamp":<ms>,"sessionID":"<id or empty>","error":{"type":"unknown","message":"<message>"}} (run.ts:330-344).
+# All exit 1.
+--fork requires --continue or --session
+You must provide a message
+File not found: <path as given>
+Cannot attach a directory, special file, or file larger than 10 MiB: <path as given>
+Cannot attach local directory without a shared filesystem: <path>        (v1 bridge only; dead)
+Failed to change directory to <root>
+Cannot select a variant before selecting a model
+Session not found                                                         (--fork with -s <unknown id>)
+Invalid model reference: nope                                             (-m nope)
+Model unavailable: anysola/nope                                           (-m anysola/nope)
+Variant unavailable for anysola/claude-sonnet-5-5: bogus                  (-m anysola/claude-sonnet-5-5#bogus)
+Agent not found: "nope"                                                   (--agent nope)
+No model is available for session ses_<id>                                (signed out; JSON error.type "provider.no-route")
+Budget reached: <total>/<limit> credits. Continue with `anysola run -s <sessionID> --budget <credits>`.
+Cannot set the budget (<error>). If you just updated, run `anysola service restart`.
+Event stream disconnected before prompt admission
+Event stream disconnected during prompt execution
+Prompt was not promoted
+Session interrupted: <reason>                                             (JSON error.type "aborted")
+
+# Minimum-version gate (services/anysola-version.ts:96-99), default command and `run` only, stderr, exit 1:
+Anysola Code 0.5.1 is no longer supported (minimum 0.6.0).
+Update Anysola Code with: anysola update
+
+# Non-interactive permission/question handling (run/noninteractive.ts:70-74, 172-176), stderr even in JSON mode:
+\x1b[93m\x1b[1m! \x1b[0mpermission requested: <action> (<resources joined by ", ">); auto-rejecting
+# Feedback the tool/model receives:
+This non-interactive run cannot ask the user for permission, so the request was rejected. Continue without this action.
+This non-interactive run cannot ask the user questions, so the question was cancelled. Continue without an answer; make reasonable assumptions and state them.
+
+# Tool failure in text mode (run.ts:324-327):
+\x1b[0m✗ \x1b[0m<tool title> failed
+# Spend summary (run.ts:194), stderr, dim, text format only, only when spent > 0:
+\x1b[90mAnysola · <n> credit[s] · <remaining> left\x1b[0m
+# Step header (noninteractive.ts:289): "> <agent> · <model id>" ; thinking (noninteractive.ts:126): "Thinking: <text>"
+# 0.5.1 bug (do not replicate): with the budget already reached in text mode, an unhandled
+# "ClientError: Transport: ECONNRESET ..." stack dump follows on stderr (exit still 1).

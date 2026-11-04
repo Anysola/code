@@ -1,0 +1,21 @@
+# Source: packages/cli/src/commands/handlers/*. stdout unless noted.
+models:           one "provider/model" per line, sorted (localeCompare): anysola/auto, anysola/claude-haiku-5-5, anysola/claude-sonnet-5-5
+reload:           Configuration reloaded
+session list:     "<id>\t<title|Untitled session>\t<new Date(updated).toLocaleString()>" per line, newest first, default 100; empty -> no output;
+                  TTY and no -n and table -> piped to `less -R -S` (Windows `cmd /c more`)
+session list --format json: [{"id","title","updated","created","projectId","directory"}] (2-space)
+session delete:   Session <id> deleted
+session export:   JSON (2-space) of {info, messages}; no ID and no TTY -> stderr "Pass a session ID when running without an interactive terminal" exit 1;
+                  picker: "Export session", "Select session to export", "No sessions found", "Cancelled" (exit 130), "Exporting session..." (all on stderr)
+session import:   Imported session: <id>   | stderr "Session already exists" (409, exit 0) | "Failed to read session data: <m>" | "Failed to fetch session data: <statusText>" | "Failed to import session: <statusText>"
+debug paths:      "<key padded to 10> <path>" for home,data,cache,config,state,tmp,bin,log,repos,db ; `debug paths <name>` prints just the path
+debug config:     JSON of config sources with secrets as "***"
+mcp list:         "No MCP servers configured" or "<✓|⚠|✗|○> <name padded>  <connected|needs authentication|failed: <err>|status>"
+mcp add:          MCP server "<name>" added to <configPath>  ; errors: "Provide either --url <url> or a command after --, not both",
+                  "Provide either --url <url> or a command after --", "Invalid URL: <url>", "--env is only valid for local MCP servers",
+                  "--header is only valid for remote MCP servers"
+mcp logout:       "No stored credentials for <name>" | "Removed OAuth credentials for <name>"
+mcp auth:         intro "Authenticate an MCP server"; "No OAuth-capable MCP servers configured"; "MCP server not found: <name>";
+                  "MCP server \"<name>\" is not an OAuth-capable remote server"; "<name> has expired credentials. Re-authenticating..."
+plugin list:      "No plugins found" ; check: "No package plugins found" ; update: "No plugin updates available", "Updated <runtime> plugin \"<name>\""
+acp:              stderr on failure "anysola acp: <reason>" (exit 1), e.g. "server exited unexpectedly (code N)"

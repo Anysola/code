@@ -1,0 +1,97 @@
+# GitHub release v0.5.1 of Anysola/code (gh release view). Title: Anysola Code 0.5.1. prerelease=false.
+# Body:
+Install: `curl -fsSL https://www.anysola.com/install | sh` (macOS, Linux) or `irm https://www.anysola.com/install.ps1 | iex` (Windows), or `npm i -g @anysola/code`. Changes: CHANGELOG.md.
+# Assets (15):
+anysola-darwin-arm64.zip
+anysola-darwin-x64.zip
+anysola-darwin-x64-baseline.zip
+anysola-linux-arm64.tar.gz
+anysola-linux-arm64-musl.tar.gz
+anysola-linux-x64.tar.gz
+anysola-linux-x64-baseline.tar.gz
+anysola-linux-x64-musl.tar.gz
+anysola-linux-x64-baseline-musl.tar.gz
+anysola-windows-arm64.zip
+anysola-windows-x64.zip
+anysola-windows-x64-baseline.zip
+install.sh
+install.ps1
+SHA256SUMS
+# SHA256SUMS (GNU sha256sum format: <64 hex><2 spaces><name>, sorted as the glob 'anysola-*' then install.sh install.ps1):
+e7677a74361aa006aabddfbdb364efec558bae082d009e703841ad0ec527ab61  anysola-darwin-arm64.zip
+b986aee327dcf97eca4ce76c56d4c02be310bfb7eaf4c60fd04dd7375eb1c31b  anysola-darwin-x64-baseline.zip
+b986aee327dcf97eca4ce76c56d4c02be310bfb7eaf4c60fd04dd7375eb1c31b  anysola-darwin-x64.zip
+49438e9a9ce54aa72ae22a266f8443b86b05e4939fc93d9e3c26d0b4a48e8e84  anysola-linux-arm64-musl.tar.gz
+43ac0695ee93ecfbad2d0b48faa9be534c7513e0b3473ea9bce613ce3cbee424  anysola-linux-arm64.tar.gz
+c7009c38039d13a3b3197948005e1841bc318f0903d5002cbe4f5796b6aa6227  anysola-linux-x64-baseline-musl.tar.gz
+adaf799a6f6eb0ddd382cc3ae4fb94773571fa1d519752cfddf18b94d483b172  anysola-linux-x64-baseline.tar.gz
+c7009c38039d13a3b3197948005e1841bc318f0903d5002cbe4f5796b6aa6227  anysola-linux-x64-musl.tar.gz
+adaf799a6f6eb0ddd382cc3ae4fb94773571fa1d519752cfddf18b94d483b172  anysola-linux-x64.tar.gz
+6e749440d69e1654d9bd06859a6023c0b702685ef6d42eb39f9c0ca44fec909c  anysola-windows-arm64.zip
+aaadd2bf7426e25212394ebf6d2b049f3b5c44689812e2358bb796b555a04b94  anysola-windows-x64-baseline.zip
+aaadd2bf7426e25212394ebf6d2b049f3b5c44689812e2358bb796b555a04b94  anysola-windows-x64.zip
+d7b3634fc212b7665f11eaa42740eb63db176c04724ebd4ba8cf58b85054141f  install.sh
+b6e8bbff34e9388548031880859c6f62ecbb0dbbd4385cf211c4d4f0936fc50e  install.ps1
+# NOTE: x64 and x64-baseline archives are byte-identical in 0.5.1 (same hash), as are x64-musl and x64-baseline-musl.
+
+# npm @anysola/code@0.5.1 package.json (from packages/cli/script/pack.ts:67-89):
+{
+  "name": "@anysola/code",
+  "version": "0.5.1",
+  "bin": {
+    "anysola": "bin/anysola.exe"
+  },
+  "scripts": {
+    "postinstall": "node ./postinstall.mjs"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "arm64",
+    "x64"
+  ],
+  "optionalDependencies": {
+    "@anysola/code-linux-x64": "0.5.1",
+    "@anysola/code-darwin-x64": "0.5.1",
+    "@anysola/code-linux-arm64": "0.5.1",
+    "@anysola/code-windows-x64": "0.5.1",
+    "@anysola/code-darwin-arm64": "0.5.1",
+    "@anysola/code-windows-arm64": "0.5.1",
+    "@anysola/code-linux-x64-musl": "0.5.1",
+    "@anysola/code-linux-arm64-musl": "0.5.1",
+    "@anysola/code-linux-x64-baseline": "0.5.1",
+    "@anysola/code-darwin-x64-baseline": "0.5.1",
+    "@anysola/code-windows-x64-baseline": "0.5.1",
+    "@anysola/code-linux-x64-baseline-musl": "0.5.1"
+  },
+  "description": "Anysola Code: the Anysola coding agent for your terminal, based on OpenCode (MIT)",
+  "homepage": "https://www.anysola.com/code",
+  "license": "MIT",
+  "repository": {
+    "url": "git+https://github.com/Anysola/code.git",
+    "type": "git"
+  }
+}
+# files: package.json, postinstall.mjs, LICENSE, NOTICE, bin/anysola.exe (placeholder until postinstall).
+# Placeholder bin/anysola.exe content (pack.ts:57-66):
+echo "Error: @anysola/code's postinstall script was not run." >&2
+echo "" >&2
+echo "This occurs when installation scripts are disabled." >&2
+echo "Run the package postinstall script or reinstall with scripts enabled." >&2
+exit 1
+# Platform packages @anysola/code-<target>: {name, version, description:'Anysola Code binary, based on OpenCode (MIT)', license MIT, repository git+https://github.com/Anysola/code.git, os:[os], cpu:[arch]}; files package.json LICENSE NOTICE bin/anysola(.exe). No libc field.
+# postinstall.mjs errors (stderr, exit 1):
+Anysola Code package does not declare a binary
+Anysola Code does not provide a binary for <platform>-<arch>
+<name> is <version>, expected <expected>
+Binary not found at <path>
+Failed to install Anysola Code. Try manually installing "<name>" or "<name>".
+# www fallback when GitHub fails (web/anysola/services/web/src/lib/code-install.ts:11-20), HTTP 502:
+#!/bin/sh
+echo "Anysola Code: the installer is unavailable (<detail>). Try again, or run: npm i -g @anysola/code" >&2
+exit 1
+throw "Anysola Code: the installer is unavailable (<detail>). Try again, or run: npm i -g @anysola/code"
+# <detail> = "GitHub did not answer" | "GitHub answered <status>"

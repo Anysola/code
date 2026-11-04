@@ -1,0 +1,24 @@
+# effect/cli parse errors: help of the command on stdout, then on stderr an empty line, "ERROR", and the indented message. Exit 1.
+# Examples captured from the 0.5.1 binary:
+ERROR
+  Unrecognized flag: --bogus in command anysola
+ERROR
+  Unrecognized flag: --bogus in command anysola run
+ERROR
+  Invalid value for flag --budget: "0". Expected: Schema validation failed: Expected a value greater than or equal to 1
+ERROR
+  Missing required argument: value
+ERROR
+  Invalid value for argument <name>: "nope". Expected: "db" | "home" | "data" | "config" | "cache" | "state" | "tmp" | "bin" | "log" | "repos"
+# `anysola bogus-cmd` is not an error of the parser: it is the [directory] argument; chdir fails with an uncaught stack (stderr):
+Error: ENOENT: no such file or directory, chdir '<cwd>' -> 'bogus-cmd'
+# Global flag errors (services/server-connection.ts), stderr, exit 1:
+--server and --standalone cannot be combined
+Could not reach server at <url>: <cause>
+Server at <url> requires a password; set OPENCODE_PASSWORD
+Server at <url> rejected the password
+Server at <url> did not provide a compatible V2 health response: <cause>
+Warning: Server at <url> has version <v>; this client is 2.2.5+anysola.0.5.1. Continuing anyway.
+# Default (TUI) command, stderr (commands/handlers/default.ts:47-51):
+Starting background server...
+Restarting background server (version mismatch)...

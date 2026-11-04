@@ -1,0 +1,35 @@
+
+
+
+
+
+
+
+
+
+
+      Worktrees                                                                                                esc
+
+      Search
+
+      Current
+    ● ~/my-app
+
+      new ctrl+a  delete ctrl+d  refresh ctrl+r
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Team · renews 23 Nov                                                                                           0.5.1

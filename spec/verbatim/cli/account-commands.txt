@@ -1,0 +1,89 @@
+# Source: packages/cli/src/commands/handlers/anysola/*.ts, packages/tui/src/anysola/format.ts
+# Clack output (non-TTY rendering shown; symbols ┌ │ ● ◇ ◆ ▲ ■ └). Captured from 0.5.1.
+
+## anysola status (stdout; keys padded to longest key + 2). Optional lines: Account, Plan, Credits, Free quota, Model, Event; Token always.
+Account  dev@example.com
+Plan     team
+Credits  731 available, renews 2026-11-23
+Token    asc_FFFF...FFFF
+# Free quota line: "Free quota  <used>/<daily> turns today"; credits use toLocaleString("en-US").
+# Token mask: first 8 chars + "..." + last 4 (ANYSOLA_TOKEN=x -> "x...x").
+# stderr errors (exit 1): "Not signed in. Run `anysola login`." / "The token was revoked or expired. Run `anysola login --force`." / "Could not load status: HTTP <n>" (then still prints Token line, exit 0)
+
+## shared account errors (usage, devices, devices revoke), stderr, exit 1 (anysola/shared.ts:11-17):
+Not signed in. Run `anysola login`.
+The token was revoked or expired. Run `anysola login --force`.
+This Anysola server does not offer this yet.
+Request failed (HTTP <n>)      (or the server's error.message)
+Cannot reach <ANYSOLA_API_URL>
+
+## anysola usage (default --days 7)
+Usage, last 7 days
+
+Totals
+        requests   credits
+  all         42     1,234
+  Cache hit rate 61%
+
+By day
+  date         requests   credits
+  2026-11-03         30     1,000
+  2026-11-04         12       234
+
+By model
+  model               requests   credits
+  claude-sonnet-5-5         40     1,200
+  claude-haiku-5-5           2        34
+
+Balance 731 credits · renews Nov 23, 03:00 AM
+# --format json: the /v1/code/usage body, JSON.stringify(body, null, 2) + EOL.
+
+## anysola devices
+  id      name             client               last used         expires
+* tok_1   laptop           anysola-code/0.5.1   Nov 4, 01:00 PM   Nov 4, 01:00 PM
+  tok_2   Unnamed device   ci                   never
+
+* this device. Sign one out with `anysola devices revoke <id>`.
+# empty list: "No devices are signed in."
+# NOTE (0.5.1 quirk): the "expires" column shows month/day only (formatDate en-US {month:short,day,hour,minute}).
+
+## anysola devices revoke tok_2
+Device tok_2 is signed out.
+
+## anysola login (signed out; device flow)
+┌  Sign in to Anysola
+│
+◇  Authorization started
+│
+●  Open https://account.anysola.com/device and enter WXYZ-1234
+│
+●  https://account.anysola.com/device
+│
+◇  Waiting for authorization...
+│
+◆  Connected to Anysola
+│
+└  Signed in
+# (TTY: a spinner "Starting authorization..." precedes; browser opened best-effort when stdin+stdout are TTYs.)
+# Device-flow errors (core/src/plugin/provider/anysola.ts): "Too many login attempts. Try again later.",
+# "Could not start login: <msg>", "Could not start login: unexpected response from the server.",
+# "The login code expired. Run `anysola login` again.", "The code expired before it was approved. Run `anysola login` again.",
+# "Login was denied.", "Login failed: <msg>", "Login failed: the server returned no usable token.", "Login failed: network error",
+# "Anysola login is not available". Shown as "■  <msg>" then "└  Failed", exit 1 (ui/prompt.ts:35-40).
+
+## anysola login (already signed in)
+┌  Sign in to Anysola
+│
+●  Already signed in (asc_FFFF...FFFF). Use `anysola login --force` for a new token.
+│
+└  Done
+# --force with a stored token: revoke old (warn "Could not revoke the old token (<msg>); revoke it at https://account.anysola.com/apps"), remove, sign in.
+
+## anysola logout
+┌  Sign out of Anysola
+│
+└  Signed out. The token is revoked and removed from this machine.
+# not signed in: "●  Not signed in." / env token: "●  Signed in through ANYSOLA_TOKEN; unset it to sign out." then "└  Done"
+# revoke failure: "■  Could not revoke the token: <msg>" "●  The token was kept. Try again, or revoke it at https://account.anysola.com/apps." exit 1
+
+## First TUI start without a connection (TTY only): intro "Welcome to Anysola Code", info "Sign in with your Anysola account to continue.", device flow, outro "Signed in".

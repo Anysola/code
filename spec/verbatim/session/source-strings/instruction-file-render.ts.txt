@@ -1,0 +1,12 @@
+// SOURCE: packages/core/src/instruction-discovery.ts lines 80-90 (copied verbatim from fork branch anysola, 0.5.1)
+      const source = (value: ReadonlyArray<File> | Instructions.Unavailable | Instructions.Removed) =>
+        Instructions.make<ReadonlyArray<File>>({
+          key,
+          codec: Schema.toCodecJson(Files),
+          read: Effect.succeed(value),
+          render: {
+            initial: render,
+            changed: renderUpdate,
+            removed: () => "Previously loaded instructions no longer apply.",
+          },
+        })

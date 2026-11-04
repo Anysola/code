@@ -1,0 +1,24 @@
+// SOURCE: packages/core/src/session/title.ts lines 20-42 (copied verbatim from fork branch anysola, 0.5.1)
+const MAX_LENGTH = 100
+const MAX_CONTEXT_LENGTH = 8_000
+const MAX_FIRST_MESSAGE_LENGTH = 2_000
+const titleChanged = Symbol("Session title changed")
+
+export interface Interface {
+  /** Generates an initial title or regenerates one from bounded conversation history. */
+  readonly generate: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+}
+
+export class Service extends Context.Service<Service, Interface>()("@opencode/SessionTitle") {}
+
+const truncate = (value: string) => (value.length <= MAX_LENGTH ? value : `${value.slice(0, MAX_LENGTH - 3)}...`)
+// Framing the input as text to name keeps models from answering or carrying out the request instead.
+const messagePrompt = (text: string) =>
+  `Here is the first message of the conversation:\n\n<message>\n${text}\n</message>\n\nReply with only the title.`
+const conversationPrompt = (text: string) =>
+  `Here is the conversation so far:\n\n<conversation>\n${text}\n</conversation>\n\nReply with only the title.`
+export const isUntitled = (session: SessionSchema.Info) =>
+  isExactRootFallback({
+    title: session.title,
+    time: { created: DateTime.toEpochMillis(session.time.created) },
+  })

@@ -1,0 +1,24 @@
+# Source: packages/cli/src/services/service-config.ts, commands/handlers/service/*.ts
+# start / restart: stdout "<url>" e.g. http://127.0.0.1:49374 ; status: "<url>" or "stopped" ; stop/set/unset: no output.
+# get (no key): JSON (2-space) of config minus password; remote shown as {} ; get port -> "" when unset; get disabled -> true|false;
+# get remote -> true|false; get cors -> JSON array; get env -> JSON object; get env NAME -> value or ""; get password -> generates+persists one.
+# Errors (stderr first line; 0.5.1 also dumps an Effect stack trace after it; exit 1):
+Error: Unknown service config key: <key>
+Error: Usage: anysola service get <key>
+Error: Usage: anysola service set <key> <value>
+Error: Usage: anysola service set env <key> <value>
+Error: Usage: anysola service unset <key>
+Error: Usage: anysola service unset env <key>
+Error: Disabled must be true or false
+Error: Remote must be true or false
+Error: Port must be between 1 and 65535
+Error: CORS must be a comma-separated list of HTTP(S) origins without paths or trailing slashes
+# set remote true (stderr when no tunnel yet): Setting up remote access; this can take a minute...
+# remote errors: "Timed out creating the remote access tunnel; run the command again to resume"
+# Service startup failure (server-process.ts:197-202):
+Managed service port <port> on <host> is already in use by <owner|another process>. Configure another port with `anysola service set port <port>` and start the service again.
+# Other: "--service and --stdio cannot be combined", "Missing server password", "Timed out waiting for the background service to start",
+# "Server process exited with code <n>\n<stderr tail>", "Background server version does not match this client",
+# "Background service uses an incompatible health protocol. Update this client or explicitly restart the service."
+# `serve` stdout: "server listening on <url>" (+ "server password <pw>" in foreground mode without OPENCODE_PASSWORD); --stdio: {"url":"<url>"}
+# Web UI disabled body (HTTP 404 for non-API paths): The web UI is not available in Anysola Code. Use the `anysola` terminal app.

@@ -1,0 +1,216 @@
+###-begin-anysola-completions-###
+#
+# Static completion script for Fish
+#
+# Installation:
+#   anysola --completions fish > ~/.config/fish/completions/anysola.fish
+#
+
+complete -c anysola -n '__fish_use_subcommand' -f
+complete -c anysola -n '__fish_use_subcommand' -f -a 'login' -d 'Sign in with your Anysola account'
+complete -c anysola -n '__fish_use_subcommand' -f -a 'logout' -d 'Revoke the Anysola token and remove it from this machine'
+complete -c anysola -n '__fish_use_subcommand' -f -a 'status' -d 'Show your Anysola plan and credits'
+complete -c anysola -n '__fish_use_subcommand' -f -a 'usage' -d 'Show Anysola usage: totals, by day and by model'
+complete -c anysola -n '__fish_use_subcommand' -f -a 'devices' -d 'List the devices signed in to your Anysola account'
+complete -c anysola -n '__fish_use_subcommand' -f -a 'update' -d 'Update Anysola Code the way it was installed (install script or npm)'
+complete -c anysola -n '__fish_use_subcommand' -f -a 'upgrade' -d 'Update Anysola Code the way it was installed (install script or npm)'
+complete -c anysola -n '__fish_use_subcommand' -f -a 'uninstall' -d 'Uninstall Anysola Code, keeping session data, configuration, and state'
+complete -c anysola -n '__fish_use_subcommand' -f -a 'acp' -d 'Start an Agent Client Protocol server'
+complete -c anysola -n '__fish_use_subcommand' -f -a 'debug' -d 'Debugging and troubleshooting tools'
+complete -c anysola -n '__fish_use_subcommand' -f -a 'mcp' -d 'Manage MCP (Model Context Protocol) servers'
+complete -c anysola -n '__fish_use_subcommand' -f -a 'plugin' -d 'Manage plugins'
+complete -c anysola -n '__fish_use_subcommand' -f -a 'models' -d 'List all available models'
+complete -c anysola -n '__fish_use_subcommand' -f -a 'run' -d 'Run Anysola Code with a message'
+complete -c anysola -n '__fish_use_subcommand' -f -a 'session' -d 'Manage sessions'
+complete -c anysola -n '__fish_use_subcommand' -f -a 'service' -d 'Manage the background server'
+complete -c anysola -n '__fish_use_subcommand' -f -a 'reload' -d 'Reload configuration'
+complete -c anysola -n '__fish_use_subcommand' -f -a 'serve' -d 'Run the server the TUI connects to (started for you; internal)'
+complete -c anysola -n '__fish_use_subcommand; and not __fish_contains_opt standalone no-standalone' -l standalone -d 'Run with a private server instead of the background service'
+complete -c anysola -n '__fish_use_subcommand; and not __fish_contains_opt standalone no-standalone' -l no-standalone -d 'Disable standalone'
+complete -c anysola -n '__fish_use_subcommand; and begin; not __fish_contains_opt server; or contains -- (commandline -poc)[-1] --server; end' -l server -d 'Connect to a server URL instead of the background service' -r -f
+complete -c anysola -n '__fish_use_subcommand; and not __fish_contains_opt auto no-auto' -l auto -d 'Auto-approve permissions that are not explicitly denied'
+complete -c anysola -n '__fish_use_subcommand; and not __fish_contains_opt auto no-auto' -l no-auto -d 'Disable auto'
+complete -c anysola -n '__fish_use_subcommand; and not __fish_contains_opt -s c continue no-continue' -l continue -s c -d 'Continue the last session'
+complete -c anysola -n '__fish_use_subcommand; and not __fish_contains_opt -s c continue no-continue' -l no-continue -d 'Disable continue'
+complete -c anysola -n '__fish_use_subcommand; and begin; not __fish_contains_opt -s s session; or contains -- (commandline -poc)[-1] --session -s; end' -l session -s s -d 'Session ID to continue, or to create if it does not exist' -r -f
+complete -c anysola -n '__fish_use_subcommand; and begin; not __fish_contains_opt prompt; or contains -- (commandline -poc)[-1] --prompt; end' -l prompt -d 'Prompt to use' -r -f
+complete -c anysola -n '__fish_use_subcommand; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt standalone no-standalone' -f -a '--standalone' -d 'Run with a private server instead of the background service'
+complete -c anysola -n '__fish_use_subcommand; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt standalone no-standalone' -f -a '--no-standalone' -d 'Disable standalone'
+complete -c anysola -n '__fish_use_subcommand; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt server' -f -a '--server' -d 'Connect to a server URL instead of the background service'
+complete -c anysola -n '__fish_use_subcommand; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt auto no-auto' -f -a '--auto' -d 'Auto-approve permissions that are not explicitly denied'
+complete -c anysola -n '__fish_use_subcommand; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt auto no-auto' -f -a '--no-auto' -d 'Disable auto'
+complete -c anysola -n '__fish_use_subcommand; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt -s c continue no-continue' -f -a '--continue' -d 'Continue the last session'
+complete -c anysola -n '__fish_use_subcommand; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt -s c continue no-continue' -f -a '--no-continue' -d 'Disable continue'
+complete -c anysola -n '__fish_use_subcommand; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt -s s session' -f -a '--session' -d 'Session ID to continue, or to create if it does not exist'
+complete -c anysola -n '__fish_use_subcommand; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt prompt' -f -a '--prompt' -d 'Prompt to use'
+complete -c anysola -n '__fish_seen_subcommand_from login' -f
+complete -c anysola -n '__fish_seen_subcommand_from login; and not __fish_contains_opt -s f force no-force' -l force -s f -d 'Replace the current token with a new one'
+complete -c anysola -n '__fish_seen_subcommand_from login; and not __fish_contains_opt -s f force no-force' -l no-force -d 'Disable force'
+complete -c anysola -n '__fish_seen_subcommand_from login; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt -s f force no-force' -f -a '--force' -d 'Replace the current token with a new one'
+complete -c anysola -n '__fish_seen_subcommand_from login; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt -s f force no-force' -f -a '--no-force' -d 'Disable force'
+complete -c anysola -n '__fish_seen_subcommand_from logout' -f
+complete -c anysola -n '__fish_seen_subcommand_from status' -f
+complete -c anysola -n '__fish_seen_subcommand_from usage' -f
+complete -c anysola -n '__fish_seen_subcommand_from usage; and begin; not __fish_contains_opt days; or contains -- (commandline -poc)[-1] --days; end' -l days -d 'Period in days' -r -f -a '7 30'
+complete -c anysola -n '__fish_seen_subcommand_from usage; and begin; not __fish_contains_opt format; or contains -- (commandline -poc)[-1] --format; end' -l format -d 'Output format' -r -f -a 'default json'
+complete -c anysola -n '__fish_seen_subcommand_from usage; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt days' -f -a '--days' -d 'Period in days'
+complete -c anysola -n '__fish_seen_subcommand_from usage; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt format' -f -a '--format' -d 'Output format'
+complete -c anysola -n '__fish_seen_subcommand_from devices; and not __fish_seen_subcommand_from revoke' -f
+complete -c anysola -n '__fish_seen_subcommand_from devices; and not __fish_seen_subcommand_from revoke' -f -a 'revoke' -d 'Sign a device out'
+complete -c anysola -n '__fish_seen_subcommand_from devices; and __fish_seen_subcommand_from revoke' -f
+complete -c anysola -n '__fish_seen_subcommand_from update' -f
+complete -c anysola -n '__fish_seen_subcommand_from update; and not __fish_contains_opt print no-print' -l print -d 'Only print the npm command'
+complete -c anysola -n '__fish_seen_subcommand_from update; and not __fish_contains_opt print no-print' -l no-print -d 'Disable print'
+complete -c anysola -n '__fish_seen_subcommand_from update; and not __fish_contains_opt force no-force' -l force -d 'Reinstall even when up to date'
+complete -c anysola -n '__fish_seen_subcommand_from update; and not __fish_contains_opt force no-force' -l no-force -d 'Disable force'
+complete -c anysola -n '__fish_seen_subcommand_from update; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt print no-print' -f -a '--print' -d 'Only print the npm command'
+complete -c anysola -n '__fish_seen_subcommand_from update; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt print no-print' -f -a '--no-print' -d 'Disable print'
+complete -c anysola -n '__fish_seen_subcommand_from update; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt force no-force' -f -a '--force' -d 'Reinstall even when up to date'
+complete -c anysola -n '__fish_seen_subcommand_from update; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt force no-force' -f -a '--no-force' -d 'Disable force'
+complete -c anysola -n '__fish_seen_subcommand_from upgrade' -f
+complete -c anysola -n '__fish_seen_subcommand_from upgrade; and not __fish_contains_opt print no-print' -l print -d 'Only print the npm command'
+complete -c anysola -n '__fish_seen_subcommand_from upgrade; and not __fish_contains_opt print no-print' -l no-print -d 'Disable print'
+complete -c anysola -n '__fish_seen_subcommand_from upgrade; and not __fish_contains_opt force no-force' -l force -d 'Reinstall even when up to date'
+complete -c anysola -n '__fish_seen_subcommand_from upgrade; and not __fish_contains_opt force no-force' -l no-force -d 'Disable force'
+complete -c anysola -n '__fish_seen_subcommand_from upgrade; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt print no-print' -f -a '--print' -d 'Only print the npm command'
+complete -c anysola -n '__fish_seen_subcommand_from upgrade; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt print no-print' -f -a '--no-print' -d 'Disable print'
+complete -c anysola -n '__fish_seen_subcommand_from upgrade; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt force no-force' -f -a '--force' -d 'Reinstall even when up to date'
+complete -c anysola -n '__fish_seen_subcommand_from upgrade; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt force no-force' -f -a '--no-force' -d 'Disable force'
+complete -c anysola -n '__fish_seen_subcommand_from uninstall' -f
+complete -c anysola -n '__fish_seen_subcommand_from uninstall; and not __fish_contains_opt dry-run no-dry-run' -l dry-run -d 'Show what would be removed without removing'
+complete -c anysola -n '__fish_seen_subcommand_from uninstall; and not __fish_contains_opt dry-run no-dry-run' -l no-dry-run -d 'Disable dry-run'
+complete -c anysola -n '__fish_seen_subcommand_from uninstall; and not __fish_contains_opt -s f force no-force' -l force -s f -d 'Skip confirmation prompts'
+complete -c anysola -n '__fish_seen_subcommand_from uninstall; and not __fish_contains_opt -s f force no-force' -l no-force -d 'Disable force'
+complete -c anysola -n '__fish_seen_subcommand_from uninstall; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt dry-run no-dry-run' -f -a '--dry-run' -d 'Show what would be removed without removing'
+complete -c anysola -n '__fish_seen_subcommand_from uninstall; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt dry-run no-dry-run' -f -a '--no-dry-run' -d 'Disable dry-run'
+complete -c anysola -n '__fish_seen_subcommand_from uninstall; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt -s f force no-force' -f -a '--force' -d 'Skip confirmation prompts'
+complete -c anysola -n '__fish_seen_subcommand_from uninstall; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt -s f force no-force' -f -a '--no-force' -d 'Disable force'
+complete -c anysola -n '__fish_seen_subcommand_from acp' -f
+complete -c anysola -n '__fish_seen_subcommand_from acp; and not __fish_contains_opt login no-login' -l login -d 'Sign in to Anysola instead of starting the server'
+complete -c anysola -n '__fish_seen_subcommand_from acp; and not __fish_contains_opt login no-login' -l no-login -d 'Disable login'
+complete -c anysola -n '__fish_seen_subcommand_from acp; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt login no-login' -f -a '--login' -d 'Sign in to Anysola instead of starting the server'
+complete -c anysola -n '__fish_seen_subcommand_from acp; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt login no-login' -f -a '--no-login' -d 'Disable login'
+complete -c anysola -n '__fish_seen_subcommand_from debug; and not __fish_seen_subcommand_from config paths' -f
+complete -c anysola -n '__fish_seen_subcommand_from debug; and not __fish_seen_subcommand_from config paths' -f -a 'config' -d 'List configuration sources'
+complete -c anysola -n '__fish_seen_subcommand_from debug; and not __fish_seen_subcommand_from config paths' -f -a 'paths' -d 'Show global paths (data, config, cache, state)'
+complete -c anysola -n '__fish_seen_subcommand_from debug; and __fish_seen_subcommand_from config' -f
+complete -c anysola -n '__fish_seen_subcommand_from debug; and __fish_seen_subcommand_from paths' -f
+complete -c anysola -n '__fish_seen_subcommand_from debug; and __fish_seen_subcommand_from paths' -r -f -a 'db home data config cache state tmp bin log repos' -d 'Print only one path: db, home, data, config, cache, state, tmp, bin, log, repos'
+complete -c anysola -n '__fish_seen_subcommand_from mcp; and not __fish_seen_subcommand_from list add auth logout' -f
+complete -c anysola -n '__fish_seen_subcommand_from mcp; and not __fish_seen_subcommand_from list add auth logout' -f -a 'list' -d 'List configured MCP servers and their status'
+complete -c anysola -n '__fish_seen_subcommand_from mcp; and not __fish_seen_subcommand_from list add auth logout' -f -a 'add' -d 'Add an MCP server to your configuration'
+complete -c anysola -n '__fish_seen_subcommand_from mcp; and not __fish_seen_subcommand_from list add auth logout' -f -a 'auth' -d 'Authenticate with an OAuth-capable remote MCP server'
+complete -c anysola -n '__fish_seen_subcommand_from mcp; and not __fish_seen_subcommand_from list add auth logout' -f -a 'logout' -d 'Remove stored OAuth credentials for an MCP server'
+complete -c anysola -n '__fish_seen_subcommand_from mcp; and __fish_seen_subcommand_from list' -f
+complete -c anysola -n '__fish_seen_subcommand_from mcp; and __fish_seen_subcommand_from add' -f
+complete -c anysola -n '__fish_seen_subcommand_from mcp; and __fish_seen_subcommand_from add; and begin; not __fish_contains_opt url; or contains -- (commandline -poc)[-1] --url; end' -l url -d 'URL for a remote MCP server' -r -f
+complete -c anysola -n '__fish_seen_subcommand_from mcp; and __fish_seen_subcommand_from add; and begin; not __fish_contains_opt header; or contains -- (commandline -poc)[-1] --header; end' -l header -d 'HTTP header for a remote server, as name=value' -r -f
+complete -c anysola -n '__fish_seen_subcommand_from mcp; and __fish_seen_subcommand_from add; and begin; not __fish_contains_opt env; or contains -- (commandline -poc)[-1] --env; end' -l env -d 'Environment variable for a local server, as name=value' -r -f
+complete -c anysola -n '__fish_seen_subcommand_from mcp; and __fish_seen_subcommand_from add; and not __fish_contains_opt global no-global' -l global -d 'Write to the global config instead of the project config'
+complete -c anysola -n '__fish_seen_subcommand_from mcp; and __fish_seen_subcommand_from add; and not __fish_contains_opt global no-global' -l no-global -d 'Disable global'
+complete -c anysola -n '__fish_seen_subcommand_from mcp; and __fish_seen_subcommand_from add; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt url' -f -a '--url' -d 'URL for a remote MCP server'
+complete -c anysola -n '__fish_seen_subcommand_from mcp; and __fish_seen_subcommand_from add; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt header' -f -a '--header' -d 'HTTP header for a remote server, as name=value'
+complete -c anysola -n '__fish_seen_subcommand_from mcp; and __fish_seen_subcommand_from add; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt env' -f -a '--env' -d 'Environment variable for a local server, as name=value'
+complete -c anysola -n '__fish_seen_subcommand_from mcp; and __fish_seen_subcommand_from add; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt global no-global' -f -a '--global' -d 'Write to the global config instead of the project config'
+complete -c anysola -n '__fish_seen_subcommand_from mcp; and __fish_seen_subcommand_from add; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt global no-global' -f -a '--no-global' -d 'Disable global'
+complete -c anysola -n '__fish_seen_subcommand_from mcp; and __fish_seen_subcommand_from auth' -f
+complete -c anysola -n '__fish_seen_subcommand_from mcp; and __fish_seen_subcommand_from logout' -f
+complete -c anysola -n '__fish_seen_subcommand_from plugin; and not __fish_seen_subcommand_from list add check update remove' -f
+complete -c anysola -n '__fish_seen_subcommand_from plugin; and not __fish_seen_subcommand_from list add check update remove' -f -a 'list' -d 'List plugins'
+complete -c anysola -n '__fish_seen_subcommand_from plugin; and not __fish_seen_subcommand_from list add check update remove' -f -a 'add' -d 'Install a plugin and add it to the global configuration'
+complete -c anysola -n '__fish_seen_subcommand_from plugin; and not __fish_seen_subcommand_from list add check update remove' -f -a 'check' -d 'Check package plugins for updates'
+complete -c anysola -n '__fish_seen_subcommand_from plugin; and not __fish_seen_subcommand_from list add check update remove' -f -a 'update' -d 'Update package plugins'
+complete -c anysola -n '__fish_seen_subcommand_from plugin; and not __fish_seen_subcommand_from list add check update remove' -f -a 'remove' -d 'Remove a plugin from global configuration'
+complete -c anysola -n '__fish_seen_subcommand_from plugin; and __fish_seen_subcommand_from list' -f
+complete -c anysola -n '__fish_seen_subcommand_from plugin; and __fish_seen_subcommand_from list; and not __fish_contains_opt builtin no-builtin' -l builtin -d 'Include built-in server plugins'
+complete -c anysola -n '__fish_seen_subcommand_from plugin; and __fish_seen_subcommand_from list; and not __fish_contains_opt builtin no-builtin' -l no-builtin -d 'Disable builtin'
+complete -c anysola -n '__fish_seen_subcommand_from plugin; and __fish_seen_subcommand_from list; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt builtin no-builtin' -f -a '--builtin' -d 'Include built-in server plugins'
+complete -c anysola -n '__fish_seen_subcommand_from plugin; and __fish_seen_subcommand_from list; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt builtin no-builtin' -f -a '--no-builtin' -d 'Disable builtin'
+complete -c anysola -n '__fish_seen_subcommand_from plugin; and __fish_seen_subcommand_from add' -f
+complete -c anysola -n '__fish_seen_subcommand_from plugin; and __fish_seen_subcommand_from check' -f
+complete -c anysola -n '__fish_seen_subcommand_from plugin; and __fish_seen_subcommand_from update' -f
+complete -c anysola -n '__fish_seen_subcommand_from plugin; and __fish_seen_subcommand_from remove' -f
+complete -c anysola -n '__fish_seen_subcommand_from models' -f
+complete -c anysola -n '__fish_seen_subcommand_from run' -f
+complete -c anysola -n '__fish_seen_subcommand_from run; and not __fish_contains_opt -s c continue no-continue' -l continue -s c -d 'Continue the last session'
+complete -c anysola -n '__fish_seen_subcommand_from run; and not __fish_contains_opt -s c continue no-continue' -l no-continue -d 'Disable continue'
+complete -c anysola -n '__fish_seen_subcommand_from run; and begin; not __fish_contains_opt -s s session; or contains -- (commandline -poc)[-1] --session -s; end' -l session -s s -d 'Session ID to continue, or to create if it does not exist' -r -f
+complete -c anysola -n '__fish_seen_subcommand_from run; and not __fish_contains_opt fork no-fork' -l fork -d 'Fork the session before continuing'
+complete -c anysola -n '__fish_seen_subcommand_from run; and not __fish_contains_opt fork no-fork' -l no-fork -d 'Disable fork'
+complete -c anysola -n '__fish_seen_subcommand_from run; and begin; not __fish_contains_opt -s m model; or contains -- (commandline -poc)[-1] --model -m; end' -l model -s m -d 'Model to use in the format provider/model#variant' -r -f
+complete -c anysola -n '__fish_seen_subcommand_from run; and begin; not __fish_contains_opt agent; or contains -- (commandline -poc)[-1] --agent; end' -l agent -d 'Agent to use' -r -f
+complete -c anysola -n '__fish_seen_subcommand_from run; and begin; not __fish_contains_opt format; or contains -- (commandline -poc)[-1] --format; end' -l format -d 'Output format' -r -f -a 'default json'
+complete -c anysola -n '__fish_seen_subcommand_from run; and begin; not __fish_contains_opt -s f file; or contains -- (commandline -poc)[-1] --file -f; end' -l file -s f -d 'File to attach to the message' -r -f
+complete -c anysola -n '__fish_seen_subcommand_from run; and begin; not __fish_contains_opt title; or contains -- (commandline -poc)[-1] --title; end' -l title -d 'Session title' -r -f
+complete -c anysola -n '__fish_seen_subcommand_from run; and not __fish_contains_opt thinking no-thinking' -l thinking -d 'Show thinking blocks'
+complete -c anysola -n '__fish_seen_subcommand_from run; and not __fish_contains_opt thinking no-thinking' -l no-thinking -d 'Disable thinking'
+complete -c anysola -n '__fish_seen_subcommand_from run; and begin; not __fish_contains_opt budget; or contains -- (commandline -poc)[-1] --budget; end' -l budget -d 'Stop once the session has spent this many credits' -r -f
+complete -c anysola -n '__fish_seen_subcommand_from run; and not __fish_contains_opt auto no-auto' -l auto -d 'Auto-approve permissions that are not explicitly denied'
+complete -c anysola -n '__fish_seen_subcommand_from run; and not __fish_contains_opt auto no-auto' -l no-auto -d 'Disable auto'
+complete -c anysola -n '__fish_seen_subcommand_from run; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt -s c continue no-continue' -f -a '--continue' -d 'Continue the last session'
+complete -c anysola -n '__fish_seen_subcommand_from run; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt -s c continue no-continue' -f -a '--no-continue' -d 'Disable continue'
+complete -c anysola -n '__fish_seen_subcommand_from run; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt -s s session' -f -a '--session' -d 'Session ID to continue, or to create if it does not exist'
+complete -c anysola -n '__fish_seen_subcommand_from run; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt fork no-fork' -f -a '--fork' -d 'Fork the session before continuing'
+complete -c anysola -n '__fish_seen_subcommand_from run; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt fork no-fork' -f -a '--no-fork' -d 'Disable fork'
+complete -c anysola -n '__fish_seen_subcommand_from run; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt -s m model' -f -a '--model' -d 'Model to use in the format provider/model#variant'
+complete -c anysola -n '__fish_seen_subcommand_from run; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt agent' -f -a '--agent' -d 'Agent to use'
+complete -c anysola -n '__fish_seen_subcommand_from run; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt format' -f -a '--format' -d 'Output format'
+complete -c anysola -n '__fish_seen_subcommand_from run; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt -s f file' -f -a '--file' -d 'File to attach to the message'
+complete -c anysola -n '__fish_seen_subcommand_from run; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt title' -f -a '--title' -d 'Session title'
+complete -c anysola -n '__fish_seen_subcommand_from run; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt thinking no-thinking' -f -a '--thinking' -d 'Show thinking blocks'
+complete -c anysola -n '__fish_seen_subcommand_from run; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt thinking no-thinking' -f -a '--no-thinking' -d 'Disable thinking'
+complete -c anysola -n '__fish_seen_subcommand_from run; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt budget' -f -a '--budget' -d 'Stop once the session has spent this many credits'
+complete -c anysola -n '__fish_seen_subcommand_from run; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt auto no-auto' -f -a '--auto' -d 'Auto-approve permissions that are not explicitly denied'
+complete -c anysola -n '__fish_seen_subcommand_from run; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt auto no-auto' -f -a '--no-auto' -d 'Disable auto'
+complete -c anysola -n '__fish_seen_subcommand_from session; and not __fish_seen_subcommand_from list delete export import' -f
+complete -c anysola -n '__fish_seen_subcommand_from session; and not __fish_seen_subcommand_from list delete export import' -f -a 'list' -d 'List top-level sessions in the current project, newest first'
+complete -c anysola -n '__fish_seen_subcommand_from session; and not __fish_seen_subcommand_from list delete export import' -f -a 'delete' -d 'Delete a session and its child sessions'
+complete -c anysola -n '__fish_seen_subcommand_from session; and not __fish_seen_subcommand_from list delete export import' -f -a 'export' -d 'Export session data as JSON'
+complete -c anysola -n '__fish_seen_subcommand_from session; and not __fish_seen_subcommand_from list delete export import' -f -a 'import' -d 'Import session data from a JSON file or URL'
+complete -c anysola -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from list' -f
+complete -c anysola -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from list; and begin; not __fish_contains_opt -s n max-count; or contains -- (commandline -poc)[-1] --max-count -n; end' -l max-count -s n -d 'Limit to N most recent sessions (default: 100)' -r -f
+complete -c anysola -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from list; and begin; not __fish_contains_opt format; or contains -- (commandline -poc)[-1] --format; end' -l format -d 'Output format' -r -f -a 'table json'
+complete -c anysola -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from list; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt -s n max-count' -f -a '--max-count' -d 'Limit to N most recent sessions (default: 100)'
+complete -c anysola -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from list; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt format' -f -a '--format' -d 'Output format'
+complete -c anysola -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from delete' -f
+complete -c anysola -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from export' -f
+complete -c anysola -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from export; and not __fish_contains_opt sanitize no-sanitize' -l sanitize -d 'Redact sensitive transcript and file data'
+complete -c anysola -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from export; and not __fish_contains_opt sanitize no-sanitize' -l no-sanitize -d 'Disable sanitize'
+complete -c anysola -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from export; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt sanitize no-sanitize' -f -a '--sanitize' -d 'Redact sensitive transcript and file data'
+complete -c anysola -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from export; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt sanitize no-sanitize' -f -a '--no-sanitize' -d 'Disable sanitize'
+complete -c anysola -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from import' -f
+complete -c anysola -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from import; and begin; not __fish_contains_opt directory; or contains -- (commandline -poc)[-1] --directory; end' -l directory -d 'Directory in which to import the session' -r -f
+complete -c anysola -n '__fish_seen_subcommand_from session; and __fish_seen_subcommand_from import; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt directory' -f -a '--directory' -d 'Directory in which to import the session'
+complete -c anysola -n '__fish_seen_subcommand_from service; and not __fish_seen_subcommand_from start restart status stop get set unset' -f
+complete -c anysola -n '__fish_seen_subcommand_from service; and not __fish_seen_subcommand_from start restart status stop get set unset' -f -a 'start' -d 'Start the background server'
+complete -c anysola -n '__fish_seen_subcommand_from service; and not __fish_seen_subcommand_from start restart status stop get set unset' -f -a 'restart' -d 'Restart the background server'
+complete -c anysola -n '__fish_seen_subcommand_from service; and not __fish_seen_subcommand_from start restart status stop get set unset' -f -a 'status' -d 'Show background server status'
+complete -c anysola -n '__fish_seen_subcommand_from service; and not __fish_seen_subcommand_from start restart status stop get set unset' -f -a 'stop' -d 'Stop the background server'
+complete -c anysola -n '__fish_seen_subcommand_from service; and not __fish_seen_subcommand_from start restart status stop get set unset' -f -a 'get' -d 'Get service configuration'
+complete -c anysola -n '__fish_seen_subcommand_from service; and not __fish_seen_subcommand_from start restart status stop get set unset' -f -a 'set' -d 'Set service configuration'
+complete -c anysola -n '__fish_seen_subcommand_from service; and not __fish_seen_subcommand_from start restart status stop get set unset' -f -a 'unset' -d 'Unset service configuration'
+complete -c anysola -n '__fish_seen_subcommand_from service; and __fish_seen_subcommand_from start' -f
+complete -c anysola -n '__fish_seen_subcommand_from service; and __fish_seen_subcommand_from restart' -f
+complete -c anysola -n '__fish_seen_subcommand_from service; and __fish_seen_subcommand_from status' -f
+complete -c anysola -n '__fish_seen_subcommand_from service; and __fish_seen_subcommand_from stop' -f
+complete -c anysola -n '__fish_seen_subcommand_from service; and __fish_seen_subcommand_from get' -f
+complete -c anysola -n '__fish_seen_subcommand_from service; and __fish_seen_subcommand_from set' -f
+complete -c anysola -n '__fish_seen_subcommand_from service; and __fish_seen_subcommand_from unset' -f
+complete -c anysola -n '__fish_seen_subcommand_from reload' -f
+complete -c anysola -n '__fish_seen_subcommand_from serve' -f
+complete -c anysola -n '__fish_seen_subcommand_from serve; and begin; not __fish_contains_opt hostname; or contains -- (commandline -poc)[-1] --hostname; end' -l hostname -r -f
+complete -c anysola -n '__fish_seen_subcommand_from serve; and begin; not __fish_contains_opt port; or contains -- (commandline -poc)[-1] --port; end' -l port -r -f
+complete -c anysola -n '__fish_seen_subcommand_from serve; and begin; not __fish_contains_opt cors; or contains -- (commandline -poc)[-1] --cors; end' -l cors -d 'Additional allowed CORS origin (repeat for multiple origins)' -r -f
+complete -c anysola -n '__fish_seen_subcommand_from serve; and not __fish_contains_opt service no-service' -l service
+complete -c anysola -n '__fish_seen_subcommand_from serve; and not __fish_contains_opt service no-service' -l no-service
+complete -c anysola -n '__fish_seen_subcommand_from serve; and not __fish_contains_opt stdio no-stdio' -l stdio
+complete -c anysola -n '__fish_seen_subcommand_from serve; and not __fish_contains_opt stdio no-stdio' -l no-stdio
+complete -c anysola -n '__fish_seen_subcommand_from serve; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt hostname' -f -a '--hostname'
+complete -c anysola -n '__fish_seen_subcommand_from serve; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt port' -f -a '--port'
+complete -c anysola -n '__fish_seen_subcommand_from serve; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt cors' -f -a '--cors' -d 'Additional allowed CORS origin (repeat for multiple origins)'
+complete -c anysola -n '__fish_seen_subcommand_from serve; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt service no-service' -f -a '--service'
+complete -c anysola -n '__fish_seen_subcommand_from serve; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt service no-service' -f -a '--no-service'
+complete -c anysola -n '__fish_seen_subcommand_from serve; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt stdio no-stdio' -f -a '--stdio'
+complete -c anysola -n '__fish_seen_subcommand_from serve; and not string match -q -- "-*" (commandline -ct); and not __fish_contains_opt stdio no-stdio' -f -a '--no-stdio'
+
+###-end-anysola-completions-###

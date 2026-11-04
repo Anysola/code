@@ -1,0 +1,14 @@
+// SOURCE: packages/ai/src/protocols/shared.ts lines 186-198 (copied verbatim from fork branch anysola, 0.5.1)
+export const joinText = (parts: ReadonlyArray<{ readonly text: string }>) => parts.map((part) => part.text).join("\n")
+
+const escapeSystemUpdateText = (text: string) =>
+  text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+
+/**
+ * Stable fallback representation for chronological `Message.system(...)`
+ * updates on routes that do not support that privileged role natively. The
+ * wrapper remains visibly lower-authority user text, preserves the original
+ * temporal position, and XML-escapes content so it cannot close the wrapper.
+ */
+export const wrapSystemUpdate = (parts: ReadonlyArray<{ readonly text: string }>) =>
+  `<system-update>\n${escapeSystemUpdateText(joinText(parts))}\n</system-update>`

@@ -1,0 +1,18 @@
+$ anysola plugin add --help
+DESCRIPTION
+  Install a plugin and add it to the global configuration
+
+USAGE
+  anysola plugin add [flags] <package>
+
+ARGUMENTS
+  package string    npm registry or Git package specifier
+
+GLOBAL FLAGS
+  --help, -h                                                          Show help information
+  --version, -v                                                       Show version information
+  --wizard                                                            Start wizard mode for a command
+  --completions <bash|zsh|fish|powershell|sh|pwsh>                    Print shell completion script (choices: bash, zsh, fish, powershell, sh, pwsh)
+  --log-level <all|trace|debug|info|warn|warning|error|fatal|none>    Sets the minimum log level (choices: all, trace, debug, info, warn, warning, error, fatal, none)
+  --print-logs                                                        Print logs to stderr (server logs require --standalone)
+[exit=0]

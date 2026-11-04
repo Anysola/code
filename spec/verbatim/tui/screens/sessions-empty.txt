@@ -1,0 +1,35 @@
+
+
+
+
+
+
+
+
+
+
+                    Sessions for my-app                                                          esc
+
+                    Search
+
+                    No sessions available
+
+                    delete ctrl+d  rename ctrl+r                                 all projects ctrl+a
+
+                       ┃
+                       ┃  Ask anything… "Fix the failing tests"
+                       ┃
+                       ┃  Build · Claude Sonnet 5.5
+                       ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                       ~/my-app:master              731 credits  shift+tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+  Team · renews 23 Nov                                                                                           0.5.1

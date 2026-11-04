@@ -1,0 +1,7 @@
+[0m
+> build · claude-sonnet-5-5
+[0m✗ [0mWeb Search "latest bun" failed
+[91m[1mError: [0mTool execution interrupted
+[91m[1mError: [0mStep interrupted
+[91m[1mError: [0mBudget reached: 1/1 credits. Continue with `anysola run -s ses_e59f08ea4ffexlphWcGY1Febrf --budget <credits>`.
+[90mAnysola · 1 credit · 731 left[0m

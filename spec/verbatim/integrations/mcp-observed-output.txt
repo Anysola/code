@@ -1,0 +1,128 @@
+# Observed with the shipped 0.5.1 binary (linux-arm64), isolated home. Exact stdout/stderr.
+
+$ anysola mcp add                      # (help printed, then)
+ERROR
+  Missing required argument: name
+(exit 1)
+
+$ anysola mcp add t1 --url notaurl     # stderr; stack lines are Bun internals and vary
+Error: Invalid URL: notaurl
+    at <anonymous> (/$bunfs/root/chunk-….js:2:733)
+    ...
+(exit 1)
+
+$ anysola mcp add t2 --url https://x.example/mcp --env A=b
+Error: --env is only valid for local MCP servers
+(exit 1)
+
+$ anysola mcp add testsrv -- node /path/mcp-stdio.mjs
+MCP server "testsrv" added to /…/my-app/opencode.json
+(exit 0)
+
+$ anysola mcp add glob1 --global -- echo hi
+MCP server "glob1" added to /…/.config/opencode/opencode.json
+
+# written JSON (jsonc-parser modify, 2-space indent):
+{
+  "mcp": {
+    "servers": {
+      "testsrv": {
+        "type": "local",
+        "command": [
+          "node",
+          "/path/mcp-stdio.mjs"
+        ]
+      },
+      "remote1": {
+        "type": "remote",
+        "url": "http://127.0.0.1:8853/mcp",
+        "headers": {
+          "Authorization": "Bearer-abc"
+        }
+      }
+    }
+  }
+}
+
+$ anysola mcp list          # FIRST call (service just started, or --standalone): race, always
+No MCP servers configured
+
+$ anysola mcp list          # second call against the running background service
+✗ bad1     failed: NotFound: ChildProcess.spawn (/nonexistent/cmd --flag)
+✗ glob1    failed: Connection closed: MCP server process exited with code 0
+⚠ oauth1   needs authentication
+✗ remote1  failed: ECONNREFUSED: Unable to connect. Is the computer able to access the url?
+✓ testsrv  connected
+
+$ anysola mcp auth </dev/null
+│
+■  Pass an MCP server name when running without an interactive terminal
+│
+└  Failed
+(exit 1)
+
+$ anysola mcp auth testsrv </dev/null
+┌  Authenticate an MCP server
+│
+■  MCP server "testsrv" is not an OAuth-capable remote server
+│
+└  Failed
+(exit 1)
+
+$ anysola mcp auth oauth1 </dev/null     (DCR server; ANSI cursor codes omitted)
+┌  Authenticate an MCP server
+│
+◇  Authorization started
+│
+●  Authorize oauth1 in your browser. This window will close automatically.
+│
+●  http://127.0.0.1:8852/authorize?response_type=code&client_id=dyn-client-1&code_challenge=…&code_challenge_method=S256&redirect_uri=http%3A%2F%2F127.0.0.1%3A35345%2Fcallback&state=…&scope=mcp.read&resource=http%3A%2F%2F127.0.0.1%3A8852%2Fmcp
+│
+◇  Waiting for authorization...
+│
+◆  Connected to oauth1
+│
+└  Done
+(exit 0)
+
+# callback hit with wrong state -> whole attempt fails:
+■  OAuth state mismatch
+│
+└  Failed
+(exit 1)
+
+# CIMD server (client_id_metadata_document_supported + "none" auth): authorize URL carries
+client_id=https%3A%2F%2Fwww.anysola.com%2Foauth%2Fanysola-code%2Fclient.json  (no /register call)
+
+# DCR POST /register body (exact):
+{"redirect_uris":["http://127.0.0.1:35345/callback"],"client_name":"Anysola Code","client_uri":"https://www.anysola.com/code","grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"none","application_type":"native","scope":"mcp.read"}
+
+# MCP initialize sent by the connection (exact):
+{"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"elicitation":{"form":{},"url":{}},"roots":{}},"clientInfo":{"name":"opencode","version":"2.2.5+anysola.0.5.1"}},"jsonrpc":"2.0","id":0}
+# OAuth challenge probe initialize (exact):
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"opencode"}}}
+# User-Agent on all MCP HTTP traffic: opencode/latest/2.2.5/cli
+
+# credential row (table `credential`, ~/.local/share/opencode/opencode.db):
+id=cred_…  integration_id=mcp_f97485b09636c533  label=oauth1
+value={"type":"oauth","methodID":"mcp_f97485b09636c533","refresh":"ref-1","access":"tok-1","expires":<epoch ms>,"metadata":{"serverUrl":"http://127.0.0.1:8852/mcp","tokenType":"Bearer","issuer":"http://127.0.0.1:8852","client":{…registered client incl. client_id…}}}
+# integration_id = "mcp_" + sha1(name + "\0" + url).hex[0..16]
+
+$ anysola mcp logout testsrv
+No stored credentials for testsrv
+$ anysola mcp logout oauth1          (after auth)
+Removed OAuth credentials for oauth1
+$ anysola mcp logout nope
+Error: MCP server not found: nope   (+ stack, exit 1)
+
+# Code Mode MCP call result as seen by the model (tool_result content, exact):
+echo: {"name":"echo","arguments":{"text":"hi"},"_meta":{"ai.opencode/sessionID":"ses_…","progressToken":3}}
+
+# Late-connecting MCP server: a role "system" message is appended after the user turn (exact text):
+The Code Mode tool catalog has changed.
+
+New tools are available in addition to those previously listed:
+  - tools.acpmcp.echo({
+  text: string,
+}): Promise<unknown> // Echo the text back
+  - tools.acpmcp.get_weather(): Promise<unknown> // Weather (dotted name)

@@ -1,0 +1,24 @@
+// SOURCE: packages/core/src/codemode/instructions.ts lines 8-30 (copied verbatim from fork branch anysola, 0.5.1)
+// prettier-ignore
+const prompt = (hasMoreTools: boolean) => `# Code Mode
+
+The tools listed below${hasMoreTools ? ", and \`search\`," : ""} cannot be called directly: they only work as JavaScript inside the \`execute\` tool. Every other tool you have is a normal tool call: call it directly, never inside \`execute\`.
+
+${hasMoreTools ? `The catalog is partial. Before calling a tool that is not listed below, find it with the global \`search(...)\` function. Do not guess tool names. Each result's \`path\` is the complete call expression: write it out as code, for example \`await tools.ns.tool_name({ ... })\`. Do not use it as a key such as \`tools[path]\`.
+
+- ${searchSignature}` : "The catalog is complete. Do not guess tool names."}
+
+## Code Mode tools (call only inside \`execute\`)`
+
+export function render(catalog: CodeModeCatalog.Summary) {
+  if (catalog.total === 0)
+    return "No Code Mode tools are currently available. Later Code Mode catalog updates may add or remove tools. Do not call `execute` unless there is at least one available Code Mode tool."
+
+  const tools = catalog.namespaces.flatMap((namespace) => {
+    return [CodeModeCatalog.namespaceLine(namespace), ...namespace.entries.map((entry) => entry.line)]
+  })
+
+  return `${prompt(catalog.shown < catalog.total)}
+
+${tools.join("\n")}`
+}

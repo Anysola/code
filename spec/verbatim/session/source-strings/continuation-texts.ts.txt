@@ -1,0 +1,6 @@
+// SOURCE: packages/core/src/session/runner/llm.ts lines 37-41 (copied verbatim from fork branch anysola, 0.5.1)
+const CONTINUE_AFTER_INCOMPLETE_STREAM =
+  "The previous response was interrupted. Continue from where you left off without repeating completed content."
+
+const CONTINUE_AFTER_OUTPUT_LIMIT =
+  "Your last response hit the output token limit (stop reason: length). Do not apologize, recap, or repeat yourself. Break the remaining work into smaller pieces."

@@ -1,0 +1,48 @@
+// SOURCE: packages/core/src/session/runner/to-llm-message.ts lines 38-84 (copied verbatim from fork branch anysola, 0.5.1)
+const textAttachment = (file: FileAttachment): ContentPart => ({
+  type: "text",
+  text: `\n\n${[
+    `Attached file: ${file.name ?? (file.source.type === "uri" ? file.source.uri : "inline attachment")}`,
+    file.description === undefined ? undefined : `Description: ${file.description}`,
+    "",
+    Buffer.from(file.data, "base64").toString("utf8"),
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n")}`,
+  metadata: {
+    attachment: {
+      source: file.source,
+      name: file.name,
+      description: file.description,
+    },
+  },
+})
+
+const directoryAttachment = (file: FileAttachment): ContentPart => ({
+  type: "text",
+  text: `\n\n${[
+    `Attached directory: ${attachmentLocation(file) ?? file.name ?? (file.source.type === "uri" ? file.source.uri : "directory")}`,
+    file.description === undefined ? undefined : `Description: ${file.description}`,
+    file.data.length === 0 ? undefined : "",
+    file.data.length === 0 ? undefined : Buffer.from(file.data, "base64").toString("utf8"),
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n")}`,
+  metadata: {
+    attachment: {
+      source: file.source,
+      name: file.name,
+      description: file.description,
+    },
+  },
+})
+
+const attachmentContent = (file: FileAttachment): ContentPart[] => {
+  if (file.mime === "text/plain") return [textAttachment(file)]
+  if (file.mime === "application/x-directory") return [directoryAttachment(file)]
+  if (imageMimes.has(file.mime) || file.mime === "application/pdf") {
+    const location = attachmentLocation(file)
+    return [...(location === undefined ? [] : [Message.text(`Attached file: ${location}`)]), media(file)]
+  }
+  return []
+}

@@ -1,0 +1,66 @@
+# SSE as POST /v1/code/messages answers a "stream": true request (gateway proxy.ts relayStream).
+# Bytes are Anthropic's upstream stream, forwarded unchanged (proxy.ts:748-751). The gateway adds only
+# three things, all built in proxy.ts:
+#   1. keepalive comment, only at an event boundary, after 15 s without bytes sent (runtime.ts:28, proxy.ts:202, 716-723)
+#   2. one closing credits event, only when the request had `x-anysola-credits-event: 1`, the upstream reached
+#      message_stop, the stream ended cleanly and the parser is at an event boundary (proxy.ts:204-210, 532, 736-737)
+#   3. a synthetic `event: error` when the gateway itself ends the stream (upstream idle 300 s, upstream cut,
+#      shutdown) and the parser is at an event boundary (proxy.ts:212-218, 641-651, 707, 757-759)
+#
+# Response headers on a streamed 200 (proxy.ts:476-482, 384-388, 421-424):
+#   content-type: text/event-stream            (upstream's own value, else this)
+#   cache-control: no-cache, no-transform
+#   x-accel-buffering: no
+#   x-request-id: <gateway request id>
+#   x-anysola-model: <model actually run, e.g. claude-haiku-5-5 when auto picked Haiku>
+#   x-upstream-request-id: <Anthropic request-id>        (when upstream sent one)
+#   x-credits-available-before: <integer>                 (paid tier only; balance the request was admitted against)
+# NO x-credits-charged and NO x-credits-remaining on a stream.
+
+---- 1. keepalive (an SSE comment; a conforming SSE parser ignores it)
+: keepalive
+
+---- 2. a normal stream with the credits event (paid tier; free tier sends charged 0)
+event: message_start
+data: {"type":"message_start","message":{"id":"msg_...","type":"message","role":"assistant","model":"claude-sonnet-5-5","content":[],"stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+event: anysola_credits
+data: {"type":"anysola_credits","charged":7}
+
+---- 3. gateway-ended stream (no message_stop, no credits event). Messages used:
+event: error
+data: {"type":"error","error":{"type":"api_error","message":"The model's stream was interrupted."}}
+
+event: error
+data: {"type":"error","error":{"type":"api_error","message":"Anysola Code is restarting. Try again in a moment."}}
+
+# Client side (anysola-credits-stream.ts): blocks are split on "\n\n" after removing "\r"; a block whose text
+# starts with "event: anysola_credits" is dropped from the stream and its first "data:" line is JSON-parsed;
+# `charged` (finite, >= 0) is reported. Every other block (keepalive comments included) is passed on unchanged.
+# A trailing partial block at end of stream is passed on unless it starts with the credits event.
+#
+# Non-stream 200 (proxy.ts:459-467): body is Anthropic's JSON unchanged; headers add
+#   x-request-id, x-anysola-model, x-upstream-request-id?, x-credits-available-before (paid), x-credits-charged: <int>
+#
+# Error envelope for every gateway-made error (wire-core.ts:31-51, admission.ts:46-61):
+#   HTTP <status>
+#   x-request-id: <id>
+#   x-should-retry: false          (only when the error is final)
+#   retry-after: <seconds>         (429 busy: "2"; upstream 429: upstream's value; /version: computed)
+#   {"type":"error","error":{"type":"<anthropic type>","message":"<text>"},"request_id":"<id>"}
+# Upstream non-2xx other than 401/402/403/429 is passed through with upstream's body and content-type (proxy.ts:410-417).

@@ -1,0 +1,35 @@
+
+
+
+
+
+
+
+
+
+
+                    Open                                                                         esc
+
+                    Search sessions and projects…
+
+                    Sessions
+                    Latest Bun version                                                   my-app · 5h
+                    Latest Bun version                                                   my-app · 5h
+                    Explain this project                                                 my-app · 5h
+                    Add a --json flag                                                    my-app · 5h
+                    Fix date parser tests                                                my-app · 5h
+
+                    Projects
+                  ● my-app                                                                ~/my-app →
+                    my-app    /…/baa4cc54-bc0a-55b0-9ae5-1c58ec…/scratchpad/shots2/home-0.5.1/my-app
+
+
+
+
+
+
+
+
+
+
+  Team · renews 23 Nov                                                                                           0.5.1

@@ -1,0 +1,41 @@
+┃ /account     Open your Anysola account
+┃ /agents      Switch agent
+┃ /btw         One-shot answer from the session's context without adding
+┃ /budget      Session budget
+┃ /cd          Change working directory
+┃ /clear       Clear session
+┃ /connect     Connect an integration
+┃ /continue    Switch session
+┃ /credits     Credits and plan
+┃ /debug       View debug info
+┃ /devices     Signed-in devices
+┃ /diff        Open diff viewer
+┃ /editor      Open editor
+┃ /effort      Switch model variant
+┃ /exit        Exit the app
+┃ /feedback    Send feedback or report a problem
+┃ /goal        keep working until an objective is met [pause|resume|clear
+┃ /help        Help
+┃ /init        guided AGENTS.md setup
+┃ /mcps        MCP servers
+┃ /models      Switch model
+┃ /new         New session
+┃ /open        Open session or project
+┃ /plugins     Plugins
+┃ /project     Open session or project
+┃ /projects    Open session or project
+┃ /q           Exit the app
+┃ /quit        Exit the app
+┃ /reload      Reload configuration
+┃ /resume      Switch session
+┃ /review      review changes [commit|branch|pr], defaults to uncommitted
+┃ /sessions    Switch session
+┃ /settings    Open settings
+┃ /skills      Skills
+┃ /status      View status
+┃ /themes      Switch theme
+┃ /thinking    Switch model variant
+┃ /update      Update Anysola Code
+┃ /usage       Usage
+┃ /variants    Switch model variant
+┃ /worktrees   Manage workspaces

@@ -1,0 +1,1 @@
+This project is a small TypeScript CLI. `src/index.ts` parses the flags and `src/run.ts` does the work; tests live in `test/` and run with `bun test`.

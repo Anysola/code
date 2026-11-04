@@ -1,0 +1,49 @@
+   Fix typo in hello.txt           Fix typo in hello.txt         +
+  ┃
+  ┃  fix the typo in hello.txt
+  ┃
+
+     ⚙ Todo update failed
+
+  ┃
+  ┃  $ cat hello.txt && ls
+  ┃
+  ┃  Helo wrold
+  ┃  hello.txt
+  ┃  opencode.json
+  ┃
+
+  ┃
+  ┃  ← Edit hello.txt
+  ┃
+  ┃    1 - Helo wrold
+  ┃    1 + Hello world
+  ┃
+
+     + Thought · 4ms
+
+     Fixed
+
+     The typo in hello.txt is fixed:
+
+     - before: Helo wrold
+     - after: Hello world
+
+     export const greet = (name: string) => `Hello ${name}`
+
+     ┌─────────────────────────────────────────────────────────┬─────────────────────────────────────────────────────┐
+     │ file                                                    │ change                                              │
+     ├─────────────────────────────────────────────────────────┼─────────────────────────────────────────────────────┤
+     │ hello.txt                                               │ 1 line                                              │
+     └─────────────────────────────────────────────────────────┴─────────────────────────────────────────────────────┘
+
+     │ Run bun test to check.
+
+     Build · Claude Sonnet 5.5 · 7.1s · 638.3 tok/s
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · Claude Sonnet 5.5
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  ~/my-app:master                                  728 credits · this turn 12 · session 12  1.3K (0%)  ctrl+p commands

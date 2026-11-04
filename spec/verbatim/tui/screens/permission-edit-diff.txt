@@ -1,0 +1,49 @@
+   Fix typo in hello.txt         ! Fix typo in hello.txt         +
+
+  ┃
+  ┃  fix the typo in hello.txt
+  ┃
+
+     ⚙ Todo update failed
+
+  ┃
+  ┃  $ cat hello.txt && ls
+  ┃
+  ┃  Helo wrold
+  ┃  hello.txt
+  ┃  opencode.json
+  ┃
+
+  ┃
+  ┃  ← Edit hello.txt
+  ┃
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃  △ Permission required
+  ┃    → Edit hello.txt
+  ┃
+  ┃  1 - Helo wrold
+  ┃  1 + Hello world
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃   Allow once   Always allow   Reject                                 ctrl+f fullscreen  ⇆ select  enter confirm
+  ┃

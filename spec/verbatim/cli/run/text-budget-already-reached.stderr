@@ -1,0 +1,14 @@
+[91m[1mError: [0mBudget reached: 1/1 credits. Continue with `anysola run -s ses_e5926f6bfffeopbQFFitUadRa3 --budget <credits>`.
+2 | import{Kte}from"/$bunfs/root/chunk-8z5way0d.js";import{B}from"/$bunfs/root/chunk-3r8nd9xv.js";var pU={};B(pU,{OpenCode:()=>pU,make:()=>dc});class gh extends Error{reason;name="ClientError";constructor(r,a){let i=a?.detail??(a?.cause instanceof Error?a.cause.message:void 0);super(i?`${r}: ${i}`:r,a);this.reason=r}}var A=16777216;function M(r){let a=r.fetch??globalThis.fetch,i=(e,t)=>{let o=new URL(r.baseUrl);if(!o.pathname.endsWith("/"))o.pathname+="/";let m=new URL(e.path.slice(1),o);for(let[d,l]of Object.entries(e.query??{}))S(m.searchParams,d,l);let y=new Headers(r.headers);for(let[d,l]of Object.entries(e.headers??{}))if(l!==void 0&&l!==null)y.set(d,String(l));for(let[d,l]of new Headers(t?.headers))y.set(d,l);if(e.body!==void 0&&!y.has("content-type"))y.set("content-type",e.binaryBody?"application/octet-stream":"application/json");return{url:m,init:{method:e.method,signal:t?.signal,headers:y,body:e.body===void 0?void 0:e.binaryBody?e.body:JSON.stringify(e.body)}}},u=async(e,t)=>{try{let o=i(e,t);return awai
+
+ClientError: Transport: ECONNRESET: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()
+ reason: "Transport",
+
+      at <anonymous> (/$bunfs/root/chunk-qhez4k1y.js:2:1892)
+
+TypeError: ECONNRESET: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()
+  path: "http://127.0.0.1:46061/api/event",
+ errno: 0,
+  code: "ECONNRESET"
+
+

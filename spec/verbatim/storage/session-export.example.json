@@ -1,0 +1,590 @@
+{
+  "info": {
+    "id": "ses_e59ed5370ffeZXdiWgNSi2YA7r",
+    "projectID": "87eb537f6a44d897663f897e6343df4fbae2550e",
+    "cost": 0,
+    "tokens": {
+      "input": 1080,
+      "output": 378,
+      "reasoning": 0,
+      "cache": {
+        "read": 7200,
+        "write": 360
+      }
+    },
+    "outcome": "succeeded",
+    "time": {
+      "created": 1793787604138,
+      "updated": 1793787605531,
+      "busy": 1793787604471,
+      "idle": 1793787605535
+    },
+    "title": "Rich storage test",
+    "location": {
+      "directory": "/home/ubuntu/anysola-code/rust/testing/runs/storage/rich/home/proj"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_1a612adec001gGFqAsrkDyxgh7",
+      "time": {
+        "created": 1793787604490
+      },
+      "text": "\"RICHTEST please do the scripted steps\"",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_1a612ae19001nlNVSp3gjts3XE",
+      "time": {
+        "created": 1793787604510,
+        "streamed": 1793787604627,
+        "completed": 1793787605029
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "claude-sonnet-5-5",
+        "providerID": "anysola"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "I should look at the repo first.",
+          "native": {
+            "signature": "SIG_0_0_ErUBCkYIBRgCKkA"
+          },
+          "time": {
+            "created": 1793787604594,
+            "completed": 1793787604601
+          }
+        },
+        {
+          "type": "text",
+          "text": "Let me check the shell."
+        },
+        {
+          "type": "tool",
+          "id": "toolu_0_shell",
+          "name": "shell",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "echo hello > hello.txt && cat hello.txt"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "hello\n"
+              }
+            ],
+            "metadata": {
+              "status": "completed",
+              "truncated": false,
+              "exit": 0
+            }
+          },
+          "time": {
+            "created": 1793787604614,
+            "ran": 1793787604623,
+            "completed": 1793787604650
+          }
+        }
+      ],
+      "snapshot": {
+        "start": "11175ebccb3241e4888e30f41aafddcb1dc72f8c",
+        "end": "59815cce7c1f65eed186854d6cdc048dc3fc0f67",
+        "files": [
+          "hello.txt"
+        ]
+      },
+      "finish": "tool-calls",
+      "rawFinish": "tool_use",
+      "cost": 0,
+      "tokens": {
+        "input": 120,
+        "output": 42,
+        "reasoning": 0,
+        "cache": {
+          "read": 800,
+          "write": 40
+        }
+      }
+    },
+    {
+      "id": "msg_1a612b033001qXFKeEQoCAD1Wa",
+      "time": {
+        "created": 1793787605047,
+        "streamed": 1793787605083,
+        "completed": 1793787605130
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "claude-sonnet-5-5",
+        "providerID": "anysola"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "",
+          "native": {
+            "redactedData": "REDACTED_1_EmwKAhgBEgy"
+          },
+          "time": {
+            "created": 1793787605064,
+            "completed": 1793787605067
+          }
+        },
+        {
+          "type": "reasoning",
+          "text": "Now write notes.",
+          "native": {
+            "signature": "SIG_1_1_ErUBCkYIBRgCKkA"
+          },
+          "time": {
+            "created": 1793787605069,
+            "completed": 1793787605072
+          }
+        },
+        {
+          "type": "tool",
+          "id": "toolu_1_write",
+          "name": "write",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "path": "notes.md",
+              "content": "# Notes\n\nfirst line\n"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "Created file successfully: notes.md"
+              }
+            ],
+            "metadata": {
+              "truncated": false
+            }
+          },
+          "time": {
+            "created": 1793787605075,
+            "ran": 1793787605079,
+            "completed": 1793787605089
+          }
+        }
+      ],
+      "snapshot": {
+        "start": "59815cce7c1f65eed186854d6cdc048dc3fc0f67",
+        "end": "5b1cd4f4a677bc718176feb4403c3d280222a710",
+        "files": [
+          "notes.md"
+        ]
+      },
+      "finish": "tool-calls",
+      "rawFinish": "tool_use",
+      "cost": 0,
+      "tokens": {
+        "input": 120,
+        "output": 42,
+        "reasoning": 0,
+        "cache": {
+          "read": 800,
+          "write": 40
+        }
+      }
+    },
+    {
+      "id": "msg_1a612b09c001EI5nRheCST8vpn",
+      "time": {
+        "created": 1793787605152,
+        "streamed": 1793787605182,
+        "completed": 1793787605222
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "claude-sonnet-5-5",
+        "providerID": "anysola"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "toolu_2_edit",
+          "name": "edit",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "path": "notes.md",
+              "oldString": "first line",
+              "newString": "second line"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "Edited notes.md (1 replacement)"
+              }
+            ],
+            "metadata": {
+              "files": [
+                {
+                  "file": "notes.md",
+                  "patch": "Index: notes.md\n===================================================================\n--- notes.md\n+++ notes.md\n@@ -1,3 +1,3 @@\n # Notes\n \n-first line\n+second line\n",
+                  "status": "modified",
+                  "additions": 1,
+                  "deletions": 1
+                }
+              ],
+              "truncated": false
+            }
+          },
+          "time": {
+            "created": 1793787605174,
+            "ran": 1793787605179,
+            "completed": 1793787605189
+          }
+        }
+      ],
+      "snapshot": {
+        "start": "5b1cd4f4a677bc718176feb4403c3d280222a710",
+        "end": "bf21ab84139ed72ac29ade0c8e791a153df491c9",
+        "files": [
+          "notes.md"
+        ]
+      },
+      "finish": "tool-calls",
+      "rawFinish": "tool_use",
+      "cost": 0,
+      "tokens": {
+        "input": 120,
+        "output": 42,
+        "reasoning": 0,
+        "cache": {
+          "read": 800,
+          "write": 40
+        }
+      }
+    },
+    {
+      "id": "msg_1a612b0f3001Ma3xK64rQ85bv9",
+      "time": {
+        "created": 1793787605238,
+        "streamed": 1793787605263,
+        "completed": 1793787605279
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "claude-sonnet-5-5",
+        "providerID": "anysola"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "toolu_3_read",
+          "name": "read",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "path": "notes.md"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "Read file notes.md, lines 1-3\n1: # Notes\n2: \n3: second line"
+              }
+            ],
+            "metadata": {
+              "truncated": false
+            }
+          },
+          "time": {
+            "created": 1793787605256,
+            "ran": 1793787605260,
+            "completed": 1793787605271
+          }
+        }
+      ],
+      "snapshot": {
+        "start": "bf21ab84139ed72ac29ade0c8e791a153df491c9",
+        "end": "bf21ab84139ed72ac29ade0c8e791a153df491c9",
+        "files": []
+      },
+      "finish": "tool-calls",
+      "rawFinish": "tool_use",
+      "cost": 0,
+      "tokens": {
+        "input": 120,
+        "output": 42,
+        "reasoning": 0,
+        "cache": {
+          "read": 800,
+          "write": 40
+        }
+      }
+    },
+    {
+      "id": "msg_1a612b12a001cFkGKPlbJ5CzNc",
+      "time": {
+        "created": 1793787605294,
+        "streamed": 1793787605316,
+        "completed": 1793787605330
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "claude-sonnet-5-5",
+        "providerID": "anysola"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "toolu_4_read",
+          "name": "read",
+          "executed": false,
+          "state": {
+            "status": "error",
+            "input": {
+              "path": "does-not-exist.txt"
+            },
+            "error": {
+              "type": "tool.execution",
+              "message": "File not found: does-not-exist.txt"
+            }
+          },
+          "time": {
+            "created": 1793787605309,
+            "ran": 1793787605313,
+            "completed": 1793787605322
+          }
+        }
+      ],
+      "snapshot": {
+        "start": "bf21ab84139ed72ac29ade0c8e791a153df491c9",
+        "end": "bf21ab84139ed72ac29ade0c8e791a153df491c9",
+        "files": []
+      },
+      "finish": "tool-calls",
+      "rawFinish": "tool_use",
+      "cost": 0,
+      "tokens": {
+        "input": 120,
+        "output": 42,
+        "reasoning": 0,
+        "cache": {
+          "read": 800,
+          "write": 40
+        }
+      }
+    },
+    {
+      "id": "msg_1a612b15c001OwYxToorjOKd51",
+      "time": {
+        "created": 1793787605344,
+        "streamed": 1793787605366,
+        "completed": 1793787605378
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "claude-sonnet-5-5",
+        "providerID": "anysola"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "toolu_5_todowrite",
+          "name": "todowrite",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "todos": [
+                {
+                  "content": "Write notes",
+                  "status": "completed"
+                },
+                {
+                  "content": "Review notes",
+                  "status": "in_progress"
+                },
+                {
+                  "content": "Ship",
+                  "status": "pending"
+                }
+              ]
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "Todos updated: 1/3 completed, 1 in progress, 1 pending. In progress: \"Review notes\""
+              }
+            ],
+            "metadata": {
+              "todos": [
+                {
+                  "content": "Write notes",
+                  "status": "completed"
+                },
+                {
+                  "content": "Review notes",
+                  "status": "in_progress"
+                },
+                {
+                  "content": "Ship",
+                  "status": "pending"
+                }
+              ],
+              "truncated": false
+            }
+          },
+          "time": {
+            "created": 1793787605359,
+            "ran": 1793787605363,
+            "completed": 1793787605369
+          }
+        }
+      ],
+      "snapshot": {
+        "start": "bf21ab84139ed72ac29ade0c8e791a153df491c9",
+        "end": "bf21ab84139ed72ac29ade0c8e791a153df491c9",
+        "files": []
+      },
+      "finish": "tool-calls",
+      "rawFinish": "tool_use",
+      "cost": 0,
+      "tokens": {
+        "input": 120,
+        "output": 42,
+        "reasoning": 0,
+        "cache": {
+          "read": 800,
+          "write": 40
+        }
+      }
+    },
+    {
+      "id": "msg_1a612b18b001YpEG73967tniCJ",
+      "time": {
+        "created": 1793787605391,
+        "streamed": 1793787605413,
+        "completed": 1793787605484
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "claude-sonnet-5-5",
+        "providerID": "anysola"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "toolu_6_subagent",
+          "name": "subagent",
+          "executed": false,
+          "state": {
+            "status": "completed",
+            "input": {
+              "agent": "general",
+              "description": "List the files",
+              "prompt": "SUBTASK: list the files in this directory"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "<subagent sessionID=\"ses_e59ed4e55ffeTQdC6rVMHKzZI7\" state=\"completed\">\nhello.txt notes.md\n</subagent>"
+              }
+            ],
+            "metadata": {
+              "sessionID": "ses_e59ed4e55ffeTQdC6rVMHKzZI7",
+              "status": "completed",
+              "truncated": false
+            }
+          },
+          "time": {
+            "created": 1793787605407,
+            "ran": 1793787605411,
+            "completed": 1793787605475
+          }
+        }
+      ],
+      "snapshot": {
+        "start": "bf21ab84139ed72ac29ade0c8e791a153df491c9",
+        "end": "bf21ab84139ed72ac29ade0c8e791a153df491c9",
+        "files": []
+      },
+      "finish": "tool-calls",
+      "rawFinish": "tool_use",
+      "cost": 0,
+      "tokens": {
+        "input": 120,
+        "output": 42,
+        "reasoning": 0,
+        "cache": {
+          "read": 800,
+          "write": 40
+        }
+      }
+    },
+    {
+      "id": "msg_1a612b1f9001hVgX4MIj3rBV5h",
+      "time": {
+        "created": 1793787605500,
+        "streamed": 1793787605523,
+        "completed": 1793787605531
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "claude-sonnet-5-5",
+        "providerID": "anysola"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "All done.",
+          "native": {
+            "signature": "SIG_7_0_ErUBCkYIBRgCKkA"
+          },
+          "time": {
+            "created": 1793787605513,
+            "completed": 1793787605516
+          }
+        },
+        {
+          "type": "text",
+          "text": "Done: wrote notes.md and listed files."
+        }
+      ],
+      "snapshot": {
+        "start": "bf21ab84139ed72ac29ade0c8e791a153df491c9",
+        "end": "bf21ab84139ed72ac29ade0c8e791a153df491c9",
+        "files": []
+      },
+      "finish": "stop",
+      "rawFinish": "end_turn",
+      "cost": 0,
+      "tokens": {
+        "input": 120,
+        "output": 42,
+        "reasoning": 0,
+        "cache": {
+          "read": 800,
+          "write": 40
+        }
+      }
+    },
+    {
+      "id": "msg_1a612b21f002LxtaFBN2jtsnQC",
+      "time": {
+        "created": 1793787605535
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+   Fix typo in hello.txt           Fix typo in hello.txt         + New session
+
+
+
+
+
+
+
+
+
+
+
+
+                                                          ▄█▜▖  ▐█▙▖  ▐█ ▝▜▙▖▗▟▛▘ ▄▛▀▀▀▀▘ ▗▟▀▀▀▀▜▄ ▐█         ▄█▜▖
+                                                        ▗▟▛▘▐█▖ ▐█▝█▄ ▐█   ▝██▘    ▀▀▀▀▜▙ ▐█    ▐█ ▐█       ▗▟▛▘▐█▖
+                                                       ▗█▀   ▜█ ▐█  ▀▙▟█    ██    ▗▄▄▄▄▟▀ ▝▜▄▄▄▄▟▀ ▐█▄▄▄▄▖ ▗█▀   ▜█
+                                                                                                               Code
+
+
+                                                ┃
+                                                ┃  Ask anything… "Review my last commit"
+                                                ┃
+                                                ┃  Build · Claude Sonnet 5.5
+                                                ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                ~/my-app:master              731 credits  shift+tab agents  ctrl+p commands
+
+                                                Recent                                                ctrl+x l all sessions
+                                                Fix typo in hello.txt                                                   now
+                                                Fix typo in hello.txt                                                1m ago
+
+
+
+
+
+
+
+
+
+  Team · renews 23 Nov                                                                                                                                             0.5.1

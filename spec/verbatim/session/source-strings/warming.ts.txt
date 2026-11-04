@@ -1,0 +1,6 @@
+// SOURCE: packages/core/src/plugin/warming.ts lines 9-13 (copied verbatim from fork branch anysola, 0.5.1)
+const defaults = {
+  prompt: "This is a keep-alive request. Do not perform any work or use tools. Reply with exactly: OK",
+  interval: Duration.minutes(4),
+  duration: Duration.minutes(30),
+}

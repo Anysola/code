@@ -57,18 +57,19 @@ credits). Nothing in core knows about the terminal.
 | Need | Choice | Note |
 |---|---|---|
 | Async | tokio | |
+| Code Mode | rquickjs (QuickJS) | the `execute` tool |
 | HTTP | reqwest + rustls | no OpenSSL; same TLS on every platform |
 | SSE | hand-written parser | Anthropic stream plus the `anysola_credits` event |
 | CLI | clap (derive) | |
 | TUI | ratatui + crossterm | Windows console included |
 | Markdown | pulldown-cmark | |
-| Highlighting | syntect (fancy-regex, default syntaxes) | fits the budget; revisit only if the TUI inventory demands tree-sitter grammars |
-| Shell parsing for permissions | tree-sitter-bash or own tokenizer | decided after the tools inventory |
+| Highlighting | syntect (fancy-regex) + two-face extra syntaxes | covers the 39 languages 0.5.1 highlighted without per-language C grammars; built in, nothing downloaded |
+| Shell parsing for permissions | port of 0.5.1's hand-written scanner | same accept/reject behaviour |
 | Storage | rusqlite, bundled SQLite | identical engine on all platforms; reads the 0.5.x database for import |
-| Search | ripgrep's crates (grep-searcher, grep-regex, ignore, globset) | no bundled `rg` |
+| Search | ripgrep's crates (grep-searcher, grep-regex, ignore, globset) | no bundled `rg`; results sorted by path |
 | Diff | similar | |
 | Fuzzy matching | nucleo-matcher | |
-| HTML to Markdown | htmd | webfetch |
+| HTML to Markdown | port of 0.5.1's converter | webfetch output must match the captured 0.5.1 output |
 | Images | image (png, jpeg, webp, gif only) | resize before sending, as photon did |
 | MCP | rmcp | |
 | ACP | agent-client-protocol | |
@@ -94,6 +95,9 @@ The gateway, Account, Admin, install scripts and the GitHub Action stay as they 
   every push. Publishing stays a tag-only job.
 
 ## Release
+
+Linux builds are static musl, so the `-musl` and glibc archive names can carry the same bytes; six real
+builds (linux x64/arm64, macOS x64/arm64, Windows x64/arm64) fill the 12 asset names the install scripts know.
 
 0.5.x stays on the TypeScript line until the Rust version covers `PARITY.md`. Rust ships once, as 1.0.0, through
 the same channels (GitHub Release archives, install scripts, npm, Admin Release).

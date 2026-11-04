@@ -1,0 +1,18 @@
+// SOURCE: packages/core/src/session/model-request.ts lines 44-60 (copied verbatim from fork branch anysola, 0.5.1)
+const IMAGE_BYTES_TRIGGER = 25 * 1024 * 1024 // 25 MiB
+const IMAGE_BYTES_TARGET = 15 * 1024 * 1024 // 15 MiB
+const IMAGE_REMOVED =
+  "[This image was removed to reduce the request size and is no longer visible. Do not make claims about its contents from memory. If needed, retrieve it again with an available tool or ask the user to attach it again.]"
+const GENERATION_KEYS = new Set(Object.keys(GenerationOptions.fields))
+// Used when the catalog has no output limit for the model.
+const OUTPUT_TOKEN_FALLBACK = 32_000
+// No reply needs more, however much the model allows.
+const OUTPUT_TOKEN_MAX = 256_000
+// Prompt text is estimated at about 4 characters per token, which can run low on dense text such as code.
+const ESTIMATE_ERROR = 0.15
+// Share of the window a turn leaves unused when its output limit is fitted to the room left. Providers count a few
+// tokens more than we do (chat template, tool schemas), and strict ones reject input plus output past the window.
+// Compaction sizes its summary against its own reserve instead.
+const WINDOW_HEADROOM = 0.01
+// Never ask for less; only reachable with automatic compaction off, since it keeps the window from filling this far.
+const OUTPUT_TOKEN_MIN = 1_024

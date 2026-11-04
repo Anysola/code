@@ -1,0 +1,49 @@
+   Fix typo in hello.txt         ! Fix typo in hello.txt         +
+
+  ┃
+  ┃  fix the typo in hello.txt
+  ┃
+
+     ⚙ Todo update failed
+
+  ┃
+  ┃  ⠏ cat hello.txt && ls
+  ┃
+
+     Press ctrl+b to move running work to the background
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃  △ Permission required
+  ┃
+  ┃  $ cat hello.txt && ls
+  ┃
+  ┃
+  ┃   Allow once   Always allow   Reject                                 ctrl+f fullscreen  ⇆ select  enter confirm
+  ┃

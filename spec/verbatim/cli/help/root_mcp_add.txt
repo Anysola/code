@@ -1,0 +1,25 @@
+$ anysola mcp add --help
+DESCRIPTION
+  Add an MCP server to your configuration
+
+USAGE
+  anysola mcp add [flags] <name> [<command...>]
+
+ARGUMENTS
+  name string          Name of the MCP server
+  command... string    Command and arguments for a local server, passed after -- (optional)
+
+FLAGS
+  --url string          URL for a remote MCP server
+  --header key=value    HTTP header for a remote server, as name=value
+  --env key=value       Environment variable for a local server, as name=value
+  --global              Write to the global config instead of the project config
+
+GLOBAL FLAGS
+  --help, -h                                                          Show help information
+  --version, -v                                                       Show version information
+  --wizard                                                            Start wizard mode for a command
+  --completions <bash|zsh|fish|powershell|sh|pwsh>                    Print shell completion script (choices: bash, zsh, fish, powershell, sh, pwsh)
+  --log-level <all|trace|debug|info|warn|warning|error|fatal|none>    Sets the minimum log level (choices: all, trace, debug, info, warn, warning, error, fatal, none)
+  --print-logs                                                        Print logs to stderr (server logs require --standalone)
+[exit=0]

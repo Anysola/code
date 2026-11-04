@@ -1,0 +1,6 @@
+# Source: packages/cli/src/index.ts:38-41, packages/cli/src/version.ts:208 (ANYSOLA_VERSION_LINE)
+# Exactly `anysola --version` or `anysola -v` (argv length 3) -> stdout, exit 0:
+Anysola Code 0.5.1 (OpenCode 2.2.5)
+# Any other argv containing --version/-v (e.g. `anysola run --version`, `anysola -v run`, `anysola --version extra`)
+# falls through to the effect/cli framework and prints (stdout, exit 0):
+anysola v2.2.5

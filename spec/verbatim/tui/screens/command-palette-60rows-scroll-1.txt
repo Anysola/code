@@ -1,0 +1,59 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                  Commands                                         esc
+
+                                  Search
+
+                                  Update Anysola Code
+                                  Reload configuration
+                                  View debug info
+                                  Switch theme
+                                  Help
+                                  Open docs
+                                  Exit the app                ctrl+c, ctrl+d, ctrl+x q
+                                  Toggle console
+                                  Plugins
+
+                       ┃          Prompt
+                       ┃  Ask     Queue prompt                            ctrl+x enter
+                       ┃          Skills
+                       ┃  Buil
+                       ╹▀▀▀▀▀▀    VCS                                                     ▀▀▀▀▀▀▀▀
+                       ~/my-ap    Open diff viewer                                        commands
+
+                                  Anysola
+                                  Credits and plan
+                                  Usage
+                                  Session budget
+                                  Signed-in devices
+                                  Open your Anysola account
+                                  Send feedback or report a problem
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Team · renews 23 Nov                                                                                           0.5.1

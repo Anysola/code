@@ -1,0 +1,59 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                  Commands                                         esc
+
+                                  Search
+
+                                  Suggested
+                                  Switch model                                ctrl+x m
+                                  Open settings
+
+                                  Session
+                                  Switch session                              ctrl+x l
+                                  New session                                 ctrl+x n
+                                  Clear session
+                                  Open session or project                       ctrl+o
+                                  Close tab                                   ctrl+x w
+                       ┃          Reopen closed tab                       ctrl+shift+t
+                       ┃  Ask     Open editor                                 ctrl+x e
+                       ┃          Manage workspaces
+                       ┃  Buil    Ask a side question One-shot answer from the session
+                       ╹▀▀▀▀▀▀                                                            ▀▀▀▀▀▀▀▀
+                       ~/my-ap    Agent                                                   commands
+                                  Switch model                                ctrl+x m
+                                  Switch agent                                ctrl+x a
+                                  MCP servers
+                                  Variant cycle                                 ctrl+t
+                                  Switch model variant
+
+                                  Integration
+                                  Connect an integration
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Team · renews 23 Nov                                                                                           0.5.1

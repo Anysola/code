@@ -1,0 +1,63 @@
+// SOURCE: packages/core/src/session/compaction.ts lines 1020-1081 (copied verbatim from fork branch anysola, 0.5.1)
+
+  // Everything fits. Keep only the latest exchange rather than duplicating the whole conversation beside the summary.
+  const latestUser = entries.findLastIndex((entry) => entry.message.type === "user")
+  if (latestUser > 0) return latestUser
+
+  // One exchange, nothing older. Summarize it all and keep nothing, unless a previous summary already
+  // kept recent text, in which case keep everything and summarize only the summary before it.
+  return previous && SessionRecentText.kept(previous) ? 0 : entries.length
+}
+
+const oldestToDrop = <T>(items: ReadonlyArray<T>, size: (item: T) => number, budget: number) => {
+  let total = 0
+  let start = items.length
+  while (start > 0) {
+    const next = total + size(items[start - 1])
+    if (next > budget) break
+    total = next
+    start--
+  }
+  return start
+}
+
+/** One request message as transcript lines at a shortening level. Empty for what that level leaves out. */
+const flattenMessage = (message: Message, level: number) => {
+  if (message.role === "system" || level === OMITTED) return ""
+  if (level >= USER_ONLY && message.role !== "user") return ""
+  return message.content
+    .flatMap((part) => {
+      if (part.type === "text") {
+        if (!part.text) return []
+        const text = level >= USER_ONLY ? clip(part.text) : part.text
+        return [`[${message.role === "user" ? "User" : "Assistant"}]: ${text}`]
+      }
+      if (level >= USER_ONLY) return []
+      if (part.type === "media") return [`[${part.media.mediaType} omitted]`]
+      if (part.type === "tool-call") {
+        const input = JSON.stringify(part.input) ?? ""
+        return [`[Assistant tool call]: ${part.name}(${level >= OUTPUTS_REMOVED ? clip(input) : input})`]
+      }
+      if (part.type !== "tool-result") return []
+      const result = part.result
+      const label = result.type === "error" ? "Tool error" : "Tool result"
+      if (level >= OUTPUTS_REMOVED) return [`[${label} omitted]`]
+      const output =
+        result.type === "content"
+          ? SessionRecentText.serializeToolContent(result.value)
+          : typeof result.value === "string"
+            ? result.value
+            : (JSON.stringify(result.value) ?? "")
+      return [`[${label}]: ${level >= OUTPUTS_CLIPPED ? clip(output) : output}`]
+    })
+    .join("\n")
+}
+
+/** `value` cut to `TRANSCRIPT_CLIP` characters from its start and end, never splitting a surrogate pair. */
+const clip = (value: string) => {
+  if (value.length <= TRANSCRIPT_CLIP) return value
+  const chars = Array.from(value)
+  if (chars.length <= TRANSCRIPT_CLIP) return value
+  const half = TRANSCRIPT_CLIP / 2
+  const omitted = chars.length - TRANSCRIPT_CLIP
+  return `${chars.slice(0, half).join("")}\n[… ${omitted} characters omitted …]\n${chars.slice(-half).join("")}`

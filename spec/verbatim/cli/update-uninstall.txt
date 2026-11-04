@@ -1,0 +1,58 @@
+# Source: packages/cli/src/commands/handlers/upgrade.ts, uninstall.ts, services/anysola-version.ts. Captured from 0.5.1 (stdout).
+
+## anysola update (latest <= installed)
+┌  Update Anysola Code
+│
+●  Installed 0.5.1, latest 0.5.1
+│
+└  Already up to date
+
+## anysola update --print (newer available, notes present), npm install
+┌  Update Anysola Code
+│
+●  Installed 0.5.1, latest 0.6.0
+│
+│  Faster startup and a new /review command.
+│
+│  npm i -g @anysola/code@latest
+│
+└  Run the command above to update
+
+## same, script install (binary == ${ANYSOLA_INSTALL_DIR:-~/.anysola/bin}/anysola)
+│  sh -c "curl -fsSL https://www.anysola.com/install | sh -s -- --no-modify-path"
+# Windows script install: powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://www.anysola.com/install.ps1 | iex"
+# (with a pinned version from the TUI: prefix "$env:ANYSOLA_VERSION='<v>'; " / suffix " --version <v>")
+## Running (no --print): "◇  <command>" (log.step), command inherits stdio; failure:
+■  <bin> failed with exit code <n>        (or "<bin> failed: <error>")
+●  Run it yourself: <command>
+# exit 1. Success: "└  Updated. Restart Anysola Code to use the new version."
+# Gateway unreachable: the "Installed/latest" line and the up-to-date check are skipped; the command runs anyway.
+
+## anysola uninstall --dry-run (npm/unknown)
+┌  Uninstall Anysola Code
+│
+●  Installation method: unknown
+│
+│  The following global files will be removed (shared by Anysola Code and OpenCode installs):
+│
+●    Cache: <home>/.cache/opencode
+│
+▲  Could not detect the installation method. Remove the installation manually after cleanup.
+│
+▲  Dry run - no changes made
+│
+└  Done
+# script install: "●  Installation method: curl" and "●    Binary (manual removal): <execPath>" (no "Could not detect" line)
+# other optional lines: "  Stop background service and persistent terminals: <state>/service*.json", "  Shell PATH: <file>",
+# "  Package: npm uninstall --global @anysola/code", Windows+curl: "  User PATH entry: <dir>"
+
+## anysola uninstall (no TTY, no --force) -> exit 1
+■  Use --force to uninstall without an interactive terminal, or --dry-run to preview.    (rendered as "■" error line)
+│
+└  Failed
+# interactive confirm: "Are you sure you want to uninstall?" (default No) -> "Cancelled"
+# progress: "Stopping background services..." / "Background services stopped" / "Failed to stop background services",
+# "Removing Cache..." / "Removed Cache" / "Failed to remove Cache", "Running <cmd>..." / "Package removed" /
+# "Package manager uninstall failed" + "Run manually: <cmd>", then for curl:
+#   "To finish removing the binary, run:"  "  rm -rf '<dir of bin dir>'"   (Windows: "  Remove-Item -Recurse -Force '<dir>'")
+# Windows user PATH removal failure: "User PATH: remove <dir> yourself"

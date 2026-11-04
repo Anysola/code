@@ -1,0 +1,35 @@
+
+
+
+
+
+
+
+
+
+
+                    Skills                                                                       esc
+
+                    Search
+
+                    Browser                            Use the in-app browser: open and read pages,
+                    built-in-browser                   Read this skill before the first step that us
+                    chrome-browser                     Read this skill before the first step that us
+                    computer-use                       Read this skill before the first step of any
+                    deep-research                      Use this skill when the user's prompt require
+                    docs                               docs (editable docs people share and comment
+                    docx                               Use this skill whenever the user wants to cre
+                    google-workspace                   Read this before the first Google Drive, Docs
+                    import-memory                      Import a memory export from another AI assist
+                    merakli-stil                       Meraklı YouTube kanalı için banner, kapak, ka
+                    morning                            Render the user's morning brief as a styled H
+                    pdf                                Use this skill whenever the user wants to do
+
+
+
+
+
+
+
+
+  Team · renews 23 Nov                                                                                           0.5.1

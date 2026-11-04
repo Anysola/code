@@ -1,0 +1,17 @@
+// SOURCE: packages/core/src/plugin/optimize.ts lines 17-32 (copied verbatim from fork branch anysola, 0.5.1)
+export const OpenAIPlugin = make("opencode.prompt.openai", (model) => {
+  const id = model.id.toLowerCase()
+  if (!id.includes("gpt")) return undefined
+  return id.includes("astra") ? PROMPT_ASTRA : PROMPT_GPT
+})
+
+export const AnthropicPlugin = make(
+  "opencode.prompt.anthropic",
+  (model) => {
+    const id = model.id.toLowerCase()
+    // Anysola Code: every Anysola model is Claude, `auto` included.
+    if (!id.includes("claude") && model.providerID !== Anysola.providerID) return undefined
+    return PROMPT_ANTHROPIC
+  },
+  "append",
+)

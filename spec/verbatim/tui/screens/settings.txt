@@ -1,0 +1,35 @@
+
+
+
+
+
+
+
+
+
+
+                                  Settings                                         esc
+
+                                  Search
+
+                                  Appearance
+                                ● Theme                                        anysola
+                                  Color mode                                    system
+                                  Animations                                       off
+                       ┃
+                       ┃  Ask     Session
+                       ┃          Sidebar                                         auto
+                       ┃  Buil    Scrollbar                                        off
+                       ╹▀▀▀▀▀▀    Thinking                                        hide    ▀▀▀▀▀▀▀▀
+                       ~/my-ap    Markdown                                    rendered    commands
+                                  Tool grouping                                   auto
+                                  Verbosity                                     medium
+
+                                  change ←/→
+
+
+
+
+
+
+  Team · renews 23 Nov                                                                                           0.5.1

@@ -1,0 +1,59 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                  Commands                                         esc
+
+                                  Search
+
+                                  Switch model variant
+
+                                  Integration
+                                  Connect an integration
+
+                                  System
+                                  Open settings
+                                  View status                                 ctrl+x s
+                                  Update Anysola Code
+                                  Reload configuration
+                       ┃          View debug info
+                       ┃  Ask     Switch theme
+                       ┃          Help
+                       ┃  Buil    Open docs
+                       ╹▀▀▀▀▀▀    Exit the app                ctrl+c, ctrl+d, ctrl+x q    ▀▀▀▀▀▀▀▀
+                       ~/my-ap    Toggle console                                          commands
+                                  Plugins
+
+                                  Prompt
+                                  Queue prompt                            ctrl+x enter
+                                  Skills
+
+                                  VCS
+                                  Open diff viewer
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Team · renews 23 Nov                                                                                           0.5.1

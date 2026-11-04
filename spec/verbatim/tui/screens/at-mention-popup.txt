@@ -1,0 +1,35 @@
+
+
+
+
+
+
+
+
+                       ┃ @browser Use the in-app browser: open and read pages, click and   skill ┃
+                       ┃ @built-in-browser Read this skill before the first step that use  skill ┃
+                       ┃ @chrome-browser Read this skill before the first step that uses   skill ┃
+                       ┃ @computer-use Read this skill before the first step of any reque  skill ┃
+                       ┃ @deep-research Use this skill when the user's prompt requires (1  skill ┃
+                       ┃ @docs docs (editable docs people share and comment on; the defau  skill ┃
+                       ┃ @docx Use this skill whenever the user wants to create, read, ed  skill ┃
+                       ┃ @google-workspace Read this before the first Google Drive, Docs,  skill ┃
+                       ┃ @import-memory Import a memory export from another AI assistant   skill ┃
+                       ┃ @merakli-stil Meraklı YouTube kanalı için banner, kapak, karakte  skill ┃
+                       ┃
+                       ┃  @
+                       ┃
+                       ┃  Build · Claude Sonnet 5.5
+                       ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                       ~/my-app:master              731 credits  shift+tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+  Team · renews 23 Nov                                                                                           0.5.1

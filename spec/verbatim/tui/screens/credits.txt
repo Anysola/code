@@ -1,0 +1,35 @@
+
+
+
+
+
+
+
+
+
+
+                                 Credits                                            esc
+
+                                 Plan            Team
+                                 Balance         731 credits
+                                 Renews          23 Nov
+                                 Today           3 requests · 9 credits
+
+                                 Upgrade or top up: https://account.anysola.com/billing
+                       ┃
+                       ┃  Ask anything… "Fix the failing tests"
+                       ┃
+                       ┃  Build · Claude Sonnet 5.5
+                       ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                       ~/my-app:master              731 credits  shift+tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+  Team · renews 23 Nov                                                                                           0.5.1

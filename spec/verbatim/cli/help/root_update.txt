@@ -1,0 +1,19 @@
+$ anysola update --help
+DESCRIPTION
+  Update Anysola Code the way it was installed (install script or npm)
+
+USAGE
+  anysola update [flags]
+
+FLAGS
+  --print    Only print the npm command
+  --force    Reinstall even when up to date
+
+GLOBAL FLAGS
+  --help, -h                                                          Show help information
+  --version, -v                                                       Show version information
+  --wizard                                                            Start wizard mode for a command
+  --completions <bash|zsh|fish|powershell|sh|pwsh>                    Print shell completion script (choices: bash, zsh, fish, powershell, sh, pwsh)
+  --log-level <all|trace|debug|info|warn|warning|error|fatal|none>    Sets the minimum log level (choices: all, trace, debug, info, warn, warning, error, fatal, none)
+  --print-logs                                                        Print logs to stderr (server logs require --standalone)
+[exit=0]

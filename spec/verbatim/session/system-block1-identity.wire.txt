@@ -1,0 +1,4 @@
+# Your Model
+- Name: Claude Sonnet 5.5
+- Provider ID: anysola
+- Model ID: claude-sonnet-5-5

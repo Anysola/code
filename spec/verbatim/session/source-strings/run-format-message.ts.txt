@@ -1,0 +1,5 @@
+// SOURCE: packages/cli/src/run/run.ts lines 244-247 (copied verbatim from fork branch anysola, 0.5.1)
+function formatMessage(message: string[]) {
+  const value = message.map((part) => (part.includes(" ") ? `"${part.replace(/"/g, '\\"')}"` : part)).join(" ")
+  return value || undefined
+}

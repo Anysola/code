@@ -1,0 +1,35 @@
+   Fix typo in hello.txt           Fix typo in hello.txt         + New session
+
+
+
+
+
+
+
+
+
+
+                                 ▄█▜▖  ▐█▙▖  ▐█ ▝▜▙▖▗▟▛▘ ▄▛▀▀▀▀▘ ▗▟▀▀▀▀▜▄ ▐█         ▄█▜▖
+                               ▗▟▛▘▐█▖ ▐█▝█▄ ▐█   ▝██▘    ▀▀▀▀▜▙ ▐█    ▐█ ▐█       ▗▟▛▘▐█▖
+                              ▗█▀   ▜█ ▐█  ▀▙▟█    ██    ▗▄▄▄▄▟▀ ▝▜▄▄▄▄▟▀ ▐█▄▄▄▄▖ ▗█▀   ▜█
+                                                                                      Code
+
+
+                       ┃
+                       ┃  Ask anything… "Fix the failing tests"
+                       ┃
+                       ┃  Build · Claude Sonnet 5.5
+                       ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                       ~/my-app:master               64 credits  shift+tab agents  ctrl+p commands
+
+                       Recent                                                ctrl+x l all sessions
+                       Fix typo in hello.txt                                                1m ago
+                       Fix typo in hello.txt                                                2m ago
+
+
+
+
+
+
+
+  Team · renews 23 Nov  Double credits weekend · until Nov 10, 12:00 AM  Low balance: 64 credits left · /credits    0.5.

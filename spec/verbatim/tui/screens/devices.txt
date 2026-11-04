@@ -1,0 +1,35 @@
+
+
+
+
+
+
+
+
+
+
+                                  Devices                                          esc
+
+                                  Search
+
+                                  laptop (this device) Anysola Co used Nov 4, 12:12 PM
+                                  ci-runner Anysola Code 0.5.0 · linux      never used
+
+
+                       ┃
+                       ┃  Ask anything… "Fix the failing tests"
+                       ┃
+                       ┃  Build · Claude Sonnet 5.5
+                       ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                       ~/my-app:master              731 credits  shift+tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+  Team · renews 23 Nov                                                                                           0.5.1

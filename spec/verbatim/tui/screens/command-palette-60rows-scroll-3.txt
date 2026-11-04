@@ -1,0 +1,59 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                  Commands                                         esc
+
+                                  Search
+
+                                  Open editor                                 ctrl+x e
+                                  Manage workspaces
+                                  Ask a side question One-shot answer from the session
+
+                                  Agent
+                                  Switch model                                ctrl+x m
+                                  Switch agent                                ctrl+x a
+                                  MCP servers
+                                  Variant cycle                                 ctrl+t
+                                  Switch model variant
+                       ┃
+                       ┃  Ask     Integration
+                       ┃          Connect an integration
+                       ┃  Buil
+                       ╹▀▀▀▀▀▀    System                                                  ▀▀▀▀▀▀▀▀
+                       ~/my-ap    Open settings                                           commands
+                                  View status                                 ctrl+x s
+                                  Update Anysola Code
+                                  Reload configuration
+                                  View debug info
+                                  Switch theme
+                                  Help
+                                  Open docs
+                                  Exit the app                ctrl+c, ctrl+d, ctrl+x q
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Team · renews 23 Nov                                                                                           0.5.1

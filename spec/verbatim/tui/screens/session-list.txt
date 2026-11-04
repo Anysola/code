@@ -1,0 +1,35 @@
+   Fix typo in hello.txt           Fix typo in hello.txt         + New session
+
+
+
+
+
+
+
+
+
+                    Sessions for my-app                                                          esc
+
+                    Search
+
+                    Today
+                    Fix typo in hello.txt
+                    Fix typo in hello.txt
+
+                    delete ctrl+d  rename ctrl+r                                 all projects ctrl+a
+
+                       ┃  Build · Claude Sonnet 5.5
+                       ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                       ~/my-app:master              731 credits  shift+tab agents  ctrl+p commands
+
+                       Recent                                                ctrl+x l all sessions
+                       Fix typo in hello.txt                                                   now
+                       Fix typo in hello.txt                                                1m ago
+
+
+
+
+
+
+
+  Team · renews 23 Nov                                                                                           0.5.1

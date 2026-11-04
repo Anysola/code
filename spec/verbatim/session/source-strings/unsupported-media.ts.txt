@@ -1,0 +1,17 @@
+// SOURCE: packages/core/src/session/model-request.ts lines 136-151 (copied verbatim from fork branch anysola, 0.5.1)
+const unsupportedMedia = (
+  mime: string,
+  name: string | undefined,
+  capabilities: Model.Capabilities,
+  provider: string | undefined,
+) => {
+  const modality = mimeToModality(mime)
+  if (!modality) return
+  const unsupported = !capabilities.input.some((item) => item.startsWith(modality))
+    ? modality
+    : provider === "xai" && modality === "image" && !XAI_IMAGE_MIMES.has(mime.toLowerCase())
+      ? mime
+      : undefined
+  if (!unsupported) return
+  return `ERROR: Cannot read ${name ? `"${name}"` : modality} (this model does not support ${unsupported} input). Inform the user.`
+}

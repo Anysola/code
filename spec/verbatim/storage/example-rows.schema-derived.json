@@ -1,0 +1,29 @@
+{
+  "_note": "NOT observed. Built from the schemas cited in spec/storage.md (packages/schema/src/session-message.ts, session-inbox.ts, permission-saved.ts, credential.ts, project/sql.ts, session/sql.ts). Values are illustrative; field names, nesting and enums are exact.",
+  "session_message": [
+    { "type": "system", "data": { "time": { "created": 1793787700000 }, "text": "<model-facing instruction update text>", "description": "Instructions updated" } },
+    { "type": "skill", "data": { "time": { "created": 1793787700000 }, "skill": "<skill id>", "name": "<skill name>", "text": "<skill body sent to the model>" } },
+    { "type": "shell", "data": { "time": { "created": 1793787700000, "completed": 1793787701000 }, "shellID": "sh_1a6150000001AbCdEfGhIjKlMn", "command": "ls", "status": "exited", "exit": 0, "output": { "output": "README.md\n" } } },
+    { "type": "location-switched", "data": { "time": { "created": 1793787700000 }, "location": { "directory": "/home/u/proj/sub" }, "projectID": "87eb537f6a44d897663f897e6343df4fbae2550e", "previous": { "location": { "directory": "/home/u/proj" } } } },
+    { "type": "compaction", "data": { "time": { "created": 1793787700000 }, "status": "running", "reason": "auto", "summary": "" } },
+    { "type": "compaction", "data": { "time": { "created": 1793787700000 }, "status": "completed", "reason": "manual", "model": { "id": "claude-sonnet-5-5", "providerID": "anysola" }, "summary": "<summary text>", "metadata": { "keepID": "msg_1a612b09c001EI5nRheCST8vpn" }, "cost": 0, "tokens": { "input": 9000, "output": 600, "reasoning": 0, "cache": { "read": 0, "write": 0 } } } },
+    { "type": "compaction", "data": { "time": { "created": 1793787700000 }, "status": "failed", "reason": "auto", "error": { "type": "provider.error", "message": "<message>" } } },
+    { "type": "assistant", "data": { "time": { "created": 1793787700000 }, "agent": "build", "model": { "id": "claude-sonnet-5-5", "providerID": "anysola" }, "content": [ { "type": "tool", "id": "toolu_x", "name": "shell", "state": { "status": "streaming", "input": "{\"command\":\"l" }, "time": { "created": 1793787700000 } }, { "type": "tool", "id": "toolu_y", "name": "shell", "state": { "status": "running", "input": { "command": "sleep 5" }, "metadata": {} }, "time": { "created": 1793787700000, "ran": 1793787700100 } } ], "error": { "type": "session.interrupted", "message": "<message>" } } }
+  ],
+  "session_part": [
+    { "message_id": "msg_…", "session_id": "ses_…", "ordinal": 0, "type": "reasoning", "call_id": null, "time_created": 1793787700000, "time_updated": 1793787700000, "data": { "type": "reasoning", "text": "…", "native": { "signature": "…" }, "time": { "created": 1793787700000, "completed": 1793787700100 } } },
+    { "message_id": "msg_…", "session_id": "ses_…", "ordinal": 1, "type": "tool", "call_id": "toolu_1", "time_created": 1793787700000, "time_updated": 1793787700000, "data": { "type": "tool", "id": "toolu_1", "name": "read", "state": { "status": "completed", "input": { "path": "a.txt" }, "content": [ { "type": "text", "text": "…" } ] }, "time": { "created": 1793787700000 } } }
+  ],
+  "session_inbox": [
+    { "id": "msg_…", "session_id": "ses_…", "type": "user", "payload": { "text": "follow-up while busy", "files": [] }, "delivery": "queue", "enqueued_seq": 30, "time_created": 1793787700000 }
+  ],
+  "permission": [
+    { "id": "psv_1a6150000001AbCdEfGhIjKlMn", "project_id": "87eb537f6a44d897663f897e6343df4fbae2550e", "action": "shell", "resource": "git status*", "time_created": 1793787700000, "time_updated": 1793787700000 }
+  ],
+  "session_v2.permission": [ { "action": "edit", "resource": "*", "effect": "deny" } ],
+  "session_v2.revert": { "messageID": "msg_1a612b033001qXFKeEQoCAD1Wa", "snapshot": "59815cce7c1f65eed186854d6cdc048dc3fc0f67", "files": [ { "file": "notes.md", "patch": "…", "additions": 3, "deletions": 0, "status": "added" } ] },
+  "blob": [ { "hash": "<sha256 hex of bytes>", "mime": "image/png", "bytes": 70, "width": 1, "height": 1, "data": "<raw bytes>", "time_created": 1793787700000 } ],
+  "blob_ref": [ { "session_id": "ses_…", "message_id": "msg_…", "hash": "<sha256>", "seq": 86 } ],
+  "user files with experimental.media_blob": [ { "uri": "media:<sha256>", "mime": "image/png", "source": { "type": "inline" }, "name": "pixel.png" } ],
+  "credential (api key kind)": { "type": "key", "key": "<secret>", "metadata": {} }
+}

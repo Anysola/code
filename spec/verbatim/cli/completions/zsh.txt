@@ -1,0 +1,671 @@
+#compdef anysola
+###-begin-anysola-completions-###
+#
+# Static completion script for Zsh
+#
+# Installation:
+#   anysola --completions zsh > ~/.zsh/completions/_anysola
+#   then add ~/.zsh/completions to your fpath
+#
+
+_anysola() {
+  local context state state_descr line
+  typeset -A opt_args
+
+  local -a commands
+  commands=(
+    'login:Sign in with your Anysola account'
+    'logout:Revoke the Anysola token and remove it from this machine'
+    'status:Show your Anysola plan and credits'
+    'usage:Show Anysola usage\: totals, by day and by model'
+    'devices:List the devices signed in to your Anysola account'
+    'update:Update Anysola Code the way it was installed (install script or npm)'
+    'upgrade:Update Anysola Code the way it was installed (install script or npm)'
+    'uninstall:Uninstall Anysola Code, keeping session data, configuration, and state'
+    'acp:Start an Agent Client Protocol server'
+    'debug:Debugging and troubleshooting tools'
+    'mcp:Manage MCP (Model Context Protocol) servers'
+    'plugin:Manage plugins'
+    'models:List all available models'
+    'run:Run Anysola Code with a message'
+    'session:Manage sessions'
+    'service:Manage the background server'
+    'reload:Reload configuration'
+    'serve:Run the server the TUI connects to (started for you; internal)'
+  )
+
+  local -a specs
+  specs=(
+    '(--standalone --no-standalone)--standalone[Run with a private server instead of the background service]'
+    '(--standalone --no-standalone)--no-standalone[Disable standalone]'
+    '(--server)--server[Connect to a server URL instead of the background service]:value:'
+    '(--auto --no-auto)--auto[Auto-approve permissions that are not explicitly denied]'
+    '(--auto --no-auto)--no-auto[Disable auto]'
+    '(--continue -c --no-continue)--continue[Continue the last session]'
+    '(--continue -c --no-continue)-c[Continue the last session]'
+    '(--continue -c --no-continue)--no-continue[Disable continue]'
+    '(--session -s)--session[Session ID to continue, or to create if it does not exist]:value:'
+    '(--session -s)-s[Session ID to continue, or to create if it does not exist]:value:'
+    '(--prompt)--prompt[Prompt to use]:value:'
+    -
+    parent-arguments
+    ':Directory to start Anysola Code in:'
+    -
+    subcommands
+    '1:command:->command'
+    '*::arg:->args'
+  )
+
+  _arguments -C "${specs[@]}"
+
+  case "$state" in
+    command)
+      _describe -t commands 'commands' commands
+      ;;
+    args)
+      case "$words[1]" in
+        login)
+          _anysola_login
+          ;;
+        logout)
+          _anysola_logout
+          ;;
+        status)
+          _anysola_status
+          ;;
+        usage)
+          _anysola_usage
+          ;;
+        devices)
+          _anysola_devices
+          ;;
+        update)
+          _anysola_update
+          ;;
+        upgrade)
+          _anysola_upgrade
+          ;;
+        uninstall)
+          _anysola_uninstall
+          ;;
+        acp)
+          _anysola_acp
+          ;;
+        debug)
+          _anysola_debug
+          ;;
+        mcp)
+          _anysola_mcp
+          ;;
+        plugin)
+          _anysola_plugin
+          ;;
+        models)
+          _anysola_models
+          ;;
+        run)
+          _anysola_run
+          ;;
+        session)
+          _anysola_session
+          ;;
+        service)
+          _anysola_service
+          ;;
+        reload)
+          _anysola_reload
+          ;;
+        serve)
+          _anysola_serve
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_anysola_login() {
+  local -a specs
+  specs=(
+    '(--force -f --no-force)--force[Replace the current token with a new one]'
+    '(--force -f --no-force)-f[Replace the current token with a new one]'
+    '(--force -f --no-force)--no-force[Disable force]'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_logout() {
+}
+
+_anysola_status() {
+}
+
+_anysola_usage() {
+  local -a specs
+  specs=(
+    '(--days)--days[Period in days]:value:(7 30)'
+    '(--format)--format[Output format]:value:(default json)'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_devices() {
+  local context state state_descr line
+  typeset -A opt_args
+
+  local -a commands
+  commands=(
+    'revoke:Sign a device out'
+  )
+
+  local -a specs
+  specs=(
+    '1:command:->command'
+    '*::arg:->args'
+  )
+
+  _arguments -C "${specs[@]}"
+
+  case "$state" in
+    command)
+      _describe -t commands 'commands' commands
+      ;;
+    args)
+      case "$words[1]" in
+        revoke)
+          _anysola_devices_revoke
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_anysola_devices_revoke() {
+  local -a specs
+  specs=(
+    ':Device ID from `anysola devices`:'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_update() {
+  local -a specs
+  specs=(
+    '(--print --no-print)--print[Only print the npm command]'
+    '(--print --no-print)--no-print[Disable print]'
+    '(--force --no-force)--force[Reinstall even when up to date]'
+    '(--force --no-force)--no-force[Disable force]'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_upgrade() {
+  local -a specs
+  specs=(
+    '(--print --no-print)--print[Only print the npm command]'
+    '(--print --no-print)--no-print[Disable print]'
+    '(--force --no-force)--force[Reinstall even when up to date]'
+    '(--force --no-force)--no-force[Disable force]'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_uninstall() {
+  local -a specs
+  specs=(
+    '(--dry-run --no-dry-run)--dry-run[Show what would be removed without removing]'
+    '(--dry-run --no-dry-run)--no-dry-run[Disable dry-run]'
+    '(--force -f --no-force)--force[Skip confirmation prompts]'
+    '(--force -f --no-force)-f[Skip confirmation prompts]'
+    '(--force -f --no-force)--no-force[Disable force]'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_acp() {
+  local -a specs
+  specs=(
+    '(--login --no-login)--login[Sign in to Anysola instead of starting the server]'
+    '(--login --no-login)--no-login[Disable login]'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_debug() {
+  local context state state_descr line
+  typeset -A opt_args
+
+  local -a commands
+  commands=(
+    'config:List configuration sources'
+    'paths:Show global paths (data, config, cache, state)'
+  )
+
+  local -a specs
+  specs=(
+    '1:command:->command'
+    '*::arg:->args'
+  )
+
+  _arguments -C "${specs[@]}"
+
+  case "$state" in
+    command)
+      _describe -t commands 'commands' commands
+      ;;
+    args)
+      case "$words[1]" in
+        config)
+          _anysola_debug_config
+          ;;
+        paths)
+          _anysola_debug_paths
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_anysola_debug_config() {
+}
+
+_anysola_debug_paths() {
+  local -a specs
+  specs=(
+    ':Print only one path\: db, home, data, config, cache, state, tmp, bin, log, repos:(db home data config cache state tmp bin log repos)'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_mcp() {
+  local context state state_descr line
+  typeset -A opt_args
+
+  local -a commands
+  commands=(
+    'list:List configured MCP servers and their status'
+    'add:Add an MCP server to your configuration'
+    'auth:Authenticate with an OAuth-capable remote MCP server'
+    'logout:Remove stored OAuth credentials for an MCP server'
+  )
+
+  local -a specs
+  specs=(
+    '1:command:->command'
+    '*::arg:->args'
+  )
+
+  _arguments -C "${specs[@]}"
+
+  case "$state" in
+    command)
+      _describe -t commands 'commands' commands
+      ;;
+    args)
+      case "$words[1]" in
+        list)
+          _anysola_mcp_list
+          ;;
+        add)
+          _anysola_mcp_add
+          ;;
+        auth)
+          _anysola_mcp_auth
+          ;;
+        logout)
+          _anysola_mcp_logout
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_anysola_mcp_list() {
+}
+
+_anysola_mcp_add() {
+  local -a specs
+  specs=(
+    '(--url)--url[URL for a remote MCP server]:value:'
+    '(--header)--header[HTTP header for a remote server, as name=value]:value:'
+    '(--env)--env[Environment variable for a local server, as name=value]:value:'
+    '(--global --no-global)--global[Write to the global config instead of the project config]'
+    '(--global --no-global)--no-global[Disable global]'
+    ':Name of the MCP server:'
+    '*:Command and arguments for a local server, passed after --:'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_mcp_auth() {
+  local -a specs
+  specs=(
+    ':Name of the MCP server:'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_mcp_logout() {
+  local -a specs
+  specs=(
+    ':Name of the MCP server:'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_plugin() {
+  local context state state_descr line
+  typeset -A opt_args
+
+  local -a commands
+  commands=(
+    'list:List plugins'
+    'add:Install a plugin and add it to the global configuration'
+    'check:Check package plugins for updates'
+    'update:Update package plugins'
+    'remove:Remove a plugin from global configuration'
+  )
+
+  local -a specs
+  specs=(
+    '1:command:->command'
+    '*::arg:->args'
+  )
+
+  _arguments -C "${specs[@]}"
+
+  case "$state" in
+    command)
+      _describe -t commands 'commands' commands
+      ;;
+    args)
+      case "$words[1]" in
+        list)
+          _anysola_plugin_list
+          ;;
+        add)
+          _anysola_plugin_add
+          ;;
+        check)
+          _anysola_plugin_check
+          ;;
+        update)
+          _anysola_plugin_update
+          ;;
+        remove)
+          _anysola_plugin_remove
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_anysola_plugin_list() {
+  local -a specs
+  specs=(
+    '(--builtin --no-builtin)--builtin[Include built-in server plugins]'
+    '(--builtin --no-builtin)--no-builtin[Disable builtin]'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_plugin_add() {
+  local -a specs
+  specs=(
+    ':npm registry or Git package specifier:'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_plugin_check() {
+  local -a specs
+  specs=(
+    ':Configured package target:'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_plugin_update() {
+  local -a specs
+  specs=(
+    ':Configured package target; omit to update all outdated plugins:'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_plugin_remove() {
+  local -a specs
+  specs=(
+    ':configured package specifier:'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_models() {
+}
+
+_anysola_run() {
+  local -a specs
+  specs=(
+    '(--continue -c --no-continue)--continue[Continue the last session]'
+    '(--continue -c --no-continue)-c[Continue the last session]'
+    '(--continue -c --no-continue)--no-continue[Disable continue]'
+    '(--session -s)--session[Session ID to continue, or to create if it does not exist]:value:'
+    '(--session -s)-s[Session ID to continue, or to create if it does not exist]:value:'
+    '(--fork --no-fork)--fork[Fork the session before continuing]'
+    '(--fork --no-fork)--no-fork[Disable fork]'
+    '(--model -m)--model[Model to use in the format provider/model#variant]:value:'
+    '(--model -m)-m[Model to use in the format provider/model#variant]:value:'
+    '(--agent)--agent[Agent to use]:value:'
+    '(--format)--format[Output format]:value:(default json)'
+    '(--file -f)--file[File to attach to the message]:value:'
+    '(--file -f)-f[File to attach to the message]:value:'
+    '(--title)--title[Session title]:value:'
+    '(--thinking --no-thinking)--thinking[Show thinking blocks]'
+    '(--thinking --no-thinking)--no-thinking[Disable thinking]'
+    '(--budget)--budget[Stop once the session has spent this many credits]:integer:'
+    '(--auto --no-auto)--auto[Auto-approve permissions that are not explicitly denied]'
+    '(--auto --no-auto)--no-auto[Disable auto]'
+    '*:Message to send:'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_session() {
+  local context state state_descr line
+  typeset -A opt_args
+
+  local -a commands
+  commands=(
+    'list:List top-level sessions in the current project, newest first'
+    'delete:Delete a session and its child sessions'
+    'export:Export session data as JSON'
+    'import:Import session data from a JSON file or URL'
+  )
+
+  local -a specs
+  specs=(
+    '1:command:->command'
+    '*::arg:->args'
+  )
+
+  _arguments -C "${specs[@]}"
+
+  case "$state" in
+    command)
+      _describe -t commands 'commands' commands
+      ;;
+    args)
+      case "$words[1]" in
+        list)
+          _anysola_session_list
+          ;;
+        delete)
+          _anysola_session_delete
+          ;;
+        export)
+          _anysola_session_export
+          ;;
+        import)
+          _anysola_session_import
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_anysola_session_list() {
+  local -a specs
+  specs=(
+    '(--max-count -n)--max-count[Limit to N most recent sessions (default\: 100)]:integer:'
+    '(--max-count -n)-n[Limit to N most recent sessions (default\: 100)]:integer:'
+    '(--format)--format[Output format]:value:(table json)'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_session_delete() {
+  local -a specs
+  specs=(
+    ':Session ID to delete:'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_session_export() {
+  local -a specs
+  specs=(
+    '(--sanitize --no-sanitize)--sanitize[Redact sensitive transcript and file data]'
+    '(--sanitize --no-sanitize)--no-sanitize[Disable sanitize]'
+    ':Session ID to export:'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_session_import() {
+  local -a specs
+  specs=(
+    '(--directory)--directory[Directory in which to import the session]:value:'
+    ':JSON file or URL to import:'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_service() {
+  local context state state_descr line
+  typeset -A opt_args
+
+  local -a commands
+  commands=(
+    'start:Start the background server'
+    'restart:Restart the background server'
+    'status:Show background server status'
+    'stop:Stop the background server'
+    'get:Get service configuration'
+    'set:Set service configuration'
+    'unset:Unset service configuration'
+  )
+
+  local -a specs
+  specs=(
+    '1:command:->command'
+    '*::arg:->args'
+  )
+
+  _arguments -C "${specs[@]}"
+
+  case "$state" in
+    command)
+      _describe -t commands 'commands' commands
+      ;;
+    args)
+      case "$words[1]" in
+        start)
+          _anysola_service_start
+          ;;
+        restart)
+          _anysola_service_restart
+          ;;
+        status)
+          _anysola_service_status
+          ;;
+        stop)
+          _anysola_service_stop
+          ;;
+        get)
+          _anysola_service_get
+          ;;
+        set)
+          _anysola_service_set
+          ;;
+        unset)
+          _anysola_service_unset
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_anysola_service_start() {
+}
+
+_anysola_service_restart() {
+}
+
+_anysola_service_status() {
+}
+
+_anysola_service_stop() {
+}
+
+_anysola_service_get() {
+  local -a specs
+  specs=(
+    ':Service setting or env:'
+    ':Environment variable name:'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_service_set() {
+  local -a specs
+  specs=(
+    ':Service setting or env:'
+    ':Setting value or environment variable name:'
+    ':Environment variable value:'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_service_unset() {
+  local -a specs
+  specs=(
+    ':Service setting or env:'
+    ':Environment variable name:'
+  )
+  _arguments "${specs[@]}"
+}
+
+_anysola_reload() {
+}
+
+_anysola_serve() {
+  local -a specs
+  specs=(
+    '(--hostname)--hostname:value:'
+    '(--port)--port:integer:'
+    '(--cors)--cors[Additional allowed CORS origin (repeat for multiple origins)]:value:'
+    '(--service --no-service)--service'
+    '(--service --no-service)--no-service'
+    '(--stdio --no-stdio)--stdio'
+    '(--stdio --no-stdio)--no-stdio'
+  )
+  _arguments "${specs[@]}"
+}
+
+# Handle both direct invocation and autoload
+if [[ "${zsh_eval_context[-1]}" == "loadautofunc" ]]; then
+  _anysola "$@"
+else
+  compdef _anysola anysola
+fi
+###-end-anysola-completions-###

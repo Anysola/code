@@ -1,0 +1,121 @@
+# Source: /home/ubuntu/anysola-code/build/fork/install.ps1 (release asset, served at https://www.anysola.com/install.ps1). Verbatim copy.
+# Anysola Code installer for Windows.
+#   irm https://www.anysola.com/install.ps1 | iex
+#   $env:ANYSOLA_VERSION = "0.4.0"; irm https://www.anysola.com/install.ps1 | iex
+# Installs anysola.exe from the GitHub release of Anysola/code into %USERPROFILE%\.anysola\bin, checks its SHA-256,
+# and adds that directory to the user PATH. Run it again to update.
+
+$ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+# Windows PowerShell 5.1 defaults to TLS 1.0/1.1 on older systems.
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
+$Repo = "Anysola/code"
+$ApiUrl = if ($env:ANYSOLA_API_URL) { $env:ANYSOLA_API_URL.TrimEnd("/") } else { "https://api.anysola.com" }
+$InstallDir = if ($env:ANYSOLA_INSTALL_DIR) { $env:ANYSOLA_INSTALL_DIR } else { Join-Path $HOME ".anysola\bin" }
+
+function Fail([string]$Message) {
+  Write-Host "Error: $Message" -ForegroundColor Red
+  # `irm | iex` runs in the caller's session: throw instead of closing their window.
+  throw $Message
+}
+
+# Platform: windows-x64, windows-x64-baseline (no AVX2) or windows-arm64.
+$arch = $env:PROCESSOR_ARCHITEW6432
+if (-not $arch) { $arch = $env:PROCESSOR_ARCHITECTURE }
+switch ($arch) {
+  "AMD64" { $target = "windows-x64" }
+  "ARM64" { $target = "windows-arm64" }
+  default { Fail "Unsupported architecture: $arch" }
+}
+if ($target -eq "windows-x64") {
+  try {
+    # A second run in the same session already has the type.
+    if (-not ("AnysolaInstall.Kernel32" -as [type])) {
+      Add-Type -Name Kernel32 -Namespace AnysolaInstall -MemberDefinition @"
+[DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(int feature);
+"@
+    }
+    # 40 = PF_AVX2_INSTRUCTIONS_AVAILABLE
+    if (-not [AnysolaInstall.Kernel32]::IsProcessorFeaturePresent(40)) { $target = "windows-x64-baseline" }
+  } catch {
+    # Unknown: the baseline build runs everywhere.
+    $target = "windows-x64-baseline"
+  }
+}
+
+$version = $env:ANYSOLA_VERSION
+if (-not $version) {
+  try {
+    $version = (Invoke-RestMethod -Uri "$ApiUrl/v1/code/version" -UseBasicParsing).latest
+  } catch {
+    Fail "Could not read the latest version from $ApiUrl"
+  }
+  if (-not $version) { Fail "Could not read the latest version from $ApiUrl" }
+}
+$version = $version.TrimStart("v")
+
+$archive = "anysola-$target.zip"
+$download = if ($env:ANYSOLA_DOWNLOAD_URL) { $env:ANYSOLA_DOWNLOAD_URL.TrimEnd("/") } else { "https://github.com/$Repo/releases/download" }
+$base = "$download/v$version"
+$tmp = Join-Path ([IO.Path]::GetTempPath()) ("anysola-install-" + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $tmp | Out-Null
+
+try {
+  Write-Host "Installing Anysola Code $version ($target)"
+  try {
+    Invoke-WebRequest -Uri "$base/$archive" -OutFile (Join-Path $tmp $archive) -UseBasicParsing
+    Invoke-WebRequest -Uri "$base/SHA256SUMS" -OutFile (Join-Path $tmp "SHA256SUMS") -UseBasicParsing
+  } catch {
+    Fail "Download failed: $base/$archive"
+  }
+
+  $expected = $null
+  foreach ($line in Get-Content (Join-Path $tmp "SHA256SUMS")) {
+    $parts = $line -split "\s+", 2
+    if ($parts.Count -eq 2 -and $parts[1].TrimStart("*") -eq $archive) { $expected = $parts[0].ToLower() }
+  }
+  if (-not $expected) { Fail "$archive is not listed in SHA256SUMS" }
+  $actual = (Get-FileHash -Algorithm SHA256 (Join-Path $tmp $archive)).Hash.ToLower()
+  if ($expected -ne $actual) { Fail "Checksum mismatch for $archive" }
+
+  $extract = Join-Path $tmp "x"
+  Expand-Archive -Path (Join-Path $tmp $archive) -DestinationPath $extract -Force
+  $exe = Join-Path $extract "anysola.exe"
+  if (-not (Test-Path $exe)) { Fail "The archive has no anysola.exe" }
+
+  New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+  $dest = Join-Path $InstallDir "anysola.exe"
+  # A running anysola.exe cannot be overwritten but can be renamed: move it aside, then copy the new one in.
+  if (Test-Path $dest) {
+    $old = "$dest.old"
+    Remove-Item $old -Force -ErrorAction SilentlyContinue
+    if (Test-Path $old) { $old = "$dest.$([Guid]::NewGuid().ToString('N')).old" }
+    Move-Item $dest $old -Force
+  }
+  Copy-Item $exe $dest -Force
+  Get-ChildItem $InstallDir -Filter "anysola.exe*.old" -ErrorAction SilentlyContinue |
+    Remove-Item -Force -ErrorAction SilentlyContinue
+  & $dest --version | Out-Null
+  if ($LASTEXITCODE -ne 0) { Fail "The installed binary does not run on this system" }
+} finally {
+  Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+$entries = @($userPath -split ";" | Where-Object { $_ })
+$added = $false
+if ($entries -notcontains $InstallDir) {
+  [Environment]::SetEnvironmentVariable("Path", (($entries + $InstallDir) -join ";"), "User")
+  $added = $true
+}
+if (($env:Path -split ";") -notcontains $InstallDir) { $env:Path = "$env:Path;$InstallDir" }
+
+Write-Host ""
+Write-Host "Anysola Code $version is installed in $InstallDir"
+if ($added) { Write-Host "Added $InstallDir to your user PATH. Other open terminals need a restart." -ForegroundColor DarkGray }
+Write-Host ""
+Write-Host "  cd <project>"
+Write-Host "  anysola          # sign in on first run"
+Write-Host ""
+Write-Host "https://www.anysola.com/code" -ForegroundColor DarkGray

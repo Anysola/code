@@ -1,0 +1,14 @@
+// SOURCE: packages/core/src/tool/plugin/opencode.ts lines 95-107 (copied verbatim from fork branch anysola, 0.5.1)
+  id: "opencode.tools",
+  effect: Effect.fn("OpenCodeTools.Plugin")(function* (ctx: Context) {
+    const access = yield* FileAccess.Service
+    const permission = yield* Permission.Service
+    const hook = (event: SessionHooks["context"]) =>
+      Effect.sync(() => {
+        event.system.push(
+          SystemPart.make(
+            "When you create a worktree outside the current working directory and intend to use it as your primary working directory, consider using `execute` to call `tools.opencode.session_move` and make the worktree the session's working directory.",
+          ),
+        )
+      })
+    yield* ctx.session.hook("context", hook)

@@ -1,0 +1,59 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                       ┃ /devices     Signed-in devices                                          ┃
+                       ┃ /diff        Open diff viewer                                           ┃
+                       ┃ /editor      Open editor                                                ┃
+                       ┃ /effort      Switch model variant                                       ┃
+                       ┃ /exit        Exit the app                                               ┃
+                       ┃ /feedback    Send feedback or report a problem                          ┃
+                       ┃ /goal        keep working until an objective is met [pause|resume|clear ┃
+                       ┃ /help        Help                                                       ┃
+                       ┃ /init        guided AGENTS.md setup                                     ┃
+                       ┃ /mcps        MCP servers                                                ┃
+                       ┃
+                       ┃  /
+                       ┃
+                       ┃  Build · Claude Sonnet 5.5
+                       ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                       ~/my-app:master              731 credits  shift+tab agents  ctrl+p commands
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Team · renews 23 Nov                                                                                           0.5.1

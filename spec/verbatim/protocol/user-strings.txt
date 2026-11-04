@@ -1,0 +1,240 @@
+# Every user-facing string of the Anysola client<->gateway area in Anysola Code 0.5.1, verbatim.
+# ${x} = interpolation as in the TS source. Paths: client = /home/ubuntu/anysola-code/build/fork/,
+# gateway = /home/ubuntu/web/anysola/. Number formatting: formatCredits(n) = Math.round(n).toLocaleString("en-US")
+# (e.g. 1,234); formatDate = toLocaleString("en-US",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}) in
+# local time ("Nov 23, 03:00 AM"); formatShortDate = "23 Nov" (+ " 2027" when not this year); planName = first letter upper.
+
+## Login (device flow) -- packages/core/src/plugin/provider/anysola.ts + packages/cli/src/commands/handlers/auth/login.ts
+anysola.ts:28    Run `anysola login` to sign in to Anysola                       (connection status needs_auth message, /config 401)
+anysola.ts:58    Cannot reach ${apiURL}                                            (network failure of any core call())
+anysola.ts:78    The login code expired. Run `anysola login` again.               (client-side deadline passed)
+anysola.ts:85    Login failed: the server returned no usable token.
+anysola.ts:106   The code expired before it was approved. Run `anysola login` again.   (expired_token)
+anysola.ts:107   Login was denied.                                                 (access_denied)
+anysola.ts:108   Login failed: ${error.message}                                    (any other 4xx poll answer; e.g. "Login failed: invalid_grant")
+anysola.ts:114   Login failed: ${message}  |  Login failed: network error          (3rd consecutive 5xx/network failure)
+anysola.ts:122   Anysola account                                                   (method label)
+anysola.ts:128   Too many login attempts. Try again later.                         (/device/code 429)
+anysola.ts:130   Could not start login: ${message}                                 (/device/code other non-2xx; e.g. "invalid_request")
+anysola.ts:136   Could not start login: unexpected response from the server.
+anysola.ts:143   Open ${verification_uri} and enter ${user_code}                   (e.g. "Open https://account.anysola.com/device and enter BCDF-GHJK")
+login.ts:163     Starting authorization...        (spinner)
+login.ts:169     Authentication failed            (spinner stop on failure to start)
+login.ts:179     Authorization started            (spinner stop)
+login.ts:180     ${instructions}                  (log.info)
+login.ts:181     ${url}                           (log.info; browser opened only when stdin AND stdout are TTYs)
+login.ts:205     Waiting for authorization...     (log.step)
+login.ts:208     Connected to Anysola             (log.success, "Connected to ${integration.name}")
+login.ts:212     Authorization expired
+Observed clack output of `anysola login` (0.5.1, fake gateway):
+  ┌  Sign in to Anysola
+  │
+  ◇  Authorization started
+  │
+  ●  Open https://account.anysola.com/device and enter BCDF-GHJK
+  │
+  ●  https://account.anysola.com/device
+  │
+  ◇  Waiting for authorization...
+  │
+  ◆  Connected to Anysola
+  │
+  └  Signed in
+
+## CLI account commands -- packages/cli/src/commands/handlers/anysola/
+account.ts:63    Cannot reach ${apiURL}
+account.ts:69    Anysola login is not available
+account.ts:79    HTTP ${status}                                                    (revoke failure detail)
+account.ts:94    Welcome to Anysola Code                                           (intro, first TUI start without connection, TTY only)
+account.ts:95    Sign in with your Anysola account to continue.
+account.ts:97    Signed in
+login.ts:13      Sign in to Anysola                                                (intro)
+login.ts:18      Already signed in (${mask}). Use `anysola login --force` for a new token.   mask = first 8 + "..." + last 4
+login.ts:19      Done                                                              (outro)
+login.ts:24      Could not revoke the old token (${message}); revoke it at https://account.anysola.com/apps
+login.ts:28      Signed in
+logout.ts:13     Sign out of Anysola
+logout.ts:17     Signed in through ANYSOLA_TOKEN; unset it to sign out.  |  Not signed in.
+logout.ts:18     Done
+logout.ts:23     Could not revoke the token: ${message}
+logout.ts:24     The token was kept. Try again, or revoke it at https://account.anysola.com/apps.
+logout.ts:29     Signed out. The token is revoked and removed from this machine.
+status.ts:46     Not signed in. Run `anysola login`.                               (stderr, exit 1)
+status.ts:52     The token was revoked or expired. Run `anysola login --force`.    (stderr, exit 1)
+status.ts:57     Could not load status: HTTP ${status}                              (stderr; Token line still printed)
+status.ts:17-35  rows (key padded to longest key + 2):
+                 Account     ${email}                       [dead: /me has no email]
+                 Plan        ${plan}                        (raw value, e.g. "team")
+                 Credits     ${available.toLocaleString("en-US")} available, renews ${renewsAt.slice(0,10)}
+                 Free quota  ${usedTurns ?? 0}/${dailyTurns} turns today   [bug: /me sends `turns`, so used is always 0]
+                 Model       ${defaultModel}                [dead: /me has no defaultModel]
+                 Event       ${event.label}
+                 Token       ${mask(token)}
+  observed:      "Plan     team\nCredits  731 available, renews 2026-11-23\nToken    asc_BBBB...BBBB"
+shared.ts:11     Not signed in. Run `anysola login`.
+shared.ts:13     The token was revoked or expired. Run `anysola login --force`.    (401 on usage/devices/revoke)
+shared.ts:14     This Anysola server does not offer this yet.                      (404)
+shared.ts:17     ${error.message} | Request failed (HTTP ${status})
+usage.ts:17      Usage, last ${days} days   then blank line, then usageLines (below)
+devices.ts:17    No devices are signed in.
+devices.ts:22    Unnamed device
+devices.ts:24    never                                                             (lastUsedAt missing)
+devices.ts:27    header row: "  id", "name", "client", "last used", "expires"; cells padEnd to column width, joined by 3 spaces, trimEnd
+devices.ts:21    row id prefix "* " for current, "  " otherwise
+devices.ts:30    (blank line) "* this device. Sign one out with `anysola devices revoke <id>`."
+devices-revoke.ts:12  Device ${id} is signed out.
+
+## usageLines -- packages/tui/src/anysola/format.ts:157-185 (shared by `anysola usage` and TUI /usage)
+Totals
+  <table header ["", "requests", "credits"], row ["all", requests, credits]>   (col 0 padEnd, others padStart, joined "   ", each line prefixed "  ")
+  Cache hit rate ${Math.round(cacheHitRate*100)}%                               (only when totals.cacheHitRate is a number)
+(blank)
+By day
+  <table ["date","requests","credits"]>
+(blank)
+By model
+  <table ["model","requests","credits"]>
+(blank)                                                                         (only when creditsAvailable is a number)
+Balance ${creditsAvailable} credits · renews ${formatDate(renewsAt)}           (" · renews …" only when renewsAt)
+
+## Version / update -- packages/cli/src/services/anysola-version.ts, packages/cli/src/commands/handlers/upgrade.ts
+anysola-version.ts:11  Update Anysola Code with: anysola update
+anysola-version.ts:97  Anysola Code ${version} is no longer supported (minimum ${minimum}).\nUpdate Anysola Code with: anysola update\n   (stderr, exit 1)
+upgrade.ts:16    Update Anysola Code
+upgrade.ts:21    Installed ${version}, latest ${latest}
+upgrade.ts:22    ${notes}                                                          (log.message, when /version notes is a string)
+upgrade.ts:24    Already up to date
+upgrade.ts:29    ${command}                                                        (--print)
+upgrade.ts:30    Run the command above to update
+upgrade.ts:33    ${command}                                                        (log.step before running it)
+upgrade.ts:37    ${bin} failed: ${error.message}  |  ${bin} failed with exit code ${status}
+upgrade.ts:38    Run it yourself: ${command}
+upgrade.ts:42    Updated. Restart Anysola Code to use the new version.
+updater.ts:257   Update Anysola Code with: anysola update (${cause})               (background install failure)
+packages/tui/src/component/dialog-update.tsx: "Update available" (97), "Update" (98), "Checking for updates…" (136),
+  "An update is available. After installing, you'll be prompted to restart Anysola Code." (140),
+  "Update successful! Restart closes Anysola Code, then run anysola to use the new version." (150),
+  "Anysola Code is already up to date." (154)
+packages/tui/src/util/presentation.ts:24  Run anysola to use ${updatedVersion}    (epilogue after TUI exit)
+
+## Model calls -- packages/core/src/plugin/provider/anysola-account.ts
+anysola-account.ts:95   Not signed in. Run `anysola login`.                        (RPC proxy without token; status 401)
+anysola-account.ts:98   Cannot reach ${apiURL}                                     (status 0)
+anysola-account.ts:103  Anysola request failed                                     (status 0)
+anysola-account.ts:199  Out of Anysola credits.                                    (402 fallback when body has no message)
+anysola-account.ts:206  ${message}\nUpgrade: https://account.anysola.com/billing   (every 402 on a model call; body rewritten to
+                        {"type":"error","error":{"type":"billing_error","message":<that>}} status 402)
+  observed in `anysola run` (stderr, exit 1):
+    Error: You've used this cycle's Anysola credits. They renew on 2026-11-23. https://account.anysola.com/billing
+    Upgrade: https://account.anysola.com/billing
+  observed 401: "Error: Anysola Code token expired or revoked. Run `anysola login`, or for CI create a new token in Account > Apps > Code."
+
+## Web search -- packages/core/src/plugin/websearch/anysola.ts
+48   Your Anysola sign-in has expired or was revoked. Run `anysola login`.         (401)
+50   Out of Anysola credits for web search. Add credits at https://account.anysola.com/billing   (402)
+51   Anysola web search is rate limited: ${detail}                                (429; detail = errorOf(body).message)
+52   Anysola web search failed (HTTP ${status}): ${detail}
+72   Anysola web search returned an unexpected response
+89   Anysola                                                                       (provider name; tool line shows "Web Search via Anysola \"<query>\"")
+93   Web search needs an Anysola sign-in. Run `anysola login`.
+110  Anysola web search returned too much data                                     (> 1 MiB body)
+116  Anysola web search timed out                                                  (30 s)
+120  Cannot reach ${apiURL}
+
+## `anysola run` -- packages/cli/src/run/run.ts
+194  Anysola · ${spent} credit${spent === 1 ? "" : "s"}${remaining === null ? "" : ` · ${remaining} left`}   (dim, after the run; not in --format json; spent and remaining are NOT thousands-formatted)
+206  Cannot set the budget (${detail}). If you just updated, run `anysola service restart`.
+234  Budget reached: ${total}/${limit} credits. Continue with `anysola run -s ${sessionID} --budget <credits>`.
+
+## TUI -- packages/tui/src/feature-plugins/system/anysola.tsx (+ store.ts, presentation.ts, dialog-model.tsx)
+29   This server does not offer it yet.                                            (404)
+30   Request failed (HTTP ${status})  |  Cannot reach Anysola                      (status 0 and no message)
+72   Unexpected reply from the Anysola Code server
+79   Account details are unavailable (${detail}). If you just updated, run `anysola service restart`.
+137  Budget reached · ${total}/${budget} credits                                   (select dialog title)
+139  Continue once — Ask again before the next prompt
+140  Add ${budget} credits — Budget ${raised}                                      raised = max(budget,total)+budget
+141  Remove the budget
+142  Stop — Keep the prompt in the composer
+168  No default budget  |  New sessions start with a ${limit} credit budget
+171  Usage: /budget default <credits> | off
+174  Default budget removed  |  New sessions start with a ${limit} credit budget
+178  Open a session first, or set one for new sessions: /budget default <credits>
+184  Session budget ${spent}/${budget} credits
+185  No budget · ${spent} credits spent. Set one: /budget <credits>
+189  Usage: /budget <credits> | off | default <credits>
+193  Budget removed
+194  Session budget ${total}/${limit} credits
+198  Budget unavailable (${detail}). If you just updated, run `anysola service restart`.
+256  ${url}  |  257  Open ${url}                                                 (toast after /account, /feedback)
+275  ${status} · renews ${formatShortDate(renewsAt) | formatDate(freeQuota.resetsAt)}   (hover)
+310  ${event.label} · until ${formatDate(event.until)}                            (info color banner)
+317  Low balance: ${remaining} credits left · /credits                            (warning color banner)
+331  ${planName} · renews ${formatShortDate(renewsAt)}                             (home footer)
+363-407 commands (group "Anysola"): /credits "Credits and plan", /usage "Usage", /budget "Session budget",
+        /devices "Signed-in devices", /account "Open your Anysola account", /feedback "Send feedback or report a problem"
+420  Account — ${meError ?? "Loading…"}
+425  Plan — ${planName(plan ?? "unknown")}${access==="free" ? " (free)" : ""}
+426  Balance — ${n} credits
+427  Renews — ${formatShortDate(renewsAt)}
+429  Free quota — ${usedTurns ?? 0}/${dailyTurns ?? 0} turns today                [bug: /me sends `turns`]
+431  Resets — ${formatDate(resetsAt)}
+433  Today — ${requests ?? 0} requests · ${credits} credits
+435  This session — ${turns} turns · ${total} credits
+437  Event — ${label}${until ? ` until ${formatDate(until)}` : ""}
+442  Credits                                                                        (dialog title)
+456  Upgrade or top up: https://account.anysola.com/billing
+473  Toggle 7/30 days (key t); 489 Usage · last ${days} days; 490 button "30 days" | "7 days"; 483 Loading…
+509  ${name || "Unnamed device"}${current ? " (this device)" : ""}; description ${client}; 512 used ${formatDate} | never used
+518  Devices; 529 This device: sign out with `anysola logout`.
+534  Revoke device; 535 Sign out "${title}"? It will need to log in again.; 536 Revoke; 540 Device signed out
+store.ts:85   today ${usedTurns ?? 0}/${dailyTurns ?? 0}                           (status line, free tier) [bug: always 0 used]
+store.ts:89-95 ${remaining} credits · this turn ${turn} · session ${total}[/${budget}]
+store.ts:102  ${turns} turn${turns===1?"":"s"} · ${total} credits                   (exit summary "Spent" row)
+presentation.ts:27-30  rows "Session" ${title}, "Spent" ${exitSummary}, "Continue" anysola -s ${sessionID}
+dialog-model.tsx:92    ~${estimate} credit${estimate===1?"":"s"}/turn                (model picker trailing text)
+
+## Gateway texts the client displays as-is (gateway = services/cloud/src/code/, contracts = packages/contracts/src/code/)
+admission.ts:25  Anysola Code token expired or revoked. Run `anysola login`, or for CI create a new token in Account > Apps > Code.
+admission.ts:26  Anysola Code tokens work only with the Anysola Code client.
+admission.ts:27  Anysola Code needs a Pro or Team plan: https://account.anysola.com/billing
+admission.ts:28  Anysola Code isn't open to this account yet.
+admission.ts:29  Anysola Code is paused.
+admission.ts:30  Anysola Code is not available in your region.
+admission.ts:32  Too many concurrent Anysola Code requests.
+admission.ts:33  Anysola Code is busy upstream. Try again shortly.
+admission.ts:34  Anysola Code is restarting. Try again in a moment.
+admission.ts:35  Anysola Code is temporarily unavailable. Try again shortly.
+admission.ts:269 Client closed the request.                                         (499)
+admission.ts:281 Daily free limit reached. Resets at 00:00 UTC. Upgrade: account.anysola.com/billing${label ? ` (${label})` : ""}
+admission.ts:289 You've used this cycle's Anysola credits. They renew on ${YYYY-MM-DD}. https://account.anysola.com/billing
+proxy.ts:67      anthropic-version ${v.slice(0,40)} is not available on Anysola Code
+proxy.ts:78      beta ${beta} is not available on Anysola Code
+proxy.ts:86      Request body is over ${floor(maxBodyBytes/1MiB)} MB.
+proxy.ts:93      The body is not valid JSON.
+proxy.ts:153     This request may cost up to ${most} credits and you have ${free}. Pick a smaller model or lower max output.
+proxy.ts:376     The model took too long to answer.                                 (504)
+proxy.ts:707/758 The model's stream was interrupted.                                (SSE error event)
+request-core.ts:150 The body must be a JSON object.
+request-core.ts:152 model: Field required.
+request-core.ts:160 max_tokens: must be a positive integer.
+request-core.ts:163 messages: Field required.
+request-core.ts:170 Fast mode is not available on Anysola Code.                     (top-level "speed")
+request-core.ts:171 ${field} is not available on Anysola Code.                      (any top-level field not allowed)
+request-core.ts:176 tools: must be a list.
+request-core.ts:182 Server tool ${type} is not available on Anysola Code.
+request-core.ts:193 ${model} is not included in your Anysola plan.                  (403)
+request-core.ts:195 model: ${model}                                                 (404 not_found_error)
+request-core.ts:209 max_tokens over ${nonStreamMaxTokens} needs streaming; set "stream": true.
+request-core.ts:234 Documents by URL are not available on Anysola Code; send them as base64.
+search.ts:50     Web search is not available on Anysola Code right now.
+search.ts:56     Request body is over 4 KB.
+search.ts:67     query: Field required.  |  query: at most 500 characters.          (search-core.ts:44)
+search.ts:107    A web search may cost up to ${most} credits and you have ${free}.
+search.ts:195    The search took too long.
+app.ts:162       days must be a whole number from 1 to 90.
+app.ts:192       Too many version checks from this address.
+app.ts:208       Too many sign-in attempts from this address. Try again later.     (device/code 429 error_description; client shows its own text instead)
+app.ts:277       No such token.
+app.ts:285       Internal error.
+app.ts:289       Not found: ${METHOD} ${path}

@@ -1,0 +1,4 @@
+// SOURCE: packages/core/src/session/runner/step.ts lines 62-64 (copied verbatim from fork branch anysola, 0.5.1)
+const TOOLS_INTERRUPTED = { type: "aborted", message: "Tool execution interrupted" } as const
+const STEP_INTERRUPTED = { type: "aborted", message: "Step interrupted" } as const
+const RESULT_MISSING = { type: "tool.result-missing", message: "Provider did not return a tool result" } as const
