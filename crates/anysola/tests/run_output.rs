@@ -17,8 +17,14 @@ use serde_json::{Value, json};
 /// for "latest"; 2 credits per request, titles free.
 fn fake2(request: &Recorded, _: usize) -> Reply {
     let body = request.json();
-    let last = body["messages"].as_array().and_then(|m| m.last()).cloned().unwrap_or(Value::Null);
-    let after_tool = last["content"].as_array().is_some_and(|c| c.iter().any(|p| p["type"] == "tool_result"));
+    let last = body["messages"]
+        .as_array()
+        .and_then(|m| m.last())
+        .cloned()
+        .unwrap_or(Value::Null);
+    let after_tool = last["content"]
+        .as_array()
+        .is_some_and(|c| c.iter().any(|p| p["type"] == "tool_result"));
     let text = last.to_string().to_lowercase();
     let title = request.is_title();
     if !title && text.contains("nocredits") {
@@ -29,16 +35,31 @@ fn fake2(request: &Recorded, _: usize) -> Reply {
         };
     }
     let stream = if !title && !after_tool && text.contains("run ls") {
-        Stream::new().tool("toolu_sh1", "shell", json!({"command": "ls", "description": "List files"}))
+        Stream::new().tool(
+            "toolu_sh1",
+            "shell",
+            json!({"command": "ls", "description": "List files"}),
+        )
     } else if !title && !after_tool && text.contains("latest") {
         Stream::new().tool("toolu_fake1", "websearch", json!({"query": "latest bun"}))
     } else if !title && text.contains("think") {
-        Stream::new().thinking("The user wants a short answer.", "sig").text("Plain answer.")
+        Stream::new()
+            .thinking("The user wants a short answer.", "sig")
+            .text("Plain answer.")
     } else {
-        Stream::new().text(if title { "Fake title" } else if after_tool { "Done after the tool." } else { "Plain answer." })
+        Stream::new().text(if title {
+            "Fake title"
+        } else if after_tool {
+            "Done after the tool."
+        } else {
+            "Plain answer."
+        })
     };
     let model = body["model"].as_str().unwrap_or_default().to_string();
-    Reply::Sse { body: stream.finish(&model, Some(if title { 0 } else { 2 })), before: Some(731) }
+    Reply::Sse {
+        body: stream.finish(&model, Some(if title { 0 } else { 2 })),
+        before: Some(731),
+    }
 }
 
 struct Run {
@@ -56,7 +77,11 @@ fn setup() -> (FakeGateway, TestHome) {
 
 fn run_in(home: &TestHome, args: &[&str]) -> Run {
     let out = home.run(BIN, args, None, None);
-    Run { stdout: out.stdout, stderr: out.stderr, code: out.code }
+    Run {
+        stdout: out.stdout,
+        stderr: out.stderr,
+        code: out.code,
+    }
 }
 
 const HEADER: &str = "\x1b[0m\n> build · claude-sonnet-5-5\n\x1b[0m\n";
@@ -66,16 +91,28 @@ fn text_plain() {
     let (_g, home) = setup();
     let out = run_in(&home, &["run", "--standalone", "hello"]);
     assert_eq!(out.stdout, "Plain answer.\n");
-    assert_eq!(out.stderr, format!("{HEADER}\x1b[90mAnysola · 2 credits · 729 left\x1b[0m\n"));
+    assert_eq!(
+        out.stderr,
+        format!("{HEADER}\x1b[90mAnysola · 2 credits · 729 left\x1b[0m\n")
+    );
     assert_eq!(out.code, 0);
 }
 
 #[test]
 fn text_thinking() {
     let (_g, home) = setup();
-    let out = run_in(&home, &["run", "--standalone", "--thinking", "please", "think"]);
-    assert_eq!(out.stdout, "Thinking: The user wants a short answer.\nPlain answer.\n");
-    assert_eq!(out.stderr, format!("{HEADER}\x1b[90mAnysola · 2 credits · 729 left\x1b[0m\n"));
+    let out = run_in(
+        &home,
+        &["run", "--standalone", "--thinking", "please", "think"],
+    );
+    assert_eq!(
+        out.stdout,
+        "Thinking: The user wants a short answer.\nPlain answer.\n"
+    );
+    assert_eq!(
+        out.stderr,
+        format!("{HEADER}\x1b[90mAnysola · 2 credits · 729 left\x1b[0m\n")
+    );
 }
 
 #[test]
@@ -93,7 +130,9 @@ fn text_shell_and_auto() {
         assert_eq!(out.stdout, "Done after the tool.\n");
         assert_eq!(
             out.stderr,
-            format!("{HEADER}\x1b[0m$ \x1b[0mls\na.txt\n\x1b[0m\n> build · claude-sonnet-5-5\n\x1b[0m\n\x1b[90mAnysola · 4 credits · 729 left\x1b[0m\n")
+            format!(
+                "{HEADER}\x1b[0m$ \x1b[0mls\na.txt\n\x1b[0m\n> build · claude-sonnet-5-5\n\x1b[0m\n\x1b[90mAnysola · 4 credits · 729 left\x1b[0m\n"
+            )
         );
         assert_eq!(out.code, 0);
     }
@@ -102,7 +141,10 @@ fn text_shell_and_auto() {
 #[test]
 fn text_permission_ask() {
     let (_g, mut home) = setup();
-    home.set_env("OPENCODE_CONFIG_CONTENT", r#"{"permission":{"bash":"ask"}}"#);
+    home.set_env(
+        "OPENCODE_CONFIG_CONTENT",
+        r#"{"permission":{"bash":"ask"}}"#,
+    );
     let out = run_in(&home, &["run", "--standalone", "run", "ls", "please"]);
     assert_eq!(out.stdout, "Done after the tool.\n");
     assert_eq!(
@@ -119,7 +161,10 @@ fn text_agent_plan() {
     let (_g, home) = setup();
     let out = run_in(&home, &["run", "--standalone", "--agent", "plan", "hello"]);
     assert_eq!(out.stdout, "Plain answer.\n");
-    assert_eq!(out.stderr, "\x1b[0m\n> plan · claude-sonnet-5-5\n\x1b[0m\n\x1b[90mAnysola · 2 credits · 729 left\x1b[0m\n");
+    assert_eq!(
+        out.stderr,
+        "\x1b[0m\n> plan · claude-sonnet-5-5\n\x1b[0m\n\x1b[90mAnysola · 2 credits · 729 left\x1b[0m\n"
+    );
 }
 
 #[test]
@@ -129,7 +174,9 @@ fn text_402() {
     assert_eq!(out.stdout, "");
     assert_eq!(
         out.stderr,
-        format!("{HEADER}\x1b[91m\x1b[1mError: \x1b[0mYou've used this cycle's Anysola credits. They renew on 23 Nov. account.anysola.com/billing\n")
+        format!(
+            "{HEADER}\x1b[91m\x1b[1mError: \x1b[0mYou've used this cycle's Anysola credits. They renew on 23 Nov. account.anysola.com/billing\n"
+        )
     );
     assert_eq!(out.code, 1);
 }
@@ -137,7 +184,20 @@ fn text_402() {
 #[test]
 fn text_budget_websearch_and_already_reached() {
     let (gateway, home) = setup();
-    let out = run_in(&home, &["run", "--standalone", "--budget", "1", "What", "is", "the", "latest", "Bun?"]);
+    let out = run_in(
+        &home,
+        &[
+            "run",
+            "--standalone",
+            "--budget",
+            "1",
+            "What",
+            "is",
+            "the",
+            "latest",
+            "Bun?",
+        ],
+    );
     let session = session_of(&gateway);
     assert_eq!(out.stdout, "");
     assert_eq!(
@@ -147,16 +207,24 @@ fn text_budget_websearch_and_already_reached() {
         )
     );
     assert_eq!(out.code, 1);
-    let again = run_in(&home, &["run", "--standalone", "-s", &session, "--budget", "1", "hi"]);
+    let again = run_in(
+        &home,
+        &["run", "--standalone", "-s", &session, "--budget", "1", "hi"],
+    );
     assert_eq!(
         again.stderr,
-        format!("\x1b[91m\x1b[1mError: \x1b[0mBudget reached: 4/1 credits. Continue with `anysola run -s {session} --budget <credits>`.\n")
+        format!(
+            "\x1b[91m\x1b[1mError: \x1b[0mBudget reached: 4/1 credits. Continue with `anysola run -s {session} --budget <credits>`.\n"
+        )
     );
     assert_eq!(again.code, 1);
 }
 
 fn session_of(gateway: &FakeGateway) -> String {
-    gateway.messages()[0].header("x-opencode-session").unwrap().to_string()
+    gateway.messages()[0]
+        .header("x-opencode-session")
+        .unwrap()
+        .to_string()
 }
 
 /// Ids become `<n>` by first appearance (a message id and the part ids derived from it share the
@@ -210,8 +278,16 @@ fn json_matches_captures() {
         ("json-plain", vec!["hello"], None),
         ("json-thinking", vec!["--thinking", "please", "think"], None),
         ("json-shell", vec!["run", "ls", "please"], None),
-        ("json-permission-ask", vec!["run", "ls", "please"], Some(r#"{"permission":{"bash":"ask"}}"#)),
-        ("json-permission-deny", vec!["--auto", "run", "ls", "please"], Some(r#"{"permission":{"bash":"deny"}}"#)),
+        (
+            "json-permission-ask",
+            vec!["run", "ls", "please"],
+            Some(r#"{"permission":{"bash":"ask"}}"#),
+        ),
+        (
+            "json-permission-deny",
+            vec!["--auto", "run", "ls", "please"],
+            Some(r#"{"permission":{"bash":"deny"}}"#),
+        ),
     ] {
         let (_g, mut home) = setup();
         if let Some(config) = config {
@@ -234,12 +310,24 @@ fn json_matches_captures() {
 #[test]
 fn json_402_without_doubled_url() {
     let (_g, home) = setup();
-    let (lines, out) = json_run(&home, &["run", "--standalone", "--format", "json", "nocredits", "now"]);
+    let (lines, out) = json_run(
+        &home,
+        &[
+            "run",
+            "--standalone",
+            "--format",
+            "json",
+            "nocredits",
+            "now",
+        ],
+    );
     let mut expected = json_capture("json-402");
     let message = "You've used this cycle's Anysola credits. They renew on 23 Nov. account.anysola.com/billing";
     expected[1]["error"]["message"] = json!(message);
-    expected[1]["error"]["response"]["body"] =
-        json!(json!({"type": "error", "error": {"type": "billing_error", "message": message}}).to_string());
+    expected[1]["error"]["response"]["body"] = json!(
+        json!({"type": "error", "error": {"type": "billing_error", "message": message}})
+            .to_string()
+    );
     assert_eq!(lines, expected);
     assert_eq!(out.code, 1);
 }
@@ -247,20 +335,44 @@ fn json_402_without_doubled_url() {
 #[test]
 fn json_budget() {
     let (gateway, home) = setup();
-    let (lines, out) = json_run(&home, &["run", "--standalone", "--format", "json", "--budget", "1", "What", "is", "the", "latest", "Bun?"]);
+    let (lines, out) = json_run(
+        &home,
+        &[
+            "run",
+            "--standalone",
+            "--format",
+            "json",
+            "--budget",
+            "1",
+            "What",
+            "is",
+            "the",
+            "latest",
+            "Bun?",
+        ],
+    );
     assert_eq!(out.code, 1);
     let kinds: Vec<&str> = lines.iter().map(|l| l["type"].as_str().unwrap()).collect();
     assert_eq!(kinds, ["step_start", "tool_use", "step_finish", "error"]);
-    assert_eq!(lines[1]["part"]["state"]["output"], "## [Bun](https://bun.com)\n\nBun 1.4.4");
+    assert_eq!(
+        lines[1]["part"]["state"]["output"],
+        "## [Bun](https://bun.com)\n\nBun 1.4.4"
+    );
     let session = session_of(&gateway);
     assert_eq!(
         lines[3]["error"],
         json!({"type": "unknown", "message": "Budget reached: 4/1 credits. Continue with `anysola run -s ses_<0> --budget <credits>`."})
     );
-    let (again, out) = json_run(&home, &["run", "--format", "json", "-s", &session, "--budget", "1", "hi"]);
+    let (again, out) = json_run(
+        &home,
+        &[
+            "run", "--format", "json", "-s", &session, "--budget", "1", "hi",
+        ],
+    );
     let mut expected = json_capture("json-budget-already-reached");
-    expected[0]["error"]["message"] =
-        json!("Budget reached: 4/1 credits. Continue with `anysola run -s ses_<0> --budget <credits>`.");
+    expected[0]["error"]["message"] = json!(
+        "Budget reached: 4/1 credits. Continue with `anysola run -s ses_<0> --budget <credits>`."
+    );
     assert_eq!(again, expected);
     assert_eq!(out.code, 1);
 }
