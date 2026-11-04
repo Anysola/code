@@ -3,6 +3,8 @@
 
 mod exec;
 mod output;
+pub mod parse;
+pub mod scan;
 mod select;
 
 use std::collections::HashMap;
