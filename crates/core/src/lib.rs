@@ -4,6 +4,7 @@
 pub mod agent;
 pub mod api;
 pub mod codemode;
+pub mod command;
 pub mod config;
 pub mod credits;
 pub mod events;
@@ -22,6 +23,7 @@ pub mod search;
 pub mod session;
 pub mod skill;
 pub mod slug;
+pub mod snapshot;
 pub mod storage;
 pub mod text;
 pub mod time;

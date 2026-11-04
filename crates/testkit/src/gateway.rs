@@ -34,8 +34,9 @@ impl Recorded {
     }
 
     /// A title request: no tools.
+    /// Title requests carry no tools and ask for only the title.
     pub fn is_title(&self) -> bool {
-        self.json().get("tools").is_none()
+        self.json().get("tools").is_none() && self.body.contains("Reply with only the title.")
     }
 }
 
@@ -59,6 +60,8 @@ struct State {
     version: Mutex<Value>,
     config: Mutex<Option<Value>>,
     requests: Mutex<Vec<Recorded>>,
+    /// Plain-text files served at other paths (instruction URLs).
+    files: Mutex<Vec<(String, String)>>,
 }
 
 pub struct FakeGateway {
@@ -171,6 +174,16 @@ async fn handle(
         "/v1/code/version" => ok(state.version.lock().unwrap().clone()),
         "/v1/code/search" => state.search.lock().unwrap().clone(),
         "/v1/code/messages" => (state.script)(&recorded, index),
+        other
+            if let Some((_, text)) =
+                state.files.lock().unwrap().iter().find(|(p, _)| p == other) =>
+        {
+            return Ok(Response::builder()
+                .status(200)
+                .header("content-type", "text/plain")
+                .body(Full::new(Bytes::from(text.clone())))
+                .expect("valid response"));
+        }
         _ => Reply::Json {
             status: 404,
             body: json!({"type": "error", "error": {"type": "not_found_error", "message": "fake"}}),
@@ -205,6 +218,7 @@ impl FakeGateway {
             version: Mutex::new(json!({"latest": "0.5.1", "minimum": "0.2.0"})),
             config: Mutex::new(None),
             requests: Mutex::new(Vec::new()),
+            files: Mutex::new(Vec::new()),
         });
         let accept = state.clone();
         runtime.spawn(async move {
@@ -238,6 +252,15 @@ impl FakeGateway {
             .into_iter()
             .filter(|r| r.path == "/v1/code/messages")
             .collect()
+    }
+
+    /// Serves `text` at `path` (for example an instruction URL).
+    pub fn serve(&self, path: &str, text: &str) {
+        self.state
+            .files
+            .lock()
+            .unwrap()
+            .push((path.to_string(), text.to_string()));
     }
 
     pub fn set_search(&self, reply: Reply) {

@@ -10,14 +10,16 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use super::gate::{RuleGate, Scope};
-use super::lower::{Target, lower};
-use super::message::{AssistantData, AssistantTime, Message, Part, StoredModel, ToolState, encode};
+use super::lower::{Entry, Target, lower};
+use super::message::{
+    AssistantData, AssistantTime, Message, Part, StepSnapshot, StoredModel, ToolState, encode,
+};
 use super::request::{Request, build, output_limit};
 use super::stream::{Action, Assembly};
-use super::{Outcome, Selection, TurnOptions};
+use super::{Outcome, Selection, TurnOptions, compaction};
 use crate::api::Shared;
 use crate::events::{Event, InterruptReason};
-use crate::gateway::error::{ApiError, SessionError};
+use crate::gateway::error::{ApiError, Reason, SessionError};
 use crate::gateway::retry::Retry;
 use crate::gateway::{MessageStream, StreamItem};
 use crate::instructions::{self, Environment};
@@ -61,7 +63,56 @@ struct Context {
     rules: Vec<crate::permission::Rule>,
 }
 
-fn context(shared: &Shared, session: &SessionRow, selection: &Selection) -> Context {
+/// Commits the instruction sources' current values (the baseline on the first step, an update
+/// message on later changes) and returns block 2, the frozen baseline.
+fn instructions(
+    shared: &Shared,
+    session: &SessionRow,
+    rules: &[crate::permission::Rule],
+) -> Result<String, SessionError> {
+    let directory = std::path::PathBuf::from(&session.directory);
+    let worktree = shared.project.worktree.clone();
+    let files = instructions::discover(
+        &shared.paths,
+        &directory,
+        &worktree,
+        &shared.config.instructions,
+        &shared.remote_instructions,
+    );
+    let environment = Environment {
+        git: shared.project.vcs == Some("git"),
+        directory,
+        worktree,
+    };
+    let catalog = shared
+        .registry
+        .code_mode(rules)
+        .map(|inventory| inventory.summary());
+    let sources = instructions::sources(
+        catalog.as_ref(),
+        crate::skill::guidance(&shared.skills, rules),
+        files,
+        &crate::time::date_string(),
+        &environment,
+    );
+    Ok(instructions::prepare(&shared.db, &session.id, &sources)?.baseline)
+}
+
+/// Settles the step context before new input is admitted, so instruction changes are recorded
+/// ahead of the prompt that follows them.
+pub(crate) fn settle_context(
+    shared: &Shared,
+    session: &SessionRow,
+    selection: &Selection,
+) -> Result<(), SessionError> {
+    context(shared, session, selection).map(drop)
+}
+
+fn context(
+    shared: &Shared,
+    session: &SessionRow,
+    selection: &Selection,
+) -> Result<Context, SessionError> {
     let rules = selection.agent.permissions.clone();
     let mut tools = shared.registry.active(&rules);
     if !shared.config.websearch_enabled() {
@@ -78,74 +129,19 @@ fn context(shared: &Shared, session: &SessionRow, selection: &Selection) -> Cont
         Some(system) => system.clone(),
         None => format!("{}\n\n{ANTHROPIC_PROMPT}", default_system(&names)),
     };
-    let directory = std::path::PathBuf::from(&session.directory);
-    let worktree = shared.project.worktree.clone();
-    let files = instructions::discover(
-        &shared.paths,
-        &directory,
-        &worktree,
-        &shared.config.instructions,
-    );
-    let environment = Environment {
-        git: shared.project.vcs == Some("git"),
-        directory,
-        worktree,
-    };
-    let skills = crate::skill::guidance(&shared.skills, &rules);
-    let catalog = shared
-        .registry
-        .code_mode(&rules)
-        .map(|inventory| crate::codemode::catalog::render(&inventory.summary()));
-    let block2 = instructions::block(
-        catalog.as_deref(),
-        skills.as_deref(),
-        &files,
-        &crate::time::date_string(),
-        &environment,
-    );
+    let block2 = instructions(shared, session, &rules)?;
     let system = vec![
         block0,
         identity(&selection.model.name, &selection.model.id),
         block2,
         WORKTREE_HINT.into(),
     ];
-    Context {
+    Ok(Context {
         system,
         tools,
         definitions,
         rules,
-    }
-}
-
-fn history(shared: &Shared, session_id: &str) -> Vec<Message> {
-    shared
-        .db
-        .messages(session_id)
-        .unwrap_or_default()
-        .iter()
-        .map(|row| Message::decode(&row.kind, &row.data))
-        .collect()
-}
-
-/// Tokens of the last answered request plus a chars/4 estimate of what came after it.
-fn input_estimate(history: &[Message], messages: &[Value]) -> u64 {
-    let last = history
-        .iter()
-        .rposition(|m| matches!(m, Message::Assistant(a) if a.tokens.is_some()));
-    let measured = last
-        .and_then(|i| match &history[i] {
-            Message::Assistant(a) => a.tokens,
-            _ => None,
-        })
-        .map_or(0, |t| {
-            t.input + t.output + t.reasoning + t.cache.read + t.cache.write
-        });
-    let since = messages
-        .iter()
-        .rev()
-        .take_while(|m| m["role"] != "assistant");
-    let chars: usize = since.map(|m| crate::json::compact(m).len()).sum();
-    measured + ((chars as f64 / 4.0) * 1.15).ceil() as u64
+    })
 }
 
 fn send(shared: &Shared, event: Event) {
@@ -155,6 +151,10 @@ fn send(shared: &Shared, event: Event) {
 enum StepEnd {
     Continue,
     Stop,
+    /// Auto compaction replaced the history; the step runs again on the checkpoint.
+    Compacted,
+    /// The provider rejected the prompt as too long before any output.
+    Overflow(ApiError),
     Failed(SessionError),
     Interrupted(InterruptReason),
 }
@@ -168,6 +168,7 @@ pub(crate) async fn drive(
 ) -> Outcome {
     let mut length_finishes = 0;
     let mut number = 0;
+    let mut overflowed = false;
     loop {
         number += 1;
         if cancel.is_cancelled() {
@@ -179,18 +180,51 @@ pub(crate) async fn drive(
                 return Outcome::Interrupted(InterruptReason::Budget);
             }
         }
-        let capped = selection.agent.steps == Some(number);
         // A tool may have moved the session; the next step runs in its new directory.
         let current = shared.db.session(&session.id).ok().flatten();
         let session = current.as_ref().unwrap_or(session);
+        if number > 1 {
+            // Steered input joins the turn at this boundary, after the context it follows.
+            if let Err(error) = settle_context(shared, session, selection) {
+                return Outcome::Failed(error);
+            }
+            if let Ok(Some(promoted)) =
+                super::inbox::promote(&shared.db, &session.id, super::inbox::Scope::Steer)
+                && promoted > 0
+            {
+                number = 1;
+            }
+        }
+        let capped = selection.agent.steps == Some(number);
         match step(shared, session, selection, capped, cancel).await {
+            StepEnd::Compacted => {
+                number -= 1;
+                continue;
+            }
+            // One overflow compaction per step; a second rejection surfaces.
+            StepEnd::Overflow(error) if !overflowed => {
+                match overflow(shared, session, selection, cancel).await {
+                    compaction::Outcome::Completed => {
+                        overflowed = true;
+                        number -= 1;
+                        continue;
+                    }
+                    compaction::Outcome::Failed(error) => return Outcome::Failed(error),
+                    compaction::Outcome::Skipped => {
+                        return Outcome::Failed(error.to_session_error());
+                    }
+                }
+            }
+            StepEnd::Overflow(error) => return Outcome::Failed(error.to_session_error()),
             StepEnd::Continue if capped => return Outcome::Succeeded,
             StepEnd::Continue => {}
             StepEnd::Stop => return Outcome::Succeeded,
             StepEnd::Failed(error) => return Outcome::Failed(error),
             StepEnd::Interrupted(reason) => return Outcome::Interrupted(reason),
         }
-        let last_finish = history(shared, &session.id)
+        overflowed = false;
+        let last_finish = compaction::history(shared, &session.id)
+            .messages
             .iter()
             .rev()
             .find_map(|m| match m {
@@ -210,6 +244,63 @@ pub(crate) async fn drive(
             length_finishes = 0;
         }
     }
+}
+
+/// `/compact`: a manual compaction of the session's history.
+pub(crate) async fn compact_manually(
+    shared: &Arc<Shared>,
+    session: &SessionRow,
+    selection: &Selection,
+    cancel: &CancellationToken,
+) -> compaction::Outcome {
+    triggered(shared, session, selection, cancel, false).await
+}
+
+/// The overflow compaction after a "too long" rejection, sized from the rejected prompt.
+async fn overflow(
+    shared: &Arc<Shared>,
+    session: &SessionRow,
+    selection: &Selection,
+    cancel: &CancellationToken,
+) -> compaction::Outcome {
+    triggered(shared, session, selection, cancel, true).await
+}
+
+async fn triggered(
+    shared: &Arc<Shared>,
+    session: &SessionRow,
+    selection: &Selection,
+    cancel: &CancellationToken,
+    overflow: bool,
+) -> compaction::Outcome {
+    let ctx = match context(shared, session, selection) {
+        Ok(ctx) => ctx,
+        Err(error) => return compaction::Outcome::Failed(error),
+    };
+    let target = Target {
+        provider: &selection.reference.provider,
+        id: &selection.model.id,
+        input: &selection.model.input,
+    };
+    let history = compaction::history(shared, &session.id).messages;
+    let estimate = compaction::estimate_prompt(&history, &target, &ctx.system, &ctx.definitions);
+    let prefix = compaction::Prefix {
+        system: &ctx.system,
+        tools: &ctx.definitions,
+    };
+    compaction::compact(
+        shared,
+        session,
+        selection,
+        prefix,
+        if overflow {
+            compaction::Trigger::Overflow(estimate)
+        } else {
+            compaction::Trigger::Manual
+        },
+        cancel,
+    )
+    .await
 }
 
 struct Running {
@@ -233,19 +324,39 @@ async fn step(
     capped: bool,
     cancel: &CancellationToken,
 ) -> StepEnd {
-    let ctx = context(shared, session, selection);
-    let history = history(shared, &session.id);
+    let ctx = match context(shared, session, selection) {
+        Ok(ctx) => ctx,
+        Err(error) => return StepEnd::Failed(error),
+    };
+    let history = compaction::history(shared, &session.id).messages;
     let target = Target {
         provider: &selection.reference.provider,
         id: &selection.model.id,
+        input: &selection.model.input,
     };
+    let estimate = compaction::estimate_prompt(&history, &target, &ctx.system, &ctx.definitions);
+    let prefix = compaction::Prefix {
+        system: &ctx.system,
+        tools: &ctx.definitions,
+    };
+    let trigger = compaction::Trigger::Auto(estimate);
+    match compaction::compact(shared, session, selection, prefix, trigger, cancel).await {
+        compaction::Outcome::Skipped => {}
+        compaction::Outcome::Completed => return StepEnd::Compacted,
+        compaction::Outcome::Failed(error) => return StepEnd::Failed(error),
+    }
     let mut messages = lower(&history, &target);
     if capped {
-        messages.push(
+        messages.push(Entry::Turn(
             json!({"role": "assistant", "content": [{"type": "text", "text": MAX_STEPS_PROMPT}]}),
-        );
+        ));
     }
-    let max_tokens = output_limit(&selection.model, input_estimate(&history, &messages));
+    let max_tokens = output_limit(
+        &selection.model,
+        estimate.measured,
+        estimate.estimated,
+        0.01,
+    );
     let variant = selection
         .reference
         .variant
@@ -263,6 +374,7 @@ async fn step(
     headers.extend(session_headers(shared, session));
 
     let message_id = crate::ids::message();
+    let start = capture(shared);
     let running = Running {
         session_id: session.id.clone(),
         message_id: message_id.clone(),
@@ -278,6 +390,10 @@ async fn step(
                 variant: selection.reference.variant.clone(),
             },
             content: Vec::new(),
+            snapshot: start.clone().map(|start| StepSnapshot {
+                start: Some(start),
+                ..StepSnapshot::default()
+            }),
             finish: None,
             raw_finish: None,
             cost: None,
@@ -301,6 +417,7 @@ async fn step(
                 event_id: crate::ids::event(),
                 agent: selection.agent.id.clone(),
                 model_id: selection.model.id.clone(),
+                snapshot: start.clone(),
             },
         )
     };
@@ -314,6 +431,9 @@ async fn step(
         };
         match attempt {
             Ok(stream) => break stream,
+            Err(error) if error.reason == Reason::ContextOverflow => {
+                return overflowed(shared, &running, error);
+            }
             Err(error) => match retry.next(&error) {
                 Some(delay) => {
                     wait_retry(shared, &session.id, retry.attempt(), delay, &error);
@@ -366,6 +486,29 @@ pub(crate) fn session_headers(shared: &Shared, session: &SessionRow) -> Vec<(Str
     headers
 }
 
+/// The project's files as a snapshot tree, when snapshots are on.
+fn capture(shared: &Shared) -> Option<String> {
+    shared.snapshots.as_ref()?.capture()
+}
+
+/// Captures the tree after the step and records the files the step changed.
+fn end_snapshot(shared: &Shared, running: &mut Running) -> Option<String> {
+    let store = shared.snapshots.as_ref()?;
+    let snapshot = running.data.snapshot.as_mut()?;
+    let end = store.capture()?;
+    if let Some(start) = &snapshot.start {
+        snapshot.files = store.files(start, &end);
+    }
+    snapshot.end = Some(end.clone());
+    Some(end)
+}
+
+/// A rejected prompt leaves no trace: its step reruns after the overflow compaction.
+fn overflowed(shared: &Shared, running: &Running, error: ApiError) -> StepEnd {
+    let _ = shared.db.delete_message(&running.message_id);
+    StepEnd::Overflow(error)
+}
+
 fn fail(shared: &Shared, mut running: Running, error: SessionError) -> StepEnd {
     running.data.error = Some(error.clone());
     running.data.time.completed = Some(now_ms());
@@ -402,6 +545,7 @@ fn interrupt(
     running.data.finish.get_or_insert_with(|| "error".into());
     running.data.time.completed = Some(now_ms());
     running.save(shared);
+    let end = end_snapshot(shared, &mut running);
     if let Some(tokens) = running.data.tokens {
         send(
             shared,
@@ -412,6 +556,7 @@ fn interrupt(
                 finish: "error".into(),
                 tokens,
                 last: true,
+                snapshot: end,
             },
         );
     }
@@ -586,6 +731,10 @@ async fn run_stream(
     if !ended_ok {
         let error = stream_error
             .unwrap_or_else(|| ApiError::incomplete("The provider response ended unexpectedly."));
+        if error.reason == Reason::ContextOverflow && !assembly.has_output() {
+            tool_cancel.cancel();
+            return overflowed(shared, &running, error);
+        }
         if !assembly.has_output()
             && let Some(delay) = retry.next(&error)
         {
@@ -648,6 +797,7 @@ async fn run_stream(
     if declined {
         return interrupt(shared, running, Vec::new(), InterruptReason::Declined);
     }
+    let end = end_snapshot(shared, &mut running);
     running.save(shared);
     let continues = (ran_tools && !capped) || finish == "length";
     send(
@@ -659,6 +809,7 @@ async fn run_stream(
             finish: finish.into(),
             tokens: assembly.tokens,
             last: !continues,
+            snapshot: end,
         },
     );
     if continues {
@@ -695,6 +846,7 @@ fn resend<'a>(
                 event_id: crate::ids::event(),
                 agent: selection.agent.id.clone(),
                 model_id: selection.model.id.clone(),
+                snapshot: running.data.snapshot.as_ref().and_then(|s| s.start.clone()),
             },
         );
         let _ = shared

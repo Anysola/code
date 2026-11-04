@@ -254,6 +254,8 @@ pub fn normalize_body(body: &Value, places: &Places, capture: bool) -> Value {
         Regex::new(r"(?s)\n\nSkills provide specialized instructions.*?</available_skills>")
             .unwrap();
     let quoted = Regex::new(r#"^"([^"]*)"(\n|$)"#).unwrap();
+    // The same quoting inside a compaction transcript line.
+    let quoted_transcript = Regex::new(r#"(?m)^\[User\]: "([^"]*)"$"#).unwrap();
     let paths = Regex::new(r"^(<PROJECT>/[^\n]*\n?)+$").unwrap();
     let f = |s: &str| {
         let mut s = places.apply(s);
@@ -262,6 +264,7 @@ pub fn normalize_body(body: &Value, places: &Places, capture: bool) -> Value {
         if capture {
             s = skills.replace_all(&s, "").into_owned();
             s = quoted.replace(&s, "$1$2").into_owned();
+            s = quoted_transcript.replace_all(&s, "[User]: $1").into_owned();
         }
         // Search results are sorted by path in 1.0; 0.5.1 kept ripgrep's walk order.
         if paths.is_match(&s) {

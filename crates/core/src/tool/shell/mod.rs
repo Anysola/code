@@ -40,6 +40,14 @@ pub fn shell_name(configured: Option<&str>) -> String {
     select::name(&select::resolve(configured))
 }
 
+/// The shell commands run with and the arguments that make it run `command` (also used for
+/// ``!`cmd` `` in command templates).
+pub fn invocation(configured: Option<&str>, command: &str) -> (String, Vec<String>) {
+    let shell = select::resolve(configured);
+    let args = select::args(&shell, command);
+    (shell, args)
+}
+
 /// `process.platform` as the description names it.
 fn os_name() -> &'static str {
     match std::env::consts::OS {

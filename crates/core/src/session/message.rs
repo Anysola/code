@@ -70,12 +70,25 @@ pub struct StoredModel {
     pub variant: Option<String>,
 }
 
+/// The trees before and after a step and the files it changed.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct StepSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AssistantData {
     pub time: AssistantTime,
     pub agent: String,
     pub model: StoredModel,
     pub content: Vec<Part>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<StepSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finish: Option<String>,
     #[serde(default, rename = "rawFinish", skip_serializing_if = "Option::is_none")]
@@ -153,26 +166,142 @@ pub enum Part {
     },
 }
 
+/// `model-switched`: the session's model or variant changed before the next prompt.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelSwitchedData {
+    pub time: Created,
+    pub model: StoredModel,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous: Option<StoredModel>,
+}
+
+/// `agent-switched`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentSwitchedData {
+    pub time: Created,
+    pub agent: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Location {
+    pub directory: String,
+}
+
+/// `location-switched`: the session moved to another directory.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LocationSwitchedData {
+    pub time: Created,
+    pub location: Location,
+}
+
+/// `skill`: a skill the user activated, with its rendered text.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SkillData {
+    pub time: Created,
+    pub skill: String,
+    pub name: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ShellOutput {
+    #[serde(default)]
+    pub output: String,
+}
+
+/// `shell`: a command the user ran (`!cmd` in the TUI).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShellData {
+    pub time: Created,
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<ShellOutput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
+}
+
+impl ShellData {
+    pub fn background(&self) -> bool {
+        self.metadata
+            .as_ref()
+            .and_then(|m| m.get("background"))
+            .and_then(Value::as_bool)
+            == Some(true)
+    }
+}
+
+/// `compaction`: a summary that replaces the history before it once `completed`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompactionData {
+    pub time: Created,
+    pub status: String,
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<StoredModel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<SessionError>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<Tokens>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
+}
+
+impl CompactionData {
+    pub fn completed(&self) -> bool {
+        self.status == "completed"
+    }
+
+    /// The first message the summary kept verbatim (`metadata.keepID`).
+    pub fn keep_id(&self) -> Option<&str> {
+        self.metadata.as_ref()?.get("keepID")?.as_str()
+    }
+}
+
 /// A decoded transcript entry.
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum Message {
     User(UserData),
     Synthetic(SyntheticData),
+    /// An instruction update (`system`).
+    System(SyntheticData),
     Assistant(AssistantData),
-    /// Kinds M1a stores but does not send (`agent-switched`, `model-switched`, `idle`, …).
+    ModelSwitched(ModelSwitchedData),
+    AgentSwitched(AgentSwitchedData),
+    LocationSwitched(LocationSwitchedData),
+    Skill(SkillData),
+    Shell(ShellData),
+    Compaction(CompactionData),
+    /// Kinds that never reach the model (`idle`) and rows that do not decode.
     Other,
 }
 
 impl Message {
     pub fn decode(kind: &str, data: &Value) -> Message {
-        let decoded = match kind {
-            "user" => serde_json::from_value(data.clone()).map(Message::User),
-            "synthetic" => serde_json::from_value(data.clone()).map(Message::Synthetic),
-            "assistant" => serde_json::from_value(data.clone()).map(Message::Assistant),
-            _ => return Message::Other,
-        };
-        decoded.unwrap_or(Message::Other)
+        fn read<T: serde::de::DeserializeOwned>(data: &Value, wrap: fn(T) -> Message) -> Message {
+            serde_json::from_value(data.clone()).map_or(Message::Other, wrap)
+        }
+        match kind {
+            "user" => read(data, Message::User),
+            "synthetic" => read(data, Message::Synthetic),
+            "system" => read(data, Message::System),
+            "assistant" => read(data, Message::Assistant),
+            "model-switched" => read(data, Message::ModelSwitched),
+            "agent-switched" => read(data, Message::AgentSwitched),
+            "location-switched" => read(data, Message::LocationSwitched),
+            "skill" => read(data, Message::Skill),
+            "shell" => read(data, Message::Shell),
+            "compaction" => read(data, Message::Compaction),
+            _ => Message::Other,
+        }
     }
 }
 

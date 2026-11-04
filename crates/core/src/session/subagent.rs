@@ -103,7 +103,7 @@ fn resolve_model(shared: &Shared, input: &str) -> Result<ModelRef> {
 }
 
 /// Text parts of the child's last completed, error-free assistant message.
-fn final_text(shared: &Shared, child: &str) -> String {
+pub(crate) fn final_text(shared: &Shared, child: &str) -> String {
     let rows = shared.db.messages(child).unwrap_or_default();
     let text = rows
         .iter()

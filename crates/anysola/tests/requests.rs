@@ -343,3 +343,97 @@ fn background_subagent_returns_at_once() {
     assert!(result.starts_with("The subagent is working in the background (sessionID: ses_"));
     assert!(result.ends_with("call subagent again with this sessionID."));
 }
+
+#[test]
+fn effort_switch_mid_session() {
+    let gateway = gateway_logger(String::new());
+    let home = anysola_testkit::TestHome::new(&gateway.url);
+    let dir = proj(&home);
+    let sonnet = "anysola/claude-sonnet-5-5";
+    assert_eq!(run(&home, &dir, &["run", "-m", sonnet, "first"]).code, 0);
+    let high = format!("{sonnet}#high");
+    assert_eq!(
+        run(&home, &dir, &["run", "-c", "-m", &high, "second"]).code,
+        0
+    );
+    let main: Vec<_> = gateway
+        .messages()
+        .into_iter()
+        .filter(|r| !r.is_title())
+        .collect();
+    let body = main[1].json();
+    assert!(
+        body.get("output_config").is_none(),
+        "top-level effort stays the first one"
+    );
+    assert_eq!(
+        body["thinking"]["display"], "summarized",
+        "the request settings follow the variant"
+    );
+    assert_eq!(
+        body["messages"][2],
+        serde_json::json!({"role": "system", "content": [], "output_config": {"effort": "high"}})
+    );
+    assert_eq!(body["messages"][3]["content"][0]["text"], "second");
+    let beta = main[1]
+        .headers
+        .iter()
+        .find(|(k, _)| k == "anthropic-beta")
+        .map(|(_, v)| v.as_str());
+    assert_eq!(
+        beta,
+        Some(
+            "interleaved-thinking-2025-05-14,thinking-binding-controls-2026-08-01,mid-conversation-output-config-2026-07-01"
+        )
+    );
+}
+
+/// Runs `first`, rewrites the project's `AGENTS.md`, then continues with `second`; returns the
+/// second main request.
+fn instruction_update(
+    model: &str,
+    before: &str,
+    after: &str,
+    turns: [&str; 2],
+) -> (anysola_testkit::Recorded, Places) {
+    let gateway = gateway_logger(String::new());
+    let home = anysola_testkit::TestHome::new(&gateway.url);
+    let dir = proj(&home);
+    std::fs::write(dir.join("AGENTS.md"), before).unwrap();
+    assert_eq!(run(&home, &dir, &["run", "-m", model, turns[0]]).code, 0);
+    std::fs::write(dir.join("AGENTS.md"), after).unwrap();
+    let output = run(&home, &dir, &["run", "-c", "-m", model, turns[1]]);
+    assert_eq!(output.code, 0, "{}", output.stderr);
+    let main: Vec<_> = gateway
+        .messages()
+        .into_iter()
+        .filter(|r| !r.is_title())
+        .collect();
+    (main[1].clone(), our_places(&home, &dir))
+}
+
+#[test]
+fn instruction_update_native_system() {
+    let rule = "Project rule: always answer in English.\n";
+    let (request, places) = instruction_update(
+        "anysola/claude-sonnet-5-5",
+        rule,
+        &format!("{rule}New line added.\n"),
+        ["hello", "next turn"],
+    );
+    let capture = read_json("session/requests/instruction-update-native-system.json");
+    assert_request("native update", &request, &capture, &places);
+}
+
+#[test]
+fn instruction_update_wrapped_for_auto() {
+    let rule = "Project rule: always answer in English.\n";
+    let (request, places) = instruction_update(
+        "anysola/auto",
+        &format!("{rule}New line added.\n"),
+        &format!("{rule}Changed again.\n"),
+        ["first", "second"],
+    );
+    let capture = read_json("session/requests/instruction-update-wrapped-auto.json");
+    assert_request("wrapped update", &request, &capture, &places);
+}

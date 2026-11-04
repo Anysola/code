@@ -703,3 +703,137 @@ fn shell_permissions_policies_and_scanner() {
         r#"{"error":{"type":"unknown","message":"Portable shell scanner cannot analyze command: unterminated-quote"},"content":[]}"#
     );
 }
+
+#[test]
+fn log_file_levels_and_printing() {
+    let gateway = FakeGateway::start(answer("ok"));
+    let mut home = TestHome::new(&gateway.url);
+    let log = home.home().join(".anysola/log/anysola.log");
+    let output = home.run(BIN, &["run", "hi"], None, None);
+    assert_eq!(output.code, 0);
+    let text = std::fs::read_to_string(&log).unwrap();
+    let line = text
+        .lines()
+        .find(|l| l.contains("message=\"session idle\""))
+        .expect("an idle line");
+    let run = regex::Regex::new(
+        r"^timestamp=\d{4}-\d\d-\d\dT[\d:.]+Z level=INFO run=[0-9a-f]{8} message=",
+    )
+    .unwrap();
+    assert!(run.is_match(line), "{line}");
+    assert!(line.ends_with(" outcome=succeeded role=cli"), "{line}");
+    assert!(!output.stderr.contains("level=INFO"));
+
+    let printed = home.run(BIN, &["run", "--print-logs", "hi"], None, None);
+    assert!(printed.stderr.contains("level=INFO"), "{}", printed.stderr);
+
+    let before = std::fs::read_to_string(&log).unwrap().lines().count();
+    home.set_env("OPENCODE_LOG_LEVEL", "ERROR");
+    home.run(BIN, &["run", "hi"], None, None);
+    let quiet = home.run(BIN, &["run", "--log-level", "warn", "hi"], None, None);
+    assert_eq!(quiet.code, 0);
+    let after = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        after
+            .lines()
+            .skip(before)
+            .all(|l| !l.contains("level=INFO")),
+        "{after}"
+    );
+}
+
+#[test]
+fn config_sources_in_precedence_order() {
+    let gateway = FakeGateway::start(answer("ok"));
+    let mut home = TestHome::new(&gateway.url);
+    let agents: String = (1..=7)
+        .map(|n| format!("\"a{n}\": {{\"mode\": \"primary\", \"description\": \"layer {n}\"}}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let layer = |n: u32| format!("{{\"default_agent\": \"a{n}\"}}");
+    home.write(
+        ".config/opencode/opencode.json",
+        &format!("{{\"default_agent\": \"a1\", \"agents\": {{{agents}}}}}"),
+    );
+    home.write(".anysola/config.json", &layer(2));
+    let explicit = home.write("explicit.json", &layer(3));
+    home.write("opencode.json", &layer(4));
+    home.write("proj/opencode.jsonc", &layer(5));
+    home.write("proj/.opencode/opencode.json", &layer(6));
+    home.set_env("OPENCODE_CONFIG", &explicit.display().to_string());
+    home.set_env("OPENCODE_CONFIG_CONTENT", &layer(7));
+    let agent = |home: &TestHome| {
+        let output = home.run(BIN, &["run", "hi"], None, None);
+        assert_eq!(output.code, 0, "{}", output.stderr);
+        output
+            .stderr
+            .lines()
+            .find_map(|l| l.strip_prefix("> "))
+            .and_then(|l| l.split(" · ").next())
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(agent(&home), "a7");
+    home.remove_env("OPENCODE_CONFIG_CONTENT");
+    assert_eq!(agent(&home), "a6");
+    std::fs::remove_file(home.home().join("proj/.opencode/opencode.json")).unwrap();
+    assert_eq!(agent(&home), "a5");
+    std::fs::remove_file(home.home().join("proj/opencode.jsonc")).unwrap();
+    assert_eq!(agent(&home), "a4");
+    home.set_env("OPENCODE_DISABLE_PROJECT_CONFIG", "1");
+    assert_eq!(agent(&home), "a3");
+    home.remove_env("OPENCODE_CONFIG");
+    assert_eq!(agent(&home), "a2");
+    std::fs::remove_file(home.home().join(".anysola/config.json")).unwrap();
+    assert_eq!(agent(&home), "a1");
+}
+
+#[test]
+fn ignored_keys_and_the_plugins_warning() {
+    let gateway = FakeGateway::start(answer("ok"));
+    let mut home = TestHome::new(&gateway.url);
+    home.set_env(
+        "OPENCODE_CONFIG_CONTENT",
+        r#"{"lsp": {"x": {}}, "share": "manual", "enterprise": {"url": "u"}, "update": false, "plugin": ["a"], "plugins": ["b"]}"#,
+    );
+    home.write(".anysola/config.json", r#"{"plugins": ["c"]}"#);
+    let output = home.run(BIN, &["run", "--print-logs", "hi"], None, None);
+    assert_eq!(output.code, 0, "{}", output.stderr);
+    let warnings = output
+        .stderr
+        .matches("Plugins are not supported since Anysola Code 1.0; ignoring \\\"plugins\\\".")
+        .count();
+    assert_eq!(warnings, 1, "{}", output.stderr);
+}
+
+#[test]
+fn instruction_urls_are_fetched() {
+    let gateway = FakeGateway::start(answer("ok"));
+    gateway.serve("/rules.md", "Remote rule.\n");
+    let mut home = TestHome::new(&gateway.url);
+    let content = format!(
+        r#"{{"instructions": ["{0}/rules.md", "{0}/missing.md"]}}"#,
+        gateway.url
+    );
+    home.set_env("OPENCODE_CONFIG_CONTENT", &content);
+    assert_eq!(home.run(BIN, &["run", "hi"], None, None).code, 0);
+    let request = main_requests(&gateway).remove(0);
+    let block = request.json()["system"][2]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(block.contains(&format!(
+        "Instructions from: {}/rules.md\nRemote rule.\n",
+        gateway.url
+    )));
+    assert!(!block.contains("missing.md"));
+    let fetch = gateway
+        .requests()
+        .into_iter()
+        .find(|r| r.path == "/rules.md")
+        .unwrap();
+    assert_eq!(
+        fetch.header("user-agent"),
+        Some("opencode/latest/2.2.5/cli")
+    );
+}

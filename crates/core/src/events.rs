@@ -35,6 +35,8 @@ pub enum Event {
         event_id: String,
         agent: String,
         model_id: String,
+        /// The tree captured as the step started.
+        snapshot: Option<String>,
     },
     TextStarted {
         session_id: String,
@@ -100,6 +102,8 @@ pub enum Event {
         tokens: Tokens,
         /// The turn ends after this step.
         last: bool,
+        /// The tree captured as the step ended.
+        snapshot: Option<String>,
     },
     StepFailed {
         session_id: String,

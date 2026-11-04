@@ -23,6 +23,12 @@ pub struct Model {
     pub output: Option<u64>,
     pub supports_binding: Option<bool>,
     pub supports_effort_updates: Option<bool>,
+    /// Input modalities (`capabilities.input`, default text and image).
+    pub input: Vec<String>,
+    /// The model picker's note: the gateway's `description`, trimmed, at most 160 characters.
+    pub note: Option<String>,
+    /// `credits_per_turn_estimate`, when the gateway sends a positive one.
+    pub credits_per_turn: Option<f64>,
     pub variants: Vec<Variant>,
 }
 
@@ -167,8 +173,45 @@ impl Model {
             output: number(&["limit", "output"]),
             supports_binding: flag("supportsThinkingBlockBinding"),
             supports_effort_updates: flag("supportsEffortUpdates"),
+            input: info
+                .get("capabilities")
+                .and_then(|c| c.get("input"))
+                .and_then(Value::as_array)
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_else(|| vec!["text".into(), "image".into()]),
+            note: text(&["description"])
+                .map(str::trim)
+                .filter(|d| !d.is_empty())
+                .map(|d| {
+                    let units: Vec<u16> = d.encode_utf16().take(160).collect();
+                    String::from_utf16_lossy(&units)
+                }),
+            credits_per_turn: info
+                .get("credits_per_turn_estimate")
+                .and_then(Value::as_f64)
+                .filter(|v| v.is_finite() && *v > 0.0),
             variants,
         }
+    }
+
+    /// The picker's trailing text: `~N credit(s)/turn`.
+    pub fn estimate_label(&self) -> Option<String> {
+        let estimate = self.credits_per_turn?;
+        let rounded = estimate.round() as u64;
+        let digits = rounded.to_string();
+        let mut grouped = String::new();
+        for (i, c) in digits.chars().enumerate() {
+            if i > 0 && (digits.len() - i).is_multiple_of(3) {
+                grouped.push(',');
+            }
+            grouped.push(c);
+        }
+        let plural = if estimate == 1.0 { "" } else { "s" };
+        Some(format!("~{grouped} credit{plural}/turn"))
     }
 
     pub fn variant(&self, id: &str) -> Option<&Variant> {
@@ -180,6 +223,16 @@ impl Model {
         self.supports_binding.unwrap_or_else(|| {
             claude_version(&self.id)
                 .is_some_and(|(_, major, minor)| major > 5 || (major == 5 && minor >= 1))
+        })
+    }
+
+    /// Mid-conversation effort changes: Claude Opus ≥ 5 and every Claude ≥ 5.1, or the gateway's
+    /// compatibility flag.
+    pub fn effort_updates(&self) -> bool {
+        self.supports_effort_updates.unwrap_or_else(|| {
+            claude_version(&self.id).is_some_and(|(family, major, minor)| {
+                (family == "opus" && major >= 5) || major > 5 || (major == 5 && minor >= 1)
+            })
         })
     }
 
@@ -274,6 +327,24 @@ mod tests {
             Some(("haiku".into(), 4, 5))
         );
         assert_eq!(claude_version("auto"), None);
+    }
+
+    #[test]
+    fn picker_note_and_estimate() {
+        let info = json!({"description": format!("  {}  ", "d".repeat(200)), "credits_per_turn_estimate": 1234.4});
+        let model = Model::from_config("m", &info);
+        assert_eq!(model.note.as_deref().map(str::len), Some(160));
+        assert_eq!(
+            model.estimate_label().as_deref(),
+            Some("~1,234 credits/turn")
+        );
+        let one = Model::from_config("m", &json!({"credits_per_turn_estimate": 1}));
+        assert_eq!(one.estimate_label().as_deref(), Some("~1 credit/turn"));
+        let none = Model::from_config(
+            "m",
+            &json!({"description": " ", "credits_per_turn_estimate": 0}),
+        );
+        assert_eq!((none.note.clone(), none.estimate_label()), (None, None));
     }
 
     #[test]
