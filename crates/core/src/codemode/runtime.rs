@@ -445,7 +445,12 @@ fn compile_error(error: CaughtError<'_>, code: &str, offset: usize) -> String {
     if name != "SyntaxError" {
         return exception_text(&e);
     }
-    let mut reason: String = message.clone();
+    // QuickJS names the token it stopped at; acorn's wording does not.
+    let mut reason = if message.starts_with("unexpected token") {
+        "Unexpected token".to_string()
+    } else {
+        message
+    };
     if let Some(first) = reason.get(..1) {
         reason = format!("{}{}", first.to_uppercase(), &reason[1..]);
     }

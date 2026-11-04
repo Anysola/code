@@ -222,3 +222,5 @@ impl Inventory {
 pub fn path_of(namespace: &str, tool: &str) -> String {
     format!("{namespace}.{}", sanitize(tool))
 }
+#[cfg(test)]
+mod tests;
