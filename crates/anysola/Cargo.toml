@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 anysola-core.workspace = true
+anysola-migrate.workspace = true
 anyhow.workspace = true
 base64.workspace = true
 clap.workspace = true
