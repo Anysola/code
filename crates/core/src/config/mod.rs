@@ -1,10 +1,11 @@
 //! Core config: discovery of every source, parsing (JSONC, substitution, V1 normalization), the
 //! Anysola provider lock, and the merge into one [`Config`].
 //!
-//! Sources, lowest precedence first: the gateway's remote document, `~/.config/opencode`
-//! (`OPENCODE_CONFIG_DIR`), `~/.anysola/config.json`, `OPENCODE_CONFIG`, project `opencode.json[c]`
-//! files farthest first, project `.opencode/` directories farthest first, `OPENCODE_CONFIG_CONTENT`,
-//! then managed settings.
+//! Sources, lowest precedence first: managed policies, the gateway's remote document,
+//! `~/.config/opencode` (`OPENCODE_CONFIG_DIR`), `~/.anysola/config.json`, `OPENCODE_CONFIG`,
+//! project `opencode.json[c]` files farthest first, project `.opencode/` directories farthest
+//! first, `OPENCODE_CONFIG_CONTENT`, then managed settings (the system directory, then macOS MDM
+//! preferences). Managed policies outrank all others although their settings load last.
 
 mod jsonc;
 mod normalize;
@@ -350,16 +351,81 @@ pub fn upward(start: &Path, home: &Path) -> Vec<PathBuf> {
     out
 }
 
-fn managed_dirs() -> Vec<PathBuf> {
+/// The system configuration directory: managed settings that override everything.
+fn system_dir() -> PathBuf {
     if cfg!(windows) {
-        std::env::var_os("ProgramData")
-            .map(|d| PathBuf::from(d).join("opencode"))
-            .into_iter()
-            .collect()
+        let base = std::env::var_os("ProgramData").unwrap_or_else(|| "C:\\ProgramData".into());
+        PathBuf::from(base).join("opencode")
     } else if cfg!(target_os = "macos") {
-        vec![PathBuf::from("/Library/Application Support/opencode")]
+        PathBuf::from("/Library/Application Support/opencode")
     } else {
-        vec![PathBuf::from("/etc/opencode")]
+        PathBuf::from("/etc/opencode")
+    }
+}
+
+/// A path with symlinks resolved as far as it exists, so a symlinked global root is recognized.
+fn resolve(path: &Path) -> PathBuf {
+    if let Ok(real) = path.canonicalize() {
+        return real;
+    }
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => resolve(parent).join(name),
+        _ => path.to_path_buf(),
+    }
+}
+
+/// macOS MDM managed preferences (`ai.opencode.managed`), converted to JSON by `plutil`.
+#[cfg(any(target_os = "macos", test))]
+mod preferences {
+    use serde_json::Value;
+
+    /// Keys macOS and MDM profiles add that are not config.
+    const METADATA: [&str; 6] = [
+        "PayloadDisplayName",
+        "PayloadIdentifier",
+        "PayloadType",
+        "PayloadUUID",
+        "PayloadVersion",
+        "_manualProfile",
+    ];
+
+    pub fn strip_metadata(json: &str) -> String {
+        match serde_json::from_str::<Value>(json) {
+            Ok(Value::Object(mut map)) => {
+                map.retain(|key, _| !METADATA.contains(&key.as_str()));
+                crate::json::compact(&Value::Object(map))
+            }
+            _ => json.to_string(),
+        }
+    }
+
+    /// The most specific plist present, as JSON text.
+    #[cfg(target_os = "macos")]
+    pub fn load() -> Option<(std::path::PathBuf, String)> {
+        let user = std::env::var("USER").unwrap_or_else(|_| "user".into());
+        let base = std::path::Path::new("/Library/Managed Preferences");
+        let plist = [
+            base.join(&user).join("ai.opencode.managed.plist"),
+            base.join("ai.opencode.managed.plist"),
+        ]
+        .into_iter()
+        .find(|p| p.is_file())?;
+        let output = std::process::Command::new("plutil")
+            .args(["-convert", "json", "-o", "-"])
+            .arg(&plist)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success());
+        let Some(output) = output else {
+            crate::log::warn(
+                "failed to convert managed preferences",
+                &[("source", &plist.display().to_string())],
+            );
+            return None;
+        };
+        let text = strip_metadata(&String::from_utf8_lossy(&output.stdout));
+        Some((plist, text))
     }
 }
 
@@ -432,20 +498,34 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
     }
     let project_disabled =
         env_flag("OPENCODE_DISABLE_PROJECT_CONFIG") || env_flag("OPENCODE_CONFIG_PROJECT_DISABLE");
-    let global_roots = [legacy.clone(), paths.data.clone()];
-    if !project_disabled && !global_roots.iter().any(|root| root == directory) {
+    let system = system_dir();
+    let config_roots: Vec<PathBuf> = [&system, &legacy, &paths.data]
+        .into_iter()
+        .map(|dir| resolve(dir))
+        .collect();
+    let global_roots: Vec<PathBuf> = config_roots
+        .iter()
+        .cloned()
+        .chain([".claude", ".agents"].map(|name| resolve(&paths.home.join(name))))
+        .collect();
+    let global_files: Vec<PathBuf> = [&system, &legacy]
+        .into_iter()
+        .flat_map(|dir| NAMES.map(|name| resolve(&dir.join(name))))
+        .chain([resolve(&paths.data.join("config.json"))])
+        .collect();
+    if !project_disabled && !config_roots.contains(&resolve(directory)) {
         let walk: Vec<PathBuf> = upward(directory, &paths.home).into_iter().rev().collect();
         for dir in &walk {
             for name in NAMES {
                 let file = dir.join(name);
-                if !global_roots.iter().any(|root| file.starts_with(root)) {
+                if !global_files.contains(&resolve(&file)) {
                     loader.file(&file);
                 }
             }
         }
         for dir in &walk {
             let dot = dir.join(".opencode");
-            if !global_roots.contains(&dot) {
+            if !global_roots.contains(&resolve(&dot)) {
                 loader.directory(&dot, &NAMES);
             }
         }
@@ -456,8 +536,11 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
         loader.text(&content, directory, "OPENCODE_CONFIG_CONTENT");
     }
     loader.managed = true;
-    for dir in managed_dirs() {
-        loader.directory(&dir, &NAMES);
+    loader.directory(&system, &NAMES);
+    #[cfg(target_os = "macos")]
+    if let Some((plist, text)) = preferences::load() {
+        let dir = plist.parent().unwrap_or(Path::new("/")).to_path_buf();
+        loader.text(&text, &dir, &plist.display().to_string());
     }
     loader.config
 }
@@ -565,6 +648,41 @@ mod tests {
                 agents: json!({"build": {"steps": 3}}).as_object().unwrap().clone(),
                 commands: Map::new(),
             })
+        );
+    }
+
+    #[test]
+    fn preference_metadata_is_stripped() {
+        assert_eq!(
+            preferences::strip_metadata(
+                r#"{"PayloadUUID":"x","_manualProfile":true,"model":"anysola/m","PayloadType":"t"}"#
+            ),
+            r#"{"model":"anysola/m"}"#
+        );
+        assert_eq!(preferences::strip_metadata("[1]"), "[1]");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walk_skipped_in_a_symlinked_global_root() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let real = root.path().join("dotfiles/opencode");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::create_dir_all(home.join(".config")).unwrap();
+        std::os::unix::fs::symlink(&real, home.join(".config/opencode")).unwrap();
+        std::fs::write(real.join("opencode.json"), r#"{"shell":"zsh"}"#).unwrap();
+        std::fs::create_dir_all(real.join(".opencode")).unwrap();
+        std::fs::write(real.join(".opencode/opencode.json"), r#"{"shell":"fish"}"#).unwrap();
+        let paths = Paths::isolated(home.clone());
+        let config = load(&paths, &real, &LoadOptions::default());
+        assert_eq!(config.shell(), Some("zsh"));
+        let project = home.join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("opencode.json"), r#"{"shell":"bash"}"#).unwrap();
+        assert_eq!(
+            load(&paths, &project, &LoadOptions::default()).shell(),
+            Some("bash")
         );
     }
 }
