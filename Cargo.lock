@@ -101,6 +101,7 @@ name = "anysola-core"
 version = "1.0.0-dev"
 dependencies = [
  "anyhow",
+ "anysola-testkit",
  "base64 0.22.1",
  "bytes",
  "chrono",

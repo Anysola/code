@@ -3,6 +3,7 @@
 
 pub mod compaction;
 pub mod gate;
+pub mod inbox;
 pub mod lower;
 pub mod message;
 pub mod recent;
@@ -19,13 +20,13 @@ use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::Agent;
-use crate::api::{Prompt, Shared};
+use crate::api::Shared;
 use crate::events::{Event, InterruptReason};
 use crate::gateway::error::SessionError;
 use crate::model::{Model, ModelRef};
 use crate::storage::SessionRow;
 use crate::time::now_ms;
-use message::{Created, FileAttachment, Message, SyntheticData, UserData, encode};
+use message::{Created, Message, SyntheticData, encode};
 
 pub const PLAN_LEAVE: &str = "<system-reminder>\nYou are NO LONGER in Plan mode. The previous Plan restrictions no longer apply. Any Plan mode instructions from earlier in this conversation are no longer active.\n</system-reminder>";
 
@@ -132,88 +133,192 @@ fn is_fallback_title(session: &SessionRow) -> bool {
         && session.title == format!("New session - {}", crate::time::iso(session.time_created))
 }
 
-pub(crate) async fn run_turn(
-    shared: Arc<Shared>,
-    session: SessionRow,
-    prompt: Prompt,
-    options: TurnOptions,
-    cancel: CancellationToken,
-) -> Outcome {
-    let session_id = session.id.clone();
-    let selection = select(&shared, &session).and_then(|selection| {
-        plan_reminders(&shared, &session_id, &selection.agent.id);
-        step::settle_context(&shared, &session, &selection)?;
-        Ok(selection)
-    });
-    let files = prompt
-        .files
-        .iter()
-        .map(|(mime, data, name)| FileAttachment {
-            data: data.clone(),
-            mime: mime.clone(),
-            source: json!({"type": "inline"}),
-            name: Some(name.clone()),
-        })
-        .collect();
-    let user = UserData {
-        time: Created { created: now_ms() },
-        text: prompt.text.clone(),
-        files,
-    };
-    let _ = shared
-        .db
-        .append_message(&session_id, &crate::ids::message(), "user", &encode(&user));
-
-    let title = (is_fallback_title(&session) && selection.is_ok()).then(|| {
-        tokio::spawn(title::generate(
-            shared.clone(),
-            session.clone(),
-            prompt.text.clone(),
-        ))
-    });
-
-    let outcome = match selection {
-        Ok(selection) => step::drive(&shared, &session, &selection, options, &cancel).await,
-        Err(error) => Outcome::Failed(error),
-    };
-    if let Some(title) = title {
-        let _ = title.await;
+/// Recovery after a process died mid-turn: running compactions failed as interrupted, unsettled
+/// tool calls failed with the tool's name.
+fn settle_stale(shared: &Shared, session_id: &str) {
+    for row in shared.db.messages(session_id).unwrap_or_default() {
+        match Message::decode(&row.kind, &row.data) {
+            Message::Compaction(mut data) if data.status == "running" => {
+                data.status = "failed".into();
+                data.summary = None;
+                data.error = Some(SessionError::new(
+                    "compaction.interrupted",
+                    "Compaction was interrupted",
+                ));
+                let _ = shared.db.update_message(&row.id, &encode(&data));
+            }
+            Message::Assistant(mut data) => {
+                let mut changed = false;
+                for part in &mut data.content {
+                    let message::Part::Tool {
+                        name, state, time, ..
+                    } = part
+                    else {
+                        continue;
+                    };
+                    let (input, metadata) = match state {
+                        message::ToolState::Streaming { input } => (
+                            serde_json::from_str(input).unwrap_or(json!({})),
+                            Default::default(),
+                        ),
+                        message::ToolState::Running { input, metadata } => {
+                            (input.clone(), metadata.clone())
+                        }
+                        _ => continue,
+                    };
+                    let child = (name == "subagent")
+                        .then(|| metadata.get("sessionID").and_then(|v| v.as_str()))
+                        .flatten()
+                        .map(|id| format!(" (sessionID: {id})"))
+                        .unwrap_or_default();
+                    *state = message::ToolState::Error {
+                        input,
+                        error: SessionError::new(
+                            "aborted",
+                            format!("Tool execution interrupted: {name}{child}"),
+                        ),
+                        content: Vec::new(),
+                        metadata,
+                    };
+                    time.completed = Some(now_ms());
+                    changed = true;
+                }
+                if changed {
+                    let _ = shared.db.update_message(&row.id, &encode(&data));
+                }
+            }
+            _ => {}
+        }
     }
-    shared.credits.close_turn(&session_id);
-    let (outcome_label, event) = match &outcome {
+}
+
+fn finish(shared: &Shared, session_id: &str, outcome: &Outcome) {
+    shared.credits.close_turn(session_id);
+    let (outcome_label, event) = match outcome {
         Outcome::Succeeded => (
             "succeeded",
             Event::Succeeded {
-                session_id: session_id.clone(),
+                session_id: session_id.to_string(),
             },
         ),
         Outcome::Failed(error) => (
             "failed",
             Event::Failed {
-                session_id: session_id.clone(),
+                session_id: session_id.to_string(),
                 error: error.clone(),
             },
         ),
         Outcome::Interrupted(reason) => (
             "interrupted",
             Event::Interrupted {
-                session_id: session_id.clone(),
+                session_id: session_id.to_string(),
                 reason: *reason,
             },
         ),
     };
     let mut idle = json!({"time": {"created": now_ms()}, "outcome": outcome_label});
-    if let Outcome::Failed(error) = &outcome {
+    if let Outcome::Failed(error) = outcome {
         idle["error"] = encode(error);
     }
     let _ = shared
         .db
-        .append_message(&session_id, &crate::ids::message(), "idle", &idle);
-    let _ = shared.db.set_idle(&session_id, outcome_label);
+        .append_message(session_id, &crate::ids::message(), "idle", &idle);
+    let _ = shared.db.set_idle(session_id, outcome_label);
     crate::log::info(
         "session idle",
-        &[("session", &session_id), ("outcome", outcome_label)],
+        &[("session", session_id), ("outcome", outcome_label)],
     );
     let _ = shared.events.send(event);
+}
+
+fn storage(error: crate::storage::StorageError) -> SessionError {
+    SessionError::new("unknown", error.to_string())
+}
+
+/// One turn: settle the context (instructions are recorded before the input that follows them),
+/// promote pending input, then run steps until the model stops.
+async fn turn(
+    shared: &Arc<Shared>,
+    session: &SessionRow,
+    options: TurnOptions,
+    cancel: &CancellationToken,
+) -> Outcome {
+    let prepared = select(shared, session).and_then(|selection| {
+        plan_reminders(shared, &session.id, &selection.agent.id);
+        step::settle_context(shared, session, &selection)?;
+        Ok(selection)
+    });
+    let selection = match prepared {
+        Ok(selection) => selection,
+        // Pending input stays in the inbox for the next attempt.
+        Err(error) => return Outcome::Failed(error),
+    };
+    let promoted = match inbox::promote(&shared.db, &session.id, inbox::Scope::Input) {
+        Ok(Some(promoted)) => promoted,
+        Ok(None) => return Outcome::Succeeded,
+        Err(error) => return Outcome::Failed(storage(error)),
+    };
+    let title = match promoted.first() {
+        Some(first) if is_fallback_title(session) => Some(tokio::spawn(title::generate(
+            shared.clone(),
+            session.clone(),
+            first.0.clone(),
+        ))),
+        _ => None,
+    };
+    let outcome = step::drive(shared, session, &selection, options, cancel).await;
+    if let Some(title) = title {
+        let _ = title.await;
+    }
     outcome
+}
+
+/// Runs the session until its inbox is empty: a manual compaction or a turn per pending item,
+/// queued prompts one at a time. Stops at the first turn that does not succeed.
+pub(crate) async fn drain(
+    shared: Arc<Shared>,
+    session_id: &str,
+    options: TurnOptions,
+    cancel: CancellationToken,
+) -> Outcome {
+    settle_stale(&shared, session_id);
+    let mut outcome = Outcome::Succeeded;
+    loop {
+        let session = match shared.db.session(session_id) {
+            Ok(Some(session)) => session,
+            Ok(None) => return Outcome::Failed(SessionError::new("unknown", "Session not found")),
+            Err(error) => return Outcome::Failed(storage(error)),
+        };
+        let next = match inbox::next(&shared.db, session_id, inbox::Scope::Input) {
+            Ok(next) => next,
+            Err(error) => return Outcome::Failed(storage(error)),
+        };
+        let Some(next) = next else {
+            return outcome;
+        };
+        if next.kind == "compaction" {
+            let _ = shared.db.inbox_remove(&next.id);
+            outcome = match manual_compaction(&shared, &session, &cancel).await {
+                compaction::Outcome::Failed(error) => Outcome::Failed(error),
+                _ => Outcome::Succeeded,
+            };
+        } else {
+            outcome = turn(&shared, &session, options, &cancel).await;
+            finish(&shared, session_id, &outcome);
+        }
+        if outcome != Outcome::Succeeded {
+            return outcome;
+        }
+    }
+}
+
+async fn manual_compaction(
+    shared: &Arc<Shared>,
+    session: &SessionRow,
+    cancel: &CancellationToken,
+) -> compaction::Outcome {
+    match select(shared, session) {
+        Ok(selection) => step::compact_manually(shared, session, &selection, cancel).await,
+        Err(error) => compaction::Outcome::Failed(error),
+    }
 }

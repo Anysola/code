@@ -56,6 +56,11 @@ impl TestHome {
         self.home().join("proj")
     }
 
+    /// The variables a run gets, for driving the core in-process.
+    pub fn env(&self) -> &[(String, String)] {
+        &self.env
+    }
+
     pub fn set_env(&mut self, name: &str, value: &str) {
         self.env.retain(|(n, _)| n != name);
         self.env.push((name.into(), value.into()));

@@ -2,9 +2,11 @@
 //! Timestamps are epoch milliseconds. A session driven by one process carries a busy marker that
 //! other processes respect.
 
+mod inbox;
 mod instruction;
 mod schema;
 
+pub use inbox::InboxRow;
 pub use instruction::{InstructionState, Values};
 
 use std::path::Path;

@@ -21,6 +21,7 @@ use crate::model::{Model, ModelRef};
 use crate::paths::Paths;
 use crate::project::Project;
 use crate::session::gate::{Asks, Reply};
+use crate::session::inbox::Delivery;
 use crate::session::{Outcome, TurnOptions};
 use crate::storage::{Db, SessionRow};
 use crate::tool::registry::Registry;
@@ -313,18 +314,64 @@ impl Core {
         self.shared.credits.set_budget(session_id, budget)
     }
 
-    /// Runs one turn to completion. Fails fast when another process drives the session.
+    /// Admits the prompt and runs the session until its inbox is empty. Fails fast when another
+    /// process drives the session.
     pub async fn prompt(
         &self,
         session_id: &str,
         prompt: Prompt,
         options: TurnOptions,
     ) -> Result<Outcome, CoreError> {
-        let shared = &self.shared;
-        let session = shared
+        self.shared
             .db
             .session(session_id)?
             .ok_or(CoreError::SessionNotFound)?;
+        crate::session::inbox::enqueue(&self.shared.db, session_id, &prompt, Delivery::Steer)?;
+        self.drain(session_id, options).await
+    }
+
+    /// Admits a prompt without waiting: a running turn picks up `steer` input at its next step
+    /// boundary and `queue` input when it ends. Returns the pending item's id.
+    pub fn enqueue(
+        &self,
+        session_id: &str,
+        prompt: Prompt,
+        delivery: Delivery,
+    ) -> Result<String, CoreError> {
+        Ok(crate::session::inbox::enqueue(
+            &self.shared.db,
+            session_id,
+            &prompt,
+            delivery,
+        )?)
+    }
+
+    /// The session's pending input, oldest first.
+    pub fn pending(&self, session_id: &str) -> Result<Vec<crate::storage::InboxRow>, CoreError> {
+        Ok(self.shared.db.inbox(session_id)?)
+    }
+
+    /// Switches a pending item between `steer` and `queue`; false once it was promoted.
+    pub fn set_delivery(&self, inbox_id: &str, delivery: Delivery) -> Result<bool, CoreError> {
+        Ok(self
+            .shared
+            .db
+            .inbox_set_delivery(inbox_id, delivery.as_str())?)
+    }
+
+    /// Cancels a pending item; false once it was promoted.
+    pub fn cancel_pending(&self, inbox_id: &str) -> Result<bool, CoreError> {
+        Ok(self.shared.db.inbox_remove(inbox_id)?)
+    }
+
+    /// `/compact`: summarizes the session's history now.
+    pub async fn compact(&self, session_id: &str) -> Result<Outcome, CoreError> {
+        crate::session::inbox::enqueue_compaction(&self.shared.db, session_id)?;
+        self.drain(session_id, TurnOptions::default()).await
+    }
+
+    async fn drain(&self, session_id: &str, options: TurnOptions) -> Result<Outcome, CoreError> {
+        let shared = &self.shared;
         if !shared.db.acquire(session_id, &shared.owner)? {
             return Err(CoreError::Busy(session_id.to_string()));
         }
@@ -344,8 +391,7 @@ impl Core {
                 }
             })
         };
-        let outcome =
-            crate::session::run_turn(self.shared.clone(), session, prompt, options, cancel).await;
+        let outcome = crate::session::drain(self.shared.clone(), session_id, options, cancel).await;
         heartbeat.abort();
         shared
             .turns

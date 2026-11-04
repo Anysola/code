@@ -169,6 +169,18 @@ pub(crate) async fn drive(
                 return Outcome::Interrupted(InterruptReason::Budget);
             }
         }
+        if number > 1 {
+            // Steered input joins the turn at this boundary, after the context it follows.
+            if let Err(error) = settle_context(shared, session, selection) {
+                return Outcome::Failed(error);
+            }
+            if let Ok(Some(promoted)) =
+                super::inbox::promote(&shared.db, &session.id, super::inbox::Scope::Steer)
+                && !promoted.is_empty()
+            {
+                number = 1;
+            }
+        }
         let capped = selection.agent.steps == Some(number);
         match step(shared, session, selection, capped, cancel).await {
             StepEnd::Compacted => {
@@ -220,12 +232,32 @@ pub(crate) async fn drive(
     }
 }
 
+/// `/compact`: a manual compaction of the session's history.
+pub(crate) async fn compact_manually(
+    shared: &Arc<Shared>,
+    session: &SessionRow,
+    selection: &Selection,
+    cancel: &CancellationToken,
+) -> compaction::Outcome {
+    triggered(shared, session, selection, cancel, false).await
+}
+
 /// The overflow compaction after a "too long" rejection, sized from the rejected prompt.
 async fn overflow(
     shared: &Arc<Shared>,
     session: &SessionRow,
     selection: &Selection,
     cancel: &CancellationToken,
+) -> compaction::Outcome {
+    triggered(shared, session, selection, cancel, true).await
+}
+
+async fn triggered(
+    shared: &Arc<Shared>,
+    session: &SessionRow,
+    selection: &Selection,
+    cancel: &CancellationToken,
+    overflow: bool,
 ) -> compaction::Outcome {
     let ctx = match context(shared, session, selection) {
         Ok(ctx) => ctx,
@@ -246,7 +278,11 @@ async fn overflow(
         session,
         selection,
         prefix,
-        compaction::Trigger::Overflow(estimate),
+        if overflow {
+            compaction::Trigger::Overflow(estimate)
+        } else {
+            compaction::Trigger::Manual
+        },
         cancel,
     )
     .await
