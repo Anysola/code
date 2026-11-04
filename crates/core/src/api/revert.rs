@@ -92,21 +92,21 @@ impl Core {
         }
         Ok(db.set_revert(session_id, None)?)
     }
+}
 
-    /// A prompt sent while a revert is staged makes it final: the reverted messages go, and the
-    /// instruction state forgets what it saw of them.
-    pub(crate) fn commit_revert(&self, session_id: &str) -> Result<(), CoreError> {
-        let db = &self.shared.db;
-        let Some(staged) = db.revert(session_id)? else {
-            return Ok(());
-        };
-        let message = staged["messageID"].as_str().unwrap_or_default();
-        if let Some(seq) = db.message_seq(session_id, message)? {
-            db.truncate_messages(session_id, seq)?;
-            db.instruction_rewind(session_id, seq)?;
-        }
-        Ok(db.set_revert(session_id, None)?)
+/// A prompt sent while a revert is staged makes it final: the reverted messages go, and the
+/// instruction state forgets what it saw of them.
+pub(super) fn commit(shared: &super::Shared, session_id: &str) -> Result<(), CoreError> {
+    let db = &shared.db;
+    let Some(staged) = db.revert(session_id)? else {
+        return Ok(());
+    };
+    let message = staged["messageID"].as_str().unwrap_or_default();
+    if let Some(seq) = db.message_seq(session_id, message)? {
+        db.truncate_messages(session_id, seq)?;
+        db.instruction_rewind(session_id, seq)?;
     }
+    Ok(db.set_revert(session_id, None)?)
 }
 
 fn staged_files(staged: Option<&Value>) -> Vec<String> {

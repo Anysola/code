@@ -1,11 +1,13 @@
 //! The set of tools and the tool array of a request: direct tools sorted by name, then `execute`
 //! (Code Mode) last. A tool is left out when the agent's rules wholly deny its permission action.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use serde_json::Value;
 
 use super::{DefinitionEnv, Tool, ToolDefinition};
+use crate::codemode::execute::{DirectTool, ExecuteTool};
+use crate::codemode::{Inventory, Namespace, opencode};
 use crate::permission::{Rule, wholly_disabled};
 
 /// The verbatim description and input schema of a built-in tool, from `defs/<name>.json`.
@@ -46,6 +48,8 @@ macro_rules! embedded_def {
 
 pub struct Registry {
     tools: Vec<Arc<dyn Tool>>,
+    /// Code Mode namespaces; MCP servers add theirs as they connect.
+    namespaces: RwLock<Vec<Arc<Namespace>>>,
 }
 
 impl Registry {
@@ -54,21 +58,40 @@ impl Registry {
             Arc::new(super::edit::EditTool),
             Arc::new(super::glob::GlobTool),
             Arc::new(super::grep::GrepTool),
-            Arc::new(super::stubs::QuestionTool),
+            Arc::new(super::question::QuestionTool),
             Arc::new(super::read::ReadTool),
             Arc::new(super::shell::ShellTool),
-            Arc::new(super::stubs::SkillTool),
-            Arc::new(super::stubs::SubagentTool),
-            Arc::new(super::stubs::WebfetchTool),
-            Arc::new(super::stubs::WebsearchTool),
+            Arc::new(super::skill::SkillTool),
+            Arc::new(super::subagent::SubagentTool),
+            Arc::new(super::webfetch::WebfetchTool),
+            Arc::new(super::websearch::WebsearchTool),
             Arc::new(super::write::WriteTool),
-            Arc::new(super::stubs::ExecuteTool),
         ];
-        Registry { tools }
+        Registry {
+            tools,
+            namespaces: RwLock::new(vec![opencode::namespace()]),
+        }
     }
 
-    pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
-        self.tools.iter().find(|t| t.name() == name).cloned()
+    /// Adds a namespace, replacing one with the same name.
+    pub fn set_namespace(&self, namespace: Arc<Namespace>) {
+        let mut namespaces = self.namespaces.write().unwrap_or_else(|e| e.into_inner());
+        namespaces.retain(|n| n.name != namespace.name);
+        namespaces.push(namespace);
+    }
+
+    /// The Code Mode tools an agent with these rules can reach; `None` when `execute` is denied.
+    pub fn code_mode(&self, rules: &[Rule]) -> Option<Inventory> {
+        (!wholly_disabled("execute", rules)).then(|| self.inventory().visible(rules))
+    }
+
+    fn inventory(&self) -> Inventory {
+        Inventory::new(
+            self.namespaces
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
+        )
     }
 
     /// Tools advertised to an agent with these rules, in request order.
@@ -78,19 +101,21 @@ impl Registry {
             // skill tool still asks `skill:<id>` per call.
             tool.name() == "skill" || !wholly_disabled(tool.permission(), rules)
         };
-        let mut direct: Vec<_> = self
-            .tools
-            .iter()
-            .filter(|t| !t.code_mode() && enabled(t))
-            .cloned()
-            .collect();
+        let mut direct: Vec<_> = self.tools.iter().filter(|t| enabled(t)).cloned().collect();
+        let code_mode = self.code_mode(rules);
+        if code_mode.is_none() {
+            // Without `execute` the namespace tools would be unreachable, so they become direct.
+            let visible = self.inventory().visible(rules);
+            for namespace in visible.namespaces() {
+                for tool in &namespace.tools {
+                    direct.push(Arc::new(DirectTool::new(namespace.clone(), tool.clone())));
+                }
+            }
+        }
         direct.sort_by(|a, b| a.name().cmp(b.name()));
-        direct.extend(
-            self.tools
-                .iter()
-                .filter(|t| t.code_mode() && enabled(t))
-                .cloned(),
-        );
+        if let Some(inventory) = code_mode {
+            direct.push(Arc::new(ExecuteTool::new(inventory)));
+        }
         direct
     }
 

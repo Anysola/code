@@ -31,7 +31,7 @@ pub fn parse_input<T: DeserializeOwned>(
     )))
 }
 
-fn format_issues(tool: &str, issues: &[(String, String)], value: &Value) -> String {
+pub(crate) fn format_issues(tool: &str, issues: &[(String, String)], value: &Value) -> String {
     let mut lines: Vec<String> = issues
         .iter()
         .take(MAX_ISSUES)
@@ -251,6 +251,19 @@ fn validate(value: &Value, schema: &Value, path: &str, issues: &mut Vec<(String,
                 issues.push((at(), "Expected string".into()));
                 return;
             };
+            // Effect renders `startsWith` checks as anchored literal patterns.
+            if let Some(prefix) = schema
+                .get("pattern")
+                .and_then(Value::as_str)
+                .and_then(|p| p.strip_prefix('^'))
+                .filter(|p| p.chars().all(|c| c.is_alphanumeric() || c == '_'))
+                && !text.starts_with(prefix)
+            {
+                issues.push((
+                    at(),
+                    format!("Expected a string starting with \"{prefix}\""),
+                ));
+            }
             let length = text.encode_utf16().count() as u64;
             if let Some(min) = schema.get("minLength").and_then(Value::as_u64)
                 && length < min
@@ -279,6 +292,17 @@ fn validate(value: &Value, schema: &Value, path: &str, issues: &mut Vec<(String,
 
 fn bounds(n: f64, schema: &Value, path: &str, issues: &mut Vec<(String, String)>) {
     let show = |v: &Value| v.to_string();
+    if let (Some(min), Some(max)) = (schema.get("minimum"), schema.get("maximum"))
+        && let (Some(low), Some(high)) = (min.as_f64(), max.as_f64())
+    {
+        if n < low || n > high {
+            issues.push((
+                path.into(),
+                format!("Expected a value between {} and {}", show(min), show(max)),
+            ));
+        }
+        return;
+    }
     if let Some(min) = schema
         .get("minimum")
         .filter(|m| m.as_f64().is_some_and(|m| n < m))

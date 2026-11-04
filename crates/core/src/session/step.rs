@@ -9,7 +9,7 @@ use serde_json::{Map, Value, json};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use super::gate::RuleGate;
+use super::gate::{RuleGate, Scope};
 use super::lower::{Entry, Target, lower};
 use super::message::{
     AssistantData, AssistantTime, Message, Part, StepSnapshot, StoredModel, ToolState, encode,
@@ -68,7 +68,7 @@ struct Context {
 fn instructions(
     shared: &Shared,
     session: &SessionRow,
-    code_mode: bool,
+    rules: &[crate::permission::Rule],
 ) -> Result<String, SessionError> {
     let directory = std::path::PathBuf::from(&session.directory);
     let worktree = shared.project.worktree.clone();
@@ -84,8 +84,17 @@ fn instructions(
         directory,
         worktree,
     };
-    let sources =
-        instructions::sources(code_mode, files, &crate::time::date_string(), &environment);
+    let catalog = shared
+        .registry
+        .code_mode(rules)
+        .map(|inventory| inventory.summary());
+    let sources = instructions::sources(
+        catalog.as_ref(),
+        crate::skill::guidance(&shared.skills, rules),
+        files,
+        &crate::time::date_string(),
+        &environment,
+    );
     Ok(instructions::prepare(&shared.db, &session.id, &sources)?.baseline)
 }
 
@@ -120,7 +129,7 @@ fn context(
         Some(system) => system.clone(),
         None => format!("{}\n\n{ANTHROPIC_PROMPT}", default_system(&names)),
     };
-    let block2 = instructions(shared, session, names.contains(&"execute"))?;
+    let block2 = instructions(shared, session, &rules)?;
     let system = vec![
         block0,
         identity(&selection.model.name, &selection.model.id),
@@ -184,6 +193,9 @@ pub(crate) async fn drive(
             }
         }
         let capped = selection.agent.steps == Some(number);
+        // A tool may have moved the session; the next step runs in its new directory.
+        let current = shared.db.session(&session.id).ok().flatten();
+        let session = current.as_ref().unwrap_or(session);
         match step(shared, session, selection, capped, cancel).await {
             StepEnd::Compacted => {
                 number -= 1;
@@ -453,14 +465,19 @@ fn wait_retry(shared: &Shared, session_id: &str, attempt: u32, delay: Duration, 
 }
 
 pub(crate) fn session_headers(shared: &Shared, session: &SessionRow) -> Vec<(String, String)> {
-    let id = session.id.clone();
+    // Children share their parent's cache affinity, forks their source's.
+    let affinity = session
+        .parent_id
+        .clone()
+        .or_else(|| session.fork_session_id.clone())
+        .unwrap_or_else(|| session.id.clone());
     let mut headers = vec![
         ("x-opencode-client".to_string(), "cli".to_string()),
         ("x-opencode-project".to_string(), shared.project.id.clone()),
-        ("x-opencode-session".to_string(), id.clone()),
-        ("x-opencode-session-id".to_string(), id.clone()),
-        ("x-session-affinity".to_string(), id.clone()),
-        ("x-session-id".to_string(), id),
+        ("x-opencode-session".to_string(), affinity.clone()),
+        ("x-opencode-session-id".to_string(), session.id.clone()),
+        ("x-session-affinity".to_string(), affinity.clone()),
+        ("x-session-id".to_string(), affinity),
     ];
     if let Some(parent) = &session.parent_id {
         headers.push(("x-opencode-parent-session-id".into(), parent.clone()));
@@ -640,11 +657,21 @@ async fn run_stream(
     headers: Vec<(String, String)>,
 ) -> StepEnd {
     let tool_cancel = cancel.child_token();
+    let mut configured = ctx.rules.clone();
+    configured.extend(
+        shared
+            .db
+            .session_permissions(&session.id)
+            .unwrap_or_default(),
+    );
     let gate = Arc::new(RuleGate {
         session_id: session.id.clone(),
-        rules: ctx.rules.clone(),
+        scope: Arc::new(Scope {
+            configured,
+            project_id: shared.project.id.clone(),
+            policies: Arc::new(shared.config.policies()),
+        }),
         asks: shared.asks.clone(),
-        events: shared.events.clone(),
     });
     let mut tasks: JoinSet<ToolTask> = JoinSet::new();
     let mut assembly = Assembly::default();
@@ -743,7 +770,9 @@ async fn run_stream(
     let unsettled = collect(shared, &mut running, &mut tasks).await;
     debug_assert!(unsettled.is_empty());
     let declined = running.data.content.iter().any(|p| {
-        matches!(p, Part::Tool { state: ToolState::Error { error, .. }, .. } if error.message == "The user declined this tool call")
+        matches!(p, Part::Tool { state: ToolState::Error { error, .. }, .. }
+            if error.message == "The user declined this tool call"
+                || error.message == crate::tool::question::DISMISSED)
     });
     let finish = assembly.finish();
     running.data.finish = Some(finish.into());
@@ -982,15 +1011,20 @@ fn handle(
                     shared.gateway.clone(),
                     shared.credits.clone(),
                 )),
+                host: shared.clone(),
+                session: Arc::new(super::host::Host {
+                    shared: shared.clone(),
+                }),
             };
             let tools = ctx.tools.clone();
             let output_dir = shared.paths.tool_output_dir();
-            let images = crate::image::Limits::from_config(&shared.config);
+            let images = crate::media::Limits::from_config(shared.config.get("media"));
             tasks.spawn(async move {
                 let result = execute(&tools, &name, input, &tool_ctx, capped).await;
-                let result = result.map(|mut out| {
-                    out.content = crate::image::normalize_tool_content(out.content, &images);
-                    crate::tool::bound::bound(out, tool_ctx.limits, &output_dir)
+                let result = result.map(|out| {
+                    let mut out = crate::tool::bound::bound(out, tool_ctx.limits, &output_dir);
+                    out.content = crate::media::normalize_content(out.content, &images);
+                    out
                 });
                 (part, result)
             });

@@ -14,12 +14,13 @@ use anysola_core::gateway::error::SessionError;
 use anysola_core::model::ModelRef;
 use anysola_core::session::gate::Reply;
 use anysola_core::session::{Outcome, TurnOptions};
+use anysola_core::tool::question::QuestionReply;
 use serde_json::json;
 
 use crate::cli::{Format, RunArgs};
 use crate::ui;
 use input::Attachment;
-use render::{Mode, PERMISSION_REJECTED, Renderer};
+use render::{Mode, PERMISSION_REJECTED, QUESTION_CANCELLED, Renderer};
 
 const SHUTDOWN_DEADLINE: Duration = Duration::from_secs(10);
 
@@ -158,6 +159,7 @@ pub async fn run(args: RunArgs) -> i32 {
             ui::NORMAL
         ));
     }
+    core.close_permissions();
     anysola_core::tool::shell::kill_background_shells();
     code
 }
@@ -215,8 +217,9 @@ async fn drive(
     }
 }
 
-/// Follows the session's events until its turn ends. Nobody can answer here: permission asks are
-/// rejected with feedback the model continues on (or approved once with `--auto`).
+/// Follows the session's events until its turn ends. Nobody can answer here: permission asks (of
+/// the session and its subagents) are rejected with feedback the model continues on (or approved
+/// once with `--auto`), and questions are cancelled with feedback.
 async fn consume(
     core: Core,
     mut events: tokio::sync::broadcast::Receiver<Event>,
@@ -229,7 +232,12 @@ async fn consume(
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
             Err(tokio::sync::broadcast::error::RecvError::Closed) => return renderer,
         };
-        if event.session_id() != renderer.session_id {
+        // Asks of any session in this process (the run's and its subagents') are answered here.
+        if let Event::QuestionAsked { request_id, .. } = &event {
+            core.reply_question(
+                request_id,
+                QuestionReply::Dismissed(Some(QUESTION_CANCELLED.into())),
+            );
             continue;
         }
         if let Event::PermissionAsked {
@@ -250,6 +258,9 @@ async fn consume(
                 ));
                 core.reply_permission(request_id, Reply::Reject(Some(PERMISSION_REJECTED.into())));
             }
+            continue;
+        }
+        if event.session_id() != renderer.session_id {
             continue;
         }
         if renderer.handle(&event) {

@@ -225,8 +225,37 @@ pub fn inline_info(
                 ),
             )
         }
+        "subagent" => {
+            let agent = text(input, "agent");
+            let kind = titlecase(if agent.is_empty() { "unknown" } else { &agent });
+            let description = text(input, "description");
+            Inline {
+                icon: "✓",
+                title: if description.is_empty() {
+                    format!("{kind} Subagent")
+                } else {
+                    description.clone()
+                },
+                description: (!description.is_empty()).then(|| format!("{kind} Agent")),
+                body: None,
+                block: false,
+            }
+        }
         _ => fallback(name, input),
     }
+}
+
+/// Upper-cases the first word character after each word boundary (`/\b\w/g`).
+fn titlecase(text: &str) -> String {
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut previous = None;
+    text.chars()
+        .map(|c| {
+            let start = word(c) && !previous.is_some_and(word);
+            previous = Some(c);
+            if start { c.to_ascii_uppercase() } else { c }
+        })
+        .collect()
 }
 
 fn fallback(name: &str, input: &Map<String, Value>) -> Inline {
@@ -289,5 +318,18 @@ mod tests {
             dir,
         );
         assert_eq!(glob.title, "Glob \"x\"");
+        let subagent = inline_info(
+            "subagent",
+            &map(json!({"agent": "code-reviewer", "description": "bg task"})),
+            &Map::new(),
+            None,
+            dir,
+        );
+        assert_eq!(
+            (subagent.title.as_str(), subagent.description.as_deref()),
+            ("bg task", Some("Code-Reviewer Agent"))
+        );
+        let subagent = inline_info("subagent", &Map::new(), &Map::new(), None, dir);
+        assert_eq!(subagent.title, "Unknown Subagent");
     }
 }

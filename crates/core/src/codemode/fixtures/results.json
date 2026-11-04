@@ -1,0 +1,378 @@
+[
+ {
+  "code": "1+1",
+  "expected": "2"
+ },
+ {
+  "code": "return {a: 1, b: [1, 2], c: 'x'}",
+  "expected": "{\n  \"a\": 1,\n  \"b\": [\n    1,\n    2\n  ],\n  \"c\": \"x\"\n}"
+ },
+ {
+  "code": "return \"text\"",
+  "expected": "text"
+ },
+ {
+  "code": "console.log('a', {x: 1, y: 'z'}, [1, 'b'], null, undefined, 1.5, true); console.info('i'); console.warn('w'); console.error('e'); console.debug('d'); return 1",
+  "expected": "1\n\nLogs:\na {\"x\":1,\"y\":\"z\"} [1,\"b\"] null undefined 1.5 true\ni\n[warn] w\n[error] e\n[debug] d"
+ },
+ {
+  "code": "throw new Error('boom')",
+  "expected": "Error: boom"
+ },
+ {
+  "code": "throw 'str'",
+  "expected": "Uncaught: str"
+ },
+ {
+  "code": "throw {a: 1}",
+  "expected": "Uncaught: {\"a\":1}"
+ },
+ {
+  "code": "undefinedVar + 1",
+  "expected": "ReferenceError: Unknown identifier 'undefinedVar'. (line 1, col 1)"
+ },
+ {
+  "code": "return await tools.opencode.nope()",
+  "expected": "Unknown tool 'opencode.nope'.\nUse search to find available tools."
+ },
+ {
+  "code": "return await tools.nope.x()",
+  "expected": "Unknown tool 'nope.x'. Did you mean tools.opencode.list_mcp_resources?\nUse search to find available tools."
+ },
+ {
+  "code": "return search({query: 'worktree'})",
+  "expected": "{\n  \"items\": [\n    {\n      \"path\": \"tools.opencode.worktree_create\",\n      \"description\": \"Create a named worktree. Returns its directory.\",\n      \"signature\": \"tools.opencode.worktree_create({\\n  name: string,\\n}): Promise<{\\n  directory: string,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.worktree_list\",\n      \"description\": \"List a repository's worktrees.\",\n      \"signature\": \"tools.opencode.worktree_list(): Promise<{\\n  worktrees: Array<{\\n      directory: string,\\n      strategy?: string,\\n    }>,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.worktree_remove\",\n      \"description\": \"Remove a worktree. The repository location selects configuration; directory identifies the worktree to remove.\",\n      \"signature\": \"tools.opencode.worktree_remove({\\n  /** Absolute path of the worktree to remove. @minLength 1 */\\n  directory: string,\\n  /** Discard modified and untracked files. Only set this when the user has confirmed forced removal. */\\n  force?: boolean,\\n}): Promise<{\\n  directory: string,\\n  removed: boolean,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.list_mcp_resources\",\n      \"description\": \"List documents, records, and other data exposed by MCP servers. Use this when the user refers to something that is not a local file, such as a URI with a custom scheme, then load a match with read_mcp_resource. Each entry names the server to read it from. Templates are resources addressed by a parameter such as a record ID; fill in the uriTemplate placeholders before reading.\",\n      \"signature\": \"tools.opencode.list_mcp_resources({\\n  /** MCP server name as configured. Omit to list every server. */\\n  server?: string,\\n}): Promise<{\\n  resources: Array<{\\n      server: string,\\n      name: string,\\n      uri: string,\\n      description?: string,\\n      mimeType?: string,\\n    }>,\\n  templates: Array<{\\n      server: string,\\n      name: string,\\n      uriTemplate: string,\\n      description?: string,\\n      mimeType?: string,\\n    }>,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.models\",\n      \"description\": \"Search the models available to use. Use this to turn a model name the user mentions into an exact reference for a tool that takes a model. Check your own provider first.\",\n      \"signature\": \"tools.opencode.models({\\n  /** Text to search for in model names and IDs. */\\n  query?: string,\\n  /** Provider ID or name to filter by. Try your own provider first. */\\n  provider?: string,\\n  /**\\n   * Which kind of model to list. Defaults to \\\"chat\\\".\\n   * \\\"chat\\\": a language model (LLM). Powers sessions, agents and subagents, and can call tools.\\n   * \\\"image\\\": generates or edits images from a prompt. It can't chat or call tools.\\n   */\\n  type?: \\\"chat\\\" | \\\"image\\\",\\n  /** Include older versions of each model family. By default only the newest version is listed. */\\n  all?: boolean,\\n  /** Maximum number of models to return. Defaults to 20. @integer @minimum 1 @maximum 100 */\\n  limit?: number,\\n  /** Number of models to skip, for paging through results. @integer @minimum 0 */\\n  offset?: number,\\n}): Promise<{\\n  /** Matching models grouped by provider. Your own provider comes first. */\\n  providers: Array<{\\n      id: string,\\n      name: string,\\n      /** Newest first. */\\n      models: Array<{\\n          /** providerID/modelID */\\n          id: string,\\n          name: string,\\n          /** Release date as a Unix timestamp in milliseconds, or 0 when unknown. */\\n          released: number,\\n          variants: Array<string>,\\n          /** Pricing in USD per million tokens. */\\n          cost: Array<{\\n              tier?: {\\n                type: \\\"context\\\",\\n                /** @integer */\\n                size: number,\\n              },\\n              input: number,\\n              output: number,\\n              cache: {\\n                read: number,\\n                write: number,\\n              },\\n            }>,\\n          status: \\\"alpha\\\" | \\\"beta\\\" | \\\"deprecated\\\" | \\\"active\\\",\\n        }>,\\n    }>,\\n  /** Number of matching models across all pages. @integer */\\n  total: number,\\n  /** Offset of the next page, or null on the last page. */\\n  next: number | null,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.read_mcp_resource\",\n      \"description\": \"Read one MCP resource by server and URI. Not for local files. Always return the full contents rather than slicing or filtering them; oversized output is truncated automatically and the full content is saved to a file you can read. Images and PDFs are shown to you directly.\",\n      \"signature\": \"tools.opencode.read_mcp_resource({\\n  /** The server field of the discovered resource. */\\n  server: string,\\n  /** Exact resource URI from discovery, an expanded uriTemplate, or the user. */\\n  uri: string,\\n}): Promise<{\\n  server: string,\\n  uri: string,\\n  contents: Array<{\\n        type: \\\"text\\\",\\n        uri: string,\\n        text: string,\\n        mimeType?: string,\\n      } | {\\n        type: \\\"blob\\\",\\n        uri: string,\\n        blob: string,\\n        mimeType?: string,\\n      }>,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.session_move\",\n      \"description\": \"Move a session to another directory, or omit sessionID to move the current session. The current session moves at the next safe boundary; do not run destination-dependent tools in the same execute call.\",\n      \"signature\": \"tools.opencode.session_move({\\n  /** Omit to move the current session. @pattern ^ses */\\n  sessionID?: string,\\n  /** Destination directory, relative to the target session's directory or absolute. Supports ~. @minLength 1 */\\n  directory: string,\\n}): Promise<{\\n  /** @pattern ^ses */\\n  sessionID: string,\\n  directory: string,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.session_rename\",\n      \"description\": \"Rename a session, or omit sessionID to rename the current session. Use a short, specific title that summarizes the work being done.\",\n      \"signature\": \"tools.opencode.session_rename({\\n  /** Omit to rename the current session. @pattern ^ses */\\n  sessionID?: string,\\n  /** New session title. @minLength 1 */\\n  title: string,\\n}): Promise<{\\n  /** @pattern ^ses */\\n  sessionID: string,\\n  title: string,\\n}>\"\n    }\n  ],\n  \"remaining\": 0,\n  \"next\": null\n}"
+ },
+ {
+  "code": "return search('worktree')",
+  "expected": "Invalid input for tool 'search': SchemaError(Expected object)"
+ },
+ {
+  "code": "return search({query: 1})",
+  "expected": "Invalid input for tool 'search': SchemaError(Expected string\n  at [\"query\"])"
+ },
+ {
+  "code": "return await tools.opencode.session_rename({title: ''})",
+  "expected": "Invalid arguments for tool \"opencode_session_rename\":\n- title: Expected a value with a length of at least 1\n\nArguments provided:\n{\n  \"title\": \"\"\n}\n\nUpdate the arguments and call the tool again."
+ },
+ {
+  "code": "return await tools.opencode.list_mcp_resources({})",
+  "expected": "{\n  \"resources\": [],\n  \"templates\": []\n}"
+ },
+ {
+  "code": "return await tools.opencode.read_mcp_resource({server: 'x', uri: 'y'})",
+  "expected": "MCP server not found: x"
+ },
+ {
+  "code": "return await tools.opencode.worktree_remove({directory: '/nonexistent'})",
+  "expected": "Unable to remove worktree /nonexistent: the directory does not exist or is not a directory."
+ },
+ {
+  "code": "const x = ",
+  "expected": "SyntaxError: Unexpected token. Code must be plain JavaScript written as a program body. (line 1, col 11)"
+ },
+ {
+  "code": "import fs from 'fs'",
+  "expected": "SyntaxError: Imports and exports aren't available. Call tools through `tools` and use the built-in globals. (line 1, col 1)"
+ },
+ {
+  "code": "setTimeout(() => 1, 10)",
+  "expected": "ReferenceError: Unknown identifier 'setTimeout'. (line 1, col 1)"
+ },
+ {
+  "code": "return [typeof fetch, typeof require, typeof process, typeof globalThis, typeof eval, typeof Function, typeof setTimeout, typeof search, typeof tools, typeof URL, typeof structuredClone, typeof queueMicrotask, typeof crypto, typeof atob, typeof TextEncoder, typeof Headers, typeof Response, typeof Request, typeof AbortController]",
+  "expected": "[\n  \"function\",\n  \"undefined\",\n  \"undefined\",\n  \"undefined\",\n  \"undefined\",\n  \"function\",\n  \"undefined\",\n  \"function\",\n  \"object\",\n  \"function\",\n  \"function\",\n  \"undefined\",\n  \"object\",\n  \"function\",\n  \"function\",\n  \"function\",\n  \"undefined\",\n  \"undefined\",\n  \"undefined\"\n]"
+ },
+ {
+  "code": "try { await tools.opencode.nope() } catch (e) { return [e.name, e.message] }",
+  "expected": "[\n  \"Error\",\n  \"Unknown tool 'opencode.nope'.\"\n]"
+ },
+ {
+  "code": "try { await tools.opencode.session_rename({title: ''}) } catch (e) { return [e.name, e.message] }",
+  "expected": "[\n  \"Error\",\n  \"Invalid arguments for tool \\\"opencode_session_rename\\\":\\n- title: Expected a value with a length of at least 1\\n\\nArguments provided:\\n{\\n  \\\"title\\\": \\\"\\\"\\n}\\n\\nUpdate the arguments and call the tool again.\"\n]"
+ },
+ {
+  "code": "return () => 1",
+  "expected": "null"
+ },
+ {
+  "code": "return undefined",
+  "expected": "null"
+ },
+ {
+  "code": "",
+  "expected": "Code cannot be empty."
+ },
+ {
+  "code": "tools.opencode.worktree_list(); return 1",
+  "expected": "1"
+ },
+ {
+  "code": "const r = await Promise.allSettled([tools.opencode.nope(), 1]); return r",
+  "expected": "[\n  {\n    \"status\": \"rejected\",\n    \"reason\": {\n      \"name\": \"Error\",\n      \"message\": \"Unknown tool 'opencode.nope'.\"\n    }\n  },\n  {\n    \"status\": \"fulfilled\",\n    \"value\": 1\n  }\n]"
+ },
+ {
+  "code": "return new Map([[1, 2]])",
+  "expected": "{}"
+ },
+ {
+  "code": "return new Date(0)",
+  "expected": "1970-01-01T00:00:00.000Z"
+ },
+ {
+  "code": "return NaN",
+  "expected": "null"
+ },
+ {
+  "code": "return [1, undefined, () => 1]",
+  "expected": "[\n  1,\n  null,\n  null\n]"
+ },
+ {
+  "code": "return Object.keys(tools.opencode)",
+  "expected": "[\n  \"session_rename\",\n  \"session_move\",\n  \"worktree_create\",\n  \"worktree_list\",\n  \"worktree_remove\",\n  \"models\",\n  \"list_mcp_resources\",\n  \"read_mcp_resource\"\n]"
+ },
+ {
+  "code": "console.log(tools); console.log(() => 1); console.log(tools.opencode.worktree_list); return 1",
+  "expected": "1\n\nLogs:\n[opaque reference]\n[opaque reference]\n[opaque reference]"
+ },
+ {
+  "code": "return await fetch('file:///etc/passwd')",
+  "expected": "Error: fetch cannot be used for filesystem access."
+ },
+ {
+  "code": "return await tools.search({query: 'rename'})",
+  "expected": "{\n  \"items\": [\n    {\n      \"path\": \"tools.opencode.session_rename\",\n      \"description\": \"Rename a session, or omit sessionID to rename the current session. Use a short, specific title that summarizes the work being done.\",\n      \"signature\": \"tools.opencode.session_rename({\\n  /** Omit to rename the current session. @pattern ^ses */\\n  sessionID?: string,\\n  /** New session title. @minLength 1 */\\n  title: string,\\n}): Promise<{\\n  /** @pattern ^ses */\\n  sessionID: string,\\n  title: string,\\n}>\"\n    }\n  ],\n  \"remaining\": 0,\n  \"next\": null\n}"
+ },
+ {
+  "code": "return search({})",
+  "expected": "{\n  \"items\": [\n    {\n      \"path\": \"tools.opencode.list_mcp_resources\",\n      \"description\": \"List documents, records, and other data exposed by MCP servers. Use this when the user refers to something that is not a local file, such as a URI with a custom scheme, then load a match with read_mcp_resource. Each entry names the server to read it from. Templates are resources addressed by a parameter such as a record ID; fill in the uriTemplate placeholders before reading.\",\n      \"signature\": \"tools.opencode.list_mcp_resources({\\n  /** MCP server name as configured. Omit to list every server. */\\n  server?: string,\\n}): Promise<{\\n  resources: Array<{\\n      server: string,\\n      name: string,\\n      uri: string,\\n      description?: string,\\n      mimeType?: string,\\n    }>,\\n  templates: Array<{\\n      server: string,\\n      name: string,\\n      uriTemplate: string,\\n      description?: string,\\n      mimeType?: string,\\n    }>,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.models\",\n      \"description\": \"Search the models available to use. Use this to turn a model name the user mentions into an exact reference for a tool that takes a model. Check your own provider first.\",\n      \"signature\": \"tools.opencode.models({\\n  /** Text to search for in model names and IDs. */\\n  query?: string,\\n  /** Provider ID or name to filter by. Try your own provider first. */\\n  provider?: string,\\n  /**\\n   * Which kind of model to list. Defaults to \\\"chat\\\".\\n   * \\\"chat\\\": a language model (LLM). Powers sessions, agents and subagents, and can call tools.\\n   * \\\"image\\\": generates or edits images from a prompt. It can't chat or call tools.\\n   */\\n  type?: \\\"chat\\\" | \\\"image\\\",\\n  /** Include older versions of each model family. By default only the newest version is listed. */\\n  all?: boolean,\\n  /** Maximum number of models to return. Defaults to 20. @integer @minimum 1 @maximum 100 */\\n  limit?: number,\\n  /** Number of models to skip, for paging through results. @integer @minimum 0 */\\n  offset?: number,\\n}): Promise<{\\n  /** Matching models grouped by provider. Your own provider comes first. */\\n  providers: Array<{\\n      id: string,\\n      name: string,\\n      /** Newest first. */\\n      models: Array<{\\n          /** providerID/modelID */\\n          id: string,\\n          name: string,\\n          /** Release date as a Unix timestamp in milliseconds, or 0 when unknown. */\\n          released: number,\\n          variants: Array<string>,\\n          /** Pricing in USD per million tokens. */\\n          cost: Array<{\\n              tier?: {\\n                type: \\\"context\\\",\\n                /** @integer */\\n                size: number,\\n              },\\n              input: number,\\n              output: number,\\n              cache: {\\n                read: number,\\n                write: number,\\n              },\\n            }>,\\n          status: \\\"alpha\\\" | \\\"beta\\\" | \\\"deprecated\\\" | \\\"active\\\",\\n        }>,\\n    }>,\\n  /** Number of matching models across all pages. @integer */\\n  total: number,\\n  /** Offset of the next page, or null on the last page. */\\n  next: number | null,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.read_mcp_resource\",\n      \"description\": \"Read one MCP resource by server and URI. Not for local files. Always return the full contents rather than slicing or filtering them; oversized output is truncated automatically and the full content is saved to a file you can read. Images and PDFs are shown to you directly.\",\n      \"signature\": \"tools.opencode.read_mcp_resource({\\n  /** The server field of the discovered resource. */\\n  server: string,\\n  /** Exact resource URI from discovery, an expanded uriTemplate, or the user. */\\n  uri: string,\\n}): Promise<{\\n  server: string,\\n  uri: string,\\n  contents: Array<{\\n        type: \\\"text\\\",\\n        uri: string,\\n        text: string,\\n        mimeType?: string,\\n      } | {\\n        type: \\\"blob\\\",\\n        uri: string,\\n        blob: string,\\n        mimeType?: string,\\n      }>,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.session_move\",\n      \"description\": \"Move a session to another directory, or omit sessionID to move the current session. The current session moves at the next safe boundary; do not run destination-dependent tools in the same execute call.\",\n      \"signature\": \"tools.opencode.session_move({\\n  /** Omit to move the current session. @pattern ^ses */\\n  sessionID?: string,\\n  /** Destination directory, relative to the target session's directory or absolute. Supports ~. @minLength 1 */\\n  directory: string,\\n}): Promise<{\\n  /** @pattern ^ses */\\n  sessionID: string,\\n  directory: string,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.session_rename\",\n      \"description\": \"Rename a session, or omit sessionID to rename the current session. Use a short, specific title that summarizes the work being done.\",\n      \"signature\": \"tools.opencode.session_rename({\\n  /** Omit to rename the current session. @pattern ^ses */\\n  sessionID?: string,\\n  /** New session title. @minLength 1 */\\n  title: string,\\n}): Promise<{\\n  /** @pattern ^ses */\\n  sessionID: string,\\n  title: string,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.worktree_create\",\n      \"description\": \"Create a named worktree. Returns its directory.\",\n      \"signature\": \"tools.opencode.worktree_create({\\n  name: string,\\n}): Promise<{\\n  directory: string,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.worktree_list\",\n      \"description\": \"List a repository's worktrees.\",\n      \"signature\": \"tools.opencode.worktree_list(): Promise<{\\n  worktrees: Array<{\\n      directory: string,\\n      strategy?: string,\\n    }>,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.worktree_remove\",\n      \"description\": \"Remove a worktree. The repository location selects configuration; directory identifies the worktree to remove.\",\n      \"signature\": \"tools.opencode.worktree_remove({\\n  /** Absolute path of the worktree to remove. @minLength 1 */\\n  directory: string,\\n  /** Discard modified and untracked files. Only set this when the user has confirmed forced removal. */\\n  force?: boolean,\\n}): Promise<{\\n  directory: string,\\n  removed: boolean,\\n}>\"\n    }\n  ],\n  \"remaining\": 0,\n  \"next\": null\n}"
+ },
+ {
+  "code": "return JSON.stringify({a: 1})",
+  "expected": "{\"a\":1}"
+ },
+ {
+  "code": "return await tools.opencode.session_rename('x')",
+  "expected": "Invalid arguments for tool \"opencode_session_rename\":\n- root: Expected object\n\nArguments provided:\n\"x\"\n\nUpdate the arguments and call the tool again."
+ },
+ {
+  "code": "return await tools.opencode.session_rename({title: 'a'}, {b: 1})",
+  "expected": "Tool 'opencode.session_rename' expects at most one input object."
+ },
+ {
+  "code": "tools.opencode",
+  "expected": "null"
+ },
+ {
+  "code": "let x; return x.y.z",
+  "expected": "TypeError: Cannot read properties of undefined (reading 'y'). (line 1, col 15)"
+ },
+ {
+  "code": "null.f()",
+  "expected": "TypeError: Cannot read properties of null (reading 'f'). (line 1, col 1)"
+ },
+ {
+  "code": "console.log('a\\nb'); console.log(); return 2",
+  "expected": "2\n\nLogs:\na\nb\n"
+ },
+ {
+  "code": "return {toJSON() { return 5 }}",
+  "expected": "5"
+ },
+ {
+  "code": "return new Error('x')",
+  "expected": "{\n  \"name\": \"Error\",\n  \"message\": \"x\"\n}"
+ },
+ {
+  "code": "return [new Set([1]), new URLSearchParams('a=1')]",
+  "expected": "[\n  [\n    1\n  ],\n  \"a=1\"\n]"
+ },
+ {
+  "code": "await 1; 5",
+  "expected": "5"
+ },
+ {
+  "code": "if (true) return 3; 4",
+  "expected": "3"
+ },
+ {
+  "code": "var x = 1; x",
+  "expected": "1"
+ },
+ {
+  "code": "let y = 2",
+  "expected": "null"
+ },
+ {
+  "code": "function f() { return 1 }",
+  "expected": "null"
+ },
+ {
+  "code": "const e = new TypeError('bad'); throw e",
+  "expected": "TypeError: bad"
+ },
+ {
+  "code": "throw null",
+  "expected": "Uncaught: null"
+ },
+ {
+  "code": "throw undefined",
+  "expected": "Uncaught: undefined"
+ },
+ {
+  "code": "throw 42",
+  "expected": "Uncaught: 42"
+ },
+ {
+  "code": "throw [1, 'a']",
+  "expected": "Uncaught: [1,\"a\"]"
+ },
+ {
+  "code": "return 'a'.repeat(3) + `t${1}`",
+  "expected": "aaat1"
+ },
+ {
+  "code": "return [1,2,3].map(x => x * 2).filter(x => x > 2)",
+  "expected": "[\n  4,\n  6\n]"
+ },
+ {
+  "code": "return search({query: 'worktree', limit: 1})",
+  "expected": "{\n  \"items\": [\n    {\n      \"path\": \"tools.opencode.worktree_create\",\n      \"description\": \"Create a named worktree. Returns its directory.\",\n      \"signature\": \"tools.opencode.worktree_create({\\n  name: string,\\n}): Promise<{\\n  directory: string,\\n}>\"\n    }\n  ],\n  \"remaining\": 7,\n  \"next\": {\n    \"offset\": 1\n  }\n}"
+ },
+ {
+  "code": "return search({namespace: 'opencode', limit: 2, offset: 1})",
+  "expected": "{\n  \"items\": [\n    {\n      \"path\": \"tools.opencode.models\",\n      \"description\": \"Search the models available to use. Use this to turn a model name the user mentions into an exact reference for a tool that takes a model. Check your own provider first.\",\n      \"signature\": \"tools.opencode.models({\\n  /** Text to search for in model names and IDs. */\\n  query?: string,\\n  /** Provider ID or name to filter by. Try your own provider first. */\\n  provider?: string,\\n  /**\\n   * Which kind of model to list. Defaults to \\\"chat\\\".\\n   * \\\"chat\\\": a language model (LLM). Powers sessions, agents and subagents, and can call tools.\\n   * \\\"image\\\": generates or edits images from a prompt. It can't chat or call tools.\\n   */\\n  type?: \\\"chat\\\" | \\\"image\\\",\\n  /** Include older versions of each model family. By default only the newest version is listed. */\\n  all?: boolean,\\n  /** Maximum number of models to return. Defaults to 20. @integer @minimum 1 @maximum 100 */\\n  limit?: number,\\n  /** Number of models to skip, for paging through results. @integer @minimum 0 */\\n  offset?: number,\\n}): Promise<{\\n  /** Matching models grouped by provider. Your own provider comes first. */\\n  providers: Array<{\\n      id: string,\\n      name: string,\\n      /** Newest first. */\\n      models: Array<{\\n          /** providerID/modelID */\\n          id: string,\\n          name: string,\\n          /** Release date as a Unix timestamp in milliseconds, or 0 when unknown. */\\n          released: number,\\n          variants: Array<string>,\\n          /** Pricing in USD per million tokens. */\\n          cost: Array<{\\n              tier?: {\\n                type: \\\"context\\\",\\n                /** @integer */\\n                size: number,\\n              },\\n              input: number,\\n              output: number,\\n              cache: {\\n                read: number,\\n                write: number,\\n              },\\n            }>,\\n          status: \\\"alpha\\\" | \\\"beta\\\" | \\\"deprecated\\\" | \\\"active\\\",\\n        }>,\\n    }>,\\n  /** Number of matching models across all pages. @integer */\\n  total: number,\\n  /** Offset of the next page, or null on the last page. */\\n  next: number | null,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.read_mcp_resource\",\n      \"description\": \"Read one MCP resource by server and URI. Not for local files. Always return the full contents rather than slicing or filtering them; oversized output is truncated automatically and the full content is saved to a file you can read. Images and PDFs are shown to you directly.\",\n      \"signature\": \"tools.opencode.read_mcp_resource({\\n  /** The server field of the discovered resource. */\\n  server: string,\\n  /** Exact resource URI from discovery, an expanded uriTemplate, or the user. */\\n  uri: string,\\n}): Promise<{\\n  server: string,\\n  uri: string,\\n  contents: Array<{\\n        type: \\\"text\\\",\\n        uri: string,\\n        text: string,\\n        mimeType?: string,\\n      } | {\\n        type: \\\"blob\\\",\\n        uri: string,\\n        blob: string,\\n        mimeType?: string,\\n      }>,\\n}>\"\n    }\n  ],\n  \"remaining\": 5,\n  \"next\": {\n    \"offset\": 3\n  }\n}"
+ },
+ {
+  "code": "return search({query: 'tools.opencode.models'})",
+  "expected": "{\n  \"items\": [\n    {\n      \"path\": \"tools.opencode.models\",\n      \"description\": \"Search the models available to use. Use this to turn a model name the user mentions into an exact reference for a tool that takes a model. Check your own provider first.\",\n      \"signature\": \"tools.opencode.models({\\n  /** Text to search for in model names and IDs. */\\n  query?: string,\\n  /** Provider ID or name to filter by. Try your own provider first. */\\n  provider?: string,\\n  /**\\n   * Which kind of model to list. Defaults to \\\"chat\\\".\\n   * \\\"chat\\\": a language model (LLM). Powers sessions, agents and subagents, and can call tools.\\n   * \\\"image\\\": generates or edits images from a prompt. It can't chat or call tools.\\n   */\\n  type?: \\\"chat\\\" | \\\"image\\\",\\n  /** Include older versions of each model family. By default only the newest version is listed. */\\n  all?: boolean,\\n  /** Maximum number of models to return. Defaults to 20. @integer @minimum 1 @maximum 100 */\\n  limit?: number,\\n  /** Number of models to skip, for paging through results. @integer @minimum 0 */\\n  offset?: number,\\n}): Promise<{\\n  /** Matching models grouped by provider. Your own provider comes first. */\\n  providers: Array<{\\n      id: string,\\n      name: string,\\n      /** Newest first. */\\n      models: Array<{\\n          /** providerID/modelID */\\n          id: string,\\n          name: string,\\n          /** Release date as a Unix timestamp in milliseconds, or 0 when unknown. */\\n          released: number,\\n          variants: Array<string>,\\n          /** Pricing in USD per million tokens. */\\n          cost: Array<{\\n              tier?: {\\n                type: \\\"context\\\",\\n                /** @integer */\\n                size: number,\\n              },\\n              input: number,\\n              output: number,\\n              cache: {\\n                read: number,\\n                write: number,\\n              },\\n            }>,\\n          status: \\\"alpha\\\" | \\\"beta\\\" | \\\"deprecated\\\" | \\\"active\\\",\\n        }>,\\n    }>,\\n  /** Number of matching models across all pages. @integer */\\n  total: number,\\n  /** Offset of the next page, or null on the last page. */\\n  next: number | null,\\n}>\"\n    }\n  ],\n  \"remaining\": 0,\n  \"next\": null\n}"
+ },
+ {
+  "code": "return search({limit: 0})",
+  "expected": "Invalid input for tool 'search': SchemaError(Expected a value greater than 0\n  at [\"limit\"])"
+ },
+ {
+  "code": "return eval('1+1')",
+  "expected": "ReferenceError: Unknown identifier 'eval'. (line 1, col 8)"
+ },
+ {
+  "code": "return this",
+  "expected": "null"
+ },
+ {
+  "code": "return globalThis.tools === tools",
+  "expected": "ReferenceError: Unknown identifier 'globalThis'. (line 1, col 8)"
+ },
+ {
+  "code": "console.log({a: {b: {c: [1, {d: 2}]}}}, 'x', new Map([[1,2]]), new Set([1]), new Date(0), new Error('m'), Promise.resolve(1)); return 0",
+  "expected": "0\n\nLogs:\n{\"a\":{\"b\":{\"c\":[1,{\"d\":2}]}}} x Map(1) [[1,2]] Set(1) [1] 1970-01-01T00:00:00.000Z Error: m [Promise (await it to get its value)]"
+ },
+ {
+  "code": "return {a: undefined, b: null, c: () => 1, d: NaN, e: Infinity}",
+  "expected": "{\n  \"b\": null,\n  \"d\": null,\n  \"e\": null\n}"
+ },
+ {
+  "code": "search({}).catch()",
+  "expected": "{\n  \"items\": [\n    {\n      \"path\": \"tools.opencode.list_mcp_resources\",\n      \"description\": \"List documents, records, and other data exposed by MCP servers. Use this when the user refers to something that is not a local file, such as a URI with a custom scheme, then load a match with read_mcp_resource. Each entry names the server to read it from. Templates are resources addressed by a parameter such as a record ID; fill in the uriTemplate placeholders before reading.\",\n      \"signature\": \"tools.opencode.list_mcp_resources({\\n  /** MCP server name as configured. Omit to list every server. */\\n  server?: string,\\n}): Promise<{\\n  resources: Array<{\\n      server: string,\\n      name: string,\\n      uri: string,\\n      description?: string,\\n      mimeType?: string,\\n    }>,\\n  templates: Array<{\\n      server: string,\\n      name: string,\\n      uriTemplate: string,\\n      description?: string,\\n      mimeType?: string,\\n    }>,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.models\",\n      \"description\": \"Search the models available to use. Use this to turn a model name the user mentions into an exact reference for a tool that takes a model. Check your own provider first.\",\n      \"signature\": \"tools.opencode.models({\\n  /** Text to search for in model names and IDs. */\\n  query?: string,\\n  /** Provider ID or name to filter by. Try your own provider first. */\\n  provider?: string,\\n  /**\\n   * Which kind of model to list. Defaults to \\\"chat\\\".\\n   * \\\"chat\\\": a language model (LLM). Powers sessions, agents and subagents, and can call tools.\\n   * \\\"image\\\": generates or edits images from a prompt. It can't chat or call tools.\\n   */\\n  type?: \\\"chat\\\" | \\\"image\\\",\\n  /** Include older versions of each model family. By default only the newest version is listed. */\\n  all?: boolean,\\n  /** Maximum number of models to return. Defaults to 20. @integer @minimum 1 @maximum 100 */\\n  limit?: number,\\n  /** Number of models to skip, for paging through results. @integer @minimum 0 */\\n  offset?: number,\\n}): Promise<{\\n  /** Matching models grouped by provider. Your own provider comes first. */\\n  providers: Array<{\\n      id: string,\\n      name: string,\\n      /** Newest first. */\\n      models: Array<{\\n          /** providerID/modelID */\\n          id: string,\\n          name: string,\\n          /** Release date as a Unix timestamp in milliseconds, or 0 when unknown. */\\n          released: number,\\n          variants: Array<string>,\\n          /** Pricing in USD per million tokens. */\\n          cost: Array<{\\n              tier?: {\\n                type: \\\"context\\\",\\n                /** @integer */\\n                size: number,\\n              },\\n              input: number,\\n              output: number,\\n              cache: {\\n                read: number,\\n                write: number,\\n              },\\n            }>,\\n          status: \\\"alpha\\\" | \\\"beta\\\" | \\\"deprecated\\\" | \\\"active\\\",\\n        }>,\\n    }>,\\n  /** Number of matching models across all pages. @integer */\\n  total: number,\\n  /** Offset of the next page, or null on the last page. */\\n  next: number | null,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.read_mcp_resource\",\n      \"description\": \"Read one MCP resource by server and URI. Not for local files. Always return the full contents rather than slicing or filtering them; oversized output is truncated automatically and the full content is saved to a file you can read. Images and PDFs are shown to you directly.\",\n      \"signature\": \"tools.opencode.read_mcp_resource({\\n  /** The server field of the discovered resource. */\\n  server: string,\\n  /** Exact resource URI from discovery, an expanded uriTemplate, or the user. */\\n  uri: string,\\n}): Promise<{\\n  server: string,\\n  uri: string,\\n  contents: Array<{\\n        type: \\\"text\\\",\\n        uri: string,\\n        text: string,\\n        mimeType?: string,\\n      } | {\\n        type: \\\"blob\\\",\\n        uri: string,\\n        blob: string,\\n        mimeType?: string,\\n      }>,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.session_move\",\n      \"description\": \"Move a session to another directory, or omit sessionID to move the current session. The current session moves at the next safe boundary; do not run destination-dependent tools in the same execute call.\",\n      \"signature\": \"tools.opencode.session_move({\\n  /** Omit to move the current session. @pattern ^ses */\\n  sessionID?: string,\\n  /** Destination directory, relative to the target session's directory or absolute. Supports ~. @minLength 1 */\\n  directory: string,\\n}): Promise<{\\n  /** @pattern ^ses */\\n  sessionID: string,\\n  directory: string,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.session_rename\",\n      \"description\": \"Rename a session, or omit sessionID to rename the current session. Use a short, specific title that summarizes the work being done.\",\n      \"signature\": \"tools.opencode.session_rename({\\n  /** Omit to rename the current session. @pattern ^ses */\\n  sessionID?: string,\\n  /** New session title. @minLength 1 */\\n  title: string,\\n}): Promise<{\\n  /** @pattern ^ses */\\n  sessionID: string,\\n  title: string,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.worktree_create\",\n      \"description\": \"Create a named worktree. Returns its directory.\",\n      \"signature\": \"tools.opencode.worktree_create({\\n  name: string,\\n}): Promise<{\\n  directory: string,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.worktree_list\",\n      \"description\": \"List a repository's worktrees.\",\n      \"signature\": \"tools.opencode.worktree_list(): Promise<{\\n  worktrees: Array<{\\n      directory: string,\\n      strategy?: string,\\n    }>,\\n}>\"\n    },\n    {\n      \"path\": \"tools.opencode.worktree_remove\",\n      \"description\": \"Remove a worktree. The repository location selects configuration; directory identifies the worktree to remove.\",\n      \"signature\": \"tools.opencode.worktree_remove({\\n  /** Absolute path of the worktree to remove. @minLength 1 */\\n  directory: string,\\n  /** Discard modified and untracked files. Only set this when the user has confirmed forced removal. */\\n  force?: boolean,\\n}): Promise<{\\n  directory: string,\\n  removed: boolean,\\n}>\"\n    }\n  ],\n  \"remaining\": 0,\n  \"next\": null\n}"
+ },
+ {
+  "code": "return search({query: 'rename'}).items.length",
+  "expected": "1"
+ },
+ {
+  "code": "return await search({query: 'rename'}).then(r => r.remaining)",
+  "expected": "0"
+ },
+ {
+  "code": "console.table([{a: 1, b: 'x'}, {a: 2}]); console.dir({a: 1}); console.table({r: {c: 1}}); console.table(5); return 1",
+  "expected": "1\n\nLogs:\n(index)\ta\tb\n0\t1\tx\n1\t2\t\n{\"a\":1}\n(index)\tc\nr\t1\n(index)\tValue\n0\t5"
+ },
+ {
+  "code": "try { await tools.opencode.read_mcp_resource({server: 'x', uri: 'y'}) } catch (e) { return Object.keys(e).concat([String(e), e.name]) }",
+  "expected": "[\n  \"Error: MCP server not found: x\",\n  \"Error\"\n]"
+ },
+ {
+  "code": "return await fetch('http://127.0.0.1:1/x')",
+  "expected": "TypeError: ECONNREFUSED: Unable to connect. Is the computer able to access the url?"
+ },
+ {
+  "code": "return await fetch('notaurl')",
+  "expected": "TypeError: fetch() URL is invalid"
+ },
+ {
+  "code": "return Object.keys(tools.nope)",
+  "expected": "Unknown tool namespace 'nope'."
+ },
+ {
+  "code": "tools.opencode.worktree_list",
+  "expected": "null"
+ },
+ {
+  "code": "return typeof tools.opencode.worktree_list",
+  "expected": "function"
+ },
+ {
+  "code": "return [typeof tools, typeof tools.opencode, JSON.stringify(tools), JSON.stringify({t: tools.opencode})]",
+  "expected": "[\n  \"object\",\n  \"function\",\n  \"{}\",\n  \"{}\"\n]"
+ },
+ {
+  "code": "return [Promise.resolve(1)]",
+  "expected": "[\n  1\n]"
+ },
+ {
+  "code": "return tools.opencode.worktree_list",
+  "expected": "null"
+ },
+ {
+  "code": "return await tools.opencode()",
+  "expected": "Tool 'opencode' is not callable."
+ },
+ {
+  "code": "return await tools.opencode.session_rename(null)",
+  "expected": "Invalid arguments for tool \"opencode_session_rename\":\n- root: Expected object\n\nArguments provided:\nnull\n\nUpdate the arguments and call the tool again."
+ },
+ {
+  "code": "return await tools.opencode.session_rename({title: 5, sessionID: 'x'})",
+  "expected": "Invalid arguments for tool \"opencode_session_rename\":\n- sessionID: Expected a string starting with \"ses\"\n- title: Expected string\n\nArguments provided:\n{\n  \"title\": 5,\n  \"sessionID\": \"x\"\n}\n\nUpdate the arguments and call the tool again."
+ },
+ {
+  "code": "return await tools.opencode.models({limit: 0, offset: -1, type: 'video', all: 'yes'})",
+  "expected": "Invalid arguments for tool \"opencode_models\":\n- type: Expected \"chat\" | \"image\"\n- all: Expected boolean\n- limit: Expected a value between 1 and 100\n- offset: Expected a value greater than or equal to 0\n\nArguments provided:\n{\n  \"limit\": 0,\n  \"offset\": -1,\n  \"type\": \"video\",\n  \"all\": \"yes\"\n}\n\nUpdate the arguments and call the tool again."
+ },
+ {
+  "code": "return await tools.opencode.session_move({directory: ''})",
+  "expected": "Invalid arguments for tool \"opencode_session_move\":\n- directory: Expected a value with a length of at least 1\n\nArguments provided:\n{\n  \"directory\": \"\"\n}\n\nUpdate the arguments and call the tool again."
+ },
+ {
+  "code": "return await tools.opencode.worktree_create({name: '  '})",
+  "expected": "Invalid arguments for tool \"opencode_worktree_create\":\n- name: Expected a value with a length of at least 1\n\nArguments provided:\n{\n  \"name\": \"  \"\n}\n\nUpdate the arguments and call the tool again."
+ },
+ {
+  "code": "return await tools.opencode.worktree_remove({directory: '/tmp'})",
+  "expected": "Unable to remove /tmp: it is not a worktree of this project. Use worktree_list to see the project's worktrees."
+ },
+ {
+  "code": "return await tools.opencode.list_mcp_resources({server: 'x'})",
+  "expected": "MCP server not found: x"
+ },
+ {
+  "code": "return [new TextEncoder().encode('hé').length, new TextDecoder().decode(new Uint8Array([104,105])), btoa('hi'), atob('aGk='), new URL('https://a.b/c?d=1#e').searchParams.get('d'), typeof crypto.randomUUID(), structuredClone({a: [1]})]",
+  "expected": "[\n  3,\n  \"hi\",\n  \"aGk=\",\n  \"hi\",\n  \"1\",\n  \"string\",\n  {\n    \"a\": [\n      1\n    ]\n  }\n]"
+ },
+ {
+  "code": "return new Uint8Array([1,2])",
+  "expected": "TypeError: A Uint8Array cannot cross to the host; pass text instead, e.g. `new TextDecoder().decode(bytes)` or `bytes.toBase64()`."
+ },
+ {
+  "code": "return [1.5, 0.1 + 0.2, 1e21, -0, 2**53 + 1, 1/3]",
+  "expected": "[\n  1.5,\n  0.30000000000000004,\n  1e+21,\n  0,\n  9007199254740992,\n  0.3333333333333333\n]"
+ },
+ {
+  "code": "return {'2': 'b', '1': 'a', z: 1, '__proto__': 5}",
+  "expected": "{\n  \"1\": \"a\",\n  \"2\": \"b\",\n  \"z\": 1\n}"
+ },
+ {
+  "code": "return await tools.opencode.session_move({directory: '../moved'})",
+  "expected": "Unable to move session to ../moved"
+ }
+]

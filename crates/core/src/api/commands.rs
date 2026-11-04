@@ -110,7 +110,7 @@ impl Core {
             self.select_model(&child.id, model)?;
         }
         let prompt = Prompt {
-            text: format!("You are a subagent spawned by another session.\n{text}"),
+            text: format!("{}\n{text}", crate::tool::subagent::FIRST_PROMPT),
             files: Vec::new(),
         };
         let outcome = self

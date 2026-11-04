@@ -3,13 +3,16 @@
 
 pub mod compaction;
 pub mod gate;
+mod host;
 pub mod inbox;
 pub mod lower;
 pub mod message;
+pub mod question;
 pub mod recent;
 pub mod request;
 mod step;
 mod stream;
+pub mod subagent;
 mod title;
 
 pub(crate) use step::session_headers as step_headers;
@@ -128,8 +131,6 @@ fn plan_reminders(shared: &Shared, session_id: &str, agent: &str) {
     }
 }
 
-const NO_TEXT: &str = "Subagent completed without a text response.";
-
 /// The `<subagent>` message a parent receives when a child session ends: the child's last
 /// assistant text, or the failure or cancellation note.
 pub(crate) fn subagent_completion(
@@ -138,42 +139,16 @@ pub(crate) fn subagent_completion(
     description: &str,
     outcome: &Outcome,
 ) -> String {
-    let (state, text) = match outcome {
-        Outcome::Succeeded => {
-            let last = shared
-                .db
-                .messages(child_id)
-                .unwrap_or_default()
-                .into_iter()
-                .rev()
-                .map(|row| Message::decode(&row.kind, &row.data))
-                .find(|m| matches!(m, Message::Assistant(_)));
-            let text = match last {
-                Some(Message::Assistant(data)) => data
-                    .content
-                    .iter()
-                    .filter_map(|p| match p {
-                        message::Part::Text { text, .. } if !text.is_empty() => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n\n"),
-                _ => String::new(),
-            };
-            let text = if text.is_empty() {
-                NO_TEXT.to_string()
-            } else {
-                text
-            };
-            ("completed", text)
+    use crate::tool::subagent::{ChildOutcome, completion_notice};
+    let child = match outcome {
+        Outcome::Succeeded => ChildOutcome::Completed(subagent::final_text(shared, child_id)),
+        Outcome::Failed(error) if !error.message.is_empty() => {
+            ChildOutcome::Failed(error.message.clone())
         }
-        Outcome::Failed(error) if !error.message.is_empty() => ("error", error.message.clone()),
-        Outcome::Failed(_) => ("error", "Subagent failed".to_string()),
-        Outcome::Interrupted(_) => ("cancelled", "Subagent cancelled".to_string()),
+        Outcome::Failed(_) => ChildOutcome::Failed("Subagent failed".into()),
+        Outcome::Interrupted(_) => ChildOutcome::Cancelled,
     };
-    format!(
-        "<subagent sessionID=\"{child_id}\" state=\"{state}\" description=\"{description}\">\n{text}\n</subagent>"
-    )
+    completion_notice(child_id, description, &child)
 }
 
 pub(crate) async fn regenerate_title(shared: Arc<Shared>, session: SessionRow) {

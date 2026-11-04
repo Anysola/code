@@ -4,16 +4,19 @@
 
 pub mod access;
 pub mod bound;
-mod input;
+pub(crate) mod input;
 pub mod registry;
 mod search;
 
 pub mod edit;
 pub mod glob;
 pub mod grep;
+pub mod question;
 pub mod read;
 pub mod shell;
-pub mod stubs;
+pub mod skill;
+pub mod subagent;
+pub mod webfetch;
 pub mod websearch;
 pub mod write;
 
@@ -168,14 +171,14 @@ pub struct ToolDefinition {
 }
 
 pub trait Tool: Send + Sync {
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
 
     /// Permission action used to hide the whole tool (`write` shares `edit`).
-    fn permission(&self) -> &'static str {
+    fn permission(&self) -> &str {
         self.name()
     }
 
-    /// Tools that only run inside Code Mode's `execute`. Every M1 tool is direct.
+    /// `execute`, which runs Code Mode programs and goes last in the tool array.
     fn code_mode(&self) -> bool {
         false
     }
@@ -206,6 +209,25 @@ pub trait SessionNotifier: Send + Sync {
     fn synthetic(&self, session_id: &str, text: String);
 }
 
+/// Session services behind the agent-facing tools: asking the user, skills, child sessions.
+pub trait SessionHost: Send + Sync {
+    /// Shows the questions to whoever drives the session and waits for the reply.
+    fn ask_questions(
+        &self,
+        session_id: &str,
+        questions: Vec<question::Question>,
+    ) -> BoxFuture<'_, question::QuestionReply>;
+
+    fn skill(&self, id: &str) -> Option<crate::skill::Skill>;
+
+    /// Runs (or continues) a child session for the `subagent` tool.
+    fn subagent<'a>(
+        &'a self,
+        ctx: &'a ToolContext,
+        request: subagent::SubagentRequest,
+    ) -> BoxFuture<'a, ToolResult>;
+}
+
 /// Everything a tool call can see.
 #[derive(Clone)]
 pub struct ToolContext {
@@ -229,6 +251,8 @@ pub struct ToolContext {
     pub locks: Arc<PathLocks>,
     pub notifier: Arc<dyn SessionNotifier>,
     pub web_search: Arc<dyn websearch::WebSearch>,
+    pub host: Arc<dyn crate::codemode::Host>,
+    pub session: Arc<dyn SessionHost>,
 }
 
 impl ToolContext {

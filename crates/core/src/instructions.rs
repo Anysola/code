@@ -12,10 +12,6 @@ use crate::paths::Paths;
 
 pub use state::{Observed, Prepared, Source, prepare};
 
-/// The default Code Mode catalog (the `opencode` namespace).
-// M1b: rendered from the Code Mode tool inventory (MCP tools, budget rules) instead of a constant.
-pub const CODE_MODE_CATALOG: &str = include_str!("prompt/codemode-catalog.txt");
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstructionFile {
     pub path: String,
@@ -130,23 +126,41 @@ fn text(value: &Value) -> Option<&str> {
     value.as_str()
 }
 
+fn render_catalog(value: &Value) -> Option<String> {
+    let summary: crate::codemode::catalog::Summary = serde_json::from_value(value.clone()).ok()?;
+    Some(crate::codemode::catalog::render(&summary))
+}
+
+fn observed<T>(value: Option<T>, encode: impl FnOnce(T) -> Value) -> Observed {
+    value.map_or(Observed::Removed, |v| Observed::Value(encode(v)))
+}
+
 /// Block 2's sources in 0.5.1's order (most shared first, so the baseline stays a reusable
-/// prompt-cache prefix): the Code Mode catalog, instruction files, the date, the environment.
-pub fn sources(code_mode: bool, files: Observed, date: &str, env: &Environment) -> Vec<Source> {
-    let catalog = if code_mode {
-        Observed::Value(Value::String(CODE_MODE_CATALOG.to_string()))
-    } else {
-        Observed::Removed
-    };
+/// prompt-cache prefix): the Code Mode catalog (its summary), skill guidance, instruction files,
+/// the date, the environment. A changed catalog or skill listing is shown whole again.
+pub fn sources(
+    catalog: Option<&crate::codemode::catalog::Summary>,
+    skills: Option<String>,
+    files: Observed,
+    date: &str,
+    env: &Environment,
+) -> Vec<Source> {
     vec![
         Source {
             key: "core/codemode",
-            observed: catalog,
-            initial: |v| text(v).map(str::to_string),
-            changed: |_, v| text(v).map(str::to_string),
+            observed: observed(catalog, |s| serde_json::to_value(s).unwrap_or_default()),
+            initial: render_catalog,
+            changed: |_, v| render_catalog(v),
             removed: |_| {
                 Some("Code Mode tools are no longer available. Do not use any previously listed Code Mode tools.".into())
             },
+        },
+        Source {
+            key: "core/skill-guidance",
+            observed: observed(skills, Value::String),
+            initial: |v| text(v).map(str::to_string),
+            changed: |_, v| text(v).map(str::to_string),
+            removed: state::never,
         },
         Source {
             key: "core/instructions",

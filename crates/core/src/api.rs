@@ -22,8 +22,12 @@ use crate::paths::Paths;
 use crate::project::Project;
 use crate::session::gate::{Asks, Reply};
 use crate::session::inbox::Delivery;
+use crate::session::question::Questions;
+use crate::session::subagent::Jobs;
 use crate::session::{Outcome, TurnOptions};
+use crate::skill::Skill;
 use crate::storage::{Db, SessionRow};
+use crate::tool::question::QuestionReply;
 use crate::tool::registry::Registry;
 use crate::tool::{PathLocks, SessionNotifier};
 
@@ -52,8 +56,8 @@ pub enum CoreError {
     MessageNotFound(String),
     #[error("{0}")]
     Snapshot(String),
-    #[error(transparent)]
-    Image(#[from] crate::image::ImageError),
+    #[error("{0}")]
+    Image(String),
 }
 
 /// Which session a front end works on.
@@ -100,7 +104,10 @@ pub(crate) struct Shared {
     pub commands: crate::command::Commands,
     pub models: Vec<Model>,
     pub registry: Registry,
+    pub skills: Vec<Skill>,
     pub asks: Arc<Asks>,
+    pub questions: Questions,
+    pub jobs: Jobs,
     pub locks: Arc<PathLocks>,
     pub env: Arc<Vec<(OsString, OsString)>>,
     pub notifier: Arc<dyn SessionNotifier>,
@@ -113,6 +120,20 @@ pub(crate) struct Shared {
     /// `<pid>:<nonce>` for busy markers.
     pub owner: String,
     pub turns: Mutex<std::collections::HashMap<String, CancellationToken>>,
+}
+
+impl crate::codemode::Host for Shared {
+    fn db(&self) -> &Db {
+        &self.db
+    }
+
+    fn models(&self) -> &[Model] {
+        &self.models
+    }
+
+    fn config(&self) -> &Config {
+        &self.config
+    }
 }
 
 #[derive(Clone)]
@@ -166,6 +187,7 @@ impl Core {
         let commands = crate::command::Commands::load(&config);
         let remote_instructions =
             crate::instructions::fetch_remote(&gateway, &config.instructions).await;
+        let skills = crate::skill::discover(&paths, &config, directory).await;
         let models = crate::model::catalog(&config);
         let project = crate::project::identify(directory);
         let snapshots = (project.vcs == Some("git")
@@ -173,7 +195,7 @@ impl Core {
         .then(|| crate::snapshot::Store::open(&paths.data, &project.id, directory))
         .flatten()
         .map(Arc::new);
-        db.upsert_project(&project, directory)?;
+        db.upsert_project(&project)?;
         let (events, _) = broadcast::channel(4096);
         let credits = Arc::new(Credits::new(db.clone(), events.clone()));
         let env = std::env::vars_os()
@@ -182,6 +204,7 @@ impl Core {
         let notifier = Arc::new(StoreNotifier {
             db: Arc::downgrade(&db),
         });
+        let asks = Arc::new(Asks::new(db.clone(), events.clone()));
         let shared = Shared {
             paths,
             db,
@@ -193,7 +216,10 @@ impl Core {
             agents,
             models,
             registry: Registry::builtin(),
-            asks: Arc::default(),
+            skills,
+            asks,
+            questions: Questions::default(),
+            jobs: Jobs::default(),
             locks: Arc::default(),
             env: Arc::new(env),
             notifier,
@@ -410,25 +436,14 @@ impl Core {
         prompt: Prompt,
         options: TurnOptions,
     ) -> Result<Outcome, CoreError> {
-        self.shared
-            .db
-            .session(session_id)?
-            .ok_or(CoreError::SessionNotFound)?;
-        self.commit_revert(session_id)?;
-        let prompt = self.normalize(prompt)?;
-        crate::session::inbox::enqueue(&self.shared.db, session_id, &prompt, Delivery::Steer)?;
-        self.drain(session_id, options).await
-    }
-
-    /// Attached images as the model should get them.
-    fn normalize(&self, mut prompt: Prompt) -> Result<Prompt, CoreError> {
-        let limits = crate::image::Limits::from_config(&self.shared.config);
-        for (mime, data, name) in &mut prompt.files {
-            if mime.starts_with("image/") {
-                (*mime, *data) = crate::image::normalize(name, mime, data, &limits)?;
-            }
-        }
-        Ok(prompt)
+        prompt_session(
+            &self.shared,
+            session_id,
+            prompt,
+            options,
+            CancellationToken::new(),
+        )
+        .await
     }
 
     /// Admits a prompt without waiting: a running turn picks up `steer` input at its next step
@@ -439,7 +454,7 @@ impl Core {
         prompt: Prompt,
         delivery: Delivery,
     ) -> Result<String, CoreError> {
-        let prompt = self.normalize(prompt)?;
+        let prompt = normalize(&self.shared, prompt)?;
         Ok(crate::session::inbox::enqueue(
             &self.shared.db,
             session_id,
@@ -473,35 +488,7 @@ impl Core {
     }
 
     async fn drain(&self, session_id: &str, options: TurnOptions) -> Result<Outcome, CoreError> {
-        let shared = &self.shared;
-        if !shared.db.acquire(session_id, &shared.owner)? {
-            return Err(CoreError::Busy(session_id.to_string()));
-        }
-        let cancel = CancellationToken::new();
-        shared
-            .turns
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(session_id.to_string(), cancel.clone());
-        let heartbeat = {
-            let db = shared.db.clone();
-            let (id, owner) = (session_id.to_string(), shared.owner.clone());
-            tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                    let _ = db.heartbeat(&id, &owner);
-                }
-            })
-        };
-        let outcome = crate::session::drain(self.shared.clone(), session_id, options, cancel).await;
-        heartbeat.abort();
-        shared
-            .turns
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(session_id);
-        shared.db.release(session_id, &shared.owner)?;
-        Ok(outcome)
+        drain_session(&self.shared, session_id, options, CancellationToken::new()).await
     }
 
     /// Interrupts the session's running turn, if any.
@@ -520,4 +507,85 @@ impl Core {
     pub fn reply_permission(&self, request_id: &str, reply: Reply) -> bool {
         self.shared.asks.reply(request_id, reply)
     }
+
+    pub fn reply_question(&self, request_id: &str, reply: QuestionReply) -> bool {
+        self.shared.questions.reply(request_id, reply)
+    }
+
+    /// Rejects every pending permission ask and every later one, for shutdown.
+    pub fn close_permissions(&self) {
+        self.shared.asks.close();
+    }
+}
+
+/// Attached images as the model should get them.
+fn normalize(shared: &Shared, mut prompt: Prompt) -> Result<Prompt, CoreError> {
+    let limits = crate::media::Limits::from_config(shared.config.get("media"));
+    for (mime, data, name) in &mut prompt.files {
+        if !crate::media::RESIZABLE.contains(&mime.as_str()) {
+            continue;
+        }
+        match crate::media::normalize(mime, data, &limits) {
+            Ok(Some((normalized, encoded))) => (*mime, *data) = (normalized, encoded),
+            Ok(None) => {}
+            Err(error) => return Err(CoreError::Image(error.message(name))),
+        }
+    }
+    Ok(prompt)
+}
+
+/// Admits a prompt (committing a staged revert first) and runs the session under `cancel` until
+/// its inbox is empty.
+pub(crate) async fn prompt_session(
+    shared: &Arc<Shared>,
+    session_id: &str,
+    prompt: Prompt,
+    options: TurnOptions,
+    cancel: CancellationToken,
+) -> Result<Outcome, CoreError> {
+    shared
+        .db
+        .session(session_id)?
+        .ok_or(CoreError::SessionNotFound)?;
+    revert::commit(shared, session_id)?;
+    let prompt = normalize(shared, prompt)?;
+    crate::session::inbox::enqueue(&shared.db, session_id, &prompt, Delivery::Steer)?;
+    drain_session(shared, session_id, options, cancel).await
+}
+
+/// Runs the session until its inbox is empty, registered so [`Core::interrupt`] reaches it.
+/// Fails fast when another process drives it.
+async fn drain_session(
+    shared: &Arc<Shared>,
+    session_id: &str,
+    options: TurnOptions,
+    cancel: CancellationToken,
+) -> Result<Outcome, CoreError> {
+    if !shared.db.acquire(session_id, &shared.owner)? {
+        return Err(CoreError::Busy(session_id.to_string()));
+    }
+    shared
+        .turns
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(session_id.to_string(), cancel.clone());
+    let heartbeat = {
+        let db = shared.db.clone();
+        let (id, owner) = (session_id.to_string(), shared.owner.clone());
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                let _ = db.heartbeat(&id, &owner);
+            }
+        })
+    };
+    let outcome = crate::session::drain(shared.clone(), session_id, options, cancel).await;
+    heartbeat.abort();
+    shared
+        .turns
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(session_id);
+    shared.db.release(session_id, &shared.owner)?;
+    Ok(outcome)
 }

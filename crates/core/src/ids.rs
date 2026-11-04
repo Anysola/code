@@ -61,6 +61,10 @@ pub fn permission() -> String {
     format!("per_{}", create(false))
 }
 
+pub fn form() -> String {
+    format!("frm_{}", create(false))
+}
+
 pub fn credential() -> String {
     format!("cred_{}", create(false))
 }

@@ -1,0 +1,458 @@
+[
+ {
+  "name": "content cap",
+  "prefix": "<p>",
+  "unit": "word ",
+  "count": 1200000,
+  "suffix": "</p>",
+  "markdown": {
+   "bytes": 5177342,
+   "hash": "69a94f579efd2e23",
+   "head": "word word word word word word word word word word word word word word word word ",
+   "tail": "rd word word word word word word word word word word word word word word word wo"
+  },
+  "text": {
+   "bytes": 5999999,
+   "hash": "98f1005a74056ae7",
+   "head": "word word word word word word word word word word word word word word word word ",
+   "tail": " word word word word word word word word word word word word word word word word"
+  }
+ },
+ {
+  "name": "content cap multibyte",
+  "prefix": "<p>",
+  "unit": "ğü😀abc ",
+  "count": 400000,
+  "suffix": "</p>",
+  "markdown": {
+   "bytes": 4799999,
+   "hash": "712d763dc5d714e7",
+   "head": "ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀",
+   "tail": "abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc"
+  },
+  "text": {
+   "bytes": 4799999,
+   "hash": "712d763dc5d714e7",
+   "head": "ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀",
+   "tail": "abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc ğü😀abc"
+  }
+ },
+ {
+  "name": "fenced code cap",
+  "prefix": "<pre><code class=\"language-txt\">",
+  "unit": "line of code\n",
+  "count": 500000,
+  "suffix": "</code></pre><p>after</p>",
+  "markdown": {
+   "bytes": 5177342,
+   "hash": "1ea9fb9386f2655a",
+   "head": "```txt\nline of code\nline of code\nline of code\nline of code\nline of code\nline of ",
+   "tail": "of code\nline of code\nline of code\nline of code\nline of code\nline of code\nlin\n```"
+  },
+  "text": {
+   "bytes": 6500005,
+   "hash": "5b77da4d64affae9",
+   "head": "line of code\nline of code\nline of code\nline of code\nline of code\nline of code\nli",
+   "tail": "e of code\nline of code\nline of code\nline of code\nline of code\nline of code\nafter"
+  }
+ },
+ {
+  "name": "fenced code cap quoted",
+  "prefix": "<blockquote><pre>",
+  "unit": "ab\n",
+  "count": 2000000,
+  "suffix": "</pre></blockquote>",
+  "markdown": {
+   "bytes": 1962226,
+   "hash": "01701c63a3d8f6da",
+   "head": "> ```\n> ab\n> ab\n> ab\n> ab\n> ab\n> ab\n> ab\n> ab\n> ab\n> ab\n> ab\n> ab\n> ab\n> ab\n> ab",
+   "tail": "> ab\n> ab\n> ab\n> ab\n> ab\n> ab\n> ab\n> ab\n> ab\n> ab\n> ab\n> ab\n> ab\n> ab\n> ab\n> ```"
+  },
+  "text": {
+   "bytes": 5999999,
+   "hash": "b12746085d6b754d",
+   "head": "ab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab",
+   "tail": "ab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab\nab"
+  }
+ },
+ {
+  "name": "inline code cap",
+  "prefix": "<p>x <code>",
+  "unit": "a`",
+  "count": 3000000,
+  "suffix": "</code> y</p>",
+  "markdown": {
+   "bytes": 5177341,
+   "hash": "8d0fab89bca4cf47",
+   "head": "x ``a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`",
+   "tail": "`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a``"
+  },
+  "text": {
+   "bytes": 6000004,
+   "hash": "e90a280fdd17a5d2",
+   "head": "x a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`",
+   "tail": "a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a`a` y"
+  }
+ },
+ {
+  "name": "inline code cap multibyte",
+  "prefix": "<code>",
+  "unit": "€",
+  "count": 2000000,
+  "suffix": "</code>",
+  "markdown": {
+   "bytes": 5177342,
+   "hash": "e0a21bfeb2384fad",
+   "head": "`€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€",
+   "tail": "€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€`"
+  },
+  "text": {
+   "bytes": 6000000,
+   "hash": "e988a146414ccb25",
+   "head": "€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€",
+   "tail": "€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€"
+  }
+ },
+ {
+  "name": "image alt cap",
+  "prefix": "<p>t</p><img src=\"/s.png\" alt=\"",
+  "unit": "alt ",
+  "count": 1400000,
+  "suffix": "\">",
+  "markdown": {
+   "bytes": 5177342,
+   "hash": "d9f457b7c21d7400",
+   "head": "t\n\n![alt alt alt alt alt alt alt alt alt alt alt alt alt alt alt alt alt alt alt",
+   "tail": "lt alt alt alt alt alt alt alt alt alt alt alt alt alt alt alt alt alt ](/s.png)"
+  },
+  "text": {
+   "bytes": 1,
+   "hash": "af63e94c860202a3",
+   "head": "t",
+   "tail": "t"
+  }
+ },
+ {
+  "name": "table cells",
+  "prefix": "<table>",
+  "unit": "<tr><td>cell</td><td>value | x</td></tr>",
+  "count": 200000,
+  "suffix": "</table>",
+  "markdown": {
+   "bytes": 4400013,
+   "hash": "4151e7c2b4dac427",
+   "head": "| cell | value \\| x |\n| --- | --- |\n| cell | value \\| x |\n| cell | value \\| x |\n",
+   "tail": "| value \\| x |\n| cell | value \\| x |\n| cell | value \\| x |\n| cell | value \\| x |"
+  },
+  "text": {
+   "bytes": 2600000,
+   "hash": "cfbcbf19c5229ae5",
+   "head": "cellvalue | xcellvalue | xcellvalue | xcellvalue | xcellvalue | xcellvalue | xce",
+   "tail": " xcellvalue | xcellvalue | xcellvalue | xcellvalue | xcellvalue | xcellvalue | x"
+  }
+ },
+ {
+  "name": "list items",
+  "prefix": "<ol>",
+  "unit": "<li>item <b>bold</b></li>",
+  "count": 300000,
+  "suffix": "</ol>",
+  "markdown": {
+   "bytes": 4796396,
+   "hash": "9851bcb9279796bf",
+   "head": "1. item **bold**\n\n2. item **bold**\n\n3. item **bold**\n\n4. item **bold**\n\n5. item ",
+   "tail": "\n216211.\n\n216212.\n\n216213.\n\n216214.\n\n216215.\n\n216216.\n\n216217.\n\n216218.\n\n216219."
+  },
+  "text": {
+   "bytes": 2700000,
+   "hash": "d5fbb0dfcbd54925",
+   "head": "item bolditem bolditem bolditem bolditem bolditem bolditem bolditem bolditem bol",
+   "tail": "tem bolditem bolditem bolditem bolditem bolditem bolditem bolditem bolditem bold"
+  }
+ },
+ {
+  "name": "headings past max",
+  "prefix": "",
+  "unit": "<h2>Heading</h2><p>paragraph text here</p>",
+  "count": 150000,
+  "suffix": "",
+  "markdown": {
+   "bytes": 4641461,
+   "hash": "11f7a0151fae925c",
+   "head": "## Heading\n\nparagraph text here\n\n## Heading\n\nparagraph text here\n\n## Heading\n\npa",
+   "tail": "#\n\n##\n\n##\n\n##\n\n##\n\n##\n\n##\n\n##\n\n##\n\n##\n\n##\n\n##\n\n##\n\n##\n\n##\n\n##\n\n##\n\n##\n\n##\n\n##\n\n#"
+  },
+  "text": {
+   "bytes": 3900000,
+   "hash": "39c90be727075245",
+   "head": "Headingparagraph text hereHeadingparagraph text hereHeadingparagraph text hereHe",
+   "tail": "reHeadingparagraph text hereHeadingparagraph text hereHeadingparagraph text here"
+  }
+ },
+ {
+  "name": "depth fallback",
+  "prefix": "",
+  "unit": "<div>",
+  "count": 10005,
+  "suffix": "deep <b>text</b> <script>hidden</script> end",
+  "markdown": {
+   "bytes": 13,
+   "hash": "42ed00591c96c37f",
+   "head": "deep text end",
+   "tail": "deep text end"
+  },
+  "text": {
+   "bytes": 14,
+   "hash": "37816159bc81afd3",
+   "head": "deep text  end",
+   "tail": "deep text  end"
+  }
+ },
+ {
+  "name": "depth fallback spans",
+  "prefix": "<p>start</p>",
+  "unit": "<span>s ",
+  "count": 10010,
+  "suffix": "<style>x</style>tail",
+  "markdown": {
+   "bytes": 20031,
+   "hash": "8176eefa79defced",
+   "head": "start\n\ns s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s",
+   "tail": "s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s tail"
+  },
+  "text": {
+   "bytes": 20029,
+   "hash": "775d6eb48727cfad",
+   "head": "starts s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s",
+   "tail": "s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s s tail"
+  }
+ },
+ {
+  "name": "depth fallback suppressed",
+  "prefix": "<p>before</p><div hidden>",
+  "unit": "<i>",
+  "count": 10003,
+  "suffix": "secret</i></i></i></i></div>visible after",
+  "markdown": {
+   "bytes": 21,
+   "hash": "8565f7a914d0cc66",
+   "head": "before\n\nvisible after",
+   "tail": "before\n\nvisible after"
+  },
+  "text": {
+   "bytes": 25,
+   "hash": "7f6d4eb699a84dc2",
+   "head": "beforesecretvisible after",
+   "tail": "beforesecretvisible after"
+  }
+ },
+ {
+  "name": "depth fallback omitted",
+  "prefix": "",
+  "unit": "<b>",
+  "count": 9999,
+  "suffix": "<script><script><p>x</p></script>after<p>more</p>",
+  "markdown": {
+   "bytes": 11,
+   "hash": "f8a7878e05952a7c",
+   "head": "after\n\nmore",
+   "tail": "after\n\nmore"
+  },
+  "text": {
+   "bytes": 9,
+   "hash": "fa79e712e2ad9b3c",
+   "head": "aftermore",
+   "tail": "aftermore"
+  }
+ },
+ {
+  "name": "depth at limit",
+  "prefix": "",
+  "unit": "<span>",
+  "count": 10000,
+  "suffix": "exact",
+  "markdown": {
+   "bytes": 5,
+   "hash": "5a6de2124dd2b924",
+   "head": "exact",
+   "tail": "exact"
+  },
+  "text": {
+   "bytes": 5,
+   "hash": "5a6de2124dd2b924",
+   "head": "exact",
+   "tail": "exact"
+  }
+ },
+ {
+  "name": "chunk boundary escape",
+  "prefix": "",
+  "unit": "a",
+  "count": 65536,
+  "suffix": "-b 1. c",
+  "markdown": {
+   "bytes": 65545,
+   "hash": "99f978a3ac8a4d68",
+   "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "tail": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\-b 1\\. c"
+  },
+  "text": {
+   "bytes": 65543,
+   "hash": "acc37422ee08fa6c",
+   "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "tail": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-b 1. c"
+  }
+ },
+ {
+  "name": "chunk boundary whitespace",
+  "prefix": "<p>",
+  "unit": "x ",
+  "count": 40000,
+  "suffix": "</p>",
+  "markdown": {
+   "bytes": 79999,
+   "hash": "187456dd469383e7",
+   "head": "x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x ",
+   "tail": " x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x"
+  },
+  "text": {
+   "bytes": 79999,
+   "hash": "187456dd469383e7",
+   "head": "x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x ",
+   "tail": " x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x x"
+  }
+ },
+ {
+  "name": "chunk boundary entity",
+  "prefix": "",
+  "unit": "z",
+  "count": 65534,
+  "suffix": "&amp;-x &notin; y",
+  "markdown": {
+   "bytes": 65544,
+   "hash": "a3058cb71448e064",
+   "head": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+   "tail": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz&\\-x ∉ y"
+  },
+  "text": {
+   "bytes": 65543,
+   "hash": "f124afe47b901262",
+   "head": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+   "tail": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz&-x ∉ y"
+  }
+ },
+ {
+  "name": "chunk boundary tag",
+  "prefix": "",
+  "unit": "q",
+  "count": 65533,
+  "suffix": "<b>bold</b> <a href=\"/x\">l</a>",
+  "markdown": {
+   "bytes": 65549,
+   "hash": "a0e7f7f6beda62e3",
+   "head": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+   "tail": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq**bold** [l](/x)"
+  },
+  "text": {
+   "bytes": 65539,
+   "hash": "24d71d95c3474a5f",
+   "head": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+   "tail": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqbold l"
+  }
+ },
+ {
+  "name": "chunk boundary title",
+  "prefix": "<title>",
+  "unit": "t",
+  "count": 70000,
+  "suffix": "&amp;-x</title>",
+  "markdown": {
+   "bytes": 70004,
+   "hash": "ca5f5ee5df14d7ea",
+   "head": "tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt",
+   "tail": "tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt&\\-x"
+  },
+  "text": {
+   "bytes": 70003,
+   "hash": "34e2b06fc159c6ac",
+   "head": "tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt",
+   "tail": "ttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt&-x"
+  }
+ },
+ {
+  "name": "chunk boundary trailing",
+  "prefix": "",
+  "unit": "w",
+  "count": 70000,
+  "suffix": "</p x",
+  "markdown": {
+   "bytes": 74472,
+   "hash": "dbaa464c0b58b102",
+   "head": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+   "tail": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\\</p x"
+  },
+  "text": {
+   "bytes": 70001,
+   "hash": "c9b431c372688817",
+   "head": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+   "tail": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwx"
+  }
+ },
+ {
+  "name": "chunk boundary cdata",
+  "prefix": "<![CDATA[",
+  "unit": "c",
+  "count": 70000,
+  "suffix": "]]>after</p tail",
+  "markdown": {
+   "bytes": 4500,
+   "hash": "90d805e775cda59d",
+   "head": "after\n\nccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+   "tail": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\\]\\]\\>after\\</p tail"
+  },
+  "text": {
+   "bytes": 6,
+   "hash": "dbd2523a5e917fff",
+   "head": "afterl",
+   "tail": "afterl"
+  }
+ },
+ {
+  "name": "chunk boundary multibyte",
+  "prefix": "",
+  "unit": "é",
+  "count": 70000,
+  "suffix": "-end",
+  "markdown": {
+   "bytes": 140004,
+   "hash": "998d9f0a0415991d",
+   "head": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+   "tail": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé-end"
+  },
+  "text": {
+   "bytes": 140004,
+   "hash": "998d9f0a0415991d",
+   "head": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+   "tail": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé-end"
+  }
+ },
+ {
+  "name": "many chunks",
+  "prefix": "<div>",
+  "unit": "<p>para-graph &amp; #more</p>",
+  "count": 20000,
+  "suffix": "</div>",
+  "markdown": {
+   "bytes": 419998,
+   "hash": "5b68462bf04c2d55",
+   "head": "para-graph & \\#more\n\npara-graph & \\#more\n\npara-graph & \\#more\n\npara-graph & \\#mo",
+   "tail": "ra-graph & \\#more\n\npara-graph & \\#more\n\npara-graph & \\#more\n\npara-graph & \\#more"
+  },
+  "text": {
+   "bytes": 360000,
+   "hash": "29aa52e9de25d8e5",
+   "head": "para-graph & #morepara-graph & #morepara-graph & #morepara-graph & #morepara-gra",
+   "tail": " & #morepara-graph & #morepara-graph & #morepara-graph & #morepara-graph & #more"
+  }
+ }
+]

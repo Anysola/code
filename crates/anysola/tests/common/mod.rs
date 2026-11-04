@@ -45,9 +45,18 @@ pub fn logger(request: &Recorded, _index: usize, read_file: &str) -> Reply {
         .as_array()
         .is_some_and(|c| c.iter().any(|p| p["type"] == "tool_result"));
     let all = Value::Array(messages.clone()).to_string();
-    let marker = ["THINKTEST", "TOOLTEST", "TWOTOOLS", "LONGSTEPS"]
-        .into_iter()
-        .find(|m| all.contains(m));
+    let marker = [
+        "THINKTEST",
+        "TOOLTEST",
+        "TWOTOOLS",
+        "LONGSTEPS",
+        "SUBEXPLORE",
+        "SUBGENERAL",
+        "SKILLQ",
+        "SUBBACKGROUND",
+    ]
+    .into_iter()
+    .find(|m| all.contains(m));
     let results = messages
         .iter()
         .flat_map(|m| m["content"].as_array().cloned().unwrap_or_default())
@@ -76,6 +85,32 @@ pub fn logger(request: &Recorded, _index: usize, read_file: &str) -> Reply {
                 "toolu_b",
                 "bash",
                 json!({"command": "echo hi", "description": "Echo hi"}),
+            )
+    } else if let Some((agent, prompt)) = match marker {
+        Some("SUBEXPLORE") => Some(("explore", "find x")),
+        Some("SUBGENERAL") => Some(("general", "do y")),
+        _ => None,
+    } && !after_tool
+    {
+        stream.tool(
+            "toolu_s1",
+            "subagent",
+            json!({"agent": agent, "description": "task", "prompt": prompt}),
+        )
+    } else if marker == Some("SUBBACKGROUND") && !after_tool {
+        stream.tool(
+            "toolu_s1",
+            "subagent",
+            json!({"agent": "general", "description": "bg", "prompt": "later", "background": true}),
+        )
+    } else if marker == Some("SKILLQ") && !after_tool {
+        stream
+            .tool("toolu_0_3", "skill", json!({"id": "demo"}))
+            .tool("toolu_0_4", "skill", json!({"id": "missing"}))
+            .tool(
+                "toolu_0_5",
+                "question",
+                json!({"questions": [{"question": "Pick?", "header": "Pick", "options": [{"label": "A", "description": "a"}]}]}),
             )
     } else if marker == Some("LONGSTEPS") && results < 50 {
         stream.tool(

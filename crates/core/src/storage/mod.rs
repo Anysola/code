@@ -4,6 +4,7 @@
 
 mod inbox;
 mod instruction;
+mod permission;
 mod revert;
 mod schema;
 
@@ -160,23 +161,19 @@ impl Db {
         Ok(parse(value).and_then(|v| v.get("access").and_then(Value::as_str).map(str::to_string)))
     }
 
-    pub fn upsert_project(
-        &self,
-        project: &crate::project::Project,
-        directory: &Path,
-    ) -> Result<()> {
+    pub fn upsert_project(&self, project: &crate::project::Project) -> Result<()> {
         let now = now_ms() as i64;
         let worktree = project.worktree.display().to_string();
-        let directory = directory.display().to_string();
         self.with(|c| {
             c.execute(
                 "INSERT INTO project (id, worktree, vcs, time_created, time_updated) VALUES (?1, ?2, ?3, ?4, ?4)
                  ON CONFLICT(id) DO UPDATE SET time_updated = excluded.time_updated",
                 params![project.id, worktree, project.vcs, now],
             )?;
+            // The checkout itself is an unowned row: no worktree strategy created it.
             c.execute(
-                "INSERT OR IGNORE INTO worktree (project_id, directory, strategy, time_created) VALUES (?1, ?2, ?3, ?4)",
-                params![project.id, directory, project.vcs, now],
+                "INSERT OR IGNORE INTO worktree (project_id, directory, strategy, time_created) VALUES (?1, ?2, NULL, ?3)",
+                params![project.id, worktree, now],
             )
             .map(drop)
         })
@@ -249,6 +246,42 @@ impl Db {
 
     pub fn set_title(&self, id: &str, title: &str) -> Result<()> {
         self.touch("title = ?2", params![id, title, now_ms() as i64])
+    }
+
+    pub fn set_directory(&self, id: &str, directory: &str) -> Result<()> {
+        self.touch("directory = ?2", params![id, directory, now_ms() as i64])
+    }
+
+    /// A project's worktrees, newest first: `(directory, strategy)`.
+    pub fn worktrees(&self, project_id: &str) -> Result<Vec<(String, Option<String>)>> {
+        self.with(|c| {
+            let mut statement = c.prepare(
+                "SELECT directory, strategy FROM worktree WHERE project_id = ?1 ORDER BY time_created DESC, directory ASC",
+            )?;
+            let rows = statement.query_map([project_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect()
+        })
+    }
+
+    pub fn put_worktree(&self, project_id: &str, directory: &str, strategy: &str) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO worktree (project_id, directory, strategy, time_created) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(project_id, directory) DO UPDATE SET strategy = excluded.strategy",
+                params![project_id, directory, strategy, now_ms() as i64],
+            )
+            .map(drop)
+        })
+    }
+
+    pub fn delete_worktree(&self, project_id: &str, directory: &str) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "DELETE FROM worktree WHERE project_id = ?1 AND directory = ?2",
+                params![project_id, directory],
+            )
+            .map(drop)
+        })
     }
 
     pub fn set_agent(&self, id: &str, agent: &str) -> Result<()> {

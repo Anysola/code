@@ -1,0 +1,1452 @@
+[
+ {
+  "html": "<html><head><title>T</title></head><body><h1>Hello</h1><p>Some <b>bold</b> and <a href=\"/x\">link</a>.</p><ul><li>a</li><li>b</li></ul><pre><code class=\"language-js\">let a=1</code></pre><table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table></body></html>",
+  "markdown": "# Hello\n\nSome **bold** and [link](/x).\n\n- a\n\n- b\n\n```js\nlet a=1\n```\n\n| A | B |\n| --- | --- |\n| 1 | 2 |",
+  "text": "THelloSome bold and link.ablet a=1AB12"
+ },
+ {
+  "html": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <title>Release notes &mdash; Example</title>\n  <link rel=\"stylesheet\" href=\"/s.css\">\n  <style>body { color: red; } a > b { }</style>\n  <script>window.x = \"<p>not html</p>\"; if (a < b && c > d) {}</script>\n</head>\n<body>\n  <nav aria-hidden=\"true\"><a href=\"/\">Home</a> | <a href=\"/docs\">Docs</a></nav>\n  <header><h1 class=\"title\">Release&nbsp;2.0</h1><p class=\"lead\">The <em>fastest</em> release yet.</p></header>\n  <main>\n    <article>\n      <h2 id=\"new\">What's new</h2>\n      <p>We rewrote the <code>parser</code> and the <a href=\"https://example.com/docs/parser (v2)\" title=\"Parser &quot;docs&quot;\">parser docs</a>.</p>\n      <ul>\n        <li>Faster <strong>startup</strong></li>\n        <li>Smaller binaries\n          <ol start=\"3\"><li>Linux</li><li value=\"10\">macOS</li><li>Windows</li></ol>\n        </li>\n      </ul>\n      <blockquote><p>It just works.</p><footer>&mdash; A user</footer></blockquote>\n      <figure><img src=\"/img/chart 1.png\" alt=\"Chart [beta]\" title=\"Speed\"><figcaption>Speed over time</figcaption></figure>\n      <h3>Upgrade</h3>\n      <pre><code class=\"lang-shell\">$ npm install example@2\n$ example --version\n2.0.0</code></pre>\n      <table>\n        <caption>Supported platforms</caption>\n        <thead><tr><th>OS</th><th>Arch</th></tr></thead>\n        <tbody><tr><td>Linux</td><td>x64 | arm64</td></tr><tr><td>macOS</td><td>arm64</td></tr></tbody>\n      </table>\n      <details><summary>Changelog</summary><p>Hidden details</p></details>\n      <details open><summary>Known issues</summary><ul><li>None</li></ul></details>\n      <dl><dt>API</dt><dd>Stable</dd><dt>CLI</dt><dd>Beta</dd></dl>\n      <hr>\n      <p>Questions? <a href=\"mailto:team@example.com\">Email us</a><br>or open an issue.</p>\n    </article>\n    <aside hidden><p>Ad</p></aside>\n  </main>\n  <footer><p>&copy; 2026 Example &amp; Co.</p></footer>\n  <noscript><p>Enable JS</p></noscript>\n  <template><p>tpl</p></template>\n  <iframe src=\"x\"></iframe>\n</body>\n</html>",
+  "markdown": "# Release 2\\.0\n\nThe *fastest* release yet.\n\n## What's new\n\nWe rewrote the `parser` and the [parser docs](https://example.com/docs/parser%20\\(v2\\) \"Parser \\\"docs\\\"\").\n\n- Faster **startup**\n\n- Smaller binaries\n\n  3. Linux\n\n  10. macOS\n\n  11. Windows\n\n> It just works.\n\n> — A user\n\n![Chart [beta\\]](/img/chart%201.png \"Speed\")\n\nSpeed over time\n\n### Upgrade\n\n```shell\n$ npm install example@2\n$ example --version\n2.0.0\n```\n\nSupported platforms\n\n| OS | Arch |\n| --- | --- |\n| Linux | x64 \\| arm64 |\n| macOS | arm64 |\n\nChangelog\n\nKnown issues\n\n- None\n\n**API**\n: Stable\n\n**CLI**\n: Beta\n\n---\n\nQuestions? [Email us](mailto:team@example.com)  \nor open an issue.\n\n© 2026 Example & Co.",
+  "text": "Release notes — Example\n  \n  \n  \n\n\n  Home | Docs\n  Release 2.0The fastest release yet.\n  \n    \n      What's new\n      We rewrote the parser and the parser docs.\n      \n        Faster startup\n        Smaller binaries\n          LinuxmacOSWindows\n        \n      \n      It just works.— A user\n      Speed over time\n      Upgrade\n      $ npm install example@2\n$ example --version\n2.0.0\n      \n        Supported platforms\n        OSArch\n        Linuxx64 | arm64macOSarm64\n      \n      ChangelogHidden details\n      Known issuesNone\n      APIStableCLIBeta\n      \n      Questions? Email usor open an issue.\n    \n    Ad\n  \n  © 2026 Example & Co.\n  \n  tpl"
+ },
+ {
+  "html": "<h1>One</h1><h2>Two</h2><h3>Three</h3><h4>Four</h4><h5>Five</h5><h6>Six</h6><h7>Seven</h7>",
+  "markdown": "# One\n\n## Two\n\n### Three\n\n#### Four\n\n##### Five\n\n###### Six\n\nSeven",
+  "text": "OneTwoThreeFourFiveSixSeven"
+ },
+ {
+  "html": "<p>First paragraph.</p><p>Second paragraph.</p>",
+  "markdown": "First paragraph.\n\nSecond paragraph.",
+  "text": "First paragraph.Second paragraph."
+ },
+ {
+  "html": "<p>  leading and   trailing   spaces  </p>",
+  "markdown": "leading and trailing spaces",
+  "text": "leading and   trailing   spaces"
+ },
+ {
+  "html": "Text before<p>para</p>text after",
+  "markdown": "Text before\n\npara\n\ntext after",
+  "text": "Text beforeparatext after"
+ },
+ {
+  "html": "<h1>Title <small>sub</small></h1>",
+  "markdown": "# Title sub",
+  "text": "Title sub"
+ },
+ {
+  "html": "<h2>  </h2><p></p><p>x</p>",
+  "markdown": "##\n\nx",
+  "text": "x"
+ },
+ {
+  "html": "<div><div><p>nested</p></div></div>",
+  "markdown": "nested",
+  "text": "nested"
+ },
+ {
+  "html": "<section><article><header>H</header><main>M</main><footer>F</footer></article></section>",
+  "markdown": "H\n\nM\n\nF",
+  "text": "HMF"
+ },
+ {
+  "html": "<p>a<p>b<p>c",
+  "markdown": "a\n\nb\n\nc",
+  "text": "abc"
+ },
+ {
+  "html": "<h1>a<h2>b</h2>c</h1>",
+  "markdown": "# a\n\n## b\n\nc",
+  "text": "abc"
+ },
+ {
+  "html": "<p><b>bold</b> <strong>strong</strong> <i>it</i> <em>em</em> <s>s</s> <strike>st</strike> <del>del</del></p>",
+  "markdown": "**bold** **strong** *it* *em* ~~s~~ ~~st~~ ~~del~~",
+  "text": "bold strong it em s st del"
+ },
+ {
+  "html": "<p>a<b></b>b</p>",
+  "markdown": "ab",
+  "text": "ab"
+ },
+ {
+  "html": "<p>a <b> </b> b</p>",
+  "markdown": "a  b",
+  "text": "a   b"
+ },
+ {
+  "html": "<p>x<b> bold </b>y</p>",
+  "markdown": "x **bold** y",
+  "text": "x bold y"
+ },
+ {
+  "html": "<p><b>bold<p>cross block</p>end</b></p>",
+  "markdown": "bold\n\ncross block\n\nend",
+  "text": "boldcross blockend"
+ },
+ {
+  "html": "<p><em>one <strong>two</strong> three</em></p>",
+  "markdown": "*one **two** three*",
+  "text": "one two three"
+ },
+ {
+  "html": "<b><i>both</i></b>",
+  "markdown": "***both***",
+  "text": "both"
+ },
+ {
+  "html": "<p>word<b>inner</b>word</p>",
+  "markdown": "word**inner**word",
+  "text": "wordinnerword"
+ },
+ {
+  "html": "<b>a</b><b>b</b>",
+  "markdown": "**a****b**",
+  "text": "ab"
+ },
+ {
+  "html": "<p>a <em>b</em> c</p>",
+  "markdown": "a *b* c",
+  "text": "a b c"
+ },
+ {
+  "html": "<b><br></b>",
+  "markdown": "**  \n**",
+  "text": ""
+ },
+ {
+  "html": "<p><i> lead</i>tail</p>",
+  "markdown": "*lead* tail",
+  "text": "leadtail"
+ },
+ {
+  "html": "<b>open only",
+  "markdown": "**open only**",
+  "text": "open only"
+ },
+ {
+  "html": "<p><b>x</p>y</b>",
+  "markdown": "**x**\n\ny",
+  "text": "xy"
+ },
+ {
+  "html": "<a href=\"/a\">simple</a>",
+  "markdown": "[simple](/a)",
+  "text": "simple"
+ },
+ {
+  "html": "<a href=\"/a\" title=\"T\">titled</a>",
+  "markdown": "[titled](/a \"T\")",
+  "text": "titled"
+ },
+ {
+  "html": "<a href=\"/a\" title=\"  spaced   out  \">t</a>",
+  "markdown": "[t](/a \"spaced out\")",
+  "text": "t"
+ },
+ {
+  "html": "<a href=\"/a\" title=\"\">empty title</a>",
+  "markdown": "[empty title](/a)",
+  "text": "empty title"
+ },
+ {
+  "html": "<a>no href</a>",
+  "markdown": "[no href]()",
+  "text": "no href"
+ },
+ {
+  "html": "<a href=\"/a b(c)\\d\">dest</a>",
+  "markdown": "[dest](/a%20b\\(c\\)\\\\d)",
+  "text": "dest"
+ },
+ {
+  "html": "<a href=\"/outer\">out <a href=\"/inner\">in</a> after</a>",
+  "markdown": "[out](/outer) [in](/inner) after",
+  "text": "out in after"
+ },
+ {
+  "html": "<a href=\"/a\"><code>code link</code></a>",
+  "markdown": "[`code link`](/a)",
+  "text": "code link"
+ },
+ {
+  "html": "<code><a href=\"/c\">in code</a></code>",
+  "markdown": "[`in code`](/c)",
+  "text": "in code"
+ },
+ {
+  "html": "<code>before <a href=\"/c\">x</a> after</code>",
+  "markdown": "` before  `[`x`](/c)`  after `",
+  "text": "before x after"
+ },
+ {
+  "html": "<code><a href=\"/1\">one</a><a href=\"/2\">two</a></code>",
+  "markdown": "[`one`](/1)[`two`](/2)",
+  "text": "onetwo"
+ },
+ {
+  "html": "<a href=\"/p\"><pre>pre in link</pre></a>",
+  "markdown": "[](/p)\n\n```\npre in link\n```",
+  "text": "pre in link"
+ },
+ {
+  "html": "<pre><a href=\"/x\">link in pre</a></pre>",
+  "markdown": "```\nlink in pre\n```",
+  "text": "link in pre"
+ },
+ {
+  "html": "<a href=\"/a\"><p>block in link</p></a>",
+  "markdown": "[](/a)\n\nblock in link",
+  "text": "block in link"
+ },
+ {
+  "html": "<a href=\"/a\"><div>div</div>tail</a>",
+  "markdown": "[](/a)\n\ndiv\n\n[tail](/a)",
+  "text": "divtail"
+ },
+ {
+  "html": "<a href=\"/a\"></a>",
+  "markdown": "[](/a)",
+  "text": ""
+ },
+ {
+  "html": "<p>x<a href=\"/a\"> spaced </a>y</p>",
+  "markdown": "x[ spaced](/a) y",
+  "text": "x spaced y"
+ },
+ {
+  "html": "<a href=\"/a\"><img src=\"/i.png\" alt=\"img\"></a>",
+  "markdown": "[![img](/i.png)](/a)",
+  "text": ""
+ },
+ {
+  "html": "<a href=\"/a\"><ul><li>item</li></ul></a>",
+  "markdown": "[](/a)\n\n- item",
+  "text": "item"
+ },
+ {
+  "html": "<a href=\"/a\"><blockquote>q</blockquote></a>",
+  "markdown": "[](/a)\n\n> q",
+  "text": "q"
+ },
+ {
+  "html": "<a href=\"/a\"><table><tr><td>c</td></tr></table></a>",
+  "markdown": "[](/a)\n\n| c |\n| --- |",
+  "text": "c"
+ },
+ {
+  "html": "<a href=\"/t\" title='quote \" and \\ back'>q</a>",
+  "markdown": "[q](/t \"quote \\\" and \\\\ back\")",
+  "text": "q"
+ },
+ {
+  "html": "<a href=\"/a\">a<br>b</a>",
+  "markdown": "[a  \nb](/a)",
+  "text": "ab"
+ },
+ {
+  "html": "<ul><li><a href=\"/a\">x<li>y</a></ul>",
+  "markdown": "- [x](/a)\n\n[  - y](/a)",
+  "text": "xy"
+ },
+ {
+  "html": "<img src=\"/a.png\" alt=\"Alt text\">",
+  "markdown": "![Alt text](/a.png)",
+  "text": ""
+ },
+ {
+  "html": "<img src=\"/a b.png\" alt=\"with ] and \\ chars\" title=\"Img title\">",
+  "markdown": "![with \\] and \\\\ chars](/a%20b.png \"Img title\")",
+  "text": ""
+ },
+ {
+  "html": "<img>",
+  "markdown": "![]()",
+  "text": ""
+ },
+ {
+  "html": "<p>see <img src=\"x.png\" alt=\"x\"> here</p>",
+  "markdown": "see ![x](x.png) here",
+  "text": "see  here"
+ },
+ {
+  "html": "<img src=\"(paren).png\" alt=\"\">",
+  "markdown": "![](\\(paren\\).png)",
+  "text": ""
+ },
+ {
+  "html": "<p>line one<br>line two<br/>line three</p>",
+  "markdown": "line one  \nline two  \nline three",
+  "text": "line oneline twoline three"
+ },
+ {
+  "html": "<p>a<br><br><br>b</p>",
+  "markdown": "a  \n  \n  \nb",
+  "text": "ab"
+ },
+ {
+  "html": "a</br>b",
+  "markdown": "a  \nb",
+  "text": "ab"
+ },
+ {
+  "html": "<hr><hr/><p>x</p><hr>",
+  "markdown": "---\n\n---\n\nx\n\n---",
+  "text": "x"
+ },
+ {
+  "html": "<p>a<hr>b</p>",
+  "markdown": "a\n\n---\n\nb",
+  "text": "ab"
+ },
+ {
+  "html": "<br>",
+  "markdown": "",
+  "text": ""
+ },
+ {
+  "html": "<p>trailing<br></p>",
+  "markdown": "trailing",
+  "text": "trailing"
+ },
+ {
+  "html": "<p>a <br> b</p>",
+  "markdown": "a  \nb",
+  "text": "a  b"
+ },
+ {
+  "html": "<blockquote>quoted</blockquote>",
+  "markdown": "> quoted",
+  "text": "quoted"
+ },
+ {
+  "html": "<blockquote><p>one</p><p>two</p></blockquote>",
+  "markdown": "> one\n\n> two",
+  "text": "onetwo"
+ },
+ {
+  "html": "<blockquote>outer<blockquote>inner</blockquote>back</blockquote>",
+  "markdown": "> outer\n>\n> > inner\n>\n> back",
+  "text": "outerinnerback"
+ },
+ {
+  "html": "<blockquote>a<br>b</blockquote>",
+  "markdown": "> a  \n> b",
+  "text": "ab"
+ },
+ {
+  "html": "<blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote><blockquote>deep</blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote></blockquote>after",
+  "markdown": "> > > > > > > > deep\n\nafter",
+  "text": "deepafter"
+ },
+ {
+  "html": "<blockquote><pre>code\nlines</pre></blockquote>",
+  "markdown": "> ```\n> code\n> lines\n> ```",
+  "text": "code\nlines"
+ },
+ {
+  "html": "<blockquote><ul><li>x</li><li>y</li></ul></blockquote>",
+  "markdown": "> - x\n\n> - y",
+  "text": "xy"
+ },
+ {
+  "html": "<blockquote><table><tr><td>a</td><td>b</td></tr></table></blockquote>",
+  "markdown": "> | a | b |\n> | --- | --- |",
+  "text": "ab"
+ },
+ {
+  "html": "<blockquote><blockquote>x</blockquote></blockquote><p>y</p>",
+  "markdown": "> > x\n\ny",
+  "text": "xy"
+ },
+ {
+  "html": "<blockquote><h2>Head</h2>text</blockquote>",
+  "markdown": "> ## Head\n\n> text",
+  "text": "Headtext"
+ },
+ {
+  "html": "<ul><li>a</li><li>b</li></ul>",
+  "markdown": "- a\n\n- b",
+  "text": "ab"
+ },
+ {
+  "html": "<ol><li>one</li><li>two</li></ol>",
+  "markdown": "1. one\n\n2. two",
+  "text": "onetwo"
+ },
+ {
+  "html": "<ol start=\"5\"><li>five</li><li>six</li></ol>",
+  "markdown": "5. five\n\n6. six",
+  "text": "fivesix"
+ },
+ {
+  "html": "<ol start=\"x\"><li>nan</li></ol>",
+  "markdown": "1. nan",
+  "text": "nan"
+ },
+ {
+  "html": "<ol start=\"0x10\"><li>hex</li></ol>",
+  "markdown": "16. hex",
+  "text": "hex"
+ },
+ {
+  "html": "<ol start=\" -3 \"><li>neg</li><li>neg2</li></ol>",
+  "markdown": "-3. neg\n\n-2. neg2",
+  "text": "negneg2"
+ },
+ {
+  "html": "<ol start=\"2.9\"><li>float</li></ol>",
+  "markdown": "2. float",
+  "text": "float"
+ },
+ {
+  "html": "<ol start=\"99999999999999999999\"><li>big</li><li>bigger</li></ol>",
+  "markdown": "100000000000000000000. big\n\n100000000000000000000. bigger",
+  "text": "bigbigger"
+ },
+ {
+  "html": "<ol start=\"1e30\"><li>exp</li></ol>",
+  "markdown": "1. exp",
+  "text": "exp"
+ },
+ {
+  "html": "<ol start=\"123456789012345678901234567890\"><li>huge</li></ol>",
+  "markdown": "1.2345678901234568e+29. huge",
+  "text": "huge"
+ },
+ {
+  "html": "<ol><li value=\"7\">seven</li><li>eight</li><li value=\"bad\">nine</li></ol>",
+  "markdown": "7. seven\n\n8. eight\n\n9. nine",
+  "text": "seveneightnine"
+ },
+ {
+  "html": "<ul><li value=\"3\">ul value</li></ul>",
+  "markdown": "- ul value",
+  "text": "ul value"
+ },
+ {
+  "html": "<ol><li>a<ol><li>a1</li><li>a2</li></ol></li><li>b</li></ol>",
+  "markdown": "1. a\n\n   1. a1\n\n   2. a2\n\n2. b",
+  "text": "aa1a2b"
+ },
+ {
+  "html": "<ul><li>a<ul><li>b<ul><li>c<ul><li>d<ul><li>e<ul><li>f<ul><li>g<ul><li>h</li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul>",
+  "markdown": "- a\n\n  - b\n\n    - c\n\n      - d\n\n        - e\n\n          - f\n\n            - g\n\n              - h",
+  "text": "abcdefgh"
+ },
+ {
+  "html": "<ul><li>one<li>two<li>three</ul>",
+  "markdown": "- one\n\n- two\n\n- three",
+  "text": "onetwothree"
+ },
+ {
+  "html": "<li>orphan</li>",
+  "markdown": "- orphan",
+  "text": "orphan"
+ },
+ {
+  "html": "<ul><li><p>para item</p><p>second</p></li></ul>",
+  "markdown": "- para item\n\n  second",
+  "text": "para itemsecond"
+ },
+ {
+  "html": "<ul><li>item<pre>code</pre></li></ul>",
+  "markdown": "- item\n\n```\ncode\n```",
+  "text": "itemcode"
+ },
+ {
+  "html": "<ol><li>x<table><tr><td>a</td></tr></table></li></ol>",
+  "markdown": "1. x\n\n| a |\n| --- |",
+  "text": "xa"
+ },
+ {
+  "html": "<ul><li></li></ul>",
+  "markdown": "-",
+  "text": ""
+ },
+ {
+  "html": "<ol start=\"-0\"><li>z</li></ol>",
+  "markdown": "0. z",
+  "text": "z"
+ },
+ {
+  "html": "<table><tr><td>a</td><td>b</td></tr><tr><td>c</td><td>d</td></tr></table>",
+  "markdown": "| a | b |\n| --- | --- |\n| c | d |",
+  "text": "abcd"
+ },
+ {
+  "html": "<table><tr><td>a</td><td>b</td></tr><tr><td>c</td></tr></table>",
+  "markdown": "a | b\n\nc",
+  "text": "abc"
+ },
+ {
+  "html": "<table><tr><td colspan=\"2\">wide</td></tr><tr><td>a</td><td>b</td></tr></table>",
+  "markdown": "wide\n\na | b",
+  "text": "wideab"
+ },
+ {
+  "html": "<table><tr><td rowspan=\"\">empty span</td><td>b</td></tr></table>",
+  "markdown": "| empty span | b |\n| --- | --- |",
+  "text": "empty spanb"
+ },
+ {
+  "html": "<table><tr><td>outer<table><tr><td>inner</td></tr></table></td><td>x</td></tr></table>",
+  "markdown": "| outer inner | x |\n| --- | --- |",
+  "text": "outerinnerx"
+ },
+ {
+  "html": "<table><caption>Cap</caption><tr><td>a</td></tr></table>",
+  "markdown": "Cap\n\n| a |\n| --- |",
+  "text": "Capa"
+ },
+ {
+  "html": "<table><tr><td>a | b</td><td>c \\| d</td></tr></table>",
+  "markdown": "| a \\| b | c \\\\\\| d |\n| --- | --- |",
+  "text": "a | bc \\| d"
+ },
+ {
+  "html": "<table><tr><td>multi\nline   cell</td></tr></table>",
+  "markdown": "| multi line cell |\n| --- |",
+  "text": "multi\nline   cell"
+ },
+ {
+  "html": "<table>loose text<tr><td>a</td></tr></table>",
+  "markdown": "loose text\n\n| a |\n| --- |",
+  "text": "loose texta"
+ },
+ {
+  "html": "<table></table>",
+  "markdown": "",
+  "text": ""
+ },
+ {
+  "html": "<table><tr></tr></table>",
+  "markdown": "",
+  "text": ""
+ },
+ {
+  "html": "<table><thead><tr><th>H</th></tr></thead><tbody><tr><td>B</td></tr></tbody><tfoot><tr><td>F</td></tr></tfoot></table>",
+  "markdown": "| H |\n| --- |\n| B |\n| F |",
+  "text": "HBF"
+ },
+ {
+  "html": "<table><tr><td>a<td>b<tr><td>c<td>d</table>",
+  "markdown": "| a | b |\n| --- | --- |\n| c | d |",
+  "text": "abcd"
+ },
+ {
+  "html": "<table><tr><td><b>bold</b> <a href=\"/l\">link</a> <code>c|d</code></td></tr></table>",
+  "markdown": "| **bold** [link](/l) `c\\|d` |\n| --- |",
+  "text": "bold link c|d"
+ },
+ {
+  "html": "<table><tr><td><pre>pre in cell</pre></td></tr></table>",
+  "markdown": "| pre in cell |\n| --- |",
+  "text": "pre in cell"
+ },
+ {
+  "html": "<table><tr><td><blockquote>q</blockquote></td></tr></table>",
+  "markdown": "| q |\n| --- |",
+  "text": "q"
+ },
+ {
+  "html": "<td>stray cell</td>",
+  "markdown": "stray cell",
+  "text": "stray cell"
+ },
+ {
+  "html": "<tr><td>stray row</td></tr>",
+  "markdown": "stray row",
+  "text": "stray row"
+ },
+ {
+  "html": "<caption>stray caption</caption>",
+  "markdown": "stray caption",
+  "text": "stray caption"
+ },
+ {
+  "html": "<table><tr><td>a</td></tr></table><table><tr><td>b</td></tr></table>",
+  "markdown": "| a |\n| --- |\n\n| b |\n| --- |",
+  "text": "ab"
+ },
+ {
+  "html": "<ul><li><table><tr><td>a</td><td>b</td></tr></table></li></ul>",
+  "markdown": "-\n\n| a | b |\n| --- | --- |",
+  "text": "ab"
+ },
+ {
+  "html": "<table><tr><td><img src=\"/i.png\" alt=\"i\"></td></tr></table>",
+  "markdown": "| ![i](/i.png) |\n| --- |",
+  "text": ""
+ },
+ {
+  "html": "<table><tr><th>A</th></tr><tr><td></td></tr></table>",
+  "markdown": "| A |\n| --- |\n|  |",
+  "text": "A"
+ },
+ {
+  "html": "<pre>plain pre</pre>",
+  "markdown": "```\nplain pre\n```",
+  "text": "plain pre"
+ },
+ {
+  "html": "<pre><code class=\"language-rust\">fn main() {}</code></pre>",
+  "markdown": "```rust\nfn main() {}\n```",
+  "text": "fn main() {}"
+ },
+ {
+  "html": "<pre><code class=\"lang-py highlight\">print(1)</code></pre>",
+  "markdown": "```py\nprint(1)\n```",
+  "text": "print(1)"
+ },
+ {
+  "html": "<pre><code class=\"x language-\">no lang</code></pre>",
+  "markdown": "```\nno lang\n```",
+  "text": "no lang"
+ },
+ {
+  "html": "<pre><code class=\"\">empty class</code></pre>",
+  "markdown": "```\nempty class\n```",
+  "text": "empty class"
+ },
+ {
+  "html": "<pre class=\"language-js\"><code>pre class only</code></pre>",
+  "markdown": "```\npre class only\n```",
+  "text": "pre class only"
+ },
+ {
+  "html": "<pre><code class=\"language-a\">x</code><code class=\"other\">y</code></pre>",
+  "markdown": "```\nxy\n```",
+  "text": "xy"
+ },
+ {
+  "html": "<pre>has ``` backticks</pre>",
+  "markdown": "~~~\nhas ``` backticks\n~~~",
+  "text": "has ``` backticks"
+ },
+ {
+  "html": "<pre>has ~~~~ tildes and ``` ticks</pre>",
+  "markdown": "````\nhas ~~~~ tildes and ``` ticks\n````",
+  "text": "has ~~~~ tildes and ``` ticks"
+ },
+ {
+  "html": "<pre>```` four ``` three ~~~~~</pre>",
+  "markdown": "`````\n```` four ``` three ~~~~~\n`````",
+  "text": "```` four ``` three ~~~~~"
+ },
+ {
+  "html": "<pre>line1<br>line2</pre>",
+  "markdown": "```\nline1\nline2\n```",
+  "text": "line1line2"
+ },
+ {
+  "html": "<pre>ends with newline\n</pre>",
+  "markdown": "```\nends with newline\n```",
+  "text": "ends with newline"
+ },
+ {
+  "html": "<pre></pre>",
+  "markdown": "```\n\n```",
+  "text": ""
+ },
+ {
+  "html": "<pre>\n\nleading newlines</pre>",
+  "markdown": "```\n\n\nleading newlines\n```",
+  "text": "leading newlines"
+ },
+ {
+  "html": "<pre><b>bold in pre</b> &lt;tag&gt;</pre>",
+  "markdown": "```\nbold in pre <tag>\n```",
+  "text": "bold in pre <tag>"
+ },
+ {
+  "html": "<pre>a\r\nb</pre>",
+  "markdown": "```\na\r\nb\n```",
+  "text": "a\r\nb"
+ },
+ {
+  "html": "<blockquote><pre>a\r\nb c</pre></blockquote>",
+  "markdown": "> ```\n> a\r> \n> b > c\n> ```",
+  "text": "a\r\nb c"
+ },
+ {
+  "html": "<code>inline</code>",
+  "markdown": "`inline`",
+  "text": "inline"
+ },
+ {
+  "html": "<code></code>",
+  "markdown": "",
+  "text": ""
+ },
+ {
+  "html": "<code> padded </code>",
+  "markdown": "`  padded  `",
+  "text": "padded"
+ },
+ {
+  "html": "<code>`tick</code>",
+  "markdown": "`` `tick ``",
+  "text": "`tick"
+ },
+ {
+  "html": "<code>tick`</code>",
+  "markdown": "`` tick` ``",
+  "text": "tick`"
+ },
+ {
+  "html": "<code>a``b</code>",
+  "markdown": "```a``b```",
+  "text": "a``b"
+ },
+ {
+  "html": "<code>   </code>",
+  "markdown": "`   `",
+  "text": ""
+ },
+ {
+  "html": "<p>x<code>c</code>y</p>",
+  "markdown": "x`c`y",
+  "text": "xcy"
+ },
+ {
+  "html": "<p>x <code>c</code> y</p>",
+  "markdown": "x `c` y",
+  "text": "x c y"
+ },
+ {
+  "html": "<code><code>nested</code></code>",
+  "markdown": "`nested`",
+  "text": "nested"
+ },
+ {
+  "html": "<code><b>marker in code</b></code>",
+  "markdown": "`marker in code`",
+  "text": "marker in code"
+ },
+ {
+  "html": "<code>a<br>b</code>",
+  "markdown": "`ab`",
+  "text": "ab"
+ },
+ {
+  "html": "<code>multi\nline</code>",
+  "markdown": "`multi\nline`",
+  "text": "multi\nline"
+ },
+ {
+  "html": "<pre><pre>double</pre></pre>",
+  "markdown": "```\ndouble\n```",
+  "text": "double"
+ },
+ {
+  "html": "<code><pre>pre in code</pre></code>",
+  "markdown": "```\npre in code\n```",
+  "text": "pre in code"
+ },
+ {
+  "html": "<dl><dt>Term</dt><dd>Definition</dd></dl>",
+  "markdown": "**Term**\n: Definition",
+  "text": "TermDefinition"
+ },
+ {
+  "html": "<dl><dt>A<dd>a<dt>B<dd>b</dl>",
+  "markdown": "**A**\n: a\n\n**B**\n: b",
+  "text": "AaBb"
+ },
+ {
+  "html": "<dd>stray dd</dd>",
+  "markdown": ": stray dd",
+  "text": "stray dd"
+ },
+ {
+  "html": "<details><summary>Sum</summary>body</details>",
+  "markdown": "Sum\n\nbody",
+  "text": "Sumbody"
+ },
+ {
+  "html": "<details open><summary>Sum</summary>body</details>",
+  "markdown": "Sum\n\nbody",
+  "text": "Sumbody"
+ },
+ {
+  "html": "<details>no summary</details>",
+  "markdown": "no summary",
+  "text": "no summary"
+ },
+ {
+  "html": "<details><p>before</p><summary>late</summary><p>after</p></details>",
+  "markdown": "late",
+  "text": "beforelateafter"
+ },
+ {
+  "html": "<details><summary>a</summary><details open><summary>b</summary>inner</details></details>",
+  "markdown": "a",
+  "text": "abinner"
+ },
+ {
+  "html": "<details open><summary>S</summary><details><summary>T</summary>hidden</details>shown</details>",
+  "markdown": "S\n\nT\n\nhidden\n\nshown",
+  "text": "SThiddenshown"
+ },
+ {
+  "html": "<p hidden>hidden</p><p>shown</p>",
+  "markdown": "shown",
+  "text": "hiddenshown"
+ },
+ {
+  "html": "<p aria-hidden=\"TRUE\">aria</p><p aria-hidden=\"false\">visible</p>",
+  "markdown": "visible",
+  "text": "ariavisible"
+ },
+ {
+  "html": "<head><title>x</title></head><body>body</body>",
+  "markdown": "body",
+  "text": "xbody"
+ },
+ {
+  "html": "<div hidden><p>a<b>b</b></p></div>c",
+  "markdown": "c",
+  "text": "abc"
+ },
+ {
+  "html": "<script>alert(1)</script><style>p{}</style><noscript>ns</noscript>text",
+  "markdown": "text",
+  "text": "text"
+ },
+ {
+  "html": "<object>obj</object><embed src=x>after<template>t</template>",
+  "markdown": "after",
+  "text": "aftert"
+ },
+ {
+  "html": "<p>a<script>var s = '</p>';</script>b</p>",
+  "markdown": "ab",
+  "text": "ab"
+ },
+ {
+  "html": "<SCRIPT>upper</SCRIPT>after",
+  "markdown": "after",
+  "text": "after"
+ },
+ {
+  "html": "<script>a</scriptx>b</script>c",
+  "markdown": "c",
+  "text": "c"
+ },
+ {
+  "html": "<style>a<</style>b",
+  "markdown": "b",
+  "text": "b"
+ },
+ {
+  "html": "<title>t &amp; t</title>after",
+  "markdown": "t & tafter",
+  "text": "t & tafter"
+ },
+ {
+  "html": "<svg><title>svg &lt;title&gt;</title></svg>",
+  "markdown": "svg \\<title\\>",
+  "text": "svg <title>"
+ },
+ {
+  "html": "<textarea><b>not raw</b></textarea>",
+  "markdown": "**not raw**",
+  "text": "not raw"
+ },
+ {
+  "html": "<xmp><b>xmp</b></xmp>",
+  "markdown": "**xmp**",
+  "text": "xmp"
+ },
+ {
+  "html": "<script/>after self closing script",
+  "markdown": "",
+  "text": ""
+ },
+ {
+  "html": "<script src=x></script>visible",
+  "markdown": "visible",
+  "text": "visible"
+ },
+ {
+  "html": "  \n\t lots   of\n\nwhitespace \r\n here \f ",
+  "markdown": "lots of whitespace here",
+  "text": "lots   of\n\nwhitespace \r\n here"
+ },
+ {
+  "html": "a b   c",
+  "markdown": "a b   c",
+  "text": "a b   c"
+ },
+ {
+  "html": "<p>a</p>\n\n\n<p>b</p>",
+  "markdown": "a\n\nb",
+  "text": "a\n\n\nb"
+ },
+ {
+  "html": "<span>a</span> <span>b</span>",
+  "markdown": "a b",
+  "text": "a b"
+ },
+ {
+  "html": "<span>a</span><span>b</span>",
+  "markdown": "ab",
+  "text": "ab"
+ },
+ {
+  "html": "one\ttwo\nthree",
+  "markdown": "one two three",
+  "text": "one\ttwo\nthree"
+ },
+ {
+  "html": "<p>trailing tab\t</p>",
+  "markdown": "trailing tab",
+  "text": "trailing tab"
+ },
+ {
+  "html": "<p>*stars* _under_ `tick` [brackets] <angle> |pipe| ~tilde~ \\back</p>",
+  "markdown": "\\*stars\\* \\_under\\_ \\`tick\\` \\[brackets\\] \\|pipe\\| \\~tilde\\~ \\\\back",
+  "text": "*stars* _under_ `tick` [brackets]  |pipe| ~tilde~ \\back"
+ },
+ {
+  "html": "<p># not heading</p><p>+ not list</p><p>- not list</p><p>1. not ordered</p><p>12.5 decimal</p>",
+  "markdown": "\\# not heading\n\n\\+ not list\n\n\\- not list\n\n1\\. not ordered\n\n12\\.5 decimal",
+  "text": "# not heading+ not list- not list1. not ordered12.5 decimal"
+ },
+ {
+  "html": "<p>a #b +c -d 3.e</p>",
+  "markdown": "a \\#b \\+c \\-d 3\\.e",
+  "text": "a #b +c -d 3.e"
+ },
+ {
+  "html": "<p>&lt;script&gt;</p>",
+  "markdown": "\\<script\\>",
+  "text": "<script>"
+ },
+ {
+  "html": "<p>a-b</p><p>a&amp;-b</p>",
+  "markdown": "a-b\n\na&\\-b",
+  "text": "a-ba&-b"
+ },
+ {
+  "html": "<p>x&amp;1. y</p>",
+  "markdown": "x&1\\. y",
+  "text": "x&1. y"
+ },
+ {
+  "html": "&amp; &lt; &gt; &quot; &apos; &nbsp; &copy; &mdash;",
+  "markdown": "& \\< \\> \" '   © —",
+  "text": "& < > \" '   © —"
+ },
+ {
+  "html": "&amp &lt &gt &copy &reg &nbsp; legacy",
+  "markdown": "& \\< \\> © ®   legacy",
+  "text": "& < > © ®   legacy"
+ },
+ {
+  "html": "&notit; &notin; &not &noti",
+  "markdown": "¬it; ∉ ¬ ¬i",
+  "text": "¬it; ∉ ¬ ¬i"
+ },
+ {
+  "html": "&#65; &#x42; &#X43; &#0; &#128; &#150; &#xD800; &#x110000; &#99999999999; &#; &#x; &#65 &#x41",
+  "markdown": "A B C � € – � � � &#; &#x; A A",
+  "text": "A B C � € – � � � &#; &#x; A A"
+ },
+ {
+  "html": "&unknown; &AMP; &Amp; &ampx &amp;x",
+  "markdown": "&unknown; & &Amp; &x &x",
+  "text": "&unknown; & &Amp; &x &x"
+ },
+ {
+  "html": "&Afr; &fjlig; &nvlt; &NotEqualTilde;",
+  "markdown": "𝔄 fj \\<⃒ ≂̸",
+  "text": "𝔄 fj <⃒ ≂̸"
+ },
+ {
+  "html": "<a href=\"?a=1&amp;b=2&copy=3&lt=4&ltx;\">attr</a>",
+  "markdown": "[attr](?a=1&b=2&copy=3&lt=4&ltx;)",
+  "text": "attr"
+ },
+ {
+  "html": "<a href=\"?q=&#65;&#x42&notin\">numeric attr</a>",
+  "markdown": "[numeric attr](?q=A&#x42&notin)",
+  "text": "numeric attr"
+ },
+ {
+  "html": "<img alt=\"&lt;&gt;&amp;&quot;\" src=\"x\">",
+  "markdown": "![<>&\"](x)",
+  "text": ""
+ },
+ {
+  "html": "trailing &am",
+  "markdown": "trailing &am",
+  "text": "trailing &am"
+ },
+ {
+  "html": "trailing &amp",
+  "markdown": "trailing &",
+  "text": "trailing &"
+ },
+ {
+  "html": "trailing &#65",
+  "markdown": "trailing A",
+  "text": "trailing A"
+ },
+ {
+  "html": "trailing &#x4",
+  "markdown": "trailing \u0004",
+  "text": "trailing \u0004"
+ },
+ {
+  "html": "trailing &",
+  "markdown": "trailing &",
+  "text": "trailing &"
+ },
+ {
+  "html": "&&amp;&",
+  "markdown": "&&&",
+  "text": "&&&"
+ },
+ {
+  "html": "<p title=\"&#65\">x</p>&#65;&#x41;&#97x",
+  "markdown": "x\n\nAAax",
+  "text": "xAAax"
+ },
+ {
+  "html": "&#128512; &#x1F600;",
+  "markdown": "😀 😀",
+  "text": "😀 😀"
+ },
+ {
+  "html": "<p>Ünïcödé — 中文 — العربية — 😀 emoji</p>",
+  "markdown": "Ünïcödé — 中文 — العربية — 😀 emoji",
+  "text": "Ünïcödé — 中文 — العربية — 😀 emoji"
+ },
+ {
+  "html": "<h1>Ελληνικά</h1><ul><li>日本語</li></ul>",
+  "markdown": "# Ελληνικά\n\n- 日本語",
+  "text": "Ελληνικά日本語"
+ },
+ {
+  "html": "<p>ﬁ ligature</p><code>😀`</code>",
+  "markdown": "ﬁ ligature\n\n`` 😀` ``",
+  "text": "ﬁ ligature😀`"
+ },
+ {
+  "html": "<DIV CLASS=X>Upper <B>Case</B></DIV>",
+  "markdown": "Upper **Case**",
+  "text": "Upper Case"
+ },
+ {
+  "html": "<İ>dotted</İ>",
+  "markdown": "\\<İ\\>dotted",
+  "text": "<İ>dotted"
+ },
+ {
+  "html": "<b><i>misnested</b></i>",
+  "markdown": "***misnested***",
+  "text": "misnested"
+ },
+ {
+  "html": "<p>unclosed paragraph",
+  "markdown": "unclosed paragraph",
+  "text": "unclosed paragraph"
+ },
+ {
+  "html": "<div><span>unclosed",
+  "markdown": "unclosed",
+  "text": "unclosed"
+ },
+ {
+  "html": "</div>stray close",
+  "markdown": "stray close",
+  "text": "stray close"
+ },
+ {
+  "html": "</p>",
+  "markdown": "",
+  "text": ""
+ },
+ {
+  "html": "a</p>b",
+  "markdown": "a\n\nb",
+  "text": "ab"
+ },
+ {
+  "html": "<p>a</div>b</p>",
+  "markdown": "ab",
+  "text": "ab"
+ },
+ {
+  "html": "<ul><li>a<li>b</ul>c",
+  "markdown": "- a\n\n- b\n\nc",
+  "text": "abc"
+ },
+ {
+  "html": "<p>p<div>div</div>",
+  "markdown": "p\n\ndiv",
+  "text": "pdiv"
+ },
+ {
+  "html": "<p>p<table><tr><td>t</td></tr></table>",
+  "markdown": "p\n\n| t |\n| --- |",
+  "text": "pt"
+ },
+ {
+  "html": "<select><option>a<option>b</select>",
+  "markdown": "ab",
+  "text": "ab"
+ },
+ {
+  "html": "<dl><dt>a<dt>b</dl>",
+  "markdown": "**a**\n\n**b**",
+  "text": "ab"
+ },
+ {
+  "html": "<tr><td>a<tr><td>b",
+  "markdown": "a b",
+  "text": "ab"
+ },
+ {
+  "html": "<table><tbody><tr><td>a<tbody><tr><td>b</table>",
+  "markdown": "| b |\n| --- |",
+  "text": "ab"
+ },
+ {
+  "html": "<p><p>double open</p></p>",
+  "markdown": "double open",
+  "text": "double open"
+ },
+ {
+  "html": "<b><p>bold para</p></b>",
+  "markdown": "bold para",
+  "text": "bold para"
+ },
+ {
+  "html": "<body><head>late head</head>x</body>",
+  "markdown": "x",
+  "text": "late headx"
+ },
+ {
+  "html": "<ruby>漢<rp>(</rp><rt>kan<rt>ji</ruby>",
+  "markdown": "漢(kanji",
+  "text": "漢(kanji"
+ },
+ {
+  "html": "<br/><img/><input type=text>text<input>",
+  "markdown": "![]()text",
+  "text": "text"
+ },
+ {
+  "html": "<p/>self closing p<span/>x",
+  "markdown": "self closing px",
+  "text": "self closing px"
+ },
+ {
+  "html": "<div/>a</div>",
+  "markdown": "a",
+  "text": "a"
+ },
+ {
+  "html": "<wbr>a<area>b<source>c<track>d<col>e<param>f<keygen>g<isindex>h<basefont>i<frame>j<command>k",
+  "markdown": "abcdefghijk",
+  "text": "abcdefghijk"
+ },
+ {
+  "html": "<meta charset=x><link rel=y>after",
+  "markdown": "after",
+  "text": "after"
+ },
+ {
+  "html": "</img>a</hr>b</input>c",
+  "markdown": "abc",
+  "text": "abc"
+ },
+ {
+  "html": "<svg><circle r=\"1\"/><text>svg text</text></svg>after",
+  "markdown": "svg textafter",
+  "text": "svg textafter"
+ },
+ {
+  "html": "<svg><p/>x</svg>y",
+  "markdown": "xy",
+  "text": "xy"
+ },
+ {
+  "html": "<math><mi>x</mi><mo>=</mo><mn>1</mn></math>",
+  "markdown": "x=1",
+  "text": "x=1"
+ },
+ {
+  "html": "<svg><foreignObject><p/>html</foreignObject></svg>",
+  "markdown": "html",
+  "text": "html"
+ },
+ {
+  "html": "<svg><desc><b/>d</desc></svg>z",
+  "markdown": "**d**z",
+  "text": "dz"
+ },
+ {
+  "html": "<math><annotation-xml><br/></annotation-xml></math>",
+  "markdown": "",
+  "text": ""
+ },
+ {
+  "html": "</svg><p/>stray",
+  "markdown": "stray",
+  "text": "stray"
+ },
+ {
+  "html": "<svg><svg/>nested</svg>",
+  "markdown": "nested",
+  "text": "nested"
+ },
+ {
+  "html": "<!-- comment -->visible<!-- another -- comment -->",
+  "markdown": "visible",
+  "text": "visible"
+ },
+ {
+  "html": "<!---->a<!--->b<!-->c",
+  "markdown": "abc",
+  "text": "abc"
+ },
+ {
+  "html": "<!-- unterminated comment",
+  "markdown": "",
+  "text": ""
+ },
+ {
+  "html": "<![CDATA[cdata text]]>after",
+  "markdown": "after",
+  "text": "after"
+ },
+ {
+  "html": "<![CDATA[unterminated",
+  "markdown": "",
+  "text": ""
+ },
+ {
+  "html": "<!DOCTYPE html><p>doc</p>",
+  "markdown": "doc",
+  "text": "doc"
+ },
+ {
+  "html": "<?xml version=\"1.0\"?><p>pi</p>",
+  "markdown": "pi",
+  "text": "pi"
+ },
+ {
+  "html": "<!x>decl</ >weird</>",
+  "markdown": "decl\\</ \\>weird\\</\\>",
+  "text": "decl</ >weird</>"
+ },
+ {
+  "html": "</ p>space close",
+  "markdown": "space close",
+  "text": "space close"
+ },
+ {
+  "html": "</3>digit close",
+  "markdown": "digit close",
+  "text": "digit close"
+ },
+ {
+  "html": "a<b",
+  "markdown": "a",
+  "text": "a"
+ },
+ {
+  "html": "a<",
+  "markdown": "a\\<",
+  "text": "a<"
+ },
+ {
+  "html": "a <b and c> d",
+  "markdown": "a  **d**",
+  "text": "a  d"
+ },
+ {
+  "html": "a < b > c",
+  "markdown": "a \\< b \\> c",
+  "text": "a < b > c"
+ },
+ {
+  "html": "<p>x</p y",
+  "markdown": "x\n\ny",
+  "text": "xy"
+ },
+ {
+  "html": "<p>x</p ",
+  "markdown": "x",
+  "text": "x"
+ },
+ {
+  "html": "<p a='1' b=\"2\" c=3 d>attrs</p>",
+  "markdown": "attrs",
+  "text": "attrs"
+ },
+ {
+  "html": "<a href=x href=y>duplicate</a>",
+  "markdown": "[duplicate](x)",
+  "text": "duplicate"
+ },
+ {
+  "html": "<a HREF=upper>upper attr</a>",
+  "markdown": "[upper attr](upper)",
+  "text": "upper attr"
+ },
+ {
+  "html": "<a href=\"x\"title=\"y\">no space</a>",
+  "markdown": "[no space](x \"y\")",
+  "text": "no space"
+ },
+ {
+  "html": "<p class=\"a\" / >odd slash</p>",
+  "markdown": "odd slash",
+  "text": "odd slash"
+ },
+ {
+  "html": "<br/",
+  "markdown": "/",
+  "text": "/"
+ },
+ {
+  "html": "<a b='x'/",
+  "markdown": "/",
+  "text": "/"
+ },
+ {
+  "html": "<p>x<",
+  "markdown": "x\\<",
+  "text": "x<"
+ },
+ {
+  "html": "<p>x<!",
+  "markdown": "x",
+  "text": "x"
+ },
+ {
+  "html": "<p>x<!-",
+  "markdown": "x\\-",
+  "text": "x-"
+ },
+ {
+  "html": "<p>x<?",
+  "markdown": "x",
+  "text": "x"
+ },
+ {
+  "html": "<p>x</",
+  "markdown": "x\\</",
+  "text": "x</"
+ },
+ {
+  "html": "<p>x<a href=\"unterminated",
+  "markdown": "x",
+  "text": "x"
+ },
+ {
+  "html": "<p>x<a href=",
+  "markdown": "x",
+  "text": "x"
+ },
+ {
+  "html": "<p>x<a href",
+  "markdown": "x",
+  "text": "x"
+ },
+ {
+  "html": "text <a",
+  "markdown": "text",
+  "text": "text"
+ },
+ {
+  "html": "<div><blockquote ",
+  "markdown": "",
+  "text": ""
+ },
+ {
+  "html": "<div>a</div ",
+  "markdown": "a",
+  "text": "a"
+ },
+ {
+  "html": "a</b x>c",
+  "markdown": "ac",
+  "text": "ac"
+ },
+ {
+  "html": "<p>Visit <a href=\"https://example.com\">example.com</a>, then <code>run()</code>.</p>",
+  "markdown": "Visit [example.com](https://example.com), then `run()`.",
+  "text": "Visit example.com, then run()."
+ },
+ {
+  "html": "<ol><li><a href=\"/1\">One</a></li><li><b>Two</b></li></ol>",
+  "markdown": "1. [One](/1)\n\n2. **Two**",
+  "text": "OneTwo"
+ },
+ {
+  "html": "<blockquote><p>Quote with <a href=\"/q\">link</a></p></blockquote>",
+  "markdown": "> Quote with [link](/q)",
+  "text": "Quote with link"
+ },
+ {
+  "html": "<h2><a href=\"/h\">Linked heading</a></h2>",
+  "markdown": "## [Linked heading](/h)",
+  "text": "Linked heading"
+ },
+ {
+  "html": "<p><b>bold <a href=\"/x\">link</a></b></p>",
+  "markdown": "**bold [link](/x)**",
+  "text": "bold link"
+ },
+ {
+  "html": "<p><a href=\"/x\"><b>bold link</b></a></p>",
+  "markdown": "[**bold link**](/x)",
+  "text": "bold link"
+ },
+ {
+  "html": "<ul><li><code>code</code> item</li></ul>",
+  "markdown": "- `code` item",
+  "text": "code item"
+ },
+ {
+  "html": "<p>Line<br>\n  continued</p>",
+  "markdown": "Line  \ncontinued",
+  "text": "Line\n  continued"
+ },
+ {
+  "html": "<blockquote>a</blockquote><blockquote>b</blockquote>",
+  "markdown": "> a\n\n> b",
+  "text": "ab"
+ },
+ {
+  "html": "<ul><li>a</li></ul><ol><li>b</li></ol>",
+  "markdown": "- a\n\n1. b",
+  "text": "ab"
+ },
+ {
+  "html": "<em>*already* escaped?</em>",
+  "markdown": "*\\*already\\* escaped?*",
+  "text": "*already* escaped?"
+ },
+ {
+  "html": "",
+  "markdown": "",
+  "text": ""
+ },
+ {
+  "html": "   ",
+  "markdown": "",
+  "text": ""
+ },
+ {
+  "html": "plain text only",
+  "markdown": "plain text only",
+  "text": "plain text only"
+ }
+]
