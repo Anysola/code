@@ -116,6 +116,15 @@ pub enum Event {
         request_id: String,
         action: String,
         resources: Vec<String>,
+        /// Patterns "always" would save; empty when the request offers no "always".
+        save: Vec<String>,
+    },
+    /// A pending ask was answered: by the user, by an "always" that now covers it, or rejected
+    /// along with another ask of its session or at shutdown.
+    PermissionReplied {
+        session_id: String,
+        request_id: String,
+        reply: PermissionReply,
     },
     Credits(CreditsSnapshot),
     TitleChanged {
@@ -151,6 +160,7 @@ impl Event {
             | Event::StepFailed { session_id, .. }
             | Event::RetryScheduled { session_id, .. }
             | Event::PermissionAsked { session_id, .. }
+            | Event::PermissionReplied { session_id, .. }
             | Event::TitleChanged { session_id, .. }
             | Event::Succeeded { session_id }
             | Event::Failed { session_id, .. }
@@ -158,4 +168,11 @@ impl Event {
             Event::Credits(snapshot) => &snapshot.session_id,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionReply {
+    Once,
+    Always,
+    Reject,
 }

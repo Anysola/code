@@ -152,6 +152,7 @@ pub async fn run(args: RunArgs) -> i32 {
             ui::NORMAL
         ));
     }
+    core.close_permissions();
     anysola_core::tool::shell::kill_background_shells();
     code
 }

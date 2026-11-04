@@ -13,6 +13,19 @@ pub fn normalize_action(action: &str) -> &str {
     }
 }
 
+/// `Object.entries` order, which decides last-match-wins rules: integer-like keys first,
+/// ascending, then the rest as written.
+fn js_entries(map: &Map<String, Value>) -> Vec<(&String, &Value)> {
+    let index = |key: &str| {
+        key.parse::<u32>()
+            .ok()
+            .filter(|n| *n != u32::MAX && n.to_string() == key)
+    };
+    let mut entries: Vec<_> = map.iter().collect();
+    entries.sort_by_key(|(key, _)| index(key).map_or((1, 0), |n| (0, n)));
+    entries
+}
+
 fn effect(value: &Value) -> Option<&str> {
     value
         .as_str()
@@ -25,13 +38,13 @@ fn migrate_permission(value: Option<&Value>) -> Vec<Value> {
         Some(Value::String(_)) => effect(value.unwrap())
             .map(|e| vec![rule("*", "*", e)])
             .unwrap_or_default(),
-        Some(Value::Object(map)) => map
-            .iter()
+        Some(Value::Object(map)) => js_entries(map)
+            .into_iter()
             .flat_map(|(tool, setting)| {
                 let action = normalize_action(tool);
                 match setting {
-                    Value::Object(patterns) => patterns
-                        .iter()
+                    Value::Object(patterns) => js_entries(patterns)
+                        .into_iter()
                         .filter_map(|(resource, e)| effect(e).map(|e| rule(action, resource, e)))
                         .collect(),
                     other => effect(other)
@@ -49,7 +62,8 @@ fn migrate_tools(value: Option<&Value>) -> Vec<Value> {
     let Some(Value::Object(map)) = value else {
         return Vec::new();
     };
-    map.iter()
+    js_entries(map)
+        .into_iter()
         .filter_map(|(tool, on)| {
             on.as_bool().map(|on| {
                 rule(
@@ -299,6 +313,15 @@ mod tests {
             "agent": {"rev": {"prompt": "Review.", "maxSteps": 3, "color": "red", "model": "anysola/m", "variant": "high"}},
         }));
         assert_eq!(out["agents"]["title"]["model"], "anysola/claude-haiku-5-5");
+        let ordered =
+            norm(json!({"permission": {"read": {"*.md": "deny", "10": "allow", "2": "ask"}}}));
+        let resources: Vec<&str> = ordered["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["resource"].as_str().unwrap())
+            .collect();
+        assert_eq!(resources, ["2", "10", "*.md"]);
         assert_eq!(
             out["agents"]["rev"],
             json!({"model": "anysola/m#high", "system": "Review.", "color": "#aaaaaa", "steps": 3})

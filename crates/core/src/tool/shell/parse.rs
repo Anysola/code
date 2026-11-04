@@ -857,14 +857,14 @@ fn expand_known_directory(
         .strip_prefix("~/")
         .or_else(|| resolved.strip_prefix("~\\").filter(|_| cfg!(windows)))
     {
-        return Some(join(host.home, rest));
+        return Some(crate::paths::node_join(host.home, rest));
     }
     if unquoted_tilde && !cfg!(windows) {
         if resolved == "~+" {
             return Some(cwd.to_string());
         }
         if let Some(rest) = resolved.strip_prefix("~+/") {
-            return Some(join(cwd, rest));
+            return Some(crate::paths::node_join(cwd, rest));
         }
         static STACK: LazyLock<fancy_regex::Regex> = LazyLock::new(|| {
             fancy_regex::Regex::new(r"^~(?:[-+](?:[0-9]+)?|[0-9]+)(?=$|/)")
@@ -880,7 +880,7 @@ fn expand_known_directory(
         if let Ok(Some(found)) = USER.captures(&resolved) {
             let user = &found[1];
             let home = user_home(user)?;
-            return Some(join(&home, &resolved[user.len() + 1..]));
+            return Some(crate::paths::node_join(&home, &resolved[user.len() + 1..]));
         }
     }
     Some(resolved)
@@ -917,50 +917,6 @@ fn dirname(file: &str) -> String {
         None if file.starts_with(separators) => file[..1].to_string(),
         None => ".".into(),
     }
-}
-
-/// `path.join(base, rest)`: joined, then `.`/`..` and repeated separators resolved, a trailing
-/// separator kept.
-fn join(base: &str, rest: &str) -> String {
-    if cfg!(windows) {
-        return crate::paths::normalize(&Path::new(base).join(rest))
-            .display()
-            .to_string();
-    }
-    let joined = if rest.is_empty() {
-        base.to_string()
-    } else if base.is_empty() {
-        rest.to_string()
-    } else {
-        format!("{base}/{rest}")
-    };
-    let absolute = joined.starts_with('/');
-    let trailing = joined.ends_with('/');
-    let mut parts: Vec<&str> = Vec::new();
-    for part in joined.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                if parts.last().is_some_and(|p| *p != "..") {
-                    parts.pop();
-                } else if !absolute {
-                    parts.push("..");
-                }
-            }
-            other => parts.push(other),
-        }
-    }
-    let mut out = parts.join("/");
-    if absolute {
-        out.insert(0, '/');
-    }
-    if out.is_empty() {
-        out.push('.');
-    }
-    if trailing && !out.ends_with('/') {
-        out.push('/');
-    }
-    out
 }
 
 /// The command prefix "always" saves: the longest ARITY key among the first words, cut to its
