@@ -154,4 +154,21 @@ mod tests {
         assert_eq!(Level::parse("warning"), Some(Level::Warn));
         assert!(Level::parse("loud").is_none());
     }
+
+    #[test]
+    fn trims_to_whole_lines_above_50_mib() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("anysola.log");
+        let line = format!("{}\n", "x".repeat(99));
+        let lines = (51 * 1024 * 1024) / line.len() + 1;
+        std::fs::write(&file, line.repeat(lines)).unwrap();
+        trim(&file);
+        let kept = std::fs::read(&file).unwrap();
+        assert!(kept.len() as u64 <= TRIM_TO);
+        assert!(kept.len() as u64 >= TRIM_TO - 100);
+        assert_eq!(kept.len() % line.len(), 0, "cut at a line start");
+        std::fs::write(&file, "small\n").unwrap();
+        trim(&file);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "small\n");
+    }
 }

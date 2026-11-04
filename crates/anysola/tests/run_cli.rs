@@ -643,3 +643,41 @@ fn sigint_interrupts_with_exit_130() {
         "a user interrupt reports no error"
     );
 }
+
+#[test]
+fn log_file_levels_and_printing() {
+    let gateway = FakeGateway::start(answer("ok"));
+    let mut home = TestHome::new(&gateway.url);
+    let log = home.home().join(".anysola/log/anysola.log");
+    let output = home.run(BIN, &["run", "hi"], None, None);
+    assert_eq!(output.code, 0);
+    let text = std::fs::read_to_string(&log).unwrap();
+    let line = text
+        .lines()
+        .find(|l| l.contains("message=\"session idle\""))
+        .expect("an idle line");
+    let run = regex::Regex::new(
+        r"^timestamp=\d{4}-\d\d-\d\dT[\d:.]+Z level=INFO run=[0-9a-f]{8} message=",
+    )
+    .unwrap();
+    assert!(run.is_match(line), "{line}");
+    assert!(line.ends_with(" outcome=succeeded role=cli"), "{line}");
+    assert!(!output.stderr.contains("level=INFO"));
+
+    let printed = home.run(BIN, &["run", "--print-logs", "hi"], None, None);
+    assert!(printed.stderr.contains("level=INFO"), "{}", printed.stderr);
+
+    let before = std::fs::read_to_string(&log).unwrap().lines().count();
+    home.set_env("OPENCODE_LOG_LEVEL", "ERROR");
+    home.run(BIN, &["run", "hi"], None, None);
+    let quiet = home.run(BIN, &["run", "--log-level", "warn", "hi"], None, None);
+    assert_eq!(quiet.code, 0);
+    let after = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        after
+            .lines()
+            .skip(before)
+            .all(|l| !l.contains("level=INFO")),
+        "{after}"
+    );
+}
