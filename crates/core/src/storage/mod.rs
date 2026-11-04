@@ -2,7 +2,10 @@
 //! Timestamps are epoch milliseconds. A session driven by one process carries a busy marker that
 //! other processes respect.
 
+mod instruction;
 mod schema;
+
+pub use instruction::{InstructionState, Values};
 
 use std::path::Path;
 use std::sync::Mutex;

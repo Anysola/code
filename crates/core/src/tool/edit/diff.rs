@@ -214,13 +214,25 @@ struct Hunk {
 
 /// A port of jsdiff's `structuredPatch` + `formatPatch` with identical file names and no headers.
 fn patch(file: &str, changes: &[Change]) -> String {
-    let mut out = vec![
+    let header = [
         format!("Index: {file}"),
         UNDERLINE.to_string(),
         format!("--- {file}"),
         format!("+++ {file}"),
     ];
-    for hunk in hunks(changes) {
+    let mut out = header.join("\n") + "\n";
+    out.push_str(&format_hunks(changes, CONTEXT));
+    out
+}
+
+/// Only the `@@` hunks of jsdiff's patch between two texts, with `context` lines around changes.
+pub(crate) fn hunks_text(before: &str, after: &str, context: usize) -> String {
+    format_hunks(&changes(before, after), context)
+}
+
+fn format_hunks(changes: &[Change], context: usize) -> String {
+    let mut out = Vec::new();
+    for hunk in hunks(changes, context) {
         let old_start = hunk.old_start - usize::from(hunk.old_lines == 0);
         let new_start = hunk.new_start - usize::from(hunk.new_lines == 0);
         out.push(format!(
@@ -237,10 +249,10 @@ fn patch(file: &str, changes: &[Change]) -> String {
             }
         }
     }
-    out.join("\n") + "\n"
+    out.iter().map(|l| format!("{l}\n")).collect()
 }
 
-fn hunks(changes: &[Change]) -> Vec<Hunk> {
+fn hunks(changes: &[Change], context_size: usize) -> Vec<Hunk> {
     let sentinel = Change {
         kind: Kind::Equal,
         lines: Vec::new(),
@@ -258,7 +270,7 @@ fn hunks(changes: &[Change]) -> Vec<Hunk> {
                 old_range_start = old_line;
                 new_range_start = new_line;
                 if let Some(prev) = i.checked_sub(1).map(|p| all[p]) {
-                    range = context(&prev.lines[prev.lines.len().saturating_sub(CONTEXT)..]);
+                    range = context(&prev.lines[prev.lines.len().saturating_sub(context_size)..]);
                     old_range_start -= range.len();
                     new_range_start -= range.len();
                 }
@@ -277,10 +289,10 @@ fn hunks(changes: &[Change]) -> Vec<Hunk> {
             continue;
         }
         if old_range_start != 0 {
-            if lines.len() <= CONTEXT * 2 && i + 2 < all.len() {
+            if lines.len() <= context_size * 2 && i + 2 < all.len() {
                 range.extend(context(lines));
             } else {
-                let size = lines.len().min(CONTEXT);
+                let size = lines.len().min(context_size);
                 range.extend(context(&lines[..size]));
                 hunks.push(Hunk {
                     old_start: old_range_start,

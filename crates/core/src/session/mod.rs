@@ -138,10 +138,11 @@ pub(crate) async fn run_turn(
     cancel: CancellationToken,
 ) -> Outcome {
     let session_id = session.id.clone();
-    let selection = select(&shared, &session);
-    if let Ok(selection) = &selection {
+    let selection = select(&shared, &session).and_then(|selection| {
         plan_reminders(&shared, &session_id, &selection.agent.id);
-    }
+        step::settle_context(&shared, &session, &selection)?;
+        Ok(selection)
+    });
     let files = prompt
         .files
         .iter()

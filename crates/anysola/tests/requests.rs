@@ -270,3 +270,53 @@ fn effort_switch_mid_session() {
         )
     );
 }
+
+/// Runs `first`, rewrites the project's `AGENTS.md`, then continues with `second`; returns the
+/// second main request.
+fn instruction_update(
+    model: &str,
+    before: &str,
+    after: &str,
+    turns: [&str; 2],
+) -> (anysola_testkit::Recorded, Places) {
+    let gateway = gateway_logger(String::new());
+    let home = anysola_testkit::TestHome::new(&gateway.url);
+    let dir = proj(&home);
+    std::fs::write(dir.join("AGENTS.md"), before).unwrap();
+    assert_eq!(run(&home, &dir, &["run", "-m", model, turns[0]]).code, 0);
+    std::fs::write(dir.join("AGENTS.md"), after).unwrap();
+    let output = run(&home, &dir, &["run", "-c", "-m", model, turns[1]]);
+    assert_eq!(output.code, 0, "{}", output.stderr);
+    let main: Vec<_> = gateway
+        .messages()
+        .into_iter()
+        .filter(|r| !r.is_title())
+        .collect();
+    (main[1].clone(), our_places(&home, &dir))
+}
+
+#[test]
+fn instruction_update_native_system() {
+    let rule = "Project rule: always answer in English.\n";
+    let (request, places) = instruction_update(
+        "anysola/claude-sonnet-5-5",
+        rule,
+        &format!("{rule}New line added.\n"),
+        ["hello", "next turn"],
+    );
+    let capture = read_json("session/requests/instruction-update-native-system.json");
+    assert_request("native update", &request, &capture, &places);
+}
+
+#[test]
+fn instruction_update_wrapped_for_auto() {
+    let rule = "Project rule: always answer in English.\n";
+    let (request, places) = instruction_update(
+        "anysola/auto",
+        &format!("{rule}New line added.\n"),
+        &format!("{rule}Changed again.\n"),
+        ["first", "second"],
+    );
+    let capture = read_json("session/requests/instruction-update-wrapped-auto.json");
+    assert_request("wrapped update", &request, &capture, &places);
+}

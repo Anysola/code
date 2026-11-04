@@ -222,6 +222,23 @@ impl Gateway {
         Some(info)
     }
 
+    /// A plain `GET` of a user-configured URL (instruction sources); `None` unless it answers 2xx
+    /// within `timeout`.
+    pub async fn fetch_text(&self, url: &str, timeout: Duration) -> Option<String> {
+        let response = self
+            .http
+            .get(url)
+            .header("user-agent", user_agent())
+            .timeout(timeout)
+            .send()
+            .await
+            .ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        response.text().await.ok()
+    }
+
     /// `POST /search`; errors are the model-visible texts. Returns the results and credits charged.
     pub async fn search(&self, query: &str) -> Result<(Vec<SearchResult>, u64), String> {
         let token = self

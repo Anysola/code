@@ -61,7 +61,47 @@ struct Context {
     rules: Vec<crate::permission::Rule>,
 }
 
-fn context(shared: &Shared, session: &SessionRow, selection: &Selection) -> Context {
+/// Commits the instruction sources' current values (the baseline on the first step, an update
+/// message on later changes) and returns block 2, the frozen baseline.
+fn instructions(
+    shared: &Shared,
+    session: &SessionRow,
+    code_mode: bool,
+) -> Result<String, SessionError> {
+    let directory = std::path::PathBuf::from(&session.directory);
+    let worktree = shared.project.worktree.clone();
+    let files = instructions::discover(
+        &shared.paths,
+        &directory,
+        &worktree,
+        &shared.config.instructions,
+        &shared.remote_instructions,
+    );
+    let environment = Environment {
+        git: shared.project.vcs == Some("git"),
+        directory,
+        worktree,
+    };
+    let sources =
+        instructions::sources(code_mode, files, &crate::time::date_string(), &environment);
+    Ok(instructions::prepare(&shared.db, &session.id, &sources)?.baseline)
+}
+
+/// Settles the step context before new input is admitted, so instruction changes are recorded
+/// ahead of the prompt that follows them.
+pub(crate) fn settle_context(
+    shared: &Shared,
+    session: &SessionRow,
+    selection: &Selection,
+) -> Result<(), SessionError> {
+    context(shared, session, selection).map(drop)
+}
+
+fn context(
+    shared: &Shared,
+    session: &SessionRow,
+    selection: &Selection,
+) -> Result<Context, SessionError> {
     let rules = selection.agent.permissions.clone();
     let mut tools = shared.registry.active(&rules);
     if !shared.config.websearch_enabled() {
@@ -78,37 +118,19 @@ fn context(shared: &Shared, session: &SessionRow, selection: &Selection) -> Cont
         Some(system) => system.clone(),
         None => format!("{}\n\n{ANTHROPIC_PROMPT}", default_system(&names)),
     };
-    let directory = std::path::PathBuf::from(&session.directory);
-    let worktree = shared.project.worktree.clone();
-    let files = instructions::discover(
-        &shared.paths,
-        &directory,
-        &worktree,
-        &shared.config.instructions,
-    );
-    let environment = Environment {
-        git: shared.project.vcs == Some("git"),
-        directory,
-        worktree,
-    };
-    let block2 = instructions::block(
-        names.contains(&"execute"),
-        &files,
-        &crate::time::date_string(),
-        &environment,
-    );
+    let block2 = instructions(shared, session, names.contains(&"execute"))?;
     let system = vec![
         block0,
         identity(&selection.model.name, &selection.model.id),
         block2,
         WORKTREE_HINT.into(),
     ];
-    Context {
+    Ok(Context {
         system,
         tools,
         definitions,
         rules,
-    }
+    })
 }
 
 fn history(shared: &Shared, session_id: &str) -> Vec<Message> {
@@ -226,7 +248,10 @@ async fn step(
     capped: bool,
     cancel: &CancellationToken,
 ) -> StepEnd {
-    let ctx = context(shared, session, selection);
+    let ctx = match context(shared, session, selection) {
+        Ok(ctx) => ctx,
+        Err(error) => return StepEnd::Failed(error),
+    };
     let history = history(shared, &session.id);
     let target = Target {
         provider: &selection.reference.provider,

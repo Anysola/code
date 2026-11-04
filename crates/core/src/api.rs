@@ -76,6 +76,8 @@ pub(crate) struct Shared {
     pub notifier: Arc<dyn SessionNotifier>,
     pub directory: PathBuf,
     pub project: Project,
+    /// The configured `instructions` URLs, fetched when the config loaded.
+    pub remote_instructions: Vec<crate::instructions::InstructionFile>,
     /// `<pid>:<nonce>` for busy markers.
     pub owner: String,
     pub turns: Mutex<std::collections::HashMap<String, CancellationToken>>,
@@ -129,6 +131,8 @@ impl Core {
             crate::log::warn(warning, &[]);
         }
         let agents = Agents::load(&config, &paths);
+        let remote_instructions =
+            crate::instructions::fetch_remote(&gateway, &config.instructions).await;
         let models = crate::model::catalog(&config);
         let project = crate::project::identify(directory);
         db.upsert_project(&project, directory)?;
@@ -156,6 +160,7 @@ impl Core {
             notifier,
             directory: directory.to_path_buf(),
             project,
+            remote_instructions,
             owner: format!("{}:{}", std::process::id(), crate::ids::part()),
             turns: Mutex::default(),
         };
@@ -254,6 +259,12 @@ impl Core {
             self.shared.db.set_model(&row.id, model)?;
         }
         self.shared.db.copy_messages(&source.id, &row.id)?;
+        // The fork starts from the instructions its source last saw, not its source's baseline.
+        if let Some(state) = self.shared.db.instruction_state(&source.id)? {
+            self.shared
+                .db
+                .instruction_initialize(&row.id, 0, &state.current)?;
+        }
         Ok(row)
     }
 
