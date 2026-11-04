@@ -224,9 +224,7 @@ async fn consume(
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
             Err(tokio::sync::broadcast::error::RecvError::Closed) => return renderer,
         };
-        if event.session_id() != renderer.session_id {
-            continue;
-        }
+        // Asks of any session in this process (the run's and its subagents') are answered here.
         if let Event::PermissionAsked {
             request_id,
             action,
@@ -245,6 +243,9 @@ async fn consume(
                 ));
                 core.reply_permission(request_id, Reply::Reject(Some(PERMISSION_REJECTED.into())));
             }
+            continue;
+        }
+        if event.session_id() != renderer.session_id {
             continue;
         }
         if renderer.handle(&event) {
