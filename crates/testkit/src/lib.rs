@@ -3,7 +3,9 @@
 
 mod gateway;
 mod home;
+mod legacy;
 pub mod sse;
 
 pub use gateway::{FakeGateway, Recorded, Reply, Script};
 pub use home::{Output, TestHome};
+pub use legacy::Legacy;
