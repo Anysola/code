@@ -745,3 +745,35 @@ fn ignored_keys_and_the_plugins_warning() {
         .count();
     assert_eq!(warnings, 1, "{}", output.stderr);
 }
+
+#[test]
+fn instruction_urls_are_fetched() {
+    let gateway = FakeGateway::start(answer("ok"));
+    gateway.serve("/rules.md", "Remote rule.\n");
+    let mut home = TestHome::new(&gateway.url);
+    let content = format!(
+        r#"{{"instructions": ["{0}/rules.md", "{0}/missing.md"]}}"#,
+        gateway.url
+    );
+    home.set_env("OPENCODE_CONFIG_CONTENT", &content);
+    assert_eq!(home.run(BIN, &["run", "hi"], None, None).code, 0);
+    let request = main_requests(&gateway).remove(0);
+    let block = request.json()["system"][2]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(block.contains(&format!(
+        "Instructions from: {}/rules.md\nRemote rule.\n",
+        gateway.url
+    )));
+    assert!(!block.contains("missing.md"));
+    let fetch = gateway
+        .requests()
+        .into_iter()
+        .find(|r| r.path == "/rules.md")
+        .unwrap();
+    assert_eq!(
+        fetch.header("user-agent"),
+        Some("opencode/latest/2.2.5/cli")
+    );
+}

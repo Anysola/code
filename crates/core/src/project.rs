@@ -176,7 +176,10 @@ mod tests {
         run(&repo, &["commit", "-q", "--allow-empty", "-m", "first"]);
         let first = git(&repo, &["rev-list", "--max-parents=0", "HEAD"]).unwrap();
         let project = identify(&repo.join("sub"));
-        assert_eq!((project.id.as_str(), project.vcs), (first.as_str(), Some("git")));
+        assert_eq!(
+            (project.id.as_str(), project.vcs),
+            (first.as_str(), Some("git"))
+        );
         assert_eq!(project.worktree, repo);
         assert_eq!(
             std::fs::read_to_string(repo.join(".git/opencode")).unwrap(),
@@ -185,8 +188,14 @@ mod tests {
         );
         std::fs::write(repo.join(".git/opencode"), "cached-id").unwrap();
         assert_eq!(identify(&repo).id, "cached-id");
-        run(&repo, &["remote", "add", "origin", "git@github.com:Anysola/code.git"]);
-        assert_eq!(identify(&repo).id, sha1_hex("git-remote:github.com/Anysola/code"));
+        run(
+            &repo,
+            &["remote", "add", "origin", "git@github.com:Anysola/code.git"],
+        );
+        assert_eq!(
+            identify(&repo).id,
+            sha1_hex("git-remote:github.com/Anysola/code")
+        );
         std::fs::create_dir_all(root.path().join("h/.hg")).unwrap();
         std::fs::write(root.path().join("h/.hg/opencode"), "hgnode\n").unwrap();
         let hg = identify(&root.path().join("h"));

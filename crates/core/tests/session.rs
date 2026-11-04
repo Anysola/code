@@ -344,3 +344,41 @@ fn titles_fall_back_to_the_session_model_and_regenerate() {
         "Renamed title"
     );
 }
+
+#[test]
+fn compaction_nudges_once_then_fails() {
+    let gateway = FakeGateway::start(|request, _| {
+        let body = &request.body;
+        if body.contains("did not fill in the required summary template") {
+            return text(request, "still prose");
+        }
+        if body.contains("You MUST summarize") {
+            return text(request, "prose only");
+        }
+        text(request, "ok")
+    });
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("first"), TurnOptions::default()))
+        .unwrap();
+    let outcome = runtime.block_on(core.compact(&session.id)).unwrap();
+    let Outcome::Failed(error) = outcome else {
+        panic!("{outcome:?}")
+    };
+    assert_eq!(
+        (error.kind.as_str(), error.message.as_str()),
+        (
+            "compaction.failed",
+            "Compaction summary did not match the required template"
+        )
+    );
+    let summaries = gateway
+        .messages()
+        .into_iter()
+        .filter(|r| r.body.contains("You MUST summarize"))
+        .count();
+    assert_eq!(summaries, 2, "the prompt, then one nudge");
+}
