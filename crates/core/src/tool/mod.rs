@@ -17,6 +17,7 @@ pub mod shell;
 pub mod skill;
 pub mod stubs;
 pub mod subagent;
+pub mod webfetch;
 pub mod websearch;
 pub mod write;
 

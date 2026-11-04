@@ -10,7 +10,6 @@ use crate::embedded_def;
 
 pub use super::websearch::WebsearchTool;
 
-embedded_def!(webfetch_def, "webfetch");
 embedded_def!(execute_def, "execute");
 
 fn plain(name: &str, def: &super::registry::Def) -> ToolDefinition {
@@ -18,28 +17,6 @@ fn plain(name: &str, def: &super::registry::Def) -> ToolDefinition {
         name: name.into(),
         description: def.description.clone(),
         input_schema: def.input_schema.clone(),
-    }
-}
-
-// M1b: fetching, redirects, HTML to Markdown.
-pub struct WebfetchTool;
-
-impl Tool for WebfetchTool {
-    fn name(&self) -> &'static str {
-        "webfetch"
-    }
-
-    fn definition(&self, _: &DefinitionEnv) -> ToolDefinition {
-        plain(self.name(), webfetch_def())
-    }
-
-    fn execute<'a>(&'a self, _input: Value, _ctx: &'a ToolContext) -> BoxFuture<'a, ToolResult> {
-        async move {
-            Err(ToolError::execution(
-                "Web fetch is not available in this build yet.",
-            ))
-        }
-        .boxed()
     }
 }
 

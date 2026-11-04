@@ -59,7 +59,7 @@ impl Registry {
             Arc::new(super::shell::ShellTool),
             Arc::new(super::skill::SkillTool),
             Arc::new(super::subagent::SubagentTool),
-            Arc::new(super::stubs::WebfetchTool),
+            Arc::new(super::webfetch::WebfetchTool),
             Arc::new(super::stubs::WebsearchTool),
             Arc::new(super::write::WriteTool),
             Arc::new(super::stubs::ExecuteTool),
