@@ -251,6 +251,7 @@ mod tests {
         let test = context(dir.path());
         *test.gate.answer.lock().unwrap() = Some(PermissionError::Blocked {
             action: "edit".into(),
+            reason: None,
         });
         let error = WriteTool
             .execute(json!({"path": "a.txt", "content": "x"}), &test.ctx)

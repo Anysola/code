@@ -13,6 +13,8 @@ base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4.6", features = ["derive"] }
+fancy-regex = "0.16"
+flate2 = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 gethostname = "1.1"
 globset = "0.4"

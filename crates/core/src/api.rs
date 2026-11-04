@@ -138,6 +138,7 @@ impl Core {
         let notifier = Arc::new(StoreNotifier {
             db: Arc::downgrade(&db),
         });
+        let asks = Arc::new(Asks::new(db.clone(), events.clone()));
         let shared = Shared {
             paths,
             db,
@@ -148,7 +149,7 @@ impl Core {
             agents,
             models,
             registry: Registry::builtin(),
-            asks: Arc::default(),
+            asks,
             locks: Arc::default(),
             env: Arc::new(env),
             notifier,
@@ -339,5 +340,10 @@ impl Core {
 
     pub fn reply_permission(&self, request_id: &str, reply: Reply) -> bool {
         self.shared.asks.reply(request_id, reply)
+    }
+
+    /// Rejects every pending permission ask and every later one, for shutdown.
+    pub fn close_permissions(&self) {
+        self.shared.asks.close();
     }
 }
