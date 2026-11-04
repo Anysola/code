@@ -122,7 +122,7 @@ impl Core {
             &self.shared.db,
             &parent.id,
             &completion,
-            &description,
+            Some(&description),
             Delivery::Steer,
         )?;
         self.drain(&parent.id, options).await

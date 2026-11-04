@@ -66,6 +66,7 @@ pub struct Ended {
 pub struct Running {
     capture: Arc<Capture>,
     supervisor: JoinHandle<Ended>,
+    untimed: CancellationToken,
     _kill: DropGuard,
 }
 
@@ -74,6 +75,11 @@ impl Running {
         (&mut self.supervisor)
             .await
             .unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic()))
+    }
+
+    /// Lets the command run without its time limit (moved to the background).
+    pub fn clear_timeout(&self) {
+        self.untimed.cancel();
     }
 
     /// Stops capturing and deletes the output file (an interrupted command leaves nothing).
@@ -103,23 +109,36 @@ pub fn spawn(job: Job<'_>) -> io::Result<Running> {
     drop(command);
     let pid = child.id().unwrap_or_default();
     running().push(pid);
+    let tracked = crate::teardown::track(format!(
+        "child {pid} running: {} {}",
+        job.program,
+        job.args.join(" ")
+    ));
 
     let capture = Arc::new(Capture::new(output));
     let (eof_tx, eof_rx) = oneshot::channel();
     let pump_capture = capture.clone();
     std::thread::spawn(move || pump(reader, &pump_capture, eof_tx));
     let kill = CancellationToken::new();
-    let supervisor = tokio::spawn(supervise(
+    let untimed = CancellationToken::new();
+    let supervised = supervise(
         child,
         pid,
         job.timeout,
+        untimed.clone(),
         kill.clone(),
         capture.clone(),
         eof_rx,
-    ));
+    );
+    let supervisor = tokio::spawn(async move {
+        let ended = supervised.await;
+        drop(tracked);
+        ended
+    });
     Ok(Running {
         capture,
         supervisor,
+        untimed,
         _kill: kill.drop_guard(),
     })
 }
@@ -128,6 +147,7 @@ async fn supervise(
     mut child: Child,
     pid: u32,
     timeout: u64,
+    untimed: CancellationToken,
     kill: CancellationToken,
     capture: Arc<Capture>,
     eof: oneshot::Receiver<()>,
@@ -136,7 +156,10 @@ async fn supervise(
         if timeout == 0 {
             std::future::pending::<()>().await;
         }
-        tokio::time::sleep(Duration::from_millis(timeout)).await;
+        tokio::select! {
+            () = tokio::time::sleep(Duration::from_millis(timeout)) => {}
+            () = untimed.cancelled() => std::future::pending::<()>().await,
+        }
     };
     let outcome = tokio::select! {
         status = child.wait() => exited(status.ok()),

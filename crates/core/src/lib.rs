@@ -25,6 +25,7 @@ pub mod skill;
 pub mod slug;
 pub mod snapshot;
 pub mod storage;
+pub mod teardown;
 pub mod text;
 pub mod time;
 pub mod tool;

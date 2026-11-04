@@ -10,6 +10,9 @@ mod select;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use tokio::sync::oneshot;
 
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
@@ -33,6 +36,57 @@ embedded_def!(def, "shell");
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 
 const BACKGROUND_INSTRUCTION: &str = "You will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.";
+
+/// A foreground command still running, and how to move it to the background.
+struct Foreground {
+    id: u64,
+    session_id: String,
+    command: String,
+    move_now: oneshot::Sender<()>,
+}
+
+static FOREGROUND: Mutex<Vec<Foreground>> = Mutex::new(Vec::new());
+
+fn foreground() -> std::sync::MutexGuard<'static, Vec<Foreground>> {
+    FOREGROUND.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Removes its entry when the foreground wait ends, whatever ended it.
+struct Blocking(u64);
+
+impl Blocking {
+    fn register(session_id: &str, command: &str) -> (Blocking, oneshot::Receiver<()>) {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let (tx, rx) = oneshot::channel();
+        foreground().push(Foreground {
+            id,
+            session_id: session_id.to_string(),
+            command: command.to_string(),
+            move_now: tx,
+        });
+        (Blocking(id), rx)
+    }
+}
+
+impl Drop for Blocking {
+    fn drop(&mut self) {
+        foreground().retain(|entry| entry.id != self.0);
+    }
+}
+
+/// Moves the session's running foreground commands to the background (their tool calls return
+/// the background result at once); returns their commands.
+pub fn background_all(session_id: &str) -> Vec<String> {
+    let (matching, rest) = std::mem::take(&mut *foreground())
+        .into_iter()
+        .partition::<Vec<_>, _>(|entry| entry.session_id == session_id);
+    foreground().extend(rest);
+    matching
+        .into_iter()
+        .filter_map(|entry| entry.move_now.send(()).is_ok().then_some(entry.command))
+        .collect()
+}
 
 /// The name of the shell commands run with (`bash`, `zsh`, `pwsh`, …), for
 /// [`DefinitionEnv::shell_name`]. `configured` is the config's `shell`.
@@ -265,16 +319,25 @@ impl Tool for ShellTool {
                 notify_when_done(started, input.command, ctx);
                 return Ok(result);
             }
+            let mut started = started;
+            let (blocking, moved) = Blocking::register(&ctx.session_id, &input.command);
+            let ended = tokio::select! {
+                ended = started.running.wait() => Some(ended),
+                () = ctx.cancel.cancelled() => None,
+                Ok(()) = moved => {
+                    drop(blocking);
+                    started.running.clear_timeout();
+                    let result = moved_to_background(&started.id, &started.file);
+                    notify_when_done(started, input.command, ctx);
+                    return Ok(result);
+                }
+            };
             let Started {
                 file,
                 timeout,
-                mut running,
+                running,
                 ..
             } = started;
-            let ended = tokio::select! {
-                ended = running.wait() => Some(ended),
-                () = ctx.cancel.cancelled() => None,
-            };
             // Dropping `running` on the way out kills a command that is still running.
             let Some(ended) = ended else {
                 running.discard(&file);
@@ -306,10 +369,8 @@ fn notify_when_done(started: Started, command: String, ctx: &ToolContext) {
             Ok(finished) => ("completed", finished.content().join("\n\n")),
             Err(error) => ("error", error.to_string()),
         };
-        notifier.synthetic(
-            &session_id,
-            output::notification(&id, state, &command, &text),
-        );
+        let text = output::notification(&id, state, &command, &text);
+        notifier.synthetic(&session_id, text, Some(command));
     });
 }
 
@@ -696,6 +757,39 @@ mod tests {
             notification(&test).await,
             format!(
                 "<shell id=\"{id}\" state=\"completed\" command=\"sleep 30\">\n(no output)\n\nKilled by SIGKILL\n</shell>"
+            )
+        );
+    }
+
+    /// ctrl+b: a running foreground command returns the background result at once, keeps running
+    /// past its timeout, and reports back when it ends.
+    #[tokio::test]
+    async fn foreground_moved_to_background() {
+        let _serial = SERIAL.lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let test = setup(dir.path());
+        assert!(background_all("ses_test").is_empty());
+        let command = "sleep 1; echo late";
+        let call = run(&test, json!({"command": command, "timeout": 500}));
+        let mover = async {
+            while foreground().is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            assert!(background_all("ses_other").is_empty());
+            background_all("ses_test")
+        };
+        let (out, moved) = tokio::join!(call, mover);
+        assert_eq!(moved, [command]);
+        let out = out.unwrap();
+        let id = out.metadata["shellID"].as_str().unwrap().to_string();
+        assert!(texts(&out)[0].starts_with(&format!(
+            "Command moved to the background (shell ID: {id})."
+        )));
+        assert!(foreground().is_empty());
+        assert_eq!(
+            notification(&test).await,
+            format!(
+                "<shell id=\"{id}\" state=\"completed\" command=\"{command}\">\nlate\n\n</shell>"
             )
         );
     }
