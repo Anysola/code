@@ -226,3 +226,42 @@ fn max_steps_final_step() {
         2,
     );
 }
+
+fn child_request(marker: &str, capture: &str) {
+    let gateway = gateway_logger(String::new());
+    let home = anysola_testkit::TestHome::new(&gateway.url);
+    let dir = my_app(&home);
+    assert_eq!(run(&home, &dir, &["run", marker, "go"]).code, 0);
+    let child = gateway
+        .messages()
+        .into_iter()
+        .find(|r| r.header("x-opencode-parent-session-id").is_some())
+        .expect("a child request");
+    assert_ne!(
+        child.header("x-opencode-session-id"),
+        child.header("x-opencode-session"),
+        "the child shares its parent's affinity"
+    );
+    assert_request(
+        capture,
+        &child,
+        &read_json(capture),
+        &our_places(&home, &dir),
+    );
+}
+
+#[test]
+fn explore_subagent_request() {
+    child_request(
+        "SUBEXPLORE",
+        "tools/_captured-request-explore-subagent.json",
+    );
+}
+
+#[test]
+fn general_subagent_request() {
+    child_request(
+        "SUBGENERAL",
+        "tools/_captured-request-general-subagent.json",
+    );
+}

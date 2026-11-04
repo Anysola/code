@@ -265,7 +265,7 @@ fn sessions_continue_resume_and_fork() {
     );
     assert_eq!(out.code, 0);
     let main = main_requests(&gateway);
-    let session = |r: &Recorded| r.header("x-opencode-session").unwrap().to_string();
+    let session = |r: &Recorded| r.header("x-opencode-session-id").unwrap().to_string();
     assert_eq!(
         session(&main[0]),
         session(&main[1]),
@@ -274,6 +274,11 @@ fn sessions_continue_resume_and_fork() {
     assert_eq!(main[1].json()["messages"].as_array().unwrap().len(), 3);
     assert_eq!(session(&main[2]), "ses_given");
     assert_ne!(session(&main[3]), "ses_given");
+    assert_eq!(
+        main[3].header("x-opencode-session"),
+        Some("ses_given"),
+        "a fork shares its source's cache affinity"
+    );
     assert_eq!(
         main[3].json()["messages"].as_array().unwrap().len(),
         3,

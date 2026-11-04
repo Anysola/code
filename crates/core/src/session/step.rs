@@ -91,8 +91,10 @@ fn context(shared: &Shared, session: &SessionRow, selection: &Selection) -> Cont
         directory,
         worktree,
     };
+    let skills = crate::skill::guidance(&shared.skills, &rules);
     let block2 = instructions::block(
         names.contains(&"execute"),
+        skills.as_deref(),
         &files,
         &crate::time::date_string(),
         &environment,
@@ -336,14 +338,19 @@ fn wait_retry(shared: &Shared, session_id: &str, attempt: u32, delay: Duration, 
 }
 
 pub(crate) fn session_headers(shared: &Shared, session: &SessionRow) -> Vec<(String, String)> {
-    let id = session.id.clone();
+    // Children share their parent's cache affinity, forks their source's.
+    let affinity = session
+        .parent_id
+        .clone()
+        .or_else(|| session.fork_session_id.clone())
+        .unwrap_or_else(|| session.id.clone());
     let mut headers = vec![
         ("x-opencode-client".to_string(), "cli".to_string()),
         ("x-opencode-project".to_string(), shared.project.id.clone()),
-        ("x-opencode-session".to_string(), id.clone()),
-        ("x-opencode-session-id".to_string(), id.clone()),
-        ("x-session-affinity".to_string(), id.clone()),
-        ("x-session-id".to_string(), id),
+        ("x-opencode-session".to_string(), affinity.clone()),
+        ("x-opencode-session-id".to_string(), session.id.clone()),
+        ("x-session-affinity".to_string(), affinity.clone()),
+        ("x-session-id".to_string(), affinity),
     ];
     if let Some(parent) = &session.parent_id {
         headers.push(("x-opencode-parent-session-id".into(), parent.clone()));
@@ -597,7 +604,9 @@ async fn run_stream(
     let unsettled = collect(shared, &mut running, &mut tasks).await;
     debug_assert!(unsettled.is_empty());
     let declined = running.data.content.iter().any(|p| {
-        matches!(p, Part::Tool { state: ToolState::Error { error, .. }, .. } if error.message == "The user declined this tool call")
+        matches!(p, Part::Tool { state: ToolState::Error { error, .. }, .. }
+            if error.message == "The user declined this tool call"
+                || error.message == crate::tool::question::DISMISSED)
     });
     let finish = assembly.finish();
     running.data.finish = Some(finish.into());
@@ -833,6 +842,9 @@ fn handle(
                     shared.gateway.clone(),
                     shared.credits.clone(),
                 )),
+                host: Arc::new(super::host::Host {
+                    shared: shared.clone(),
+                }),
             };
             let tools = ctx.tools.clone();
             let output_dir = shared.paths.tool_output_dir();

@@ -7,10 +7,15 @@ use std::sync::{Arc, Mutex};
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 
+use super::question::{Question, QuestionReply};
+use super::subagent::SubagentRequest;
 use super::websearch::{SearchResult, WebSearch};
-use super::{OutputLimits, PathLocks, SessionNotifier, ToolContext};
+use super::{
+    OutputLimits, PathLocks, SessionHost, SessionNotifier, ToolContext, ToolError, ToolResult,
+};
 use crate::paths::Paths;
 use crate::permission::{PermissionError, PermissionGate, PermissionRequest};
+use crate::skill::Skill;
 
 #[derive(Default)]
 pub struct RecordingGate {
@@ -57,10 +62,55 @@ impl WebSearch for NoSearch {
     }
 }
 
+/// Records questions and subagent requests; answers questions with `question_reply`.
+#[derive(Default)]
+pub struct TestHost {
+    pub skills: Mutex<Vec<Skill>>,
+    pub questions: Mutex<Vec<Vec<Question>>>,
+    pub question_reply: Mutex<Option<QuestionReply>>,
+    pub subagents: Mutex<Vec<SubagentRequest>>,
+}
+
+impl SessionHost for TestHost {
+    fn ask_questions(
+        &self,
+        _session_id: &str,
+        questions: Vec<Question>,
+    ) -> BoxFuture<'_, QuestionReply> {
+        self.questions.lock().unwrap().push(questions);
+        let reply = self
+            .question_reply
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or(QuestionReply::Dismissed(None));
+        async move { reply }.boxed()
+    }
+
+    fn skill(&self, id: &str) -> Option<Skill> {
+        self.skills
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|s| s.id == id)
+            .cloned()
+    }
+
+    fn subagent<'a>(
+        &'a self,
+        _ctx: &'a ToolContext,
+        request: SubagentRequest,
+    ) -> BoxFuture<'a, ToolResult> {
+        self.subagents.lock().unwrap().push(request);
+        async { Err(ToolError::execution("no subagents in tests")) }.boxed()
+    }
+}
+
 pub struct TestContext {
     pub ctx: ToolContext,
     pub gate: Arc<RecordingGate>,
     pub notifier: Arc<RecordingNotifier>,
+    pub host: Arc<TestHost>,
 }
 
 /// A context whose session directory and project worktree are `dir`, with home and the data dir
@@ -68,6 +118,7 @@ pub struct TestContext {
 pub fn context(dir: &Path) -> TestContext {
     let gate = Arc::new(RecordingGate::default());
     let notifier = Arc::new(RecordingNotifier::default());
+    let host = Arc::new(TestHost::default());
     let home = dir.join(".home");
     let paths = Paths::isolated(home);
     let ctx = ToolContext {
@@ -87,10 +138,12 @@ pub fn context(dir: &Path) -> TestContext {
         locks: Arc::new(PathLocks::default()),
         notifier: notifier.clone(),
         web_search: Arc::new(NoSearch),
+        host: host.clone(),
     };
     TestContext {
         ctx,
         gate,
         notifier,
+        host,
     }
 }

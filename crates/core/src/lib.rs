@@ -18,6 +18,7 @@ pub mod permission;
 pub mod project;
 pub mod search;
 pub mod session;
+pub mod skill;
 pub mod slug;
 pub mod storage;
 pub mod text;

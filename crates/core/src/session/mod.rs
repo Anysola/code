@@ -2,11 +2,14 @@
 //! makes. Tools start as soon as their `tool_use` block completes and run while the stream goes on.
 
 pub mod gate;
+mod host;
 pub mod lower;
 pub mod message;
+pub mod question;
 pub mod request;
 mod step;
 mod stream;
+pub mod subagent;
 mod title;
 
 pub(crate) use step::session_headers as step_headers;

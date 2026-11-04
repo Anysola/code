@@ -240,11 +240,7 @@ impl Agents {
             })
             .map(|a| (a.id.clone(), a.description.clone()))
             .collect();
-        out.sort_by(|a, b| {
-            a.0.to_lowercase()
-                .cmp(&b.0.to_lowercase())
-                .then(a.0.cmp(&b.0))
-        });
+        out.sort_by(|a, b| crate::text::locale_compare(&a.0, &b.0));
         out
     }
 }

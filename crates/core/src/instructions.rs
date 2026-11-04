@@ -57,11 +57,18 @@ fn render(files: &[InstructionFile]) -> String {
 }
 
 /// Joined block 2. Empty sources are left out.
-pub fn block(code_mode: bool, files: &[InstructionFile], date: &str, env: &Environment) -> String {
+pub fn block(
+    code_mode: bool,
+    skills: Option<&str>,
+    files: &[InstructionFile],
+    date: &str,
+    env: &Environment,
+) -> String {
     let mut sources = Vec::new();
     if code_mode {
         sources.push(CODE_MODE_CATALOG.to_string());
     }
+    sources.extend(skills.map(str::to_string));
     if !files.is_empty() {
         sources.push(render(files));
     }
@@ -199,7 +206,7 @@ mod tests {
             worktree: project,
             git: false,
         };
-        let text = block(false, &files[..1], "Wed Nov 04 2026", &env);
+        let text = block(false, None, &files[..1], "Wed Nov 04 2026", &env);
         assert!(text.starts_with("Instructions from: "));
         assert!(text.contains(
             "global\n\n\nToday's date: Wed Nov 04 2026\n\nHere is some useful information"

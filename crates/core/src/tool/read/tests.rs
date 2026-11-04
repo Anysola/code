@@ -314,7 +314,7 @@ async fn directory_listing() {
 #[test]
 fn locale_order_approximation() {
     let mut names = vec!["b", "B", "a", "_x", "A", "a.txt", "alpha"];
-    names.sort_by(|a, b| file::locale_compare(a, b));
+    names.sort_by(|a, b| crate::text::locale_compare(a, b));
     assert_eq!(names, ["_x", "a", "A", "a.txt", "alpha", "b", "B"]);
 }
 

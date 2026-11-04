@@ -11,9 +11,12 @@ mod search;
 pub mod edit;
 pub mod glob;
 pub mod grep;
+pub mod question;
 pub mod read;
 pub mod shell;
+pub mod skill;
 pub mod stubs;
+pub mod subagent;
 pub mod websearch;
 pub mod write;
 
@@ -206,6 +209,25 @@ pub trait SessionNotifier: Send + Sync {
     fn synthetic(&self, session_id: &str, text: String);
 }
 
+/// Session services behind the agent-facing tools: asking the user, skills, child sessions.
+pub trait SessionHost: Send + Sync {
+    /// Shows the questions to whoever drives the session and waits for the reply.
+    fn ask_questions(
+        &self,
+        session_id: &str,
+        questions: Vec<question::Question>,
+    ) -> BoxFuture<'_, question::QuestionReply>;
+
+    fn skill(&self, id: &str) -> Option<crate::skill::Skill>;
+
+    /// Runs (or continues) a child session for the `subagent` tool.
+    fn subagent<'a>(
+        &'a self,
+        ctx: &'a ToolContext,
+        request: subagent::SubagentRequest,
+    ) -> BoxFuture<'a, ToolResult>;
+}
+
 /// Everything a tool call can see.
 #[derive(Clone)]
 pub struct ToolContext {
@@ -229,6 +251,7 @@ pub struct ToolContext {
     pub locks: Arc<PathLocks>,
     pub notifier: Arc<dyn SessionNotifier>,
     pub web_search: Arc<dyn websearch::WebSearch>,
+    pub host: Arc<dyn SessionHost>,
 }
 
 impl ToolContext {
