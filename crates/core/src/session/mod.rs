@@ -207,6 +207,10 @@ pub(crate) async fn run_turn(
         .db
         .append_message(&session_id, &crate::ids::message(), "idle", &idle);
     let _ = shared.db.set_idle(&session_id, outcome_label);
+    crate::log::info(
+        "session idle",
+        &[("session", &session_id), ("outcome", outcome_label)],
+    );
     let _ = shared.events.send(event);
     outcome
 }

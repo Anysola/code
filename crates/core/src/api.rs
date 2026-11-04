@@ -123,6 +123,9 @@ impl Core {
             api_url: gateway.base().to_string(),
         };
         let config = crate::config::load(&paths, directory, &options);
+        for warning in &config.warnings {
+            crate::log::warn(warning, &[]);
+        }
         let agents = Agents::load(&config, &paths);
         let models = crate::model::catalog(&config);
         let project = crate::project::identify(directory);

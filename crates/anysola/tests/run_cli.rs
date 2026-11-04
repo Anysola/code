@@ -298,7 +298,7 @@ fn title(home: &TestHome, id: &str) -> String {
 
 #[test]
 fn multi_tool_turn() {
-    let gateway = FakeGateway::start(|request: &Recorded, index| {
+    let gateway = FakeGateway::start(|request: &Recorded, _| {
         let model = request.json()["model"]
             .as_str()
             .unwrap_or_default()
@@ -309,21 +309,18 @@ fn multi_tool_turn() {
                 before: None,
             };
         }
-        let stream = match index {
-            _ if request.json()["messages"].as_array().unwrap().len() == 1 => {
-                Stream::new().text("Working.").tool(
-                    "t1",
-                    "shell",
-                    json!({"command": "printf 'one\\ntwo\\n' > notes.txt"}),
-                )
-            }
-            _ if request.json()["messages"].as_array().unwrap().len() == 3 => Stream::new()
-                .tool(
-                    "t2",
-                    "edit",
-                    json!({"path": "notes.txt", "oldString": "two", "newString": "three"}),
-                )
-                .tool("t3", "read", json!({"path": "notes.txt"})),
+        let stream = match request.json()["messages"].as_array().unwrap().len() {
+            1 => Stream::new().text("Working.").tool(
+                "t1",
+                "shell",
+                json!({"command": "printf 'one\\ntwo\\n' > notes.txt"}),
+            ),
+            3 => Stream::new().tool(
+                "t2",
+                "edit",
+                json!({"path": "notes.txt", "oldString": "two", "newString": "three"}),
+            ),
+            5 => Stream::new().tool("t3", "read", json!({"path": "notes.txt"})),
             _ => Stream::new().text("All done."),
         };
         Reply::Sse {
@@ -364,10 +361,12 @@ fn multi_tool_turn() {
         "{tools:?}"
     );
     let main = main_requests(&gateway);
-    let results = &main[2].json()["messages"][4]["content"];
-    assert_eq!(results[0]["content"], "Edited notes.txt (1 replacement)");
     assert_eq!(
-        results[1]["content"],
+        main[2].json()["messages"][4]["content"][0]["content"],
+        "Edited notes.txt (1 replacement)"
+    );
+    assert_eq!(
+        main[3].json()["messages"][6]["content"][0]["content"],
         "Read file notes.txt, lines 1-2\n1: one\n2: three"
     );
     let answer: Vec<&str> = lines
@@ -588,5 +587,59 @@ fn code_action_review_and_issue_modes() {
     assert_eq!(
         std::fs::read_to_string(home.project().join("fix.txt")).unwrap(),
         "fixed\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn sigint_interrupts_with_exit_130() {
+    let gateway = FakeGateway::start(|request: &Recorded, _| {
+        let model = request.json()["model"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        if request.is_title() {
+            return Reply::Sse {
+                body: Stream::new().text("t").finish(&model, None),
+                before: None,
+            };
+        }
+        Reply::Sse {
+            body: Stream::new()
+                .tool("s1", "shell", json!({"command": "sleep 20"}))
+                .finish(&model, None),
+            before: None,
+        }
+    });
+    let home = TestHome::new(&gateway.url);
+    let mut command = Command::new(BIN);
+    command
+        .args(["run", "--auto", "--format", "json", "go"])
+        .current_dir(home.project());
+    command
+        .env("HOME", home.home())
+        .env("ANYSOLA_API_URL", &gateway.url)
+        .env("ANYSOLA_TOKEN", "asc_x");
+    let child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(1500));
+    unsafe { libc::kill(child.id() as i32, libc::SIGINT) };
+    let started = Instant::now();
+    let out = child.wait_with_output().unwrap();
+    assert!(started.elapsed() < Duration::from_secs(10));
+    assert_eq!(out.status.code(), Some(130));
+    let lines: Vec<Value> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let tool = lines.iter().find(|l| l["type"] == "tool_use").unwrap();
+    assert_eq!(tool["part"]["state"]["error"], "Tool execution interrupted");
+    assert!(
+        lines.iter().all(|l| l["type"] != "error"),
+        "a user interrupt reports no error"
     );
 }

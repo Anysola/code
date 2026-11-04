@@ -47,6 +47,16 @@ fn main() {
     {
         ui::println("--server is not supported since Anysola Code 1.0; running locally.");
     }
+    let paths = anysola_core::paths::Paths::from_env();
+    anysola_core::log::init(&paths, cli.log_level.as_deref(), cli.print_logs);
+    let version = anysola_core::version::VERSION;
+    anysola_core::log::info(
+        "cli starting",
+        &[
+            ("version", version),
+            ("args", &crate::json(&serde_json::json!(args[1..]))),
+        ],
+    );
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
