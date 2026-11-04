@@ -6,3 +6,10 @@ license.workspace = true
 publish = false
 
 [dependencies]
+bytes.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true

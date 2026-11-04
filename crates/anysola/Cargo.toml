@@ -10,3 +10,15 @@ name = "anysola"
 path = "src/main.rs"
 
 [dependencies]
+anysola-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+libc.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+anysola-testkit.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
