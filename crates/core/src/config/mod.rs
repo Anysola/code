@@ -42,6 +42,8 @@ pub struct Config {
     pub permissions: Vec<Rule>,
     /// `instructions` of every document, deduplicated.
     pub instructions: Vec<String>,
+    /// `skills` sources of every document, deduplicated.
+    pub skills: Vec<String>,
     /// `providers.anysola` merged.
     pub provider: Map<String, Value>,
     /// Directories that hold markdown definitions (`agent/`, `command/`, …), lowest precedence first.
@@ -121,13 +123,18 @@ impl Config {
                     .filter_map(|r| serde_json::from_value(r).ok()),
             );
         }
-        if let Some(Value::Array(items)) = data.remove("instructions") {
-            for item in items
-                .into_iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-            {
-                if !self.instructions.contains(&item) {
-                    self.instructions.push(item);
+        for (key, list) in [
+            ("instructions", &mut self.instructions),
+            ("skills", &mut self.skills),
+        ] {
+            if let Some(Value::Array(items)) = data.remove(key) {
+                for item in items
+                    .into_iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                {
+                    if !list.contains(&item) {
+                        list.push(item);
+                    }
                 }
             }
         }

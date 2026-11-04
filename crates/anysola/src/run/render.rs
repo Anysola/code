@@ -15,6 +15,7 @@ use serde_json::{Map, Value, json};
 use super::tools::inline_info;
 use crate::ui;
 
+pub const QUESTION_CANCELLED: &str = "This non-interactive run cannot ask the user questions, so the question was cancelled. Continue without an answer; make reasonable assumptions and state them.";
 pub const PERMISSION_REJECTED: &str = "This non-interactive run cannot ask the user for permission, so the request was rejected. Continue without this action.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -393,6 +394,7 @@ impl Renderer {
             Event::Interrupted { .. } | Event::Succeeded { .. } => return true,
             Event::RetryScheduled { .. }
             | Event::PermissionAsked { .. }
+            | Event::QuestionAsked { .. }
             | Event::PermissionReplied { .. }
             | Event::Credits(_)
             | Event::TitleChanged { .. } => {}

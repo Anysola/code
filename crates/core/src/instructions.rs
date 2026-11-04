@@ -56,12 +56,14 @@ fn render(files: &[InstructionFile]) -> String {
 /// sources are left out.
 pub fn block(
     catalog: Option<&str>,
+    skills: Option<&str>,
     files: &[InstructionFile],
     date: &str,
     env: &Environment,
 ) -> String {
     let mut sources = Vec::new();
     sources.extend(catalog.map(str::to_string));
+    sources.extend(skills.map(str::to_string));
     if !files.is_empty() {
         sources.push(render(files));
     }
@@ -199,7 +201,7 @@ mod tests {
             worktree: project,
             git: false,
         };
-        let text = block(None, &files[..1], "Wed Nov 04 2026", &env);
+        let text = block(None, None, &files[..1], "Wed Nov 04 2026", &env);
         assert!(text.starts_with("Instructions from: "));
         assert!(text.contains(
             "global\n\n\nToday's date: Wed Nov 04 2026\n\nHere is some useful information"

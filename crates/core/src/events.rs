@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 use crate::gateway::error::SessionError;
 use crate::session::message::Tokens;
 use crate::tool::ToolContent;
+use crate::tool::question::Question;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CreditsSnapshot {
@@ -126,6 +127,12 @@ pub enum Event {
         request_id: String,
         reply: PermissionReply,
     },
+    /// The question tool waits for [`crate::api::Core::reply_question`].
+    QuestionAsked {
+        session_id: String,
+        request_id: String,
+        questions: Vec<Question>,
+    },
     Credits(CreditsSnapshot),
     TitleChanged {
         session_id: String,
@@ -160,6 +167,7 @@ impl Event {
             | Event::StepFailed { session_id, .. }
             | Event::RetryScheduled { session_id, .. }
             | Event::PermissionAsked { session_id, .. }
+            | Event::QuestionAsked { session_id, .. }
             | Event::PermissionReplied { session_id, .. }
             | Event::TitleChanged { session_id, .. }
             | Event::Succeeded { session_id }

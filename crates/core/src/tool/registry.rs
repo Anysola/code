@@ -58,13 +58,13 @@ impl Registry {
             Arc::new(super::edit::EditTool),
             Arc::new(super::glob::GlobTool),
             Arc::new(super::grep::GrepTool),
-            Arc::new(super::stubs::QuestionTool),
+            Arc::new(super::question::QuestionTool),
             Arc::new(super::read::ReadTool),
             Arc::new(super::shell::ShellTool),
-            Arc::new(super::stubs::SkillTool),
-            Arc::new(super::stubs::SubagentTool),
-            Arc::new(super::stubs::WebfetchTool),
-            Arc::new(super::stubs::WebsearchTool),
+            Arc::new(super::skill::SkillTool),
+            Arc::new(super::subagent::SubagentTool),
+            Arc::new(super::webfetch::WebfetchTool),
+            Arc::new(super::websearch::WebsearchTool),
             Arc::new(super::write::WriteTool),
         ];
         Registry {

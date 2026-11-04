@@ -2,11 +2,14 @@
 //! makes. Tools start as soon as their `tool_use` block completes and run while the stream goes on.
 
 pub mod gate;
+mod host;
 pub mod lower;
 pub mod message;
+pub mod question;
 pub mod request;
 mod step;
 mod stream;
+pub mod subagent;
 mod title;
 
 pub(crate) use step::session_headers as step_headers;
@@ -130,6 +133,32 @@ fn is_fallback_title(session: &SessionRow) -> bool {
         && session.title == format!("New session - {}", crate::time::iso(session.time_created))
 }
 
+/// Prompt attachments as stored, images normalized to the configured limits.
+fn attachments(
+    shared: &Shared,
+    files: &[(String, String, String)],
+) -> Result<Vec<FileAttachment>, SessionError> {
+    let limits = crate::media::Limits::from_config(shared.config.get("media"));
+    files
+        .iter()
+        .map(|(mime, data, name)| {
+            let normalized = if crate::media::RESIZABLE.contains(&mime.as_str()) {
+                crate::media::normalize(mime, data, &limits)
+                    .map_err(|error| SessionError::new("unknown", error.message(name)))?
+            } else {
+                None
+            };
+            let (mime, data) = normalized.unwrap_or_else(|| (mime.clone(), data.clone()));
+            Ok(FileAttachment {
+                data,
+                mime,
+                source: json!({"type": "inline"}),
+                name: Some(name.clone()),
+            })
+        })
+        .collect()
+}
+
 pub(crate) async fn run_turn(
     shared: Arc<Shared>,
     session: SessionRow,
@@ -142,16 +171,10 @@ pub(crate) async fn run_turn(
     if let Ok(selection) = &selection {
         plan_reminders(&shared, &session_id, &selection.agent.id);
     }
-    let files = prompt
-        .files
-        .iter()
-        .map(|(mime, data, name)| FileAttachment {
-            data: data.clone(),
-            mime: mime.clone(),
-            source: json!({"type": "inline"}),
-            name: Some(name.clone()),
-        })
-        .collect();
+    let (selection, files) = match attachments(&shared, &prompt.files) {
+        Ok(files) => (selection, files),
+        Err(error) => (Err(error), Vec::new()),
+    };
     let user = UserData {
         time: Created { created: now_ms() },
         text: prompt.text.clone(),

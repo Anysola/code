@@ -91,12 +91,14 @@ fn context(shared: &Shared, session: &SessionRow, selection: &Selection) -> Cont
         directory,
         worktree,
     };
+    let skills = crate::skill::guidance(&shared.skills, &rules);
     let catalog = shared
         .registry
         .code_mode(&rules)
         .map(|inventory| crate::codemode::catalog::render(&inventory.summary()));
     let block2 = instructions::block(
         catalog.as_deref(),
+        skills.as_deref(),
         &files,
         &crate::time::date_string(),
         &environment,
@@ -343,14 +345,19 @@ fn wait_retry(shared: &Shared, session_id: &str, attempt: u32, delay: Duration, 
 }
 
 pub(crate) fn session_headers(shared: &Shared, session: &SessionRow) -> Vec<(String, String)> {
-    let id = session.id.clone();
+    // Children share their parent's cache affinity, forks their source's.
+    let affinity = session
+        .parent_id
+        .clone()
+        .or_else(|| session.fork_session_id.clone())
+        .unwrap_or_else(|| session.id.clone());
     let mut headers = vec![
         ("x-opencode-client".to_string(), "cli".to_string()),
         ("x-opencode-project".to_string(), shared.project.id.clone()),
-        ("x-opencode-session".to_string(), id.clone()),
-        ("x-opencode-session-id".to_string(), id.clone()),
-        ("x-session-affinity".to_string(), id.clone()),
-        ("x-session-id".to_string(), id),
+        ("x-opencode-session".to_string(), affinity.clone()),
+        ("x-opencode-session-id".to_string(), session.id.clone()),
+        ("x-session-affinity".to_string(), affinity.clone()),
+        ("x-session-id".to_string(), affinity),
     ];
     if let Some(parent) = &session.parent_id {
         headers.push(("x-opencode-parent-session-id".into(), parent.clone()));
@@ -614,7 +621,9 @@ async fn run_stream(
     let unsettled = collect(shared, &mut running, &mut tasks).await;
     debug_assert!(unsettled.is_empty());
     let declined = running.data.content.iter().any(|p| {
-        matches!(p, Part::Tool { state: ToolState::Error { error, .. }, .. } if error.message == "The user declined this tool call")
+        matches!(p, Part::Tool { state: ToolState::Error { error, .. }, .. }
+            if error.message == "The user declined this tool call"
+                || error.message == crate::tool::question::DISMISSED)
     });
     let finish = assembly.finish();
     running.data.finish = Some(finish.into());
@@ -851,13 +860,20 @@ fn handle(
                     shared.credits.clone(),
                 )),
                 host: shared.clone(),
+                session: Arc::new(super::host::Host {
+                    shared: shared.clone(),
+                }),
             };
             let tools = ctx.tools.clone();
             let output_dir = shared.paths.tool_output_dir();
+            let images = crate::media::Limits::from_config(shared.config.get("media"));
             tasks.spawn(async move {
                 let result = execute(&tools, &name, input, &tool_ctx, capped).await;
-                let result =
-                    result.map(|out| crate::tool::bound::bound(out, tool_ctx.limits, &output_dir));
+                let result = result.map(|out| {
+                    let mut out = crate::tool::bound::bound(out, tool_ctx.limits, &output_dir);
+                    out.content = crate::media::normalize_content(out.content, &images);
+                    out
+                });
                 (part, result)
             });
         }

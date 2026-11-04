@@ -226,3 +226,120 @@ fn max_steps_final_step() {
         2,
     );
 }
+
+fn child_request(marker: &str, capture: &str) {
+    let gateway = gateway_logger(String::new());
+    let home = anysola_testkit::TestHome::new(&gateway.url);
+    let dir = my_app(&home);
+    assert_eq!(run(&home, &dir, &["run", marker, "go"]).code, 0);
+    let child = gateway
+        .messages()
+        .into_iter()
+        .find(|r| r.header("x-opencode-parent-session-id").is_some())
+        .expect("a child request");
+    assert_ne!(
+        child.header("x-opencode-session-id"),
+        child.header("x-opencode-session"),
+        "the child shares its parent's affinity"
+    );
+    assert_request(
+        capture,
+        &child,
+        &read_json(capture),
+        &our_places(&home, &dir),
+    );
+}
+
+#[test]
+fn explore_subagent_request() {
+    child_request(
+        "SUBEXPLORE",
+        "tools/_captured-request-explore-subagent.json",
+    );
+}
+
+#[test]
+fn general_subagent_request() {
+    child_request(
+        "SUBGENERAL",
+        "tools/_captured-request-general-subagent.json",
+    );
+}
+
+#[test]
+fn skill_and_question_results() {
+    let gateway = gateway_logger(String::new());
+    let home = anysola_testkit::TestHome::new(&gateway.url);
+    let dir = my_app(&home);
+    let write = |path: std::path::PathBuf, text: &str| {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    write(
+        dir.join(".claude/skills/demo/SKILL.md"),
+        "---\nname: demo\ndescription: Demo skill\n---\nDo the demo thing.\n",
+    );
+    write(dir.join(".claude/skills/demo/notes.txt"), "notes\n");
+    write(
+        home.home()
+            .parent()
+            .unwrap()
+            .join(".claude/skills/above/SKILL.md"),
+        "---\ndescription: Above home\n---\nx\n",
+    );
+    assert_eq!(run(&home, &dir, &["run", "SKILLQ", "go"]).code, 0);
+    let main: Vec<_> = gateway
+        .messages()
+        .into_iter()
+        .filter(|r| !r.is_title())
+        .collect();
+    let places = our_places(&home, &dir);
+    let block2 = places.apply(main[0].json()["system"][2]["text"].as_str().unwrap());
+    assert!(block2.contains(
+        "<available_skills>\n  <skill>\n    <id>demo</id>\n    <name>demo</name>\n    <description>Demo skill</description>\n  </skill>\n</available_skills>\n\nToday's date:"
+    ));
+    assert!(
+        !block2.contains("Above home"),
+        "skills above home are not read"
+    );
+    let ours = normalize_body(&main[1].json(), &places, false);
+    let capture = normalize_body(
+        &read_json("tools/_captured-results-execute-skill-question.json")["body"],
+        &capture_places(),
+        true,
+    );
+    let results = |body: &serde_json::Value| -> Vec<serde_json::Value> {
+        body["messages"].as_array().unwrap().last().unwrap()["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|p| {
+                p["tool_use_id"]
+                    .as_str()
+                    .is_some_and(|id| id >= "toolu_0_3")
+            })
+            .cloned()
+            .collect()
+    };
+    assert_eq!(results(&ours), results(&capture));
+}
+
+#[test]
+fn background_subagent_returns_at_once() {
+    let gateway = gateway_logger(String::new());
+    let home = anysola_testkit::TestHome::new(&gateway.url);
+    let dir = my_app(&home);
+    assert_eq!(run(&home, &dir, &["run", "SUBBACKGROUND", "go"]).code, 0);
+    let parent: Vec<_> = gateway
+        .messages()
+        .into_iter()
+        .filter(|r| !r.is_title() && r.header("x-opencode-parent-session-id").is_none())
+        .collect();
+    let body = parent[1].json();
+    let result = body["messages"].as_array().unwrap().last().unwrap()["content"][0]["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(result.starts_with("The subagent is working in the background (sessionID: ses_"));
+    assert!(result.ends_with("call subagent again with this sessionID."));
+}

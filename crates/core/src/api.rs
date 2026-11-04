@@ -19,8 +19,12 @@ use crate::model::{Model, ModelRef};
 use crate::paths::Paths;
 use crate::project::Project;
 use crate::session::gate::{Asks, Reply};
+use crate::session::question::Questions;
+use crate::session::subagent::Jobs;
 use crate::session::{Outcome, TurnOptions};
+use crate::skill::Skill;
 use crate::storage::{Db, SessionRow};
+use crate::tool::question::QuestionReply;
 use crate::tool::registry::Registry;
 use crate::tool::{PathLocks, SessionNotifier};
 
@@ -68,7 +72,10 @@ pub(crate) struct Shared {
     pub agents: Agents,
     pub models: Vec<Model>,
     pub registry: Registry,
+    pub skills: Vec<Skill>,
     pub asks: Arc<Asks>,
+    pub questions: Questions,
+    pub jobs: Jobs,
     pub locks: Arc<PathLocks>,
     pub env: Arc<Vec<(OsString, OsString)>>,
     pub notifier: Arc<dyn SessionNotifier>,
@@ -141,6 +148,7 @@ impl Core {
             crate::log::warn(warning, &[]);
         }
         let agents = Agents::load(&config, &paths);
+        let skills = crate::skill::discover(&paths, &config, directory).await;
         let models = crate::model::catalog(&config);
         let project = crate::project::identify(directory);
         db.upsert_project(&project)?;
@@ -163,7 +171,10 @@ impl Core {
             agents,
             models,
             registry: Registry::builtin(),
+            skills,
             asks,
+            questions: Questions::default(),
+            jobs: Jobs::default(),
             locks: Arc::default(),
             env: Arc::new(env),
             notifier,
@@ -303,40 +314,14 @@ impl Core {
         prompt: Prompt,
         options: TurnOptions,
     ) -> Result<Outcome, CoreError> {
-        let shared = &self.shared;
-        let session = shared
-            .db
-            .session(session_id)?
-            .ok_or(CoreError::SessionNotFound)?;
-        if !shared.db.acquire(session_id, &shared.owner)? {
-            return Err(CoreError::Busy(session_id.to_string()));
-        }
-        let cancel = CancellationToken::new();
-        shared
-            .turns
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(session_id.to_string(), cancel.clone());
-        let heartbeat = {
-            let db = shared.db.clone();
-            let (id, owner) = (session_id.to_string(), shared.owner.clone());
-            tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                    let _ = db.heartbeat(&id, &owner);
-                }
-            })
-        };
-        let outcome =
-            crate::session::run_turn(self.shared.clone(), session, prompt, options, cancel).await;
-        heartbeat.abort();
-        shared
-            .turns
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(session_id);
-        shared.db.release(session_id, &shared.owner)?;
-        Ok(outcome)
+        prompt_session(
+            &self.shared,
+            session_id,
+            prompt,
+            options,
+            CancellationToken::new(),
+        )
+        .await
     }
 
     /// Interrupts the session's running turn, if any.
@@ -356,8 +341,53 @@ impl Core {
         self.shared.asks.reply(request_id, reply)
     }
 
+    pub fn reply_question(&self, request_id: &str, reply: QuestionReply) -> bool {
+        self.shared.questions.reply(request_id, reply)
+    }
+
     /// Rejects every pending permission ask and every later one, for shutdown.
     pub fn close_permissions(&self) {
         self.shared.asks.close();
     }
+}
+
+/// Runs one turn of a session under `cancel`, registered so [`Core::interrupt`] reaches it.
+pub(crate) async fn prompt_session(
+    shared: &Arc<Shared>,
+    session_id: &str,
+    prompt: Prompt,
+    options: TurnOptions,
+    cancel: CancellationToken,
+) -> Result<Outcome, CoreError> {
+    let session = shared
+        .db
+        .session(session_id)?
+        .ok_or(CoreError::SessionNotFound)?;
+    if !shared.db.acquire(session_id, &shared.owner)? {
+        return Err(CoreError::Busy(session_id.to_string()));
+    }
+    shared
+        .turns
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(session_id.to_string(), cancel.clone());
+    let heartbeat = {
+        let db = shared.db.clone();
+        let (id, owner) = (session_id.to_string(), shared.owner.clone());
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                let _ = db.heartbeat(&id, &owner);
+            }
+        })
+    };
+    let outcome = crate::session::run_turn(shared.clone(), session, prompt, options, cancel).await;
+    heartbeat.abort();
+    shared
+        .turns
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(session_id);
+    shared.db.release(session_id, &shared.owner)?;
+    Ok(outcome)
 }

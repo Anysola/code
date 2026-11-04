@@ -266,6 +266,10 @@ impl PermissionGate for RuleGate {
         !self.asks.closed()
             && self.scope.decide(&self.asks.db, action, resources).effect == Effect::Allow
     }
+
+    fn denies(&self, action: &str, resources: &[String]) -> bool {
+        self.scope.decide(&self.asks.db, action, resources).effect == Effect::Deny
+    }
 }
 
 #[cfg(test)]

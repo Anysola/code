@@ -1,7 +1,6 @@
 //! What read sees on disk: media by magic bytes, whole small text files, line pages of larger ones,
 //! and directory listings. Blocking; the tool runs it on the blocking pool.
 
-use std::cmp::Ordering;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Cursor, Read};
 use std::path::{MAIN_SEPARATOR, Path};
@@ -223,7 +222,11 @@ fn list(path: &Path, page: Page) -> Result<Content, ReadError> {
             visible.push((false, name));
         }
     }
-    visible.sort_by(|(a_dir, a), (b_dir, b)| b_dir.cmp(a_dir).then_with(|| locale_compare(a, b)));
+    visible.sort_by(|(a_dir, a), (b_dir, b)| {
+        b_dir
+            .cmp(a_dir)
+            .then_with(|| crate::text::locale_compare(a, b))
+    });
     let (offset, limit) = (page.start(), page.limit());
     let total = visible.len();
     let entries: Vec<String> = visible
@@ -235,13 +238,4 @@ fn list(path: &Path, page: Page) -> Result<Content, ReadError> {
     let shown = (offset - 1).saturating_add(entries.len());
     let next = (shown < total).then_some(offset + entries.len());
     Ok(Content::Listing { entries, next })
-}
-
-/// Approximates JavaScript's `localeCompare` (ICU root collation) for names: case-insensitive
-/// first, then lowercase before uppercase. Exact ICU order for punctuation and non-ASCII letters
-/// would need a collation library.
-pub(super) fn locale_compare(a: &str, b: &str) -> Ordering {
-    a.to_lowercase()
-        .cmp(&b.to_lowercase())
-        .then_with(|| b.cmp(a))
 }

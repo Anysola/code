@@ -7,16 +7,23 @@ use std::sync::{Arc, Mutex};
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 
+use super::question::{Question, QuestionReply};
+use super::subagent::SubagentRequest;
 use super::websearch::{SearchResult, WebSearch};
-use super::{OutputLimits, PathLocks, SessionNotifier, ToolContext};
+use super::{
+    OutputLimits, PathLocks, SessionHost, SessionNotifier, ToolContext, ToolError, ToolResult,
+};
 use crate::paths::Paths;
 use crate::permission::{PermissionError, PermissionGate, PermissionRequest};
+use crate::skill::Skill;
 
 #[derive(Default)]
 pub struct RecordingGate {
     pub asked: Mutex<Vec<PermissionRequest>>,
     /// Answer for every ask; `None` allows.
     pub answer: Mutex<Option<PermissionError>>,
+    /// Resources a rule denies.
+    pub denied: Mutex<Vec<String>>,
 }
 
 impl PermissionGate for RecordingGate {
@@ -28,6 +35,11 @@ impl PermissionGate for RecordingGate {
 
     fn allows(&self, _action: &str, _resources: &[String]) -> bool {
         self.answer.lock().unwrap().is_none()
+    }
+
+    fn denies(&self, _action: &str, resources: &[String]) -> bool {
+        let denied = self.denied.lock().unwrap();
+        resources.iter().any(|r| denied.contains(r))
     }
 }
 
@@ -54,6 +66,50 @@ impl WebSearch for NoSearch {
         _: &'a str,
     ) -> BoxFuture<'a, Result<Vec<SearchResult>, String>> {
         async { Err("no search in tests".to_string()) }.boxed()
+    }
+}
+
+/// Records questions and subagent requests; answers questions with `question_reply`.
+#[derive(Default)]
+pub struct TestSession {
+    pub skills: Mutex<Vec<Skill>>,
+    pub questions: Mutex<Vec<Vec<Question>>>,
+    pub question_reply: Mutex<Option<QuestionReply>>,
+    pub subagents: Mutex<Vec<SubagentRequest>>,
+}
+
+impl SessionHost for TestSession {
+    fn ask_questions(
+        &self,
+        _session_id: &str,
+        questions: Vec<Question>,
+    ) -> BoxFuture<'_, QuestionReply> {
+        self.questions.lock().unwrap().push(questions);
+        let reply = self
+            .question_reply
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or(QuestionReply::Dismissed(None));
+        async move { reply }.boxed()
+    }
+
+    fn skill(&self, id: &str) -> Option<Skill> {
+        self.skills
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|s| s.id == id)
+            .cloned()
+    }
+
+    fn subagent<'a>(
+        &'a self,
+        _ctx: &'a ToolContext,
+        request: SubagentRequest,
+    ) -> BoxFuture<'a, ToolResult> {
+        self.subagents.lock().unwrap().push(request);
+        async { Err(ToolError::execution("no subagents in tests")) }.boxed()
     }
 }
 
@@ -93,6 +149,7 @@ pub struct TestContext {
     pub ctx: ToolContext,
     pub gate: Arc<RecordingGate>,
     pub notifier: Arc<RecordingNotifier>,
+    pub session: Arc<TestSession>,
 }
 
 /// A context whose session directory and project worktree are `dir`, with home and the data dir
@@ -100,6 +157,7 @@ pub struct TestContext {
 pub fn context(dir: &Path) -> TestContext {
     let gate = Arc::new(RecordingGate::default());
     let notifier = Arc::new(RecordingNotifier::default());
+    let session = Arc::new(TestSession::default());
     let home = dir.join(".home");
     let paths = Paths::isolated(home);
     let ctx = ToolContext {
@@ -120,10 +178,12 @@ pub fn context(dir: &Path) -> TestContext {
         notifier: notifier.clone(),
         web_search: Arc::new(NoSearch),
         host: Arc::new(TestHost::new()),
+        session: session.clone(),
     };
     TestContext {
         ctx,
         gate,
         notifier,
+        session,
     }
 }
