@@ -52,6 +52,7 @@ pub fn logger(request: &Recorded, _index: usize, read_file: &str) -> Reply {
         "LONGSTEPS",
         "SUBEXPLORE",
         "SUBGENERAL",
+        "SKILLQ",
     ]
     .into_iter()
     .find(|m| all.contains(m));
@@ -95,6 +96,15 @@ pub fn logger(request: &Recorded, _index: usize, read_file: &str) -> Reply {
             "subagent",
             json!({"agent": agent, "description": "task", "prompt": prompt}),
         )
+    } else if marker == Some("SKILLQ") && !after_tool {
+        stream
+            .tool("toolu_0_3", "skill", json!({"id": "demo"}))
+            .tool("toolu_0_4", "skill", json!({"id": "missing"}))
+            .tool(
+                "toolu_0_5",
+                "question",
+                json!({"questions": [{"question": "Pick?", "header": "Pick", "options": [{"label": "A", "description": "a"}]}]}),
+            )
     } else if marker == Some("LONGSTEPS") && results < 50 {
         stream.tool(
             &format!("toolu_l{results}"),

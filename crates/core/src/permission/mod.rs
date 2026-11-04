@@ -82,4 +82,8 @@ pub trait PermissionGate: Send + Sync {
     fn ask(&self, request: PermissionRequest) -> BoxFuture<'_, Result<(), PermissionError>>;
     /// True only when the rules already allow every resource; never asks.
     fn allows(&self, action: &str, resources: &[String]) -> bool;
+    /// True when a rule denies any of the resources; never asks. Gates without rules deny nothing.
+    fn denies(&self, _action: &str, _resources: &[String]) -> bool {
+        false
+    }
 }

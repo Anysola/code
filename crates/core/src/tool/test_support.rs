@@ -22,6 +22,8 @@ pub struct RecordingGate {
     pub asked: Mutex<Vec<PermissionRequest>>,
     /// Answer for every ask; `None` allows.
     pub answer: Mutex<Option<PermissionError>>,
+    /// Resources a rule denies.
+    pub denied: Mutex<Vec<String>>,
 }
 
 impl PermissionGate for RecordingGate {
@@ -33,6 +35,11 @@ impl PermissionGate for RecordingGate {
 
     fn allows(&self, _action: &str, _resources: &[String]) -> bool {
         self.answer.lock().unwrap().is_none()
+    }
+
+    fn denies(&self, _action: &str, resources: &[String]) -> bool {
+        let denied = self.denied.lock().unwrap();
+        resources.iter().any(|r| denied.contains(r))
     }
 }
 

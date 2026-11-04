@@ -102,4 +102,10 @@ impl PermissionGate for RuleGate {
             .iter()
             .all(|r| evaluate(action, r, &self.rules) == Effect::Allow)
     }
+
+    fn denies(&self, action: &str, resources: &[String]) -> bool {
+        resources
+            .iter()
+            .any(|r| evaluate(action, r, &self.rules) == Effect::Deny)
+    }
 }
