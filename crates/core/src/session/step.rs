@@ -848,10 +848,14 @@ fn handle(
             };
             let tools = ctx.tools.clone();
             let output_dir = shared.paths.tool_output_dir();
+            let images = crate::media::Limits::from_config(shared.config.get("media"));
             tasks.spawn(async move {
                 let result = execute(&tools, &name, input, &tool_ctx, capped).await;
-                let result =
-                    result.map(|out| crate::tool::bound::bound(out, tool_ctx.limits, &output_dir));
+                let result = result.map(|out| {
+                    let mut out = crate::tool::bound::bound(out, tool_ctx.limits, &output_dir);
+                    out.content = crate::media::normalize_content(out.content, &images);
+                    out
+                });
                 (part, result)
             });
         }
