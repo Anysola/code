@@ -96,12 +96,17 @@ dependencies = [
  "anysola-core",
  "anysola-testkit",
  "base64 0.22.1",
+ "chrono",
  "clap",
+ "hex",
  "libc",
  "regex",
+ "reqwest",
  "serde_json",
+ "sha1",
  "tempfile",
  "tokio",
+ "url",
 ]
 
 [[package]]

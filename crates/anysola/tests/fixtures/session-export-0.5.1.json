@@ -1,0 +1,83 @@
+{
+  "info": {
+    "id": "ses_e57db01ceffeDJ6bJmjPVwv3Hr",
+    "projectID": "global",
+    "cost": 0,
+    "tokens": {
+      "input": 20,
+      "output": 6,
+      "reasoning": 0,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "outcome": "succeeded",
+    "time": {
+      "created": 1793822359266,
+      "updated": 1793822362305,
+      "busy": 1793822361788,
+      "idle": 1793822362324
+    },
+    "title": "Fake title",
+    "location": {
+      "directory": "/home/ubuntu/anysola-code/rust/testing/runs/m2-misc-cap/proj"
+    }
+  },
+  "messages": [
+    {
+      "id": "msg_1a825086e001l9AzoUCS2LBG7j",
+      "time": {
+        "created": 1793822361840
+      },
+      "text": "\"hello there\"",
+      "files": [],
+      "type": "user"
+    },
+    {
+      "id": "msg_1a825092f001BSZx3fXdthZbaW",
+      "time": {
+        "created": 1793822361929,
+        "streamed": 1793822362262,
+        "completed": 1793822362305
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "claude-sonnet-5-5",
+        "providerID": "anysola"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Plain answer."
+        }
+      ],
+      "snapshot": {
+        "start": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+        "end": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+        "files": []
+      },
+      "finish": "stop",
+      "rawFinish": "end_turn",
+      "cost": 0,
+      "tokens": {
+        "input": 10,
+        "output": 3,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      }
+    },
+    {
+      "id": "msg_1a8250ad4001Jbo5O8wwJKc7ZZ",
+      "time": {
+        "created": 1793822362324
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    }
+  ]
+}

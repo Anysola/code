@@ -7,9 +7,11 @@ mod instruction;
 mod permission;
 mod revert;
 mod schema;
+mod transfer;
 
 pub use inbox::InboxRow;
 pub use instruction::{InstructionState, Values};
+pub use transfer::{ImportError, SessionSummary, sanitize};
 
 use std::path::Path;
 use std::sync::Mutex;
