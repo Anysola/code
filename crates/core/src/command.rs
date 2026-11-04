@@ -9,7 +9,7 @@ use futures_util::StreamExt;
 use regex::Regex;
 use serde_json::Value;
 
-use crate::config::Config;
+use crate::config::{Config, Entry};
 
 const INITIALIZE: &str = include_str!("prompt/initialize.txt");
 const REVIEW: &str = include_str!("prompt/review.txt");
@@ -81,8 +81,8 @@ fn markdown_commands(dir: &Path) -> Vec<Command> {
         .into_iter()
         .filter_map(|(file, root)| {
             let text = std::fs::read_to_string(&file).ok()?;
-            let (mut meta, body) = crate::markdown::parse(&text);
-            meta.insert("template".into(), Value::String(body));
+            let (mut meta, body) = crate::markdown::parse(&text)?;
+            meta.insert("template".into(), Value::String(body.trim().to_string()));
             let name = file.strip_prefix(&root).ok()?.with_extension("");
             from_value(
                 &name.to_string_lossy().replace('\\', "/"),
@@ -114,12 +114,14 @@ impl Commands {
                 template: Template::Builtin(REVIEW),
             },
         ];
-        let markdown = config.directories.iter().flat_map(|d| markdown_commands(d));
-        let configured = config
-            .commands
-            .iter()
-            .filter_map(|(name, value)| from_value(name, value));
-        for command in markdown.chain(configured) {
+        let defined = config.entries.iter().flat_map(|entry| match entry {
+            Entry::Directory(dir) => markdown_commands(dir),
+            Entry::Document { commands, .. } => commands
+                .iter()
+                .filter_map(|(name, value)| from_value(name, value))
+                .collect(),
+        });
+        for command in defined {
             list.retain(|c| c.name != command.name);
             list.push(command);
         }
@@ -316,11 +318,16 @@ mod tests {
         )
         .unwrap();
         let mut config = Config::default();
-        config.directories = vec![dir.path().join(".opencode")];
-        config.commands.insert(
-            "init".into(),
-            serde_json::json!({"template": "custom init"}),
-        );
+        config.entries = vec![
+            Entry::Directory(dir.path().join(".opencode")),
+            Entry::Document {
+                agents: Default::default(),
+                commands: serde_json::json!({"init": {"template": "custom init"}})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            },
+        ];
         let commands = Commands::load(&config);
         let commit = commands.get("git/commit").unwrap();
         assert_eq!(commit.description.as_deref(), Some("Commit"));

@@ -134,7 +134,7 @@ pub fn targets(
         add(entries(&dir, &ENTRIES));
     }
     let mut config_dirs = vec![paths.legacy_config_dir(), paths.data.clone()];
-    config_dirs.extend(config.directories.iter().cloned());
+    config_dirs.extend(config.directories().cloned());
     for dir in &config_dirs {
         add(entries(
             dir,

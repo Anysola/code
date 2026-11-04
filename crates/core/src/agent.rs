@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use crate::config::Config;
+use crate::config::{Config, Entry};
 use crate::paths::Paths;
 use crate::permission::{Effect, Rule};
 
@@ -175,33 +175,28 @@ impl Agents {
         for agent in &mut list {
             agent.permissions.extend(global.iter().cloned());
         }
-        let markdown = config
-            .directories
-            .iter()
-            .flat_map(|dir| markdown_agents(dir));
-        let configured: Vec<(String, Value)> = markdown
-            .chain(
-                config
-                    .agents
-                    .iter()
-                    .map(|(id, item)| (id.clone(), item.clone())),
-            )
-            .collect();
-        for (id, item) in &configured {
+        let defined = config.entries.iter().flat_map(|entry| match entry {
+            Entry::Directory(dir) => markdown_agents(dir),
+            Entry::Document { agents, .. } => agents
+                .iter()
+                .map(|(id, item)| (id.clone(), item.clone()))
+                .collect(),
+        });
+        for (id, item) in defined {
             if item.get("disabled").and_then(Value::as_bool) == Some(true) {
-                list.retain(|a| &a.id != id);
+                list.retain(|a| a.id != id);
                 continue;
             }
-            let index = match list.iter().position(|a| &a.id == id) {
+            let index = match list.iter().position(|a| a.id == id) {
                 Some(index) => index,
                 None => {
-                    let mut agent = Agent::new(id);
+                    let mut agent = Agent::new(&id);
                     agent.permissions.extend(global.iter().cloned());
                     list.push(agent);
                     list.len() - 1
                 }
             };
-            apply(&mut list[index], item, &home);
+            apply(&mut list[index], &item, &home);
         }
         Agents {
             list,
@@ -268,11 +263,12 @@ fn markdown_agents(dir: &std::path::Path) -> Vec<(String, Value)> {
             let Ok(text) = std::fs::read_to_string(&file) else {
                 continue;
             };
-            let (meta, body) = crate::markdown::parse(&text);
-            let mut agent = crate::config::markdown_agent(&meta);
-            if !body.is_empty() {
-                agent["system"] = Value::String(body);
-            }
+            let Some((meta, body)) = crate::markdown::parse(&text) else {
+                continue;
+            };
+            let Some(mut agent) = crate::config::markdown_agent(&meta, body.trim()) else {
+                continue;
+            };
             if primary {
                 agent["mode"] = Value::String("primary".into());
             }
@@ -319,7 +315,10 @@ mod tests {
     fn agents(config: Value) -> Agents {
         let paths = Paths::isolated("/home/u".into());
         let mut cfg = Config::default();
-        cfg.agents = config.as_object().unwrap().clone();
+        cfg.entries = vec![Entry::Document {
+            agents: config.as_object().unwrap().clone(),
+            commands: Default::default(),
+        }];
         Agents::load(&cfg, &paths)
     }
 
@@ -345,5 +344,89 @@ mod tests {
             plan.permissions.last().unwrap().resource,
             "/home/u/.opencode/plan/*"
         );
+    }
+
+    #[test]
+    fn markdown_agents_in_source_order() {
+        let root = tempfile::tempdir().unwrap();
+        let global = root.path().join("global");
+        let project = root.path().join("proj/.opencode");
+        let write = |path: std::path::PathBuf, text: &str| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write(
+            project.join("agent/team/reviewer.md"),
+            "---\ndescription: Reviews: carefully\nmode: subagent\nmodel: anysola/claude-haiku-5-5\nvariant: high\n---\nReview the diff.\n",
+        );
+        write(
+            project.join("agents/legacy.md"),
+            "---\ncolor: accent\nmaxSteps: 4\ntemperature: 0.2\ntools:\n  write: false\n  bash: false\npermission:\n  bash:\n    \"git *\": allow\n---\nOld style.",
+        );
+        write(
+            project.join("agent/bad.md"),
+            "---\ncolor: red\ntemperature: 1\n---\nx",
+        );
+        write(
+            project.join("modes/focus.md"),
+            "---\nmode: subagent\n---\nFocus.",
+        );
+        write(project.join("modes/nested/skip.md"), "---\n---\nnot a mode");
+        write(
+            global.join("agent/override.md"),
+            "---\ndescription: from markdown\n---\nGlobal.",
+        );
+        let mut config = Config::default();
+        config.entries = vec![
+            Entry::Directory(global),
+            Entry::Document {
+                agents: json!({"override": {"description": "from a document"}, "team/reviewer": {"steps": 2}})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                commands: Default::default(),
+            },
+            Entry::Directory(project),
+        ];
+        let all = Agents::load(&config, &Paths::isolated("/home/u".into()));
+        let reviewer = all.get("team/reviewer").unwrap();
+        assert_eq!(reviewer.description.as_deref(), Some("Reviews: carefully"));
+        assert_eq!(reviewer.mode, Mode::Subagent);
+        assert_eq!(
+            reviewer.model.as_deref(),
+            Some("anysola/claude-haiku-5-5#high")
+        );
+        assert_eq!(reviewer.system.as_deref(), Some("Review the diff."));
+        assert_eq!(
+            reviewer.steps,
+            Some(2),
+            "the document came before the markdown file"
+        );
+        assert_eq!(
+            all.get("override").unwrap().description.as_deref(),
+            Some("from a document")
+        );
+        let legacy = all.get("legacy").unwrap();
+        assert_eq!(legacy.steps, Some(4));
+        assert_eq!(legacy.system.as_deref(), Some("Old style."));
+        let rules: Vec<(&str, &str, Effect)> = legacy
+            .permissions
+            .iter()
+            .skip(4)
+            .map(|r| (r.action.as_str(), r.resource.as_str(), r.effect))
+            .collect();
+        assert_eq!(
+            rules,
+            vec![
+                ("edit", "*", Effect::Deny),
+                ("shell", "git *", Effect::Allow)
+            ]
+        );
+        assert!(
+            all.get("bad").is_none(),
+            "an invalid V1 colour drops the agent"
+        );
+        assert_eq!(all.get("focus").unwrap().mode, Mode::Primary);
+        assert!(all.get("nested/skip").is_none());
     }
 }

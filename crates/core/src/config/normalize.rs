@@ -103,7 +103,54 @@ pub fn model_ref(value: &Value, variant: Option<&Value>) -> Option<String> {
     }
 }
 
-pub fn migrate_agent(v1: &Map<String, Value>) -> Value {
+const V1_THEME_COLORS: [&str; 7] = [
+    "primary",
+    "secondary",
+    "accent",
+    "success",
+    "warning",
+    "error",
+    "info",
+];
+
+fn hex_color(text: &str) -> bool {
+    text.len() == 7 && text.starts_with('#') && text[1..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn positive_int(value: &Value) -> bool {
+    value.as_u64().is_some_and(|n| n > 0)
+}
+
+/// Whether a V1 agent decodes: every known field has its type, `color` is a hex colour or a
+/// theme colour name.
+fn valid_v1(v1: &Map<String, Value>) -> bool {
+    let typed = |key: &str, check: fn(&Value) -> bool| v1.get(key).is_none_or(check);
+    typed("model", Value::is_string)
+        && typed("variant", Value::is_string)
+        && typed("prompt", Value::is_string)
+        && typed("description", Value::is_string)
+        && typed("temperature", Value::is_number)
+        && typed("top_p", Value::is_number)
+        && typed("disable", Value::is_boolean)
+        && typed("hidden", Value::is_boolean)
+        && typed("steps", positive_int)
+        && typed("maxSteps", positive_int)
+        && typed("tools", Value::is_object)
+        && typed("mode", |m| {
+            matches!(m.as_str(), Some("subagent" | "primary" | "all"))
+        })
+        && typed("color", |c| {
+            c.as_str()
+                .is_some_and(|c| hex_color(c) || V1_THEME_COLORS.contains(&c))
+        })
+}
+
+/// A V1 agent as a V2 agent, `None` when it does not decode as V1. `tools` and `permission`
+/// share one map per tool (a key keeps its first position, its last value), as V1 merged them.
+pub fn migrate_agent(v1: &Map<String, Value>) -> Option<Value> {
+    if !valid_v1(v1) {
+        return None;
+    }
     let mut agent = Map::new();
     if let Some(model) = v1
         .get("model")
@@ -136,14 +183,34 @@ pub fn migrate_agent(v1: &Map<String, Value>) -> Value {
     if let Some(disable) = v1.get("disable") {
         agent.insert("disabled".into(), disable.clone());
     }
-    let permissions: Vec<Value> = migrate_tools(v1.get("tools"))
-        .into_iter()
-        .chain(migrate_permission(v1.get("permission")))
-        .collect();
+    let mut merged = Map::new();
+    if let Some(Value::Object(tools)) = v1.get("tools") {
+        for (tool, on) in js_entries(tools) {
+            let Some(on) = on.as_bool() else { continue };
+            let key = if tool == "write" || tool == "patch" {
+                "edit"
+            } else {
+                tool
+            };
+            merged.insert(key.to_string(), json!(if on { "allow" } else { "deny" }));
+        }
+    }
+    match v1.get("permission") {
+        Some(Value::Object(permission)) => {
+            for (key, rule) in js_entries(permission) {
+                merged.insert(key.clone(), rule.clone());
+            }
+        }
+        Some(other) => {
+            merged.insert("*".into(), other.clone());
+        }
+        None => {}
+    }
+    let permissions = migrate_permission(Some(&Value::Object(merged)));
     if !permissions.is_empty() {
         agent.insert("permissions".into(), Value::Array(permissions));
     }
-    Value::Object(agent)
+    Some(Value::Object(agent))
 }
 
 pub fn native_agent(agent: &Value) -> Value {
@@ -175,7 +242,9 @@ pub fn normalize(input: Map<String, Value>) -> Map<String, Value> {
         if let Some(Value::Object(map)) = input.get(key) {
             for (id, v1) in map {
                 let Value::Object(v1) = v1 else { continue };
-                let mut migrated = migrate_agent(v1);
+                let Some(mut migrated) = migrate_agent(v1) else {
+                    continue;
+                };
                 if key == "mode" {
                     migrated["mode"] = Value::String("primary".into());
                 }
@@ -283,17 +352,48 @@ const V2_AGENT_KEYS: &[&str] = &[
     "permissions",
 ];
 
-/// A markdown agent's frontmatter as a V2 agent: V2 when every key is a V2 key or a V2-only key is
-/// present, else migrated from V1.
-pub fn markdown_agent(meta: &Map<String, Value>) -> Value {
-    let v2_only = ["permissions", "request", "system", "disabled"]
+/// Whether a V2 agent decodes; a bad `color` alone is dropped, not the agent.
+fn valid_v2(agent: &Map<String, Value>) -> bool {
+    let typed = |key: &str, check: fn(&Value) -> bool| agent.get(key).is_none_or(check);
+    typed("model", |m| m.is_string() || m.is_object())
+        && typed("request", Value::is_object)
+        && typed("system", Value::is_string)
+        && typed("description", Value::is_string)
+        && typed("hidden", Value::is_boolean)
+        && typed("disabled", Value::is_boolean)
+        && typed("steps", positive_int)
+        && typed("permissions", Value::is_array)
+        && typed("mode", |m| {
+            matches!(m.as_str(), Some("subagent" | "primary" | "all"))
+        })
+}
+
+/// A markdown agent as a V2 agent: its frontmatter and `body` (the system prompt). Read as V1 and
+/// migrated when it has keys V2 does not know and none only V2 knows. `None` when it does not
+/// decode.
+pub fn markdown_agent(meta: &Map<String, Value>, body: &str) -> Option<Value> {
+    let native = ["permissions", "request", "system", "disabled"]
         .iter()
         .any(|k| meta.contains_key(*k));
-    if v2_only || meta.keys().all(|k| V2_AGENT_KEYS.contains(&k.as_str())) {
-        native_agent(&Value::Object(meta.clone()))
-    } else {
-        migrate_agent(meta)
+    let unsupported = meta.keys().any(|k| !V2_AGENT_KEYS.contains(&k.as_str()));
+    if unsupported && !native {
+        let mut v1 = meta.clone();
+        v1.insert("prompt".into(), Value::String(body.into()));
+        return migrate_agent(&v1);
     }
+    let mut v2 = meta.clone();
+    v2.insert("system".into(), Value::String(body.into()));
+    if !valid_v2(&v2) {
+        return None;
+    }
+    if v2
+        .get("color")
+        .is_some_and(|c| !c.as_str().is_some_and(hex_color))
+    {
+        v2.remove("color");
+    }
+    v2.retain(|k, _| V2_AGENT_KEYS.contains(&k.as_str()));
+    Some(native_agent(&Value::Object(v2)))
 }
 
 #[cfg(test)]
@@ -310,7 +410,7 @@ mod tests {
             "small_model": "anysola/claude-haiku-5-5",
             "permission": {"bash": {"git *": "allow"}, "webfetch": "deny"},
             "tools": {"write": false},
-            "agent": {"rev": {"prompt": "Review.", "maxSteps": 3, "color": "red", "model": "anysola/m", "variant": "high"}},
+            "agent": {"rev": {"prompt": "Review.", "maxSteps": 3, "color": "primary", "model": "anysola/m", "variant": "high"}},
         }));
         assert_eq!(out["agents"]["title"]["model"], "anysola/claude-haiku-5-5");
         let ordered =

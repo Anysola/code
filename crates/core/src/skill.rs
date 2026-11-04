@@ -53,8 +53,8 @@ fn boolean(value: &serde_json::Value) -> Option<bool> {
 }
 
 /// A skill file: id = file stem for a `*.md` directly in `root`, else the parent directory name.
-fn parse(root: &Path, file: &Path, content: &str) -> Skill {
-    let (meta, body) = crate::markdown::parse(content);
+fn parse(root: &Path, file: &Path, content: &str) -> Option<Skill> {
+    let (meta, body) = crate::markdown::parse(content)?;
     let top_level = file.parent() == Some(root) && file.file_name() != Some("SKILL.md".as_ref());
     let id = if top_level {
         file.file_stem()
@@ -74,14 +74,14 @@ fn parse(root: &Path, file: &Path, content: &str) -> Skill {
                 .filter(|disabled| *disabled)
                 .map(|_| false)
         });
-    Skill {
+    Some(Skill {
         name: text("name").unwrap_or_else(|| id.clone()),
         id,
         description: text("description"),
         autoinvoke,
         path: file.to_path_buf(),
-        content: body,
-    }
+        content: body.trim().to_string(),
+    })
 }
 
 /// Breadth-first: a directory holding `SKILL.md` is one skill and is not descended; `*.md` files
@@ -144,7 +144,9 @@ fn load_directory(root: &Path, into: &mut Vec<Skill>) {
         if content.is_empty() {
             continue;
         }
-        let skill = parse(root, &file, &content);
+        let Some(skill) = parse(root, &file, &content) else {
+            continue;
+        };
         match into.iter_mut().find(|s| s.id == skill.id) {
             Some(existing) => *existing = skill,
             None => into.push(skill),
@@ -201,7 +203,7 @@ fn sources(config: &Config, paths: &Paths, directory: &Path) -> Vec<Source> {
             out.push(source);
         }
     };
-    for dir in &config.directories {
+    for dir in config.directories() {
         add(Source::Directory(dir.join("skill")));
         add(Source::Directory(dir.join("skills")));
     }
@@ -564,7 +566,8 @@ mod tests {
             root,
             Path::new("/s/demo/SKILL.md"),
             "---\nname: Demo\ndescription: Does demos\nmetadata:\n  opencode/autoinvoke: \"no\"\n---\n\nBody\n",
-        );
+        )
+        .unwrap();
         assert_eq!(
             (skill.id.as_str(), skill.name.as_str(), skill.autoinvoke),
             ("demo", "Demo", Some(false))
@@ -574,9 +577,10 @@ mod tests {
             root,
             Path::new("/s/top.md"),
             "---\ndisable-model-invocation: true\n---\nx",
-        );
+        )
+        .unwrap();
         assert_eq!((skill.id.as_str(), skill.autoinvoke), ("top", Some(false)));
-        let skill = parse(root, Path::new("/s/top.md"), "plain");
+        let skill = parse(root, Path::new("/s/top.md"), "plain").unwrap();
         assert_eq!((skill.name.as_str(), skill.autoinvoke), ("top", None));
     }
 

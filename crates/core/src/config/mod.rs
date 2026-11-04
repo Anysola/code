@@ -32,24 +32,33 @@ struct Document {
     managed: bool,
 }
 
+/// A source of agent and command definitions, in load order: later entries override earlier ones,
+/// so a project's markdown agent overrides a global document's agent of the same id.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Entry {
+    /// A document's `agents` and `commands`.
+    Document {
+        agents: Map<String, Value>,
+        commands: Map<String, Value>,
+    },
+    /// A config directory whose `agent/`, `command/`, … folders hold markdown definitions.
+    Directory(PathBuf),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     /// Top-level keys, latest document wins (maps below are merged separately).
     values: Map<String, Value>,
-    /// `agents.<id>` merged field by field, `permissions` concatenated.
-    pub agents: Map<String, Value>,
+    /// Agent and command sources in load order.
+    pub entries: Vec<Entry>,
     /// Top-level `permissions` of every document, in load order.
     pub permissions: Vec<Rule>,
     /// `instructions` of every document, deduplicated.
     pub instructions: Vec<String>,
-    /// `commands.<name>`, later documents replacing whole entries.
-    pub commands: Map<String, Value>,
     /// `skills` sources of every document, deduplicated.
     pub skills: Vec<String>,
     /// `providers.anysola` merged.
     pub provider: Map<String, Value>,
-    /// Directories that hold markdown definitions (`agent/`, `command/`, …), lowest precedence first.
-    pub directories: Vec<PathBuf>,
     /// Problems worth one warning line each (malformed documents, ignored keys).
     pub warnings: Vec<String>,
     /// Policy statements of ordinary documents, earliest-loaded last.
@@ -92,6 +101,14 @@ impl Config {
             max_lines: field("max_lines").map_or(defaults.max_lines, |v| v as usize),
             max_bytes: field("max_bytes").map_or(defaults.max_bytes, |v| v as usize),
         }
+    }
+
+    /// Directories that hold markdown definitions (`agent/`, `command/`, …), lowest precedence first.
+    pub fn directories(&self) -> impl Iterator<Item = &PathBuf> {
+        self.entries.iter().filter_map(|entry| match entry {
+            Entry::Directory(dir) => Some(dir),
+            Entry::Document { .. } => None,
+        })
     }
 
     pub fn models(&self) -> Option<&Map<String, Value>> {
@@ -140,18 +157,14 @@ impl Config {
                 }
             }
         }
-        if let Some(Value::Object(commands)) = data.remove("commands") {
-            self.commands.extend(commands);
-        }
-        if let Some(Value::Object(agents)) = data.remove("agents") {
-            for (id, agent) in agents {
-                merge_agent(
-                    self.agents
-                        .entry(id)
-                        .or_insert_with(|| Value::Object(Map::new())),
-                    agent,
-                );
-            }
+        let map = |value: Option<Value>| match value {
+            Some(Value::Object(map)) => map,
+            _ => Map::new(),
+        };
+        let agents = map(data.remove("agents"));
+        let commands = map(data.remove("commands"));
+        if !agents.is_empty() || !commands.is_empty() {
+            self.entries.push(Entry::Document { agents, commands });
         }
         if let Some(Value::Object(mut providers)) = data.remove("providers")
             && let Some(Value::Object(anysola)) = providers.remove("anysola")
@@ -206,22 +219,6 @@ fn policy_statements(data: &mut Map<String, Value>) -> Vec<Policy> {
     };
     out.extend(experimental.iter().chain(&native).filter_map(Policy::parse));
     out
-}
-
-fn merge_agent(base: &mut Value, next: Value) {
-    let (Value::Object(base), Value::Object(next)) = (base, next) else {
-        return;
-    };
-    for (key, value) in next {
-        match (key.as_str(), base.get_mut(&key), value) {
-            ("permissions", Some(Value::Array(existing)), Value::Array(more)) => {
-                existing.extend(more)
-            }
-            (_, _, value) => {
-                base.insert(key, value);
-            }
-        }
-    }
 }
 
 fn deep_merge(base: &mut Map<String, Value>, next: Map<String, Value>) {
@@ -395,7 +392,9 @@ impl Loader<'_> {
             self.file(&dir.join(name));
         }
         if dir.is_dir() {
-            self.config.directories.push(dir.to_path_buf());
+            self.config
+                .entries
+                .push(Entry::Directory(dir.to_path_buf()));
         }
     }
 }
@@ -552,6 +551,12 @@ mod tests {
         assert_eq!(config.shell(), Some("bash"));
         assert_eq!(config.instructions, vec!["x.md"]);
         assert_eq!(config.permissions.len(), 1);
-        assert_eq!(config.agents["build"]["steps"], 3);
+        assert_eq!(
+            config.entries.iter().rev().nth(1),
+            Some(&Entry::Document {
+                agents: json!({"build": {"steps": 3}}).as_object().unwrap().clone(),
+                commands: Map::new(),
+            })
+        );
     }
 }
