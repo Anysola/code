@@ -180,6 +180,9 @@ pub(crate) async fn drive(
                 return Outcome::Interrupted(InterruptReason::Budget);
             }
         }
+        // A tool may have moved the session; the next step runs in its new directory.
+        let current = shared.db.session(&session.id).ok().flatten();
+        let session = current.as_ref().unwrap_or(session);
         if number > 1 {
             // Steered input joins the turn at this boundary, after the context it follows.
             if let Err(error) = settle_context(shared, session, selection) {
@@ -193,9 +196,6 @@ pub(crate) async fn drive(
             }
         }
         let capped = selection.agent.steps == Some(number);
-        // A tool may have moved the session; the next step runs in its new directory.
-        let current = shared.db.session(&session.id).ok().flatten();
-        let session = current.as_ref().unwrap_or(session);
         match step(shared, session, selection, capped, cancel).await {
             StepEnd::Compacted => {
                 number -= 1;
