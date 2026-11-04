@@ -5,10 +5,6 @@ use std::path::{Path, PathBuf};
 
 use crate::paths::Paths;
 
-/// The default Code Mode catalog (the `opencode` namespace).
-// M1b: rendered from the Code Mode tool inventory (MCP tools, budget rules) instead of a constant.
-pub const CODE_MODE_CATALOG: &str = include_str!("prompt/codemode-catalog.txt");
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstructionFile {
     pub path: String,
@@ -56,12 +52,16 @@ fn render(files: &[InstructionFile]) -> String {
         .join("\n\n")
 }
 
-/// Joined block 2. Empty sources are left out.
-pub fn block(code_mode: bool, files: &[InstructionFile], date: &str, env: &Environment) -> String {
+/// Joined block 2: the Code Mode catalog when the agent can run `execute`, then the rest. Empty
+/// sources are left out.
+pub fn block(
+    catalog: Option<&str>,
+    files: &[InstructionFile],
+    date: &str,
+    env: &Environment,
+) -> String {
     let mut sources = Vec::new();
-    if code_mode {
-        sources.push(CODE_MODE_CATALOG.to_string());
-    }
+    sources.extend(catalog.map(str::to_string));
     if !files.is_empty() {
         sources.push(render(files));
     }
@@ -199,7 +199,7 @@ mod tests {
             worktree: project,
             git: false,
         };
-        let text = block(false, &files[..1], "Wed Nov 04 2026", &env);
+        let text = block(None, &files[..1], "Wed Nov 04 2026", &env);
         assert!(text.starts_with("Instructions from: "));
         assert!(text.contains(
             "global\n\n\nToday's date: Wed Nov 04 2026\n\nHere is some useful information"

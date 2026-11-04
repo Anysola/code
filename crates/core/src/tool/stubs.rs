@@ -16,7 +16,6 @@ embedded_def!(question_def, "question");
 embedded_def!(skill_def, "skill");
 embedded_def!(subagent_def, "subagent");
 embedded_def!(webfetch_def, "webfetch");
-embedded_def!(execute_def, "execute");
 
 fn plain(name: &str, def: &super::registry::Def) -> ToolDefinition {
     ToolDefinition {
@@ -136,32 +135,6 @@ impl Tool for WebfetchTool {
         async move {
             Err(ToolError::execution(
                 "Web fetch is not available in this build yet.",
-            ))
-        }
-        .boxed()
-    }
-}
-
-// M1b: the Code Mode runtime (QuickJS) and the `opencode` namespace.
-pub struct ExecuteTool;
-
-impl Tool for ExecuteTool {
-    fn name(&self) -> &'static str {
-        "execute"
-    }
-
-    fn code_mode(&self) -> bool {
-        true
-    }
-
-    fn definition(&self, _: &DefinitionEnv) -> ToolDefinition {
-        plain(self.name(), execute_def())
-    }
-
-    fn execute<'a>(&'a self, _input: Value, _ctx: &'a ToolContext) -> BoxFuture<'a, ToolResult> {
-        async move {
-            Err(ToolError::execution(
-                "Code Mode is not available in this build yet.",
             ))
         }
         .boxed()
