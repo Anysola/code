@@ -13,6 +13,34 @@ use crate::tool::ToolContent;
 pub struct Target<'a> {
     pub provider: &'a str,
     pub id: &'a str,
+    /// The input modalities the model takes; other media become an error text.
+    pub input: &'a [String],
+}
+
+fn modality(mime: &str) -> Option<&'static str> {
+    if mime.starts_with("image/") {
+        Some("image")
+    } else if mime.starts_with("audio/") {
+        Some("audio")
+    } else if mime.starts_with("video/") {
+        Some("video")
+    } else if mime == "application/pdf" {
+        Some("pdf")
+    } else {
+        None
+    }
+}
+
+/// The text that replaces media the model cannot read.
+fn unsupported(mime: &str, name: Option<&str>, target: &Target) -> Option<String> {
+    let modality = modality(mime)?;
+    if target.input.iter().any(|i| i.starts_with(modality)) {
+        return None;
+    }
+    let what = name.map_or_else(|| modality.to_string(), |n| format!("\"{n}\""));
+    Some(format!(
+        "ERROR: Cannot read {what} (this model does not support {modality} input). Inform the user."
+    ))
 }
 
 fn text_block(text: &str) -> Value {
@@ -35,7 +63,7 @@ fn data_uri(uri: &str) -> Option<(&str, &str)> {
     Some((mime, data))
 }
 
-fn user(data: &UserData) -> Option<Value> {
+fn user(data: &UserData, target: &Target) -> Option<Value> {
     let mut content = Vec::new();
     if !data.text.trim().is_empty() {
         content.push(text_block(&data.text));
@@ -43,7 +71,10 @@ fn user(data: &UserData) -> Option<Value> {
     for file in &data.files {
         let mime = file.mime.to_lowercase();
         if mime.starts_with("image/") || mime == "application/pdf" {
-            content.push(media_block(&mime, &file.data));
+            content.push(match unsupported(&mime, file.name.as_deref(), target) {
+                Some(text) => text_block(&text),
+                None => media_block(&mime, &file.data),
+            });
         }
     }
     (!content.is_empty()).then(|| json!({"role": "user", "content": content}))
@@ -57,7 +88,7 @@ fn reasoning_replayable(data: &AssistantData) -> bool {
         })
 }
 
-fn tool_result_content(content: &[ToolContent]) -> Value {
+fn tool_result_content(content: &[ToolContent], target: &Target) -> Value {
     if let [ToolContent::Text { text }] = content {
         return Value::String(text.clone());
     }
@@ -66,10 +97,13 @@ fn tool_result_content(content: &[ToolContent]) -> Value {
             .iter()
             .map(|item| match item {
                 ToolContent::Text { text } => text_block(text),
-                ToolContent::File { uri, mime, .. } => match data_uri(uri) {
-                    Some((mime, data)) => media_block(mime, data),
-                    None => text_block(&format!("[{mime} omitted]")),
-                },
+                ToolContent::File { uri, mime, name } => {
+                    match (unsupported(mime, name.as_deref(), target), data_uri(uri)) {
+                        (Some(text), _) => text_block(&text),
+                        (None, Some((mime, data))) => media_block(mime, data),
+                        (None, None) => text_block(&format!("[{mime} omitted]")),
+                    }
+                }
             })
             .collect(),
     )
@@ -87,13 +121,13 @@ fn scrub(id: &str) -> String {
         .collect()
 }
 
-fn tool_result(id: &str, state: &ToolState) -> Option<Value> {
+fn tool_result(id: &str, state: &ToolState, target: &Target) -> Option<Value> {
     let mut block = Map::new();
     block.insert("type".into(), "tool_result".into());
     block.insert("tool_use_id".into(), scrub(id).into());
     match state {
         ToolState::Completed { content, .. } => {
-            block.insert("content".into(), tool_result_content(content));
+            block.insert("content".into(), tool_result_content(content, target));
         }
         ToolState::Error { error, content, .. } => {
             let items: Vec<Value> = content
@@ -160,7 +194,7 @@ fn assistant(data: &AssistantData, target: &Target) -> (Option<Value>, Vec<Value
                 content.push(
                     json!({"type": "tool_use", "id": scrub(id), "name": name, "input": input}),
                 );
-                results.extend(tool_result(id, state));
+                results.extend(tool_result(id, state, target));
             }
         }
     }
@@ -235,11 +269,68 @@ pub fn checkpoint(summary: &str, recent: &str) -> String {
     lines.join("\n")
 }
 
+const IMAGE_BYTES_TRIGGER: usize = 25 * 1024 * 1024;
+const IMAGE_BYTES_TARGET: usize = 15 * 1024 * 1024;
+const IMAGE_REMOVED: &str = "[This image was removed to reduce the request size and is no longer visible. Do not make claims about its contents from memory. If needed, retrieve it again with an available tool or ask the user to attach it again.]";
+
+/// Every image block, in order: user turn media and images inside tool results.
+fn images(entries: &mut [Entry]) -> Vec<&mut Value> {
+    let mut out = Vec::new();
+    for entry in entries {
+        let Entry::Turn(message) = entry else {
+            continue;
+        };
+        let Some(blocks) = message["content"].as_array_mut() else {
+            continue;
+        };
+        for block in blocks {
+            if block["type"] == "image" {
+                out.push(block);
+            } else if block["type"] == "tool_result"
+                && let Some(items) = block["content"].as_array_mut()
+            {
+                out.extend(items.iter_mut().filter(|i| i["type"] == "image"));
+            }
+        }
+    }
+    out
+}
+
+/// Once the inline images pass 25 MiB of base64, the oldest are replaced by a note until 15 MiB
+/// remain. The cut moves only every 10 MiB, so the replaced prefix (and its cache) stays stable.
+fn bound_images(entries: &mut [Entry]) {
+    let mut blocks = images(entries);
+    let sizes: Vec<usize> = blocks
+        .iter()
+        .map(|b| b["source"]["data"].as_str().map_or(0, str::len))
+        .collect();
+    let (mut cut, mut kept) = (0, 0);
+    for size in &sizes {
+        kept += size;
+        if kept <= IMAGE_BYTES_TRIGGER {
+            continue;
+        }
+        while kept > IMAGE_BYTES_TARGET {
+            kept -= sizes[cut];
+            cut += 1;
+        }
+    }
+    for block in blocks.iter_mut().take(cut) {
+        **block = text_block(IMAGE_REMOVED);
+    }
+}
+
 pub fn lower(history: &[Message], target: &Target) -> Vec<Entry> {
+    let mut out = lower_messages(history, target);
+    bound_images(&mut out);
+    out
+}
+
+fn lower_messages(history: &[Message], target: &Target) -> Vec<Entry> {
     let mut out: Vec<Entry> = Vec::new();
     for message in history {
         match message {
-            Message::User(data) => out.extend(user(data).map(Entry::Turn)),
+            Message::User(data) => out.extend(user(data, target).map(Entry::Turn)),
             Message::Synthetic(data) => out.extend(user_text(data.text.clone())),
             Message::Skill(data) => out.extend(user_text(data.text.clone())),
             Message::System(data) => out.push(Entry::Update {
@@ -340,6 +431,46 @@ mod tests {
     }
 
     #[test]
+    fn media_limits() {
+        let time = json!({"created": 1});
+        let image = |data: &str| json!({"data": data, "mime": "image/png", "source": {"type": "inline"}, "name": "p.png"});
+        let pdf = json!({"data": "JVBE", "mime": "application/pdf", "source": {"type": "inline"}, "name": "doc.pdf"});
+        let big = "A".repeat(10 * 1024 * 1024);
+        let history: Vec<Message> = (0..3)
+            .map(|i| {
+                let files = if i == 0 {
+                    vec![image(&big), pdf.clone()]
+                } else {
+                    vec![image(&big)]
+                };
+                decode("user", json!({"time": time, "text": "", "files": files}))
+            })
+            .collect();
+        let input = vec!["text".to_string(), "image".to_string()];
+        let target = Target {
+            provider: "anysola",
+            id: "claude-sonnet-5-5",
+            input: &input,
+        };
+        let entries = lower(&history, &target);
+        let blocks = |i: usize| match &entries[i] {
+            Entry::Turn(m) => m["content"].as_array().unwrap().clone(),
+            _ => panic!(),
+        };
+        assert_eq!(blocks(0)[0]["text"], IMAGE_REMOVED);
+        assert_eq!(
+            blocks(0)[1]["text"],
+            "ERROR: Cannot read \"doc.pdf\" (this model does not support pdf input). Inform the user."
+        );
+        assert_eq!(
+            blocks(1)[0]["text"],
+            IMAGE_REMOVED,
+            "30 MiB passes 25: cut to 10"
+        );
+        assert_eq!(blocks(2)[0]["type"], "image");
+    }
+
+    #[test]
     fn synthetic_kinds() {
         let time = json!({"created": 1});
         let sonnet = json!({"id": "claude-sonnet-5-5", "providerID": "anysola"});
@@ -380,9 +511,11 @@ mod tests {
                 json!({"time": time, "status": "running", "reason": "auto", "summary": ""}),
             ),
         ];
+        let input = vec!["text".to_string(), "image".to_string()];
         let target = Target {
             provider: "anysola",
             id: "claude-sonnet-5-5",
+            input: &input,
         };
         assert_eq!(
             texts(&lower(&history, &target)),

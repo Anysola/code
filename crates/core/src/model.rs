@@ -23,6 +23,8 @@ pub struct Model {
     pub output: Option<u64>,
     pub supports_binding: Option<bool>,
     pub supports_effort_updates: Option<bool>,
+    /// Input modalities (`capabilities.input`, default text and image).
+    pub input: Vec<String>,
     pub variants: Vec<Variant>,
 }
 
@@ -167,6 +169,16 @@ impl Model {
             output: number(&["limit", "output"]),
             supports_binding: flag("supportsThinkingBlockBinding"),
             supports_effort_updates: flag("supportsEffortUpdates"),
+            input: info
+                .get("capabilities")
+                .and_then(|c| c.get("input"))
+                .and_then(Value::as_array)
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_else(|| vec!["text".into(), "image".into()]),
             variants,
         }
     }

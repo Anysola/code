@@ -52,6 +52,8 @@ pub enum CoreError {
     MessageNotFound(String),
     #[error("{0}")]
     Snapshot(String),
+    #[error(transparent)]
+    Image(#[from] crate::image::ImageError),
 }
 
 /// Which session a front end works on.
@@ -400,8 +402,20 @@ impl Core {
             .session(session_id)?
             .ok_or(CoreError::SessionNotFound)?;
         self.commit_revert(session_id)?;
+        let prompt = self.normalize(prompt)?;
         crate::session::inbox::enqueue(&self.shared.db, session_id, &prompt, Delivery::Steer)?;
         self.drain(session_id, options).await
+    }
+
+    /// Attached images as the model should get them.
+    fn normalize(&self, mut prompt: Prompt) -> Result<Prompt, CoreError> {
+        let limits = crate::image::Limits::from_config(&self.shared.config);
+        for (mime, data, name) in &mut prompt.files {
+            if mime.starts_with("image/") {
+                (*mime, *data) = crate::image::normalize(name, mime, data, &limits)?;
+            }
+        }
+        Ok(prompt)
     }
 
     /// Admits a prompt without waiting: a running turn picks up `steer` input at its next step
@@ -412,6 +426,7 @@ impl Core {
         prompt: Prompt,
         delivery: Delivery,
     ) -> Result<String, CoreError> {
+        let prompt = self.normalize(prompt)?;
         Ok(crate::session::inbox::enqueue(
             &self.shared.db,
             session_id,

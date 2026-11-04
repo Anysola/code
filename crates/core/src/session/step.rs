@@ -268,6 +268,7 @@ async fn triggered(
     let target = Target {
         provider: &selection.reference.provider,
         id: &selection.model.id,
+        input: &selection.model.input,
     };
     let history = compaction::history(shared, &session.id).messages;
     let estimate = compaction::estimate_prompt(&history, &target, &ctx.system, &ctx.definitions);
@@ -319,6 +320,7 @@ async fn step(
     let target = Target {
         provider: &selection.reference.provider,
         id: &selection.model.id,
+        input: &selection.model.input,
     };
     let estimate = compaction::estimate_prompt(&history, &target, &ctx.system, &ctx.definitions);
     let prefix = compaction::Prefix {
@@ -983,10 +985,13 @@ fn handle(
             };
             let tools = ctx.tools.clone();
             let output_dir = shared.paths.tool_output_dir();
+            let images = crate::image::Limits::from_config(&shared.config);
             tasks.spawn(async move {
                 let result = execute(&tools, &name, input, &tool_ctx, capped).await;
-                let result =
-                    result.map(|out| crate::tool::bound::bound(out, tool_ctx.limits, &output_dir));
+                let result = result.map(|mut out| {
+                    out.content = crate::image::normalize_tool_content(out.content, &images);
+                    crate::tool::bound::bound(out, tool_ctx.limits, &output_dir)
+                });
                 (part, result)
             });
         }

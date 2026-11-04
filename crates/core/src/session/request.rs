@@ -253,6 +253,7 @@ mod tests {
             output: Some(32_000),
             supports_binding: None,
             supports_effort_updates: None,
+            input: vec!["text".into(), "image".into()],
             variants: vec![],
         }
     }

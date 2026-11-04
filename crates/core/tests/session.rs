@@ -261,3 +261,38 @@ fn forks_and_children() {
     assert_eq!(child.parent_id.as_deref(), Some(session.id.as_str()));
     assert!(child.title.starts_with("Child session - "));
 }
+
+#[test]
+fn prompt_images_are_normalized() {
+    use base64::Engine;
+    let gateway = FakeGateway::start(|request, _| text(request, "ok"));
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    let mut seed: u32 = 1;
+    let noise = image::RgbImage::from_fn(3000, 1000, |_, _| {
+        seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+        let b = seed.to_le_bytes();
+        image::Rgb([b[1], b[2], b[3]])
+    });
+    let mut png = std::io::Cursor::new(Vec::new());
+    noise.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let data = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
+    let prompt = Prompt {
+        text: "see".into(),
+        files: vec![("image/png".into(), data, "noise.png".into())],
+    };
+    runtime
+        .block_on(core.prompt(&session.id, prompt, TurnOptions::default()))
+        .unwrap();
+    let request = gateway
+        .messages()
+        .into_iter()
+        .find(|r| !r.is_title())
+        .unwrap();
+    let body = request.json();
+    let image = &body["messages"][0]["content"][1];
+    assert_eq!(image["source"]["media_type"], "image/jpeg");
+    assert!(image["source"]["data"].as_str().unwrap().len() <= 5 * 1024 * 1024);
+}

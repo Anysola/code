@@ -880,6 +880,7 @@ async fn summarize(
     let target = Target {
         provider: &selection.reference.provider,
         id: &call.model.id,
+        input: &call.model.input,
     };
     let prepared = Draft {
         system: prefix.system.to_vec(),

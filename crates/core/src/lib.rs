@@ -9,6 +9,7 @@ pub mod credits;
 pub mod events;
 pub mod gateway;
 pub mod ids;
+pub mod image;
 pub mod instructions;
 pub mod json;
 pub mod log;
