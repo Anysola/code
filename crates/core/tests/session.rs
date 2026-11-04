@@ -125,3 +125,103 @@ fn nothing_to_compact() {
         ("compaction.unavailable", "Nothing to compact yet")
     );
 }
+
+fn sse(
+    request: &anysola_testkit::Recorded,
+    stream: anysola_testkit::sse::Stream,
+    cut: bool,
+) -> anysola_testkit::Reply {
+    let model = request.json()["model"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    anysola_testkit::Reply::Sse {
+        body: if cut {
+            stream.interrupted(&model)
+        } else {
+            stream.finish(&model, Some(1))
+        },
+        before: Some(100),
+    }
+}
+
+#[test]
+fn incomplete_stream_continues_after_output() {
+    let gateway = FakeGateway::start(|request, _| {
+        let stream = anysola_testkit::sse::Stream::new();
+        if request.is_title() {
+            return text(request, "Title");
+        }
+        let continued = request.body.contains("was interrupted");
+        sse(
+            request,
+            stream.text(if continued { "rest" } else { "partial" }),
+            !continued,
+        )
+    });
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    let outcome = runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    assert_eq!(outcome, Outcome::Succeeded);
+    let main: Vec<_> = gateway
+        .messages()
+        .into_iter()
+        .filter(|r| !r.is_title())
+        .collect();
+    assert_eq!(main.len(), 2);
+    assert_eq!(
+        transcript(&main[1]),
+        vec![
+            "user: go",
+            "assistant: partial",
+            "user: The previous response was interrupted. Continue from where you left off without repeating completed content.",
+        ]
+    );
+}
+
+#[test]
+fn output_limit_continuations() {
+    let gateway = FakeGateway::start(|request, _| {
+        if request.is_title() {
+            return text(request, "Title");
+        }
+        sse(
+            request,
+            anysola_testkit::sse::Stream::new()
+                .text("long")
+                .stop("max_tokens"),
+            false,
+        )
+    });
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    let outcome = runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    let Outcome::Failed(error) = outcome else {
+        panic!("{outcome:?}")
+    };
+    assert_eq!(
+        (error.kind.as_str(), error.message.as_str()),
+        (
+            "output-limit",
+            "Response still truncated after two output token limit continuations"
+        )
+    );
+    let main: Vec<_> = gateway
+        .messages()
+        .into_iter()
+        .filter(|r| !r.is_title())
+        .collect();
+    assert_eq!(main.len(), 3);
+    assert_eq!(
+        transcript(&main[2]).last().unwrap(),
+        "user: Your last response hit the output token limit (stop reason: length). Do not apologize, recap, or repeat yourself. Break the remaining work into smaller pieces."
+    );
+}
