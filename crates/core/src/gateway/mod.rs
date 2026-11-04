@@ -217,9 +217,8 @@ impl Gateway {
             return None;
         }
         let mut info: VersionInfo = serde_json::from_slice(&response.bytes().await.ok()?).ok()?;
-        let strip = |v: &str| v.strip_prefix('v').unwrap_or(v).to_string();
-        info.latest = strip(&info.latest);
-        info.minimum = info.minimum.as_deref().map(strip);
+        info.latest = strip_v(&info.latest);
+        info.minimum = info.minimum.as_deref().map(strip_v);
         Some(info)
     }
 
@@ -353,6 +352,10 @@ impl Gateway {
             done: false,
         })
     }
+}
+
+fn strip_v(version: &str) -> String {
+    version.strip_prefix('v').unwrap_or(version).to_string()
 }
 
 fn decode_search(body: Option<Value>) -> Option<(Vec<SearchResult>, u64)> {

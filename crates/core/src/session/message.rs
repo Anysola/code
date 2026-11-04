@@ -125,6 +125,8 @@ pub enum ToolState {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+// Parts mirror the stored JSON and live briefly; boxing the large variant buys nothing.
+#[allow(clippy::large_enum_variant)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Part {
     Text {
@@ -153,6 +155,7 @@ pub enum Part {
 
 /// A decoded transcript entry.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum Message {
     User(UserData),
     Synthetic(SyntheticData),

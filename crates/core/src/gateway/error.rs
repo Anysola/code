@@ -537,7 +537,7 @@ mod tests {
             Reason::InvalidRequest
         );
         assert_eq!(http(413, "{}"), Reason::PayloadTooLarge);
-        assert!(ApiError::http(500, "{}".into(), None, Some(false)).retryable() == false);
+        assert!(!ApiError::http(500, "{}".into(), None, Some(false)).retryable());
         assert!(ApiError::http(400, "{}".into(), None, Some(true)).retryable());
     }
 

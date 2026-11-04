@@ -191,7 +191,10 @@ impl Assembly {
                     .get("data")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                let mut time = created.unwrap_or_default();
+                let mut time = PartTime {
+                    created: now_ms(),
+                    ..PartTime::default()
+                };
                 time.completed = Some(now_ms());
                 let native =
                     Map::from_iter([("redactedData".to_string(), Value::String(data.into()))]);

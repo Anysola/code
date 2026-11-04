@@ -89,7 +89,7 @@ pub fn model_ref(value: &Value, variant: Option<&Value>) -> Option<String> {
     }
 }
 
-fn migrate_agent(v1: &Map<String, Value>) -> Value {
+pub fn migrate_agent(v1: &Map<String, Value>) -> Value {
     let mut agent = Map::new();
     if let Some(model) = v1
         .get("model")
@@ -132,7 +132,7 @@ fn migrate_agent(v1: &Map<String, Value>) -> Value {
     Value::Object(agent)
 }
 
-fn native_agent(agent: &Value) -> Value {
+pub fn native_agent(agent: &Value) -> Value {
     let Value::Object(map) = agent else {
         return agent.clone();
     };
@@ -253,6 +253,33 @@ pub fn normalize(input: Map<String, Value>) -> Map<String, Value> {
         }
     }
     out
+}
+
+const V2_AGENT_KEYS: &[&str] = &[
+    "model",
+    "variant",
+    "request",
+    "system",
+    "description",
+    "mode",
+    "hidden",
+    "color",
+    "steps",
+    "disabled",
+    "permissions",
+];
+
+/// A markdown agent's frontmatter as a V2 agent: V2 when every key is a V2 key or a V2-only key is
+/// present, else migrated from V1.
+pub fn markdown_agent(meta: &Map<String, Value>) -> Value {
+    let v2_only = ["permissions", "request", "system", "disabled"]
+        .iter()
+        .any(|k| meta.contains_key(*k));
+    if v2_only || meta.keys().all(|k| V2_AGENT_KEYS.contains(&k.as_str())) {
+        native_agent(&Value::Object(meta.clone()))
+    } else {
+        migrate_agent(meta)
+    }
 }
 
 #[cfg(test)]

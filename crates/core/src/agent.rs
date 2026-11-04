@@ -180,7 +180,19 @@ impl Agents {
         for agent in &mut list {
             agent.permissions.extend(global.iter().cloned());
         }
-        for (id, item) in &config.agents {
+        let markdown = config
+            .directories
+            .iter()
+            .flat_map(|dir| markdown_agents(dir));
+        let configured: Vec<(String, Value)> = markdown
+            .chain(
+                config
+                    .agents
+                    .iter()
+                    .map(|(id, item)| (id.clone(), item.clone())),
+            )
+            .collect();
+        for (id, item) in &configured {
             if item.get("disabled").and_then(Value::as_bool) == Some(true) {
                 list.retain(|a| &a.id != id);
                 continue;
@@ -235,6 +247,49 @@ impl Agents {
         });
         out
     }
+}
+
+/// `{agent,agents}/**/*.md` (mode from frontmatter) and `{mode,modes}/*.md` (always primary) of a
+/// config directory; the id is the path below that folder without `.md`.
+fn markdown_agents(dir: &std::path::Path) -> Vec<(String, Value)> {
+    let mut out = Vec::new();
+    for (folder, primary) in [
+        ("agent", false),
+        ("agents", false),
+        ("mode", true),
+        ("modes", true),
+    ] {
+        let root = dir.join(folder);
+        if !root.is_dir() {
+            continue;
+        }
+        let depth = if primary { 1 } else { usize::MAX };
+        let mut files: Vec<std::path::PathBuf> = ignore::WalkBuilder::new(&root)
+            .standard_filters(false)
+            .max_depth(Some(depth))
+            .build()
+            .filter_map(Result::ok)
+            .map(|e| e.into_path())
+            .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "md"))
+            .collect();
+        files.sort();
+        for file in files {
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            let (meta, body) = crate::markdown::parse(&text);
+            let mut agent = crate::config::markdown_agent(&meta);
+            if !body.is_empty() {
+                agent["system"] = Value::String(body);
+            }
+            if primary {
+                agent["mode"] = Value::String("primary".into());
+            }
+            let id = file.strip_prefix(&root).unwrap_or(&file).with_extension("");
+            out.push((id.to_string_lossy().replace('\\', "/"), agent));
+        }
+    }
+    out
 }
 
 fn apply(agent: &mut Agent, item: &Value, home: &str) {

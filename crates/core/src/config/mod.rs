@@ -18,7 +18,7 @@ use crate::paths::Paths;
 use crate::permission::Rule;
 use crate::tool::OutputLimits;
 
-pub use normalize::{model_ref, normalize_action};
+pub use normalize::{markdown_agent, model_ref, normalize_action};
 
 const NAMES: [&str; 2] = ["opencode.json", "opencode.jsonc"];
 const ENDPOINT_KEYS: [&str; 4] = ["baseURL", "apiKey", "authToken", "accessToken"];

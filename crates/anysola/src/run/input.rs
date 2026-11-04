@@ -156,12 +156,13 @@ pub fn attach(input: &str, directory: &Path) -> Result<Attachment, String> {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     let media = detected.starts_with("image/") || detected == "application/pdf";
-    if !media && !binary(&bytes) {
-        if let Ok(text) = String::from_utf8(bytes.clone()) {
-            return Ok(Attachment::Text(format!(
-                "<file name=\"{name}\">\n{text}\n</file>"
-            )));
-        }
+    if !media
+        && !binary(&bytes)
+        && let Ok(text) = String::from_utf8(bytes.clone())
+    {
+        return Ok(Attachment::Text(format!(
+            "<file name=\"{name}\">\n{text}\n</file>"
+        )));
     }
     let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
     Ok(Attachment::Media {

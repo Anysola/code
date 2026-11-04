@@ -10,6 +10,7 @@ pub mod gateway;
 pub mod ids;
 pub mod instructions;
 pub mod json;
+pub mod markdown;
 pub mod model;
 pub mod paths;
 pub mod permission;

@@ -523,6 +523,9 @@ mod tests {
         assert!(db.acquire("ses_1", &other).unwrap());
         db.release("ses_1", &other).unwrap();
         assert!(db.acquire("ses_1", "999999999:dead").unwrap());
-        assert!(db.acquire("ses_1", &me).unwrap(), "a dead holder does not block");
+        assert!(
+            db.acquire("ses_1", &me).unwrap(),
+            "a dead holder does not block"
+        );
     }
 }

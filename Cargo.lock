@@ -86,6 +86,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "libc",
+ "regex",
  "serde_json",
  "tempfile",
  "tokio",
