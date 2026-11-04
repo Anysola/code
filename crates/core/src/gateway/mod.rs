@@ -28,6 +28,14 @@ pub fn api_url() -> String {
     }
 }
 
+/// `ANYSOLA_TOKEN`, trimmed, when set and not blank.
+pub fn env_token() -> Option<String> {
+    std::env::var("ANYSOLA_TOKEN")
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
     /// `ANYSOLA_TOKEN`: `x-api-key` on model calls, `Bearer` elsewhere.
@@ -37,6 +45,14 @@ pub enum Token {
 }
 
 impl Token {
+    /// `ANYSOLA_TOKEN` wins over a stored device login everywhere.
+    pub fn resolve(db: &crate::storage::Db) -> crate::storage::Result<Option<Token>> {
+        Ok(match env_token() {
+            Some(token) => Some(Token::Env(token)),
+            None => db.anysola_login()?.map(Token::Login),
+        })
+    }
+
     pub fn secret(&self) -> &str {
         match self {
             Token::Env(t) | Token::Login(t) => t,

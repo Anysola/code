@@ -149,16 +149,50 @@ impl Db {
 
     /// The access token of the active Anysola device login, if any.
     pub fn anysola_login(&self) -> Result<Option<String>> {
-        let value = self.with(|c| {
+        Ok(self.anysola_credential()?.map(|(_, token)| token))
+    }
+
+    /// The credential id and token of the active Anysola device login.
+    pub fn anysola_credential(&self) -> Result<Option<(String, String)>> {
+        let row = self.with(|c| {
             c.query_row(
-                "SELECT value FROM credential WHERE integration_id = 'anysola' AND active = 1
+                "SELECT id, value FROM credential WHERE integration_id = 'anysola' AND active = 1
                  ORDER BY time_updated DESC LIMIT 1",
                 [],
-                |r| r.get::<_, String>(0),
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
             )
             .optional()
         })?;
-        Ok(parse(value).and_then(|v| v.get("access").and_then(Value::as_str).map(str::to_string)))
+        Ok(row.and_then(|(id, value)| {
+            let value: Value = serde_json::from_str(&value).ok()?;
+            let token = value
+                .get("access")
+                .or_else(|| value.get("key"))
+                .and_then(Value::as_str)?;
+            Some((id, token.to_string()))
+        }))
+    }
+
+    /// Stores a device login as the active Anysola credential; returns its id.
+    pub fn insert_anysola_login(&self, value: &Value) -> Result<String> {
+        let id = crate::ids::credential();
+        let now = now_ms() as i64;
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO credential (id, integration_id, label, connector_id, method_id, active, value, time_created, time_updated)
+                 VALUES (?1, 'anysola', 'Anysola account', NULL, NULL, 1, ?2, ?3, ?3)",
+                params![id, json(value), now],
+            )
+            .map(drop)
+        })?;
+        Ok(id)
+    }
+
+    pub fn remove_credential(&self, id: &str) -> Result<()> {
+        self.with(|c| {
+            c.execute("DELETE FROM credential WHERE id = ?1", [id])
+                .map(drop)
+        })
     }
 
     pub fn upsert_project(&self, project: &crate::project::Project) -> Result<()> {

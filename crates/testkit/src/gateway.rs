@@ -1,8 +1,10 @@
-//! A fake `api.anysola.com/v1/code` on 127.0.0.1: `/config`, `/me`, `/version`, `/search` and
-//! scripted `/messages` streams. Every request is recorded.
+//! A fake `api.anysola.com/v1/code` on 127.0.0.1: `/config`, the account routes (`/me`, `/usage`,
+//! `/tokens`, revokes, the device flow), `/version`, `/search` and scripted `/messages` streams.
+//! Every request is recorded.
 
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
@@ -16,6 +18,10 @@ use serde_json::{Value, json};
 pub struct Recorded {
     pub method: String,
     pub path: String,
+    /// The query string without `?`, empty when there is none.
+    pub query: String,
+    /// When the request arrived.
+    pub at: Instant,
     /// Lower-case names, in arrival order.
     pub headers: Vec<(String, String)>,
     pub body: String,
@@ -53,12 +59,18 @@ pub enum Reply {
 
 pub type Script = Arc<dyn Fn(&Recorded, usize) -> Reply + Send + Sync>;
 
+/// Answers the n-th `POST /device/token`.
+pub type DevicePoll = Arc<dyn Fn(usize) -> Reply + Send + Sync>;
+
 struct State {
     port: u16,
     script: Script,
     search: Mutex<Reply>,
     version: Mutex<Value>,
     config: Mutex<Option<Value>>,
+    /// Fixed answers by path, ahead of the defaults.
+    replies: Mutex<Vec<(String, Reply)>>,
+    device: Mutex<DevicePoll>,
     requests: Mutex<Vec<Recorded>>,
     /// Plain-text files served at other paths (instruction URLs).
     files: Mutex<Vec<(String, String)>>,
@@ -89,6 +101,48 @@ pub fn default_config(base: &str) -> Value {
                 "claude-haiku-5-5": {"name": "Claude Haiku 5.5", "description": "Fastest", "limit": {"context": 200000, "output": 32000}, "credits_per_turn_estimate": 1}
             }}}
     })
+}
+
+/// The token every default device login approves.
+pub const DEVICE_TOKEN: &str = "asc_FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF";
+
+/// Pending on the first poll, approved on the second.
+fn default_poll(index: usize) -> Reply {
+    if index == 0 {
+        Reply::Json {
+            status: 400,
+            body: json!({"error": "authorization_pending"}),
+            headers: Vec::new(),
+        }
+    } else {
+        Reply::Json {
+            status: 200,
+            body: json!({"access_token": DEVICE_TOKEN, "token_type": "bearer", "expires_at": "2027-11-04T00:00:00Z"}),
+            headers: Vec::new(),
+        }
+    }
+}
+
+/// The `/usage` body of the 0.5.1 capture.
+pub fn default_usage() -> Value {
+    json!({
+        "days": 7,
+        "totals": {"requests": 42, "credits": 1234, "costUsd": 0.0512, "cacheHitRate": 0.61},
+        "byDay": [{"date": "2026-11-03", "requests": 30, "credits": 1000}, {"date": "2026-11-04", "requests": 12, "credits": 234}],
+        "byModel": [{"model": "claude-sonnet-5-5", "requests": 40, "credits": 1200}, {"model": "claude-haiku-5-5", "requests": 2, "credits": 34}],
+        "today": {"requests": 12, "credits": 234}, "freeQuota": null, "plan": "team",
+        "creditsAvailable": 731, "renewsAt": "2026-11-23T00:00:00Z"
+    })
+}
+
+/// The `/tokens` body of the 0.5.1 capture.
+pub fn default_tokens() -> Value {
+    json!({"tokens": [
+        {"id": "tok_1", "name": "laptop", "client": "anysola-code/0.5.1", "kind": "device", "createdAt": "2026-11-01T10:00:00Z",
+         "lastUsedAt": "2026-11-04T10:00:00Z", "expiresAt": "2027-11-04T10:00:00Z", "current": true},
+        {"id": "tok_2", "name": "", "client": "ci", "kind": "ci", "createdAt": "2026-11-01T10:00:00Z",
+         "lastUsedAt": null, "expiresAt": null, "current": false}
+    ]})
 }
 
 fn respond(reply: Reply) -> Response<Full<Bytes>> {
@@ -126,8 +180,10 @@ async fn handle(
     state: Arc<State>,
     request: Request<hyper::body::Incoming>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
+    let at = Instant::now();
     let method = request.method().to_string();
     let path = request.uri().path().to_string();
+    let query = request.uri().query().unwrap_or_default().to_string();
     let headers = request
         .headers()
         .iter()
@@ -147,6 +203,8 @@ async fn handle(
     let recorded = Recorded {
         method,
         path: path.clone(),
+        query,
+        at,
         headers,
         body: String::from_utf8_lossy(&body).into_owned(),
     };
@@ -161,7 +219,15 @@ async fn handle(
         body,
         headers: Vec::new(),
     };
+    let fixed = state
+        .replies
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(p, _)| *p == path)
+        .map(|(_, reply)| reply.clone());
     let reply = match path.as_str() {
+        _ if let Some(reply) = fixed => reply,
         "/v1/code/config" => ok(state
             .config
             .lock()
@@ -171,6 +237,18 @@ async fn handle(
         "/v1/code/me" => ok(
             json!({"plan": "team", "access": "paid", "credits": {"available": 731, "renewsAt": "2026-11-23T00:00:00Z"}, "lowBalance": false, "usageToday": {"requests": 3, "credits": 9}}),
         ),
+        "/v1/code/usage" => ok(default_usage()),
+        "/v1/code/tokens" => ok(default_tokens()),
+        "/v1/code/device/code" => ok(
+            json!({"device_code": "D".repeat(43), "user_code": "WXYZ-1234", "verification_uri": "https://account.anysola.com/device", "interval": 1, "expires_in": 600}),
+        ),
+        "/v1/code/device/token" => {
+            let poll = state.device.lock().unwrap().clone();
+            poll(index)
+        }
+        revoke if revoke.starts_with("/v1/code/tokens/") && revoke.ends_with("/revoke") => {
+            ok(json!({"revoked": true}))
+        }
         "/v1/code/version" => ok(state.version.lock().unwrap().clone()),
         "/v1/code/search" => state.search.lock().unwrap().clone(),
         "/v1/code/messages" => (state.script)(&recorded, index),
@@ -217,6 +295,8 @@ impl FakeGateway {
             }),
             version: Mutex::new(json!({"latest": "0.5.1", "minimum": "0.2.0"})),
             config: Mutex::new(None),
+            replies: Mutex::new(Vec::new()),
+            device: Mutex::new(Arc::new(default_poll)),
             requests: Mutex::new(Vec::new()),
             files: Mutex::new(Vec::new()),
         });
@@ -273,5 +353,24 @@ impl FakeGateway {
 
     pub fn set_config(&self, body: Value) {
         *self.state.config.lock().unwrap() = Some(body);
+    }
+
+    /// Answers every later request to `path` (no query) with `reply`.
+    pub fn set_reply(&self, path: &str, reply: Reply) {
+        let mut replies = self.state.replies.lock().unwrap();
+        replies.retain(|(p, _)| p != path);
+        replies.push((path.to_string(), reply));
+    }
+
+    pub fn set_device_poll(&self, poll: impl Fn(usize) -> Reply + Send + Sync + 'static) {
+        *self.state.device.lock().unwrap() = Arc::new(poll);
+    }
+
+    /// Recorded requests to `path`.
+    pub fn requests_to(&self, path: &str) -> Vec<Recorded> {
+        self.requests()
+            .into_iter()
+            .filter(|r| r.path == path)
+            .collect()
     }
 }

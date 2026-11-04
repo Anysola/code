@@ -161,10 +161,7 @@ impl Core {
     pub async fn start(directory: &Path) -> Result<Core, CoreError> {
         let paths = Arc::new(Paths::from_env());
         let db = Arc::new(Db::open(&paths.database())?);
-        let token = match std::env::var("ANYSOLA_TOKEN") {
-            Ok(token) if !token.trim().is_empty() => Some(Token::Env(token.trim().to_string())),
-            _ => db.anysola_login()?.map(Token::Login),
-        };
+        let token = Token::resolve(&db)?;
         let gateway = Arc::new(Gateway::new(token));
         let remote = match gateway.config().await {
             ConfigFetch::Ok(body) => {
