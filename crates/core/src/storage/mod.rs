@@ -4,6 +4,7 @@
 
 mod inbox;
 mod instruction;
+mod revert;
 mod schema;
 
 pub use inbox::InboxRow;

@@ -72,6 +72,8 @@ fn setup() -> (FakeGateway, TestHome) {
     let gateway = FakeGateway::start(fake2);
     let home = TestHome::new(&gateway.url);
     std::fs::write(home.project().join("a.txt"), "a\n").unwrap();
+    // The captures ran in a git project, so their steps carry snapshot trees.
+    git(&home.project(), &["init", "-q"]);
     (gateway, home)
 }
 
@@ -228,7 +230,7 @@ fn session_of(gateway: &FakeGateway) -> String {
 }
 
 /// Ids become `<n>` by first appearance (a message id and the part ids derived from it share the
-/// number), times become 0, and the M1.11 `snapshot` field is dropped.
+/// number), times become 0, and snapshot tree ids become `<tree>`.
 fn normalize_json(text: &str) -> Vec<Value> {
     let ids = Regex::new(r"(ses|msg|prt)_([0-9a-f]{12}[0-9A-Za-z]{14})").unwrap();
     let mut seen: HashMap<String, usize> = HashMap::new();
@@ -249,7 +251,9 @@ fn normalize_json(text: &str) -> Vec<Value> {
 fn strip(value: &mut Value) {
     match value {
         Value::Object(map) => {
-            map.remove("snapshot");
+            if let Some(tree) = map.get_mut("snapshot") {
+                *tree = json!("<tree>");
+            }
             for (key, child) in map.iter_mut() {
                 if matches!(key.as_str(), "timestamp" | "start" | "end") && child.is_number() {
                     *child = json!(0);

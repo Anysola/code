@@ -13,6 +13,7 @@ const UNDERLINE: &str = "=======================================================
 pub(crate) enum Status {
     Added,
     Modified,
+    Deleted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

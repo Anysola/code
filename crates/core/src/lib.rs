@@ -20,6 +20,7 @@ pub mod project;
 pub mod search;
 pub mod session;
 pub mod slug;
+pub mod snapshot;
 pub mod storage;
 pub mod text;
 pub mod time;

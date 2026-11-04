@@ -11,7 +11,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::gate::RuleGate;
 use super::lower::{Entry, Target, lower};
-use super::message::{AssistantData, AssistantTime, Message, Part, StoredModel, ToolState, encode};
+use super::message::{
+    AssistantData, AssistantTime, Message, Part, StepSnapshot, StoredModel, ToolState, encode,
+};
 use super::request::{Request, build, output_limit};
 use super::stream::{Action, Assembly};
 use super::{Outcome, Selection, TurnOptions, compaction};
@@ -358,6 +360,7 @@ async fn step(
     headers.extend(session_headers(shared, session));
 
     let message_id = crate::ids::message();
+    let start = capture(shared);
     let running = Running {
         session_id: session.id.clone(),
         message_id: message_id.clone(),
@@ -373,6 +376,10 @@ async fn step(
                 variant: selection.reference.variant.clone(),
             },
             content: Vec::new(),
+            snapshot: start.clone().map(|start| StepSnapshot {
+                start: Some(start),
+                ..StepSnapshot::default()
+            }),
             finish: None,
             raw_finish: None,
             cost: None,
@@ -396,6 +403,7 @@ async fn step(
                 event_id: crate::ids::event(),
                 agent: selection.agent.id.clone(),
                 model_id: selection.model.id.clone(),
+                snapshot: start.clone(),
             },
         )
     };
@@ -459,6 +467,23 @@ pub(crate) fn session_headers(shared: &Shared, session: &SessionRow) -> Vec<(Str
     headers
 }
 
+/// The project's files as a snapshot tree, when snapshots are on.
+fn capture(shared: &Shared) -> Option<String> {
+    shared.snapshots.as_ref()?.capture()
+}
+
+/// Captures the tree after the step and records the files the step changed.
+fn end_snapshot(shared: &Shared, running: &mut Running) -> Option<String> {
+    let store = shared.snapshots.as_ref()?;
+    let snapshot = running.data.snapshot.as_mut()?;
+    let end = store.capture()?;
+    if let Some(start) = &snapshot.start {
+        snapshot.files = store.files(start, &end);
+    }
+    snapshot.end = Some(end.clone());
+    Some(end)
+}
+
 /// A rejected prompt leaves no trace: its step reruns after the overflow compaction.
 fn overflowed(shared: &Shared, running: &Running, error: ApiError) -> StepEnd {
     let _ = shared.db.delete_message(&running.message_id);
@@ -501,6 +526,7 @@ fn interrupt(
     running.data.finish.get_or_insert_with(|| "error".into());
     running.data.time.completed = Some(now_ms());
     running.save(shared);
+    let end = end_snapshot(shared, &mut running);
     if let Some(tokens) = running.data.tokens {
         send(
             shared,
@@ -511,6 +537,7 @@ fn interrupt(
                 finish: "error".into(),
                 tokens,
                 last: true,
+                snapshot: end,
             },
         );
     }
@@ -739,6 +766,7 @@ async fn run_stream(
     if declined {
         return interrupt(shared, running, Vec::new(), InterruptReason::Declined);
     }
+    let end = end_snapshot(shared, &mut running);
     running.save(shared);
     let continues = (ran_tools && !capped) || finish == "length";
     send(
@@ -750,6 +778,7 @@ async fn run_stream(
             finish: finish.into(),
             tokens: assembly.tokens,
             last: !continues,
+            snapshot: end,
         },
     );
     if continues {
@@ -786,6 +815,7 @@ fn resend<'a>(
                 event_id: crate::ids::event(),
                 agent: selection.agent.id.clone(),
                 model_id: selection.model.id.clone(),
+                snapshot: running.data.snapshot.as_ref().and_then(|s| s.start.clone()),
             },
         );
         let _ = shared

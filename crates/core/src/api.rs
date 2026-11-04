@@ -28,6 +28,7 @@ use crate::tool::registry::Registry;
 use crate::tool::{PathLocks, SessionNotifier};
 
 mod commands;
+mod revert;
 
 const CONFIG_CACHE_KEY: &str = "anysola:config";
 
@@ -47,6 +48,10 @@ pub enum CoreError {
     ForkEmpty(String),
     #[error("Command not found: \"{0}\"")]
     CommandNotFound(String),
+    #[error("Message not found: {0}")]
+    MessageNotFound(String),
+    #[error("{0}")]
+    Snapshot(String),
 }
 
 /// Which session a front end works on.
@@ -99,6 +104,8 @@ pub(crate) struct Shared {
     pub notifier: Arc<dyn SessionNotifier>,
     pub directory: PathBuf,
     pub project: Project,
+    /// The shadow repository of the project's files; `None` outside git or with `snapshots: false`.
+    pub snapshots: Option<Arc<crate::snapshot::Store>>,
     /// The configured `instructions` URLs, fetched when the config loaded.
     pub remote_instructions: Vec<crate::instructions::InstructionFile>,
     /// `<pid>:<nonce>` for busy markers.
@@ -159,6 +166,11 @@ impl Core {
             crate::instructions::fetch_remote(&gateway, &config.instructions).await;
         let models = crate::model::catalog(&config);
         let project = crate::project::identify(directory);
+        let snapshots = (project.vcs == Some("git")
+            && config.get("snapshots") != Some(&Value::Bool(false)))
+        .then(|| crate::snapshot::Store::open(&paths.data, &project.id, directory))
+        .flatten()
+        .map(Arc::new);
         db.upsert_project(&project, directory)?;
         let (events, _) = broadcast::channel(4096);
         let credits = Arc::new(Credits::new(db.clone(), events.clone()));
@@ -186,6 +198,7 @@ impl Core {
             directory: directory.to_path_buf(),
             project,
             remote_instructions,
+            snapshots,
             owner: format!("{}:{}", std::process::id(), crate::ids::part()),
             turns: Mutex::default(),
         };
@@ -386,6 +399,7 @@ impl Core {
             .db
             .session(session_id)?
             .ok_or(CoreError::SessionNotFound)?;
+        self.commit_revert(session_id)?;
         crate::session::inbox::enqueue(&self.shared.db, session_id, &prompt, Delivery::Steer)?;
         self.drain(session_id, options).await
     }

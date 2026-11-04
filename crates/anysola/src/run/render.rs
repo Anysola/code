@@ -179,10 +179,14 @@ impl Renderer {
                 event_id,
                 agent,
                 model_id,
+                snapshot,
                 ..
             } => {
                 if self.json() {
-                    let part = json!({"id": part_id(event_id), "sessionID": self.session_id, "messageID": message_id, "type": "step-start"});
+                    let mut part = json!({"id": part_id(event_id), "sessionID": self.session_id, "messageID": message_id, "type": "step-start"});
+                    if let Some(snapshot) = snapshot {
+                        part["snapshot"] = json!(snapshot);
+                    }
                     self.emit("step_start", at, json!({"part": part}));
                 } else {
                     ui::empty();
@@ -364,6 +368,7 @@ impl Renderer {
                 finish,
                 tokens,
                 last,
+                snapshot,
                 ..
             } => {
                 if self.json() {
@@ -375,7 +380,12 @@ impl Renderer {
                     } else {
                         part_id(event_id)
                     };
-                    let part = json!({"id": id, "sessionID": self.session_id, "messageID": message_id, "type": "step-finish", "reason": finish, "cost": 0, "tokens": tokens});
+                    let mut part = json!({"id": id, "sessionID": self.session_id, "messageID": message_id, "type": "step-finish", "reason": finish});
+                    if let Some(snapshot) = snapshot {
+                        part["snapshot"] = json!(snapshot);
+                    }
+                    part["cost"] = json!(0);
+                    part["tokens"] = json!(tokens);
                     self.emit("step_finish", at, json!({"part": part}));
                 }
             }

@@ -70,12 +70,25 @@ pub struct StoredModel {
     pub variant: Option<String>,
 }
 
+/// The trees before and after a step and the files it changed.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct StepSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AssistantData {
     pub time: AssistantTime,
     pub agent: String,
     pub model: StoredModel,
     pub content: Vec<Part>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<StepSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finish: Option<String>,
     #[serde(default, rename = "rawFinish", skip_serializing_if = "Option::is_none")]
