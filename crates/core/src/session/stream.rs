@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use serde_json::{Map, Value};
 
 use super::message::{Cache, Part, PartTime, Tokens, ToolState};
-use crate::gateway::error::ApiError;
+use crate::gateway::error::{ApiError, SessionError};
 use crate::gateway::sse::SseEvent;
 use crate::time::now_ms;
 
@@ -57,6 +57,21 @@ enum Block {
     },
 }
 
+/// Server tool result blocks, which arrive whole and settle the provider-executed call they name.
+const HOSTED_RESULTS: [&str; 3] = [
+    "web_search_tool_result",
+    "code_execution_tool_result",
+    "web_fetch_tool_result",
+];
+
+const INPUT_EXCERPT_LIMIT: usize = 2048;
+
+/// Why a client call's arguments never became a call.
+enum InputFailure {
+    Malformed,
+    Incomplete,
+}
+
 #[derive(Default)]
 pub struct Assembly {
     pub parts: Vec<Part>,
@@ -66,6 +81,8 @@ pub struct Assembly {
     pub tokens: Tokens,
     pub stop_reason: Option<String>,
     pub finished: bool,
+    /// Client calls whose complete arguments were not valid JSON, with the raw arguments.
+    malformed: Vec<(usize, String)>,
 }
 
 impl Assembly {
@@ -206,7 +223,8 @@ impl Assembly {
                 self.blocks.insert(index, Block::Redacted);
                 Vec::new()
             }
-            Some("tool_use") => {
+            Some(kind @ ("tool_use" | "server_tool_use")) => {
+                let hosted = kind == "server_tool_use";
                 let call_id = block
                     .get("id")
                     .and_then(Value::as_str)
@@ -217,27 +235,29 @@ impl Assembly {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string();
+                // Server tools may carry their whole input on the start block.
+                let raw = block
+                    .get("input")
+                    .filter(|i| i.as_object().is_none_or(|o| !o.is_empty()))
+                    .map(crate::json::compact)
+                    .unwrap_or_default();
                 self.parts.push(Part::Tool {
                     id: call_id.clone(),
                     name: name.clone(),
-                    executed: Some(false),
+                    executed: Some(hosted),
                     native: None,
-                    state: ToolState::Streaming {
-                        input: String::new(),
-                    },
+                    state: ToolState::Streaming { input: raw.clone() },
                     time: PartTime {
                         created: now_ms(),
                         ..PartTime::default()
                     },
                 });
-                self.blocks.insert(
-                    index,
-                    Block::Tool {
-                        part,
-                        raw: String::new(),
-                    },
-                );
+                self.blocks.insert(index, Block::Tool { part, raw });
                 vec![Action::ToolStarted { call_id, name }]
+            }
+            Some(kind) if HOSTED_RESULTS.contains(&kind) => {
+                self.hosted_result(kind, block);
+                Vec::new()
             }
             _ => Vec::new(),
         }
@@ -313,9 +333,9 @@ impl Assembly {
             }
             Some(Block::Tool { part, raw }) => {
                 let input = if raw.trim().is_empty() {
-                    Value::Object(Map::new())
+                    Ok(Value::Object(Map::new()))
                 } else {
-                    serde_json::from_str(&raw).unwrap_or(Value::String(raw.clone()))
+                    serde_json::from_str(&raw)
                 };
                 match self.parts.get_mut(part) {
                     Some(Part::Tool {
@@ -323,13 +343,23 @@ impl Assembly {
                         name,
                         state,
                         time,
+                        executed,
                         ..
                     }) => {
+                        let Ok(input) = input else {
+                            if *executed != Some(true) {
+                                self.malformed.push((part, raw));
+                            }
+                            return Vec::new();
+                        };
                         *state = ToolState::Running {
                             input: input.clone(),
                             metadata: Map::new(),
                         };
                         time.ran = Some(now_ms());
+                        if *executed == Some(true) {
+                            return Vec::new();
+                        }
                         vec![Action::ToolReady {
                             call_id: id.clone(),
                             name: name.clone(),
@@ -345,6 +375,94 @@ impl Assembly {
         }
     }
 
+    /// Settles the provider-executed call a server tool result block answers.
+    fn hosted_result(&mut self, kind: &str, block: &Value) {
+        let id = block.get("tool_use_id").and_then(Value::as_str);
+        let content = block.get("content").cloned().unwrap_or(Value::Null);
+        let Some(Part::Tool {
+            state,
+            native,
+            time,
+            ..
+        }) = self.parts.iter_mut().find(|p| {
+            matches!(p, Part::Tool { id: call, executed: Some(true), .. } if Some(call.as_str()) == id)
+        })
+        else {
+            return;
+        };
+        let input = match state {
+            ToolState::Running { input, .. } => input.clone(),
+            _ => return,
+        };
+        let text = match &content {
+            Value::String(text) => text.clone(),
+            other => crate::json::compact(other),
+        };
+        let failed = content
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|t| t.ends_with("_tool_result_error"));
+        *state = if failed {
+            ToolState::Error {
+                input,
+                error: SessionError::new("tool.execution", text),
+                content: Vec::new(),
+                metadata: Map::new(),
+            }
+        } else {
+            ToolState::Completed {
+                input,
+                content: vec![crate::tool::ToolContent::text(text)],
+                metadata: Map::new(),
+            }
+        };
+        *native = Some(serde_json::json!({"blockType": kind, "result": content}));
+        time.completed = Some(now_ms());
+    }
+
+    /// Calls the response left without an outcome, with the error each one gets: client calls
+    /// whose arguments were invalid or never completed, and provider-executed calls with no
+    /// result block.
+    pub fn unfinished(&self) -> Vec<(usize, SessionError)> {
+        let length = self.stop_reason.as_deref() == Some("max_tokens");
+        let mut out: Vec<(usize, SessionError)> = self
+            .parts
+            .iter()
+            .enumerate()
+            .filter_map(|(index, part)| match part {
+                Part::Tool {
+                    executed: Some(true),
+                    state: ToolState::Streaming { .. } | ToolState::Running { .. },
+                    ..
+                } => Some((
+                    index,
+                    SessionError::new(
+                        "tool.result-missing",
+                        "Provider did not return a tool result",
+                    ),
+                )),
+                _ => None,
+            })
+            .collect();
+        for (index, part) in self.parts.iter().enumerate() {
+            let Part::Tool {
+                executed: Some(false) | None,
+                state: ToolState::Streaming { input },
+                ..
+            } = part
+            else {
+                continue;
+            };
+            let malformed = self.malformed.iter().find(|(p, _)| *p == index);
+            let (reason, raw) = match malformed {
+                Some((_, raw)) => (InputFailure::Malformed, raw.as_str()),
+                None => (InputFailure::Incomplete, input.as_str()),
+            };
+            out.push((index, input_failure(reason, length, raw)));
+        }
+        out
+    }
+
     /// The step's finish reason as stored and reported.
     pub fn finish(&self) -> &'static str {
         match self.stop_reason.as_deref() {
@@ -354,5 +472,90 @@ impl Assembly {
             Some("refusal") => "content-filter",
             _ => "unknown",
         }
+    }
+}
+
+/// The error of a client call that was not executed, with an excerpt of its arguments.
+fn input_failure(reason: InputFailure, length: bool, raw: &str) -> SessionError {
+    let (kind, message) = match (reason, length) {
+        (_, true) => (
+            "tool.input-incomplete",
+            "The tool call was not executed because the output token limit (stop reason: length) was reached before you could complete the arguments. Break large payloads into smaller tool calls and reissue the call with complete arguments.",
+        ),
+        (InputFailure::Malformed, false) => (
+            "tool.input-json",
+            "The tool input could not be parsed as JSON, so the call was not executed. Reissue the call with valid JSON arguments.",
+        ),
+        (InputFailure::Incomplete, false) => (
+            "tool.input-incomplete",
+            "Tool call arguments were not completed and were not executed. Reissue the call with complete arguments.",
+        ),
+    };
+    let total = crate::text::utf16_len(raw);
+    if total == 0 {
+        return SessionError::new(kind, message);
+    }
+    let excerpt = crate::text::utf16_prefix(raw, INPUT_EXCERPT_LIMIT);
+    let shown = crate::text::utf16_len(excerpt);
+    let truncated = if total > shown { "\n[truncated]" } else { "" };
+    SessionError::new(
+        kind,
+        format!(
+            "{message}\n\nInput excerpt (first {shown} of {total} characters):\n{excerpt}{truncated}"
+        ),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn feed(assembly: &mut Assembly, kind: &str, data: Value) {
+        let event = SseEvent {
+            event: Some(kind.into()),
+            data: data.to_string(),
+        };
+        assembly.on_event(&event).unwrap();
+    }
+
+    fn cut_call(raw: &str) -> Assembly {
+        let mut assembly = Assembly::default();
+        feed(
+            &mut assembly,
+            "content_block_start",
+            serde_json::json!({"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "t", "name": "write", "input": {}}}),
+        );
+        feed(
+            &mut assembly,
+            "content_block_delta",
+            serde_json::json!({"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": raw}}),
+        );
+        assembly
+    }
+
+    #[test]
+    fn cut_off_arguments() {
+        let assembly = cut_call("");
+        assert_eq!(
+            assembly.unfinished(),
+            vec![(
+                0,
+                SessionError::new(
+                    "tool.input-incomplete",
+                    "Tool call arguments were not completed and were not executed. Reissue the call with complete arguments."
+                )
+            )]
+        );
+        let mut assembly = cut_call(&format!("{{\"content\": \"{}", "é".repeat(3000)));
+        assembly.stop_reason = Some("max_tokens".into());
+        let (_, error) = &assembly.unfinished()[0];
+        assert_eq!(error.kind, "tool.input-incomplete");
+        assert!(error.message.starts_with("The tool call was not executed because the output token limit (stop reason: length) was reached"));
+        assert!(
+            error
+                .message
+                .contains("\n\nInput excerpt (first 2048 of 3013 characters):\n{\"content\": \"é")
+        );
+        assert!(error.message.ends_with("é\n[truncated]"));
     }
 }

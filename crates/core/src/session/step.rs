@@ -588,65 +588,83 @@ fn settle(
     result: Result<ToolOutput, ToolError>,
     interrupted: &SessionError,
 ) {
+    let output = match result {
+        Ok(output) => output,
+        Err(error) => {
+            let error = match error.kind {
+                ToolErrorKind::Interrupted => interrupted.clone(),
+                _ => SessionError::new(error.type_tag(), error.message),
+            };
+            return fail_part(shared, running, index, error);
+        }
+    };
     let Some(Part::Tool {
         id, state, time, ..
     }) = running.data.content.get_mut(index)
     else {
         return;
     };
-    let input = match state {
-        ToolState::Running { input, .. } => input.clone(),
-        ToolState::Streaming { input } => serde_json::from_str(input).unwrap_or(json!({})),
-        _ => return,
+    let Some(input) = settled_input(state) else {
+        return;
     };
     time.completed = Some(now_ms());
-    let (session_id, message_id, call_id) = (
-        running.session_id.clone(),
-        running.message_id.clone(),
-        id.clone(),
+    *state = ToolState::Completed {
+        input,
+        content: output.content.clone(),
+        metadata: output.metadata.clone(),
+    };
+    let call_id = id.clone();
+    send(
+        shared,
+        Event::ToolSucceeded {
+            session_id: running.session_id.clone(),
+            message_id: running.message_id.clone(),
+            call_id,
+            content: output.content,
+            metadata: output.metadata,
+        },
     );
-    match result {
-        Ok(output) => {
-            *state = ToolState::Completed {
-                input,
-                content: output.content.clone(),
-                metadata: output.metadata.clone(),
-            };
-            send(
-                shared,
-                Event::ToolSucceeded {
-                    session_id,
-                    message_id,
-                    call_id,
-                    content: output.content,
-                    metadata: output.metadata,
-                },
-            );
-        }
-        Err(error) => {
-            let error = match error.kind {
-                ToolErrorKind::Interrupted => interrupted.clone(),
-                _ => SessionError::new(error.type_tag(), error.message),
-            };
-            *state = ToolState::Error {
-                input,
-                error: error.clone(),
-                content: Vec::new(),
-                metadata: Map::new(),
-            };
-            send(
-                shared,
-                Event::ToolFailed {
-                    session_id,
-                    message_id,
-                    call_id,
-                    error,
-                    content: Vec::new(),
-                    metadata: Map::new(),
-                },
-            );
-        }
+}
+
+/// The input a still-open call settles with; `None` once it has settled.
+fn settled_input(state: &ToolState) -> Option<Value> {
+    match state {
+        ToolState::Running { input, .. } => Some(input.clone()),
+        ToolState::Streaming { input } => Some(serde_json::from_str(input).unwrap_or(json!({}))),
+        _ => None,
     }
+}
+
+/// Records a tool call as failed and reports it.
+fn fail_part(shared: &Shared, running: &mut Running, index: usize, error: SessionError) {
+    let Some(Part::Tool {
+        id, state, time, ..
+    }) = running.data.content.get_mut(index)
+    else {
+        return;
+    };
+    let Some(input) = settled_input(state) else {
+        return;
+    };
+    time.completed = Some(now_ms());
+    *state = ToolState::Error {
+        input,
+        error: error.clone(),
+        content: Vec::new(),
+        metadata: Map::new(),
+    };
+    let call_id = id.clone();
+    send(
+        shared,
+        Event::ToolFailed {
+            session_id: running.session_id.clone(),
+            message_id: running.message_id.clone(),
+            call_id,
+            error,
+            content: Vec::new(),
+            metadata: Map::new(),
+        },
+    );
 }
 
 type ToolTask = (usize, Result<ToolOutput, ToolError>);
@@ -755,18 +773,10 @@ async fn run_stream(
             )
             .await;
         }
-        tool_cancel.cancel();
-        let unsettled = collect(shared, &mut running, &mut tasks).await;
+        // Calls already running finish; the ones the stream cut off never ran.
+        collect(shared, &mut running, &mut tasks).await;
+        settle_unfinished(shared, &mut running, &assembly);
         if error.retryable() && assembly.has_output() {
-            for index in unsettled {
-                settle(
-                    shared,
-                    &mut running,
-                    index,
-                    Err(ToolError::interrupted()),
-                    &interrupted_error(),
-                );
-            }
             running.data.finish = Some("unknown".into());
             running.data.time.completed = Some(now_ms());
             running.save(shared);
@@ -776,8 +786,8 @@ async fn run_stream(
         return fail(shared, running, error.to_session_error());
     }
 
-    let unsettled = collect(shared, &mut running, &mut tasks).await;
-    debug_assert!(unsettled.is_empty());
+    collect(shared, &mut running, &mut tasks).await;
+    settle_unfinished(shared, &mut running, &assembly);
     let declined = running.data.content.iter().any(|p| {
         matches!(p, Part::Tool { state: ToolState::Error { error, .. }, .. }
             if error.message == "The user declined this tool call"
@@ -788,11 +798,16 @@ async fn run_stream(
     running.data.raw_finish = assembly.stop_reason.clone();
     running.data.cost = Some(0.0);
     running.data.time.completed = Some(now_ms());
-    let ran_tools = running
-        .data
-        .content
-        .iter()
-        .any(|p| matches!(p, Part::Tool { .. }));
+    // Provider-executed calls ran inside the response; only client calls need another step.
+    let ran_tools = running.data.content.iter().any(|p| {
+        matches!(
+            p,
+            Part::Tool {
+                executed: Some(false) | None,
+                ..
+            }
+        )
+    });
     let _ = shared.db.add_tokens(
         &session.id,
         crate::storage::TokenTotals {
@@ -826,6 +841,14 @@ async fn run_stream(
     } else {
         StepEnd::Stop
     }
+}
+
+/// Fails the calls the response left without an outcome (`Assembly::unfinished`).
+fn settle_unfinished(shared: &Shared, running: &mut Running, assembly: &Assembly) {
+    for (index, error) in assembly.unfinished() {
+        fail_part(shared, running, index, error);
+    }
+    running.save(shared);
 }
 
 fn interrupted_error() -> SessionError {
