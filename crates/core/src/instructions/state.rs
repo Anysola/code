@@ -21,13 +21,16 @@ pub enum Observed {
     Removed,
 }
 
+pub type Render = Box<dyn Fn(&Value) -> Option<String>>;
+pub type RenderChange = Box<dyn Fn(&Value, &Value) -> Option<String>>;
+
 /// One instruction source in block 2. Renderers return `None` for a value they cannot read.
 pub struct Source {
-    pub key: &'static str,
+    pub key: String,
     pub observed: Observed,
-    pub initial: fn(&Value) -> Option<String>,
-    pub changed: fn(&Value, &Value) -> Option<String>,
-    pub removed: fn(&Value) -> Option<String>,
+    pub initial: Render,
+    pub changed: RenderChange,
+    pub removed: Render,
 }
 
 pub fn never(_: &Value) -> Option<String> {
@@ -87,7 +90,7 @@ fn load(db: &Db, values: &Values) -> Result<BTreeMap<String, Value>, SessionErro
 fn render_initial(sources: &[Source], values: &BTreeMap<String, Value>) -> String {
     sources
         .iter()
-        .filter_map(|s| values.get(s.key).and_then(s.initial))
+        .filter_map(|s| values.get(&s.key).and_then(|v| (s.initial)(v)))
         .collect::<Vec<_>>()
         .join("\n\n")
 }
@@ -100,7 +103,7 @@ pub fn prepare(db: &Db, session_id: &str, sources: &[Source]) -> Result<Prepared
         let blocked: Vec<&str> = sources
             .iter()
             .filter(|s| s.observed == Observed::Unavailable)
-            .map(|s| s.key)
+            .map(|s| s.key.as_str())
             .collect();
         if !blocked.is_empty() {
             return Err(SessionError::new(
@@ -123,16 +126,16 @@ pub fn prepare(db: &Db, session_id: &str, sources: &[Source]) -> Result<Prepared
         match &source.observed {
             Observed::Unavailable => {}
             Observed::Removed => {
-                if current.remove(source.key).is_some() {
+                if current.remove(&source.key).is_some() {
                     changed.push((source, None));
                 }
             }
             Observed::Value(value) => {
                 let next = hash(value);
-                if previous.get(source.key) == Some(&next) {
+                if previous.get(&source.key) == Some(&next) {
                     continue;
                 }
-                current.insert(source.key.to_string(), next.clone());
+                current.insert(source.key.clone(), next.clone());
                 blobs.insert(next, value.clone());
                 changed.push((source, Some(value.clone())));
             }
@@ -153,7 +156,7 @@ pub fn prepare(db: &Db, session_id: &str, sources: &[Source]) -> Result<Prepared
         let before = load(db, &previous)?;
         let text = changed
             .iter()
-            .filter_map(|(source, value)| match (before.get(source.key), value) {
+            .filter_map(|(source, value)| match (before.get(&source.key), value) {
                 (Some(old), None) => (source.removed)(old),
                 (Some(old), Some(new)) => (source.changed)(old, new),
                 (None, Some(new)) => (source.initial)(new),
@@ -194,13 +197,13 @@ mod tests {
         Some("gone".into())
     }
 
-    fn source(key: &'static str, observed: Observed) -> Source {
+    fn source(key: &str, observed: Observed) -> Source {
         Source {
-            key,
+            key: key.into(),
             observed,
-            initial: text,
-            changed,
-            removed: gone,
+            initial: Box::new(text),
+            changed: Box::new(changed),
+            removed: Box::new(gone),
         }
     }
 

@@ -58,6 +58,8 @@ pub enum CoreError {
     Snapshot(String),
     #[error("{0}")]
     Image(String),
+    #[error("{0}")]
+    InstructionEntry(String),
 }
 
 /// Which session a front end works on.
@@ -423,6 +425,9 @@ impl Core {
                 .db
                 .instruction_initialize(&row.id, 0, &state.current)?;
         }
+        self.shared
+            .db
+            .instruction_entries_copy(&source.id, &row.id)?;
         Ok(row)
     }
 
@@ -433,6 +438,40 @@ impl Core {
             .ok_or(CoreError::SessionNotFound)?;
         crate::session::regenerate_title(self.shared.clone(), session).await;
         Ok(())
+    }
+
+    /// Attaches `value` to the session's instructions under `key` (shown to the model as a
+    /// `<context key="…">` block from the next step), or detaches it when `value` is `None`.
+    pub fn set_instruction_entry(
+        &self,
+        session_id: &str,
+        key: &str,
+        value: Option<&Value>,
+    ) -> Result<(), CoreError> {
+        let valid = key.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
+            && key.chars().all(|c| {
+                c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-')
+            });
+        if !valid {
+            return Err(CoreError::InstructionEntry(format!(
+                "Invalid instruction entry key: {key}"
+            )));
+        }
+        const MAX_BYTES: usize = 256 * 1024;
+        if let Some(value) = value {
+            let bytes = crate::json::compact(value).len();
+            if bytes > MAX_BYTES {
+                return Err(CoreError::InstructionEntry(format!(
+                    "Instruction entry value is {bytes} bytes; the limit is {MAX_BYTES} bytes"
+                )));
+            }
+        }
+        self.session(session_id)?
+            .ok_or(CoreError::SessionNotFound)?;
+        Ok(self
+            .shared
+            .db
+            .instruction_entry_set(session_id, key, value)?)
     }
 
     pub fn set_title(&self, session_id: &str, title: &str) -> Result<(), CoreError> {

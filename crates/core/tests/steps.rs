@@ -333,3 +333,52 @@ fn plan_mode_reminder_survives_compaction_and_guards_edits() {
         json!({"type": "tool.execution", "message": format!("Cannot use write to modify files outside the Plan directory: {}", plan_dir.display())})
     );
 }
+
+#[test]
+fn session_entries_close_block_two() {
+    let gateway = FakeGateway::start(|request, _| text(request, "ok"));
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    assert!(
+        core.set_instruction_entry(&session.id, "Bad/Key", Some(&json!(1)))
+            .is_err()
+    );
+    core.set_instruction_entry(&session.id, "ticket", Some(&json!({"id": 7})))
+        .unwrap();
+    core.set_instruction_entry(&session.id, "a-note", Some(&json!("Be brief.")))
+        .unwrap();
+    let turn = |text: &str| {
+        runtime
+            .block_on(core.prompt(&session.id, prompt(text), TurnOptions::default()))
+            .unwrap()
+    };
+    turn("one");
+    core.set_instruction_entry(&session.id, "ticket", Some(&json!({"id": 8})))
+        .unwrap();
+    core.set_instruction_entry(&session.id, "a-note", None)
+        .unwrap();
+    turn("two");
+    let main: Vec<_> = gateway
+        .messages()
+        .into_iter()
+        .filter(|r| !r.is_title())
+        .collect();
+    let block2 = main[0].json()["system"][2]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        block2.ends_with(
+            "</env>\n\n<context key=\"a-note\">\nBe brief.\n</context>\n\n<context key=\"ticket\">\n{\n  \"id\": 7\n}\n</context>"
+        ),
+        "{block2}"
+    );
+    let second = transcript(&main[1]);
+    assert_eq!(
+        second[3],
+        "system: The context under \"a-note\" no longer applies. Disregard it.\n\nThe context under \"ticket\" changed and supersedes the previous value:\n<context key=\"ticket\">\n{\n  \"id\": 8\n}\n</context>",
+        "{second:?}"
+    );
+}

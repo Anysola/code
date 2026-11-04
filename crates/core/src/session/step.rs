@@ -95,6 +95,10 @@ fn instructions(
         files,
         &crate::time::date_string(),
         &environment,
+        &shared
+            .db
+            .instruction_entries(&session.id)
+            .map_err(|e| SessionError::new("unknown", e.to_string()))?,
     );
     Ok(instructions::prepare(&shared.db, &session.id, &sources)?.baseline)
 }
