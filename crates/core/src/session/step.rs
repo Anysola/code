@@ -14,10 +14,10 @@ use super::lower::{Entry, Target, lower};
 use super::message::{AssistantData, AssistantTime, Message, Part, StoredModel, ToolState, encode};
 use super::request::{Request, build, output_limit};
 use super::stream::{Action, Assembly};
-use super::{Outcome, Selection, TurnOptions};
+use super::{Outcome, Selection, TurnOptions, compaction};
 use crate::api::Shared;
 use crate::events::{Event, InterruptReason};
-use crate::gateway::error::{ApiError, SessionError};
+use crate::gateway::error::{ApiError, Reason, SessionError};
 use crate::gateway::retry::Retry;
 use crate::gateway::{MessageStream, StreamItem};
 use crate::instructions::{self, Environment};
@@ -133,39 +133,6 @@ fn context(
     })
 }
 
-fn history(shared: &Shared, session_id: &str) -> Vec<Message> {
-    shared
-        .db
-        .messages(session_id)
-        .unwrap_or_default()
-        .iter()
-        .map(|row| Message::decode(&row.kind, &row.data))
-        .collect()
-}
-
-/// Tokens of the last answered request plus a chars/4 estimate of what came after it.
-fn input_estimate(history: &[Message], messages: &[Entry]) -> u64 {
-    let last = history
-        .iter()
-        .rposition(|m| matches!(m, Message::Assistant(a) if a.tokens.is_some()));
-    let measured = last
-        .and_then(|i| match &history[i] {
-            Message::Assistant(a) => a.tokens,
-            _ => None,
-        })
-        .map_or(0, |t| {
-            t.input + t.output + t.reasoning + t.cache.read + t.cache.write
-        });
-    let since = messages.iter().rev().map_while(|e| match e {
-        Entry::Turn(m) if m["role"] == "assistant" => None,
-        Entry::Turn(m) => Some(crate::json::compact(m).len()),
-        Entry::Update { text, .. } => Some(text.len()),
-        Entry::Effort { .. } => Some(0),
-    });
-    let chars: usize = since.sum();
-    measured + ((chars as f64 / 4.0) * 1.15).ceil() as u64
-}
-
 fn send(shared: &Shared, event: Event) {
     let _ = shared.events.send(event);
 }
@@ -173,6 +140,10 @@ fn send(shared: &Shared, event: Event) {
 enum StepEnd {
     Continue,
     Stop,
+    /// Auto compaction replaced the history; the step runs again on the checkpoint.
+    Compacted,
+    /// The provider rejected the prompt as too long before any output.
+    Overflow(ApiError),
     Failed(SessionError),
     Interrupted(InterruptReason),
 }
@@ -186,6 +157,7 @@ pub(crate) async fn drive(
 ) -> Outcome {
     let mut length_finishes = 0;
     let mut number = 0;
+    let mut overflowed = false;
     loop {
         number += 1;
         if cancel.is_cancelled() {
@@ -199,13 +171,34 @@ pub(crate) async fn drive(
         }
         let capped = selection.agent.steps == Some(number);
         match step(shared, session, selection, capped, cancel).await {
+            StepEnd::Compacted => {
+                number -= 1;
+                continue;
+            }
+            // One overflow compaction per step; a second rejection surfaces.
+            StepEnd::Overflow(error) if !overflowed => {
+                match overflow(shared, session, selection, cancel).await {
+                    compaction::Outcome::Completed => {
+                        overflowed = true;
+                        number -= 1;
+                        continue;
+                    }
+                    compaction::Outcome::Failed(error) => return Outcome::Failed(error),
+                    compaction::Outcome::Skipped => {
+                        return Outcome::Failed(error.to_session_error());
+                    }
+                }
+            }
+            StepEnd::Overflow(error) => return Outcome::Failed(error.to_session_error()),
             StepEnd::Continue if capped => return Outcome::Succeeded,
             StepEnd::Continue => {}
             StepEnd::Stop => return Outcome::Succeeded,
             StepEnd::Failed(error) => return Outcome::Failed(error),
             StepEnd::Interrupted(reason) => return Outcome::Interrupted(reason),
         }
-        let last_finish = history(shared, &session.id)
+        overflowed = false;
+        let last_finish = compaction::history(shared, &session.id)
+            .messages
             .iter()
             .rev()
             .find_map(|m| match m {
@@ -225,6 +218,38 @@ pub(crate) async fn drive(
             length_finishes = 0;
         }
     }
+}
+
+/// The overflow compaction after a "too long" rejection, sized from the rejected prompt.
+async fn overflow(
+    shared: &Arc<Shared>,
+    session: &SessionRow,
+    selection: &Selection,
+    cancel: &CancellationToken,
+) -> compaction::Outcome {
+    let ctx = match context(shared, session, selection) {
+        Ok(ctx) => ctx,
+        Err(error) => return compaction::Outcome::Failed(error),
+    };
+    let target = Target {
+        provider: &selection.reference.provider,
+        id: &selection.model.id,
+    };
+    let history = compaction::history(shared, &session.id).messages;
+    let estimate = compaction::estimate_prompt(&history, &target, &ctx.system, &ctx.definitions);
+    let prefix = compaction::Prefix {
+        system: &ctx.system,
+        tools: &ctx.definitions,
+    };
+    compaction::compact(
+        shared,
+        session,
+        selection,
+        prefix,
+        compaction::Trigger::Overflow(estimate),
+        cancel,
+    )
+    .await
 }
 
 struct Running {
@@ -252,18 +277,34 @@ async fn step(
         Ok(ctx) => ctx,
         Err(error) => return StepEnd::Failed(error),
     };
-    let history = history(shared, &session.id);
+    let history = compaction::history(shared, &session.id).messages;
     let target = Target {
         provider: &selection.reference.provider,
         id: &selection.model.id,
     };
+    let estimate = compaction::estimate_prompt(&history, &target, &ctx.system, &ctx.definitions);
+    let prefix = compaction::Prefix {
+        system: &ctx.system,
+        tools: &ctx.definitions,
+    };
+    let trigger = compaction::Trigger::Auto(estimate);
+    match compaction::compact(shared, session, selection, prefix, trigger, cancel).await {
+        compaction::Outcome::Skipped => {}
+        compaction::Outcome::Completed => return StepEnd::Compacted,
+        compaction::Outcome::Failed(error) => return StepEnd::Failed(error),
+    }
     let mut messages = lower(&history, &target);
     if capped {
         messages.push(Entry::Turn(
             json!({"role": "assistant", "content": [{"type": "text", "text": MAX_STEPS_PROMPT}]}),
         ));
     }
-    let max_tokens = output_limit(&selection.model, input_estimate(&history, &messages));
+    let max_tokens = output_limit(
+        &selection.model,
+        estimate.measured,
+        estimate.estimated,
+        0.01,
+    );
     let variant = selection
         .reference
         .variant
@@ -332,6 +373,9 @@ async fn step(
         };
         match attempt {
             Ok(stream) => break stream,
+            Err(error) if error.reason == Reason::ContextOverflow => {
+                return overflowed(shared, &running, error);
+            }
             Err(error) => match retry.next(&error) {
                 Some(delay) => {
                     wait_retry(shared, &session.id, retry.attempt(), delay, &error);
@@ -377,6 +421,12 @@ pub(crate) fn session_headers(shared: &Shared, session: &SessionRow) -> Vec<(Str
         headers.push(("x-parent-session-id".into(), parent.clone()));
     }
     headers
+}
+
+/// A rejected prompt leaves no trace: its step reruns after the overflow compaction.
+fn overflowed(shared: &Shared, running: &Running, error: ApiError) -> StepEnd {
+    let _ = shared.db.delete_message(&running.message_id);
+    StepEnd::Overflow(error)
 }
 
 fn fail(shared: &Shared, mut running: Running, error: SessionError) -> StepEnd {
@@ -589,6 +639,10 @@ async fn run_stream(
     if !ended_ok {
         let error = stream_error
             .unwrap_or_else(|| ApiError::incomplete("The provider response ended unexpectedly."));
+        if error.reason == Reason::ContextOverflow && !assembly.has_output() {
+            tool_cancel.cancel();
+            return overflowed(shared, &running, error);
+        }
         if !assembly.has_output()
             && let Some(delay) = retry.next(&error)
         {

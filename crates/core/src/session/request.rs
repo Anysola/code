@@ -29,13 +29,16 @@ pub struct Request<'a> {
     pub tools_disabled: bool,
 }
 
-/// `min(limit.output ?? 32000, 256000)`, reduced when the context window is nearly full.
-pub fn output_limit(model: &Model, input_tokens: u64) -> u64 {
+/// `min(limit.output ?? 32000, 256000)`, reduced to the room the prompt leaves in the window
+/// (`headroom` of it kept free, the estimated part counted 15% high).
+pub fn output_limit(model: &Model, measured: u64, estimated: u64, headroom: f64) -> u64 {
     let limit = model.output.unwrap_or(DEFAULT_OUTPUT).min(OUTPUT_CAP);
-    match model.context {
+    match model.context.filter(|c| *c > 0) {
         Some(context) => {
-            let room = ((context as f64 * 0.99).floor() as u64).saturating_sub(input_tokens);
-            limit.min(room.max(1024))
+            let room = (context as f64 * (1.0 - headroom)).floor() as i64
+                - measured as i64
+                - (estimated as f64 * 1.15).ceil() as i64;
+            limit.min(room.max(1024) as u64)
         }
         None => limit,
     }
@@ -446,8 +449,9 @@ mod tests {
     #[test]
     fn limits() {
         let m = model("x");
-        assert_eq!(output_limit(&m, 0), 32_000);
-        assert_eq!(output_limit(&m, 985_000), 5_000);
-        assert_eq!(output_limit(&m, 999_999), 1024);
+        assert_eq!(output_limit(&m, 0, 0, 0.01), 32_000);
+        assert_eq!(output_limit(&m, 985_000, 0, 0.01), 5_000);
+        assert_eq!(output_limit(&m, 900_000, 70_000, 0.01), 9_500);
+        assert_eq!(output_limit(&m, 999_999, 0, 0.01), 1024);
     }
 }

@@ -124,6 +124,13 @@ impl Db {
         .map(parse)
     }
 
+    pub fn delete_message(&self, id: &str) -> Result<()> {
+        self.with(|c| {
+            c.execute("DELETE FROM message WHERE id = ?1", [id])
+                .map(drop)
+        })
+    }
+
     /// The highest message sequence of the session (0 when empty).
     pub fn last_seq(&self, session_id: &str) -> Result<i64> {
         self.with(|c| {

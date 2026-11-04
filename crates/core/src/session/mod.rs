@@ -1,9 +1,11 @@
 //! The agent loop: a turn is a series of steps, each one model request plus the tool calls it
 //! makes. Tools start as soon as their `tool_use` block completes and run while the stream goes on.
 
+pub mod compaction;
 pub mod gate;
 pub mod lower;
 pub mod message;
+pub mod recent;
 pub mod request;
 mod step;
 mod stream;

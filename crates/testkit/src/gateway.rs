@@ -34,8 +34,9 @@ impl Recorded {
     }
 
     /// A title request: no tools.
+    /// Title requests carry no tools and ask for only the title.
     pub fn is_title(&self) -> bool {
-        self.json().get("tools").is_none()
+        self.json().get("tools").is_none() && self.body.contains("Reply with only the title.")
     }
 }
 
