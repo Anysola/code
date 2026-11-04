@@ -7,8 +7,8 @@ use crate::session::inbox::Delivery;
 use crate::session::{Outcome, TurnOptions};
 
 impl Core {
-    pub fn commands(&self) -> &Commands {
-        &self.shared.commands
+    pub fn commands(&self) -> Commands {
+        self.shared.loaded().commands.clone()
     }
 
     /// Runs `/<name> <arguments>`: switches to the command's agent and model, then prompts the
@@ -21,8 +21,8 @@ impl Core {
         arguments: &str,
         options: TurnOptions,
     ) -> Result<Outcome, CoreError> {
-        let command = self
-            .shared
+        let loaded = self.shared.loaded();
+        let command = loaded
             .commands
             .get(name)
             .cloned()
@@ -34,7 +34,7 @@ impl Core {
             &command,
             arguments,
             &self.shared.project.worktree,
-            self.shared.config.shell(),
+            loaded.config.shell(),
             std::path::Path::new(&session.directory),
             &self.shared.env,
         )
@@ -47,10 +47,7 @@ impl Core {
                 )));
             }
         };
-        let agent = command
-            .agent
-            .as_deref()
-            .and_then(|a| self.shared.agents.get(a));
+        let agent = command.agent.as_deref().and_then(|a| loaded.agents.get(a));
         let model = command
             .model
             .as_deref()
@@ -89,11 +86,12 @@ impl Core {
             .clone()
             .unwrap_or_else(|| command.name.clone());
         let child = self.create_child(&parent.id, Some(description.clone()))?;
+        let loaded = self.shared.loaded();
         let agent = command
             .agent
             .clone()
             .or_else(|| parent.agent.clone())
-            .or_else(|| self.shared.agents.default_agent().map(|a| a.id.clone()));
+            .or_else(|| loaded.agents.default_agent().map(|a| a.id.clone()));
         if let Some(agent) = &agent {
             self.select_agent(&child.id, agent)?;
         }
@@ -101,7 +99,7 @@ impl Core {
             .or_else(|| {
                 agent
                     .as_deref()
-                    .and_then(|a| self.shared.agents.get(a))
+                    .and_then(|a| loaded.agents.get(a))
                     .and_then(|a| a.model.as_deref())
                     .and_then(ModelRef::parse)
             })

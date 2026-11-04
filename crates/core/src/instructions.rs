@@ -244,19 +244,16 @@ pub async fn fetch_remote(
     gateway: &crate::gateway::Gateway,
     configured: &[String],
 ) -> Vec<InstructionFile> {
-    let urls: Vec<&String> = configured.iter().filter(|e| is_url(e)).collect();
+    let urls: Vec<String> = configured.iter().filter(|e| is_url(e)).cloned().collect();
     let fetched = futures_util::stream::iter(urls)
         .map(|url| async move {
             let content = gateway
-                .fetch_text(url, std::time::Duration::from_secs(5))
+                .fetch_text(&url, std::time::Duration::from_secs(5))
                 .await;
             if content.is_none() {
-                crate::log::warn("failed to fetch instruction url", &[("url", url)]);
+                crate::log::warn("failed to fetch instruction url", &[("url", &url)]);
             }
-            content.map(|content| InstructionFile {
-                path: url.clone(),
-                content,
-            })
+            content.map(|content| InstructionFile { path: url, content })
         })
         .buffered(4)
         .collect::<Vec<_>>()

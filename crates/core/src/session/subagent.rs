@@ -77,7 +77,8 @@ fn resolve_model(shared: &Shared, input: &str) -> Result<ModelRef> {
         ))
     })?;
     let label = reference.label();
-    let model = shared
+    let sources = shared.loaded();
+    let model = sources
         .models
         .iter()
         .find(|m| reference.provider == crate::model::PROVIDER && m.id == reference.id)
@@ -245,7 +246,8 @@ pub(crate) async fn run(
 ) -> ToolResult {
     let parent = session(&shared, &ctx.session_id)
         .ok_or_else(|| execution(format!("Parent session not found: {}", ctx.session_id)))?;
-    let limit = shared
+    let sources = shared.loaded();
+    let limit = sources
         .config
         .get("experimental")
         .and_then(|e| e.get("subagent_depth"))
@@ -256,7 +258,7 @@ pub(crate) async fn run(
             "Subagent depth limit reached ({limit}). Increase \"experimental.subagent_depth\" to allow nested subagents."
         )));
     }
-    let agent = shared
+    let agent = sources
         .agents
         .get(&request.agent)
         .cloned()

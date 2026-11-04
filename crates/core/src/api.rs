@@ -93,18 +93,60 @@ pub struct Prompt {
     pub files: Vec<(String, String, String)>,
 }
 
+/// What the config sources yield. Replaced whole when they change, between steps.
+pub(crate) struct Loaded {
+    pub config: Config,
+    pub agents: Agents,
+    pub commands: crate::command::Commands,
+    pub models: Vec<Model>,
+    pub skills: Vec<Skill>,
+    /// The configured `instructions` URLs, fetched when the config loaded.
+    pub remote_instructions: Vec<crate::instructions::InstructionFile>,
+}
+
+impl Loaded {
+    /// Every config source, with the Anysola remote document `remote` (live or cached).
+    async fn load(
+        paths: &Paths,
+        gateway: &Gateway,
+        directory: &Path,
+        remote: Option<String>,
+    ) -> Loaded {
+        let options = LoadOptions {
+            remote,
+            api_url: gateway.base().to_string(),
+        };
+        let config = crate::config::load(paths, directory, &options);
+        for warning in &config.warnings {
+            crate::log::warn(warning, &[]);
+        }
+        let agents = Agents::load(&config, paths);
+        let commands = crate::command::Commands::load(&config);
+        let remote_instructions =
+            crate::instructions::fetch_remote(gateway, &config.instructions).await;
+        let skills = crate::skill::discover(paths, &config, directory).await;
+        let models = crate::model::catalog(&config);
+        Loaded {
+            config,
+            agents,
+            commands,
+            models,
+            skills,
+            remote_instructions,
+        }
+    }
+}
+
 pub(crate) struct Shared {
     pub paths: Arc<Paths>,
     pub db: Arc<Db>,
     pub gateway: Arc<Gateway>,
     pub events: broadcast::Sender<Event>,
     pub credits: Arc<Credits>,
-    pub config: Config,
-    pub agents: Agents,
-    pub commands: crate::command::Commands,
-    pub models: Vec<Model>,
+    loaded: std::sync::RwLock<Arc<Loaded>>,
+    /// Set when a config source changed; the next step reloads them.
+    stale: std::sync::atomic::AtomicBool,
     pub registry: Registry,
-    pub skills: Vec<Skill>,
     pub asks: Arc<Asks>,
     pub questions: Questions,
     pub jobs: Jobs,
@@ -115,11 +157,34 @@ pub(crate) struct Shared {
     pub project: Project,
     /// The shadow repository of the project's files; `None` outside git or with `snapshots: false`.
     pub snapshots: Option<Arc<crate::snapshot::Store>>,
-    /// The configured `instructions` URLs, fetched when the config loaded.
-    pub remote_instructions: Vec<crate::instructions::InstructionFile>,
     /// `<pid>:<nonce>` for busy markers.
     pub owner: String,
     pub turns: Mutex<std::collections::HashMap<String, CancellationToken>>,
+}
+
+impl Shared {
+    pub fn loaded(&self) -> Arc<Loaded> {
+        self.loaded
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Reloads the config sources when one changed since the last load. The Anysola remote
+    /// document comes from its cache, which the gateway refresh keeps current.
+    pub async fn refresh(&self) {
+        if !self.stale.swap(false, std::sync::atomic::Ordering::AcqRel) {
+            return;
+        }
+        let remote = self
+            .db
+            .kv_get(CONFIG_CACHE_KEY)
+            .ok()
+            .flatten()
+            .and_then(|v| v.as_str().map(|s| s.to_owned()));
+        let loaded = Loaded::load(&self.paths, &self.gateway, &self.directory, remote).await;
+        *self.loaded.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(loaded);
+    }
 }
 
 impl crate::codemode::Host for Shared {
@@ -127,12 +192,12 @@ impl crate::codemode::Host for Shared {
         &self.db
     }
 
-    fn models(&self) -> &[Model] {
-        &self.models
+    fn models(&self) -> Vec<Model> {
+        self.loaded().models.clone()
     }
 
-    fn config(&self) -> &Config {
-        &self.config
+    fn config(&self) -> Config {
+        self.loaded().config.clone()
     }
 }
 
@@ -175,23 +240,10 @@ impl Core {
                 .kv_get(CONFIG_CACHE_KEY)?
                 .and_then(|v| v.as_str().map(str::to_string)),
         };
-        let options = LoadOptions {
-            remote,
-            api_url: gateway.base().to_string(),
-        };
-        let config = crate::config::load(&paths, directory, &options);
-        for warning in &config.warnings {
-            crate::log::warn(warning, &[]);
-        }
-        let agents = Agents::load(&config, &paths);
-        let commands = crate::command::Commands::load(&config);
-        let remote_instructions =
-            crate::instructions::fetch_remote(&gateway, &config.instructions).await;
-        let skills = crate::skill::discover(&paths, &config, directory).await;
-        let models = crate::model::catalog(&config);
+        let loaded = Loaded::load(&paths, &gateway, directory, remote).await;
         let project = crate::project::identify(directory);
         let snapshots = (project.vcs == Some("git")
-            && config.get("snapshots") != Some(&Value::Bool(false)))
+            && loaded.config.get("snapshots") != Some(&Value::Bool(false)))
         .then(|| crate::snapshot::Store::open(&paths.data, &project.id, directory))
         .flatten()
         .map(Arc::new);
@@ -211,12 +263,9 @@ impl Core {
             gateway,
             events,
             credits,
-            config,
-            commands,
-            agents,
-            models,
+            loaded: std::sync::RwLock::new(Arc::new(loaded)),
+            stale: Default::default(),
             registry: Registry::builtin(),
-            skills,
             asks,
             questions: Questions::default(),
             jobs: Jobs::default(),
@@ -225,7 +274,6 @@ impl Core {
             notifier,
             directory: directory.to_path_buf(),
             project,
-            remote_instructions,
             snapshots,
             owner: format!("{}:{}", std::process::id(), crate::ids::part()),
             turns: Mutex::default(),
@@ -239,16 +287,24 @@ impl Core {
         self.shared.events.subscribe()
     }
 
-    pub fn config(&self) -> &Config {
-        &self.shared.config
+    pub fn config(&self) -> Config {
+        self.shared.loaded().config.clone()
     }
 
-    pub fn agents(&self) -> &Agents {
-        &self.shared.agents
+    pub fn agents(&self) -> Agents {
+        self.shared.loaded().agents.clone()
     }
 
-    pub fn models(&self) -> &[Model] {
-        &self.shared.models
+    pub fn models(&self) -> Vec<Model> {
+        self.shared.loaded().models.clone()
+    }
+
+    /// Re-reads every config source (config files, agents, commands, skills, instructions)
+    /// before the next step of any session, as `/reload` and the file watcher ask.
+    pub fn reload(&self) {
+        self.shared
+            .stale
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 
     pub fn session(&self, id: &str) -> Result<Option<SessionRow>, CoreError> {
@@ -385,7 +441,7 @@ impl Core {
 
     /// Selects the agent for the session's next turns, recorded as an `agent-switched` message.
     pub fn select_agent(&self, session_id: &str, agent: &str) -> Result<(), CoreError> {
-        if self.shared.agents.get(agent).is_none() {
+        if self.shared.loaded().agents.get(agent).is_none() {
             return Err(CoreError::AgentNotFound(agent.to_string()));
         }
         let db = &self.shared.db;
@@ -401,7 +457,7 @@ impl Core {
     /// Selects the model (and variant) for the session's next turns. A change is recorded as a
     /// `model-switched` message, which becomes an effort marker when only the effort changed.
     pub fn select_model(&self, session_id: &str, model: &ModelRef) -> Result<(), CoreError> {
-        crate::model::resolve(&self.shared.models, model)?;
+        crate::model::resolve(&self.shared.loaded().models, model)?;
         let db = &self.shared.db;
         let session = db.session(session_id)?.ok_or(CoreError::SessionNotFound)?;
         let previous = session.model.as_ref().and_then(ModelRef::from_json);
@@ -520,7 +576,7 @@ impl Core {
 
 /// Attached images as the model should get them.
 fn normalize(shared: &Shared, mut prompt: Prompt) -> Result<Prompt, CoreError> {
-    let limits = crate::media::Limits::from_config(shared.config.get("media"));
+    let limits = crate::media::Limits::from_config(shared.loaded().config.get("media"));
     for (mime, data, name) in &mut prompt.files {
         if !crate::media::RESIZABLE.contains(&mime.as_str()) {
             continue;

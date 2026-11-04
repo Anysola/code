@@ -136,12 +136,12 @@ impl crate::codemode::Host for TestHost {
         &self.db
     }
 
-    fn models(&self) -> &[crate::model::Model] {
-        &[]
+    fn models(&self) -> Vec<crate::model::Model> {
+        Vec::new()
     }
 
-    fn config(&self) -> &crate::config::Config {
-        &self.config
+    fn config(&self) -> crate::config::Config {
+        self.config.clone()
     }
 }
 

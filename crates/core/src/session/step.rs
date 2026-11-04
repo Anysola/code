@@ -17,7 +17,7 @@ use super::message::{
 use super::request::{Request, build, output_limit};
 use super::stream::{Action, Assembly};
 use super::{Outcome, Selection, TurnOptions, compaction};
-use crate::api::Shared;
+use crate::api::{Loaded, Shared};
 use crate::events::{Event, InterruptReason};
 use crate::gateway::error::{ApiError, Reason, SessionError};
 use crate::gateway::retry::Retry;
@@ -67,6 +67,7 @@ struct Context {
 /// message on later changes) and returns block 2, the frozen baseline.
 fn instructions(
     shared: &Shared,
+    sources: &Loaded,
     session: &SessionRow,
     rules: &[crate::permission::Rule],
 ) -> Result<String, SessionError> {
@@ -76,8 +77,8 @@ fn instructions(
         &shared.paths,
         &directory,
         &worktree,
-        &shared.config.instructions,
-        &shared.remote_instructions,
+        &sources.config.instructions,
+        &sources.remote_instructions,
     );
     let environment = Environment {
         git: shared.project.vcs == Some("git"),
@@ -90,7 +91,7 @@ fn instructions(
         .map(|inventory| inventory.summary());
     let sources = instructions::sources(
         catalog.as_ref(),
-        crate::skill::guidance(&shared.skills, rules),
+        crate::skill::guidance(&sources.skills, rules),
         files,
         &crate::time::date_string(),
         &environment,
@@ -115,13 +116,14 @@ fn context(
 ) -> Result<Context, SessionError> {
     let rules = selection.agent.permissions.clone();
     let mut tools = shared.registry.active(&rules);
-    if !shared.config.websearch_enabled() {
+    let sources = &selection.sources;
+    if !sources.config.websearch_enabled() {
         tools.retain(|t| t.name() != "websearch");
     }
     let env = DefinitionEnv {
-        shell_name: crate::tool::shell::shell_name(shared.config.shell()),
+        shell_name: crate::tool::shell::shell_name(sources.config.shell()),
         year: process_year(),
-        subagents: shared.agents.subagents_for(&rules),
+        subagents: sources.agents.subagents_for(&rules),
     };
     let definitions = Registry::definitions(&tools, &env);
     let names: Vec<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
@@ -129,7 +131,7 @@ fn context(
         Some(system) => system.clone(),
         None => format!("{}\n\n{ANTHROPIC_PROMPT}", default_system(&names)),
     };
-    let block2 = instructions(shared, session, &rules)?;
+    let block2 = instructions(shared, sources, session, &rules)?;
     let system = vec![
         block0,
         identity(&selection.model.name, &selection.model.id),
@@ -159,10 +161,11 @@ enum StepEnd {
     Interrupted(InterruptReason),
 }
 
+/// Runs the turn's steps. Before each one the config sources, agent, model, tools and
+/// instructions are selected again, so changes apply at the next step boundary.
 pub(crate) async fn drive(
     shared: &Arc<Shared>,
     session: &SessionRow,
-    selection: &Selection,
     options: TurnOptions,
     cancel: &CancellationToken,
 ) -> Outcome {
@@ -180,9 +183,15 @@ pub(crate) async fn drive(
                 return Outcome::Interrupted(InterruptReason::Budget);
             }
         }
+        shared.refresh().await;
         // A tool may have moved the session; the next step runs in its new directory.
         let current = shared.db.session(&session.id).ok().flatten();
         let session = current.as_ref().unwrap_or(session);
+        let selection = match super::select(shared, session) {
+            Ok(selection) => selection,
+            Err(error) => return Outcome::Failed(error),
+        };
+        let selection = &selection;
         if number > 1 {
             // Steered input joins the turn at this boundary, after the context it follows.
             if let Err(error) = settle_context(shared, session, selection) {
@@ -669,7 +678,7 @@ async fn run_stream(
         scope: Arc::new(Scope {
             configured,
             project_id: shared.project.id.clone(),
-            policies: Arc::new(shared.config.policies()),
+            policies: Arc::new(selection.sources.config.policies()),
         }),
         asks: shared.asks.clone(),
     });
@@ -1003,8 +1012,8 @@ fn handle(
                 permissions: gate.clone(),
                 cancel: cancel.clone(),
                 env: shared.env.clone(),
-                configured_shell: shared.config.shell().map(str::to_string),
-                limits: shared.config.tool_output(),
+                configured_shell: selection.sources.config.shell().map(str::to_string),
+                limits: selection.sources.config.tool_output(),
                 locks: shared.locks.clone(),
                 notifier: shared.notifier.clone(),
                 web_search: Arc::new(crate::search::GatewaySearch::new(
@@ -1018,7 +1027,7 @@ fn handle(
             };
             let tools = ctx.tools.clone();
             let output_dir = shared.paths.tool_output_dir();
-            let images = crate::media::Limits::from_config(shared.config.get("media"));
+            let images = crate::media::Limits::from_config(selection.sources.config.get("media"));
             tasks.spawn(async move {
                 let result = execute(&tools, &name, input, &tool_ctx, capped).await;
                 let result = result.map(|out| {

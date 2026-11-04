@@ -23,7 +23,7 @@ use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::Agent;
-use crate::api::Shared;
+use crate::api::{Loaded, Shared};
 use crate::events::{Event, InterruptReason};
 use crate::gateway::error::SessionError;
 use crate::model::{Model, ModelRef};
@@ -53,17 +53,19 @@ pub enum Outcome {
     Interrupted(InterruptReason),
 }
 
-/// The agent, model and variant a turn runs with.
+/// The config sources, agent, model and variant a step runs with.
 pub(crate) struct Selection {
+    pub sources: Arc<Loaded>,
     pub agent: Agent,
     pub model: Model,
     pub reference: ModelRef,
 }
 
 fn select(shared: &Shared, session: &SessionRow) -> Result<Selection, SessionError> {
+    let sources = shared.loaded();
     let agent = match session.agent.as_deref() {
-        Some(id) => shared.agents.get(id).cloned(),
-        None => shared.agents.default_agent().cloned(),
+        Some(id) => sources.agents.get(id).cloned(),
+        None => sources.agents.default_agent().cloned(),
     }
     .ok_or_else(|| {
         SessionError::new(
@@ -85,11 +87,12 @@ fn select(shared: &Shared, session: &SessionRow) -> Result<Selection, SessionErr
         .as_deref()
         .and_then(ModelRef::parse)
         .or_else(|| session.model.as_ref().and_then(ModelRef::from_json))
-        .or_else(|| shared.config.model().and_then(ModelRef::parse))
+        .or_else(|| sources.config.model().and_then(ModelRef::parse))
         .ok_or_else(no_route)?;
-    let model = crate::model::resolve(&shared.models, &reference)
+    let model = crate::model::resolve(&sources.models, &reference)
         .map_err(|error| SessionError::new("provider.no-route", error.to_string()))?;
     Ok(Selection {
+        sources,
         agent,
         model,
         reference,
@@ -270,16 +273,15 @@ async fn turn(
     options: TurnOptions,
     cancel: &CancellationToken,
 ) -> Outcome {
+    shared.refresh().await;
     let prepared = select(shared, session).and_then(|selection| {
         plan_reminders(shared, &session.id, &selection.agent.id);
-        step::settle_context(shared, session, &selection)?;
-        Ok(selection)
+        step::settle_context(shared, session, &selection)
     });
-    let selection = match prepared {
-        Ok(selection) => selection,
+    if let Err(error) = prepared {
         // Pending input stays in the inbox for the next attempt.
-        Err(error) => return Outcome::Failed(error),
-    };
+        return Outcome::Failed(error);
+    }
     let promoted = match inbox::promote(&shared.db, &session.id, inbox::Scope::Input) {
         Ok(Some(promoted)) => promoted,
         Ok(None) => return Outcome::Succeeded,
@@ -287,7 +289,7 @@ async fn turn(
     };
     let title = (promoted > 0 && is_fallback_title(session))
         .then(|| tokio::spawn(title::generate(shared.clone(), session.clone())));
-    let outcome = step::drive(shared, session, &selection, options, cancel).await;
+    let outcome = step::drive(shared, session, options, cancel).await;
     if let Some(title) = title {
         let _ = title.await;
     }
