@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 anysola-core.workspace = true
 anyhow.workspace = true
+base64.workspace = true
 clap.workspace = true
 libc.workspace = true
 serde_json.workspace = true

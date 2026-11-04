@@ -9,13 +9,43 @@ pub struct Paths {
     pub home: PathBuf,
     /// `~/.anysola`
     pub data: PathBuf,
+    /// The 0.5.x global config directory, still read: `OPENCODE_CONFIG_DIR`, else
+    /// `$XDG_CONFIG_HOME/opencode`, else `~/.config/opencode`.
+    pub legacy_config: PathBuf,
 }
 
 impl Paths {
     pub fn from_env() -> Self {
         let home = home_dir();
+        Paths::under(home)
+    }
+
+    /// The layout for a given home, with the legacy config dir taken from the environment.
+    pub fn under(home: PathBuf) -> Self {
         let data = home.join(".anysola");
-        Paths { home, data }
+        let legacy_config =
+            if let Some(dir) = env::var_os("OPENCODE_CONFIG_DIR").filter(|v| !v.is_empty()) {
+                PathBuf::from(dir)
+            } else {
+                match env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
+                    Some(dir) => PathBuf::from(dir).join("opencode"),
+                    None => home.join(".config").join("opencode"),
+                }
+            };
+        Paths {
+            home,
+            data,
+            legacy_config,
+        }
+    }
+
+    /// The layout for tests: everything under `home`.
+    pub fn isolated(home: PathBuf) -> Self {
+        Paths {
+            data: home.join(".anysola"),
+            legacy_config: home.join(".config").join("opencode"),
+            home,
+        }
     }
 
     pub fn database(&self) -> PathBuf {
@@ -42,16 +72,8 @@ impl Paths {
         self.data.join("state")
     }
 
-    /// The 0.5.x global config directory, still read: `OPENCODE_CONFIG_DIR`, else
-    /// `$XDG_CONFIG_HOME/opencode`, else `~/.config/opencode`.
     pub fn legacy_config_dir(&self) -> PathBuf {
-        if let Some(dir) = env::var_os("OPENCODE_CONFIG_DIR").filter(|v| !v.is_empty()) {
-            return PathBuf::from(dir);
-        }
-        match env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
-            Some(dir) => PathBuf::from(dir).join("opencode"),
-            None => self.home.join(".config").join("opencode"),
-        }
+        self.legacy_config.clone()
     }
 
     /// Plan files stay where 0.5.1 named them in the plan-mode prompt.

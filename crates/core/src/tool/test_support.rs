@@ -38,14 +38,21 @@ pub struct RecordingNotifier {
 
 impl SessionNotifier for RecordingNotifier {
     fn synthetic(&self, session_id: &str, text: String) {
-        self.messages.lock().unwrap().push((session_id.to_string(), text));
+        self.messages
+            .lock()
+            .unwrap()
+            .push((session_id.to_string(), text));
     }
 }
 
 struct NoSearch;
 
 impl WebSearch for NoSearch {
-    fn search<'a>(&'a self, _: &'a str, _: &'a str) -> BoxFuture<'a, Result<Vec<SearchResult>, String>> {
+    fn search<'a>(
+        &'a self,
+        _: &'a str,
+        _: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<SearchResult>, String>> {
         async { Err("no search in tests".to_string()) }.boxed()
     }
 }
@@ -62,7 +69,7 @@ pub fn context(dir: &Path) -> TestContext {
     let gate = Arc::new(RecordingGate::default());
     let notifier = Arc::new(RecordingNotifier::default());
     let home = dir.join(".home");
-    let paths = Paths { data: home.join(".anysola"), home };
+    let paths = Paths::isolated(home);
     let ctx = ToolContext {
         session_id: "ses_test".into(),
         message_id: "msg_test".into(),
@@ -81,5 +88,9 @@ pub fn context(dir: &Path) -> TestContext {
         notifier: notifier.clone(),
         web_search: Arc::new(NoSearch),
     };
-    TestContext { ctx, gate, notifier }
+    TestContext {
+        ctx,
+        gate,
+        notifier,
+    }
 }

@@ -6,6 +6,7 @@ pub mod access;
 pub mod bound;
 mod input;
 pub mod registry;
+mod search;
 
 pub mod edit;
 pub mod glob;

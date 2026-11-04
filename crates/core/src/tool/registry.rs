@@ -33,7 +33,12 @@ macro_rules! embedded_def {
             static DEF: std::sync::OnceLock<$crate::tool::registry::Def> =
                 std::sync::OnceLock::new();
             DEF.get_or_init(|| {
-                $crate::tool::registry::parse_def(include_str!(concat!("defs/", $file, ".json")))
+                $crate::tool::registry::parse_def(include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/src/tool/defs/",
+                    $file,
+                    ".json"
+                )))
             })
         }
     };

@@ -83,6 +83,7 @@ dependencies = [
  "anyhow",
  "anysola-core",
  "anysola-testkit",
+ "base64 0.22.1",
  "clap",
  "libc",
  "serde_json",
