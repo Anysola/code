@@ -134,7 +134,13 @@ async fn run(inventory: &Inventory, code: String, ctx: &ToolContext) -> ToolResu
     let mut outcome = std::pin::pin!(outcome);
     let finished = loop {
         tokio::select! {
-            result = &mut outcome => break result.unwrap_or(Finished::Interrupted),
+            result = &mut outcome => match result {
+                Ok(finished) => break finished,
+                Err(_) => {
+                    running.abort_all();
+                    return Err(ToolError::execution("Code Mode stopped unexpectedly."));
+                }
+            },
             Some(job) = requests.recv() => {
                 let inventory = inventory.clone();
                 let index = index.clone();
@@ -408,7 +414,7 @@ impl Tool for DirectTool {
             let called = invoke(&self.namespace, &self.tool, input, ctx).await?;
             Ok(ToolOutput {
                 content: called.content(),
-                metadata: called.metadata,
+                metadata: serde_json::Map::new(),
             })
         }
         .boxed()

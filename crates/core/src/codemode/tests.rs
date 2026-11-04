@@ -303,6 +303,23 @@ fn denied_execute_exposes_direct_tools() {
         ]
     );
     assert!(registry.code_mode(&rules).is_none());
+    let captured: Value = serde_json::from_str(include_str!(
+        "../../../../spec/verbatim/tools/_captured-request-build-execute-denied.json"
+    ))
+    .unwrap();
+    for definition in Registry::definitions(&registry.active(&rules), &env)
+        .into_iter()
+        .filter(|d| d.name.starts_with("opencode_"))
+    {
+        let entry = captured["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == definition.name.as_str())
+            .unwrap();
+        assert_eq!(entry["description"], definition.description.as_str());
+        assert_eq!(entry["input_schema"], definition.input_schema);
+    }
     let edit_denied = vec![Rule::new("edit", "*", Effect::Deny)];
     let inventory = registry.code_mode(&edit_denied).unwrap();
     assert_eq!(inventory.summary().total, 7);

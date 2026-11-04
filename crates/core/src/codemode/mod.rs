@@ -16,7 +16,7 @@ pub mod typescript;
 use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::permission::{Rule, wholly_disabled};
 use crate::tool::{ToolContent, ToolContext, ToolError};
@@ -27,7 +27,6 @@ use crate::tool::{ToolContent, ToolContext, ToolError};
 pub struct Called {
     pub output: Option<Value>,
     pub content: Vec<ToolContent>,
-    pub metadata: Map<String, Value>,
 }
 
 impl Called {
