@@ -109,7 +109,7 @@ impl Tool for SubagentTool {
                 });
             }
             let request: SubagentRequest = parse_input(self.name(), &def().input_schema, input)?;
-            ctx.host.subagent(ctx, request).await
+            ctx.session.subagent(ctx, request).await
         }
         .boxed()
     }
@@ -151,7 +151,7 @@ mod tests {
                 &test.ctx,
             )
             .await;
-        let requests = test.host.subagents.lock().unwrap();
+        let requests = test.session.subagents.lock().unwrap();
         assert_eq!(
             requests[0],
             SubagentRequest {

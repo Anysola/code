@@ -16,6 +16,7 @@ use serde_json::{Map, Value};
 
 use crate::paths::Paths;
 use crate::permission::Rule;
+use crate::permission::policy::{Policies, Policy};
 use crate::tool::OutputLimits;
 
 pub use normalize::{markdown_agent, model_ref, normalize_action};
@@ -27,6 +28,8 @@ const ENDPOINT_KEYS: [&str; 4] = ["baseURL", "apiKey", "authToken", "accessToken
 #[derive(Debug, Clone)]
 struct Document {
     data: Map<String, Value>,
+    /// From a managed (system) directory: its policies outrank every other document's.
+    managed: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -47,6 +50,10 @@ pub struct Config {
     pub directories: Vec<PathBuf>,
     /// Problems worth one warning line each (malformed documents, ignored keys).
     pub warnings: Vec<String>,
+    /// Policy statements of ordinary documents, earliest-loaded last.
+    policies: Vec<Policy>,
+    /// Policy statements of managed documents, earliest-loaded last.
+    managed_policies: Vec<Policy>,
 }
 
 impl Config {
@@ -89,8 +96,26 @@ impl Config {
         self.provider.get("models").and_then(Value::as_object)
     }
 
+    /// Every policy statement; the last one matching decides.
+    pub fn policies(&self) -> Policies {
+        Policies(
+            self.policies
+                .iter()
+                .chain(&self.managed_policies)
+                .cloned()
+                .collect(),
+        )
+    }
+
     fn apply(&mut self, document: Document) {
         let mut data = document.data;
+        let statements = policy_statements(&mut data);
+        let list = if document.managed {
+            &mut self.managed_policies
+        } else {
+            &mut self.policies
+        };
+        list.splice(0..0, statements);
         if let Some(Value::Array(rules)) = data.remove("permissions") {
             self.permissions.extend(
                 rules
@@ -138,6 +163,44 @@ impl Config {
             self.values.insert(key, value);
         }
     }
+}
+
+/// A document's policy statements in its own order: those generated from the legacy
+/// `enabled_providers`/`disabled_providers` lists, then `experimental.policies`, then `policies`.
+fn policy_statements(data: &mut Map<String, Value>) -> Vec<Policy> {
+    let provider = |resource: &str, effect: &str| {
+        Policy::parse(
+            &serde_json::json!({"action": "provider.use", "resource": resource, "effect": effect}),
+        )
+    };
+    let names = |value: Option<&Value>| -> Option<Vec<String>> {
+        value.and_then(Value::as_array).map(|list| {
+            list.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+    };
+    let mut out: Vec<Policy> = Vec::new();
+    if let Some(enabled) = names(data.get("enabled_providers")) {
+        out.extend(provider("*", "deny"));
+        out.extend(enabled.iter().filter_map(|id| provider(id, "allow")));
+    }
+    if let Some(disabled) = names(data.get("disabled_providers")) {
+        out.extend(disabled.iter().filter_map(|id| provider(id, "deny")));
+    }
+    let experimental = data
+        .get("experimental")
+        .and_then(|e| e.get("policies"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let native = match data.remove("policies") {
+        Some(Value::Array(list)) => list,
+        _ => Vec::new(),
+    };
+    out.extend(experimental.iter().chain(&native).filter_map(Policy::parse));
+    out
 }
 
 fn merge_agent(base: &mut Value, next: Value) {
@@ -295,6 +358,7 @@ fn managed_dirs() -> Vec<PathBuf> {
 struct Loader<'a> {
     paths: &'a Paths,
     config: Config,
+    managed: bool,
 }
 
 impl Loader<'_> {
@@ -304,7 +368,10 @@ impl Loader<'_> {
             Ok(Value::Object(map)) => {
                 let mut data = normalize::normalize(map);
                 lock_local(&mut data);
-                self.config.apply(Document { data });
+                self.config.apply(Document {
+                    data,
+                    managed: self.managed,
+                });
             }
             _ => self
                 .config
@@ -335,13 +402,17 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
     let mut loader = Loader {
         paths,
         config: Config::default(),
+        managed: false,
     };
     if let Some(remote) = options
         .remote
         .as_deref()
         .and_then(|body| remote_document(body, &options.api_url))
     {
-        loader.config.apply(Document { data: remote });
+        loader.config.apply(Document {
+            data: remote,
+            managed: false,
+        });
     }
     let legacy = paths.legacy_config_dir();
     loader.directory(&legacy, &NAMES);
@@ -374,6 +445,7 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
     {
         loader.text(&content, directory, "OPENCODE_CONFIG_CONTENT");
     }
+    loader.managed = true;
     for dir in managed_dirs() {
         loader.directory(&dir, &NAMES);
     }
@@ -384,6 +456,34 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn earlier_documents_and_managed_documents_win_policies() {
+        let mut config = Config::default();
+        let doc = |value: Value, managed: bool| Document {
+            data: value.as_object().unwrap().clone(),
+            managed,
+        };
+        let deny =
+            |resource: &str| json!({"action": "tool.use", "resource": resource, "effect": "deny"});
+        let allow =
+            |resource: &str| json!({"action": "tool.use", "resource": resource, "effect": "allow"});
+        config.apply(doc(json!({"policies": [deny("shell:*")]}), false));
+        config.apply(doc(json!({"policies": [allow("shell:*"), deny("read:*")], "experimental": {"policies": [deny("edit:*")]}}), false));
+        let policies = config.policies();
+        assert!(policies.tool_denial("shell", &["ls".into()]).is_some());
+        assert!(policies.tool_denial("read", &["a".into()]).is_some());
+        assert!(policies.tool_denial("edit", &["a".into()]).is_some());
+        config.apply(doc(json!({"policies": [allow("read:*")]}), true));
+        config.apply(doc(json!({"policies": [deny("read:*")]}), true));
+        assert!(
+            config
+                .policies()
+                .tool_denial("read", &["a".into()])
+                .is_none()
+        );
+        assert!(config.get("policies").is_none());
+    }
 
     #[test]
     fn remote_document_keeps_only_anysola() {

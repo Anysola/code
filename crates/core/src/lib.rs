@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod api;
+pub mod codemode;
 pub mod config;
 pub mod credits;
 pub mod events;
@@ -26,3 +27,4 @@ pub mod text;
 pub mod time;
 pub mod tool;
 pub mod version;
+pub mod worktree;

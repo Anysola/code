@@ -395,6 +395,7 @@ impl Renderer {
             Event::RetryScheduled { .. }
             | Event::PermissionAsked { .. }
             | Event::QuestionAsked { .. }
+            | Event::PermissionReplied { .. }
             | Event::Credits(_)
             | Event::TitleChanged { .. } => {}
         }

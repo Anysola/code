@@ -71,14 +71,14 @@ impl WebSearch for NoSearch {
 
 /// Records questions and subagent requests; answers questions with `question_reply`.
 #[derive(Default)]
-pub struct TestHost {
+pub struct TestSession {
     pub skills: Mutex<Vec<Skill>>,
     pub questions: Mutex<Vec<Vec<Question>>>,
     pub question_reply: Mutex<Option<QuestionReply>>,
     pub subagents: Mutex<Vec<SubagentRequest>>,
 }
 
-impl SessionHost for TestHost {
+impl SessionHost for TestSession {
     fn ask_questions(
         &self,
         _session_id: &str,
@@ -113,11 +113,43 @@ impl SessionHost for TestHost {
     }
 }
 
+/// A database outside the test directory, so it never shows up in listings.
+struct TestHost {
+    db: crate::storage::Db,
+    config: crate::config::Config,
+    _dir: tempfile::TempDir,
+}
+
+impl TestHost {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().expect("temp dir");
+        TestHost {
+            db: crate::storage::Db::open(&dir.path().join("test.db")).expect("test database"),
+            config: crate::config::Config::default(),
+            _dir: dir,
+        }
+    }
+}
+
+impl crate::codemode::Host for TestHost {
+    fn db(&self) -> &crate::storage::Db {
+        &self.db
+    }
+
+    fn models(&self) -> &[crate::model::Model] {
+        &[]
+    }
+
+    fn config(&self) -> &crate::config::Config {
+        &self.config
+    }
+}
+
 pub struct TestContext {
     pub ctx: ToolContext,
     pub gate: Arc<RecordingGate>,
     pub notifier: Arc<RecordingNotifier>,
-    pub host: Arc<TestHost>,
+    pub session: Arc<TestSession>,
 }
 
 /// A context whose session directory and project worktree are `dir`, with home and the data dir
@@ -125,7 +157,7 @@ pub struct TestContext {
 pub fn context(dir: &Path) -> TestContext {
     let gate = Arc::new(RecordingGate::default());
     let notifier = Arc::new(RecordingNotifier::default());
-    let host = Arc::new(TestHost::default());
+    let session = Arc::new(TestSession::default());
     let home = dir.join(".home");
     let paths = Paths::isolated(home);
     let ctx = ToolContext {
@@ -145,12 +177,13 @@ pub fn context(dir: &Path) -> TestContext {
         locks: Arc::new(PathLocks::default()),
         notifier: notifier.clone(),
         web_search: Arc::new(NoSearch),
-        host: host.clone(),
+        host: Arc::new(TestHost::new()),
+        session: session.clone(),
     };
     TestContext {
         ctx,
         gate,
         notifier,
-        host,
+        session,
     }
 }

@@ -9,7 +9,7 @@ use serde_json::{Map, Value, json};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use super::gate::RuleGate;
+use super::gate::{RuleGate, Scope};
 use super::lower::{Target, lower};
 use super::message::{AssistantData, AssistantTime, Message, Part, StoredModel, ToolState, encode};
 use super::request::{Request, build, output_limit};
@@ -92,8 +92,12 @@ fn context(shared: &Shared, session: &SessionRow, selection: &Selection) -> Cont
         worktree,
     };
     let skills = crate::skill::guidance(&shared.skills, &rules);
+    let catalog = shared
+        .registry
+        .code_mode(&rules)
+        .map(|inventory| crate::codemode::catalog::render(&inventory.summary()));
     let block2 = instructions::block(
-        names.contains(&"execute"),
+        catalog.as_deref(),
         skills.as_deref(),
         &files,
         &crate::time::date_string(),
@@ -176,6 +180,9 @@ pub(crate) async fn drive(
             }
         }
         let capped = selection.agent.steps == Some(number);
+        // A tool may have moved the session; the next step runs in its new directory.
+        let current = shared.db.session(&session.id).ok().flatten();
+        let session = current.as_ref().unwrap_or(session);
         match step(shared, session, selection, capped, cancel).await {
             StepEnd::Continue if capped => return Outcome::Succeeded,
             StepEnd::Continue => {}
@@ -505,11 +512,21 @@ async fn run_stream(
     headers: Vec<(String, String)>,
 ) -> StepEnd {
     let tool_cancel = cancel.child_token();
+    let mut configured = ctx.rules.clone();
+    configured.extend(
+        shared
+            .db
+            .session_permissions(&session.id)
+            .unwrap_or_default(),
+    );
     let gate = Arc::new(RuleGate {
         session_id: session.id.clone(),
-        rules: ctx.rules.clone(),
+        scope: Arc::new(Scope {
+            configured,
+            project_id: shared.project.id.clone(),
+            policies: Arc::new(shared.config.policies()),
+        }),
         asks: shared.asks.clone(),
-        events: shared.events.clone(),
     });
     let mut tasks: JoinSet<ToolTask> = JoinSet::new();
     let mut assembly = Assembly::default();
@@ -842,7 +859,8 @@ fn handle(
                     shared.gateway.clone(),
                     shared.credits.clone(),
                 )),
-                host: Arc::new(super::host::Host {
+                host: shared.clone(),
+                session: Arc::new(super::host::Host {
                     shared: shared.clone(),
                 }),
             };

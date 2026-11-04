@@ -4,7 +4,7 @@
 
 pub mod access;
 pub mod bound;
-mod input;
+pub(crate) mod input;
 pub mod registry;
 mod search;
 
@@ -15,7 +15,6 @@ pub mod question;
 pub mod read;
 pub mod shell;
 pub mod skill;
-pub mod stubs;
 pub mod subagent;
 pub mod webfetch;
 pub mod websearch;
@@ -172,14 +171,14 @@ pub struct ToolDefinition {
 }
 
 pub trait Tool: Send + Sync {
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
 
     /// Permission action used to hide the whole tool (`write` shares `edit`).
-    fn permission(&self) -> &'static str {
+    fn permission(&self) -> &str {
         self.name()
     }
 
-    /// Tools that only run inside Code Mode's `execute`. Every M1 tool is direct.
+    /// `execute`, which runs Code Mode programs and goes last in the tool array.
     fn code_mode(&self) -> bool {
         false
     }
@@ -252,7 +251,8 @@ pub struct ToolContext {
     pub locks: Arc<PathLocks>,
     pub notifier: Arc<dyn SessionNotifier>,
     pub web_search: Arc<dyn websearch::WebSearch>,
-    pub host: Arc<dyn SessionHost>,
+    pub host: Arc<dyn crate::codemode::Host>,
+    pub session: Arc<dyn SessionHost>,
 }
 
 impl ToolContext {

@@ -86,6 +86,20 @@ pub(crate) struct Shared {
     pub turns: Mutex<std::collections::HashMap<String, CancellationToken>>,
 }
 
+impl crate::codemode::Host for Shared {
+    fn db(&self) -> &Db {
+        &self.db
+    }
+
+    fn models(&self) -> &[Model] {
+        &self.models
+    }
+
+    fn config(&self) -> &Config {
+        &self.config
+    }
+}
+
 #[derive(Clone)]
 pub struct Core {
     pub(crate) shared: Arc<Shared>,
@@ -137,7 +151,7 @@ impl Core {
         let skills = crate::skill::discover(&paths, &config, directory).await;
         let models = crate::model::catalog(&config);
         let project = crate::project::identify(directory);
-        db.upsert_project(&project, directory)?;
+        db.upsert_project(&project)?;
         let (events, _) = broadcast::channel(4096);
         let credits = Arc::new(Credits::new(db.clone(), events.clone()));
         let env = std::env::vars_os()
@@ -146,6 +160,7 @@ impl Core {
         let notifier = Arc::new(StoreNotifier {
             db: Arc::downgrade(&db),
         });
+        let asks = Arc::new(Asks::new(db.clone(), events.clone()));
         let shared = Shared {
             paths,
             db,
@@ -157,7 +172,7 @@ impl Core {
             models,
             registry: Registry::builtin(),
             skills,
-            asks: Arc::default(),
+            asks,
             questions: Questions::default(),
             jobs: Jobs::default(),
             locks: Arc::default(),
@@ -330,22 +345,9 @@ impl Core {
         self.shared.questions.reply(request_id, reply)
     }
 
-    /// True when `session_id` is `ancestor` or one of its child sessions, at any depth.
-    pub fn descends_from(&self, session_id: &str, ancestor: &str) -> bool {
-        let mut current = Some(session_id.to_string());
-        while let Some(id) = current {
-            if id == ancestor {
-                return true;
-            }
-            current = self
-                .shared
-                .db
-                .session(&id)
-                .ok()
-                .flatten()
-                .and_then(|s| s.parent_id);
-        }
-        false
+    /// Rejects every pending permission ask and every later one, for shutdown.
+    pub fn close_permissions(&self) {
+        self.shared.asks.close();
     }
 }
 

@@ -130,3 +130,45 @@ pub fn normalize(path: &Path) -> PathBuf {
     }
     out
 }
+
+/// Node's `path.join(base, rest)`: joined, then `.`/`..` and repeated separators resolved, a trailing
+/// separator kept.
+pub fn node_join(base: &str, rest: &str) -> String {
+    if cfg!(windows) && !base.starts_with('/') {
+        return normalize(&Path::new(base).join(rest)).display().to_string();
+    }
+    let joined = if rest.is_empty() {
+        base.to_string()
+    } else if base.is_empty() {
+        rest.to_string()
+    } else {
+        format!("{base}/{rest}")
+    };
+    let absolute = joined.starts_with('/');
+    let trailing = joined.ends_with('/');
+    let mut parts: Vec<&str> = Vec::new();
+    for part in joined.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if parts.last().is_some_and(|p| *p != "..") {
+                    parts.pop();
+                } else if !absolute {
+                    parts.push("..");
+                }
+            }
+            other => parts.push(other),
+        }
+    }
+    let mut out = parts.join("/");
+    if absolute {
+        out.insert(0, '/');
+    }
+    if out.is_empty() {
+        out.push('.');
+    }
+    if trailing && !out.ends_with('/') {
+        out.push('/');
+    }
+    out
+}

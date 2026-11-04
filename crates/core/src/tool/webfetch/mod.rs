@@ -272,6 +272,7 @@ impl Tool for WebfetchTool {
                 Ok(Err(FetchError::Denied)) => {
                     return Err(PermissionError::Blocked {
                         action: self.name().into(),
+                        reason: None,
                     }
                     .into());
                 }

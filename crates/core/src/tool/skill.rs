@@ -38,7 +38,7 @@ impl Tool for SkillTool {
     fn execute<'a>(&'a self, input: Value, ctx: &'a ToolContext) -> BoxFuture<'a, ToolResult> {
         async move {
             let input: Input = parse_input(self.name(), &def().input_schema, input)?;
-            let Some(skill) = ctx.host.skill(&input.id) else {
+            let Some(skill) = ctx.session.skill(&input.id) else {
                 return Err(ToolError::execution(format!(
                     "Unable to load skill {}",
                     input.id
@@ -78,14 +78,18 @@ mod tests {
         std::fs::create_dir_all(&skill_dir).unwrap();
         std::fs::write(skill_dir.join("SKILL.md"), "Do the demo thing.\n").unwrap();
         let test = context(dir.path());
-        test.host.skills.lock().unwrap().push(crate::skill::Skill {
-            id: "demo".into(),
-            name: "demo".into(),
-            description: None,
-            autoinvoke: None,
-            path: skill_dir.join("SKILL.md"),
-            content: "Do the demo thing.".into(),
-        });
+        test.session
+            .skills
+            .lock()
+            .unwrap()
+            .push(crate::skill::Skill {
+                id: "demo".into(),
+                name: "demo".into(),
+                description: None,
+                autoinvoke: None,
+                path: skill_dir.join("SKILL.md"),
+                content: "Do the demo thing.".into(),
+            });
         let output = SkillTool
             .execute(json!({"id": "demo"}), &test.ctx)
             .await
@@ -114,6 +118,7 @@ mod tests {
         );
         *test.gate.answer.lock().unwrap() = Some(PermissionError::Blocked {
             action: "skill".into(),
+            reason: None,
         });
         let denied = SkillTool
             .execute(json!({"id": "demo"}), &test.ctx)

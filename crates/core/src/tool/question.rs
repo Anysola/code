@@ -90,7 +90,7 @@ impl Tool for QuestionTool {
             })
             .await?;
             match ctx
-                .host
+                .session
                 .ask_questions(&ctx.session_id, input.questions.clone())
                 .await
             {
@@ -126,7 +126,7 @@ mod tests {
     async fn answers_and_unanswered() {
         let dir = tempfile::tempdir().unwrap();
         let test = context(dir.path());
-        *test.host.question_reply.lock().unwrap() =
+        *test.session.question_reply.lock().unwrap() =
             Some(QuestionReply::Answered(vec![vec!["A".into()], vec![]]));
         let output = QuestionTool.execute(input(), &test.ctx).await.unwrap();
         assert_eq!(
@@ -142,18 +142,18 @@ mod tests {
             ("question", &vec!["*".to_string()])
         );
         assert!(asked[0].save.is_empty());
-        assert_eq!(test.host.questions.lock().unwrap()[0].len(), 2);
+        assert_eq!(test.session.questions.lock().unwrap()[0].len(), 2);
     }
 
     #[tokio::test]
     async fn dismissed() {
         let dir = tempfile::tempdir().unwrap();
         let test = context(dir.path());
-        *test.host.question_reply.lock().unwrap() =
+        *test.session.question_reply.lock().unwrap() =
             Some(QuestionReply::Dismissed(Some("no answers here".into())));
         let error = QuestionTool.execute(input(), &test.ctx).await.unwrap_err();
         assert_eq!(error, ToolError::execution("no answers here"));
-        *test.host.question_reply.lock().unwrap() = Some(QuestionReply::Dismissed(None));
+        *test.session.question_reply.lock().unwrap() = Some(QuestionReply::Dismissed(None));
         let error = QuestionTool.execute(input(), &test.ctx).await.unwrap_err();
         assert_eq!(
             (error.kind, error.message.as_str()),

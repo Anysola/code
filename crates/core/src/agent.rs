@@ -132,10 +132,9 @@ fn expand(rule: Rule, home: &str) -> Rule {
     } else if let Some(rest) = resource
         .strip_prefix("~/")
         .or_else(|| resource.strip_prefix("$HOME/"))
+        .or_else(|| resource.strip_prefix("$HOME\\"))
     {
-        format!("{home}/{rest}")
-    } else if let Some(rest) = resource.strip_prefix("$HOME\\") {
-        format!("{home}\\{rest}")
+        crate::paths::node_join(home, rest)
     } else {
         return rule;
     };
@@ -151,10 +150,6 @@ fn rules(value: Option<&Value>, home: &str) -> Vec<Rule> {
         .map(|list| {
             list.iter()
                 .filter_map(|r| serde_json::from_value::<Rule>(r.clone()).ok())
-                .map(|r| Rule {
-                    action: crate::config::normalize_action(&r.action).to_string(),
-                    ..r
-                })
                 .map(|r| expand(r, home))
                 .collect()
         })

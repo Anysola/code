@@ -62,9 +62,13 @@ pub fn windows_path(input: &str) -> String {
 
 /// Expands `~` and resolves against `directory` (lexically, like `path.resolve`).
 pub fn resolve_path(ctx: &ToolContext, input: &str) -> PathBuf {
+    resolve_path_at(ctx, &ctx.directory, input)
+}
+
+fn resolve_path_at(ctx: &ToolContext, base: &Path, input: &str) -> PathBuf {
     let normalized = windows_path(input);
     let expanded = ctx.paths.expand_home(&normalized);
-    crate::paths::normalize(&ctx.directory.join(expanded))
+    crate::paths::normalize(&base.join(expanded))
 }
 
 pub fn slash(path: &Path) -> String {
@@ -82,7 +86,12 @@ pub fn is_internal(ctx: &ToolContext, absolute: &Path) -> bool {
 }
 
 pub fn resolve(ctx: &ToolContext, input: &str, kind: Option<Kind>) -> Target {
-    let absolute = resolve_path(ctx, input);
+    resolve_at(ctx, &ctx.directory, input, kind)
+}
+
+/// [`resolve`] with relative paths taken from `base` instead of the session directory.
+pub fn resolve_at(ctx: &ToolContext, base: &Path, input: &str, kind: Option<Kind>) -> Target {
+    let absolute = resolve_path_at(ctx, base, input);
     if is_internal(ctx, &absolute) {
         let relative = absolute
             .strip_prefix(&ctx.directory)

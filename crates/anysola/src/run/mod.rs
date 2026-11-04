@@ -153,6 +153,7 @@ pub async fn run(args: RunArgs) -> i32 {
             ui::NORMAL
         ));
     }
+    core.close_permissions();
     anysola_core::tool::shell::kill_background_shells();
     code
 }
@@ -225,9 +226,8 @@ async fn consume(
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
             Err(tokio::sync::broadcast::error::RecvError::Closed) => return renderer,
         };
-        if let Event::QuestionAsked { request_id, .. } = &event
-            && core.descends_from(event.session_id(), &renderer.session_id)
-        {
+        // Asks of any session in this process (the run's and its subagents') are answered here.
+        if let Event::QuestionAsked { request_id, .. } = &event {
             core.reply_question(
                 request_id,
                 QuestionReply::Dismissed(Some(QUESTION_CANCELLED.into())),
@@ -240,7 +240,6 @@ async fn consume(
             resources,
             ..
         } = &event
-            && core.descends_from(event.session_id(), &renderer.session_id)
         {
             if auto {
                 core.reply_permission(request_id, Reply::Once);
