@@ -223,6 +223,21 @@ fn sources(config: &Config, paths: &Paths, directory: &Path) -> Vec<Source> {
     out
 }
 
+/// The local folders skills are read from, for the file watcher.
+pub fn local_roots(paths: &Paths, config: &Config, directory: &Path) -> Vec<PathBuf> {
+    let compatibility = compatibility_roots(paths, directory)
+        .into_iter()
+        .map(|root| root.join("skills"));
+    let configured =
+        sources(config, paths, directory)
+            .into_iter()
+            .filter_map(|source| match source {
+                Source::Directory(dir) => Some(dir),
+                Source::Url(_) => None,
+            });
+    compatibility.chain(configured).collect()
+}
+
 /// Every skill visible from `directory`.
 pub async fn discover(paths: &Paths, config: &Config, directory: &Path) -> Vec<Skill> {
     let mut skills = Vec::new();

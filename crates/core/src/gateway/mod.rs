@@ -1,6 +1,7 @@
 //! Client for the Anysola gateway (`<api>/v1/code/*`): remote config, version check, web search and
 //! streamed model calls, with the exact header sets 0.5.1 sent.
 
+pub mod config;
 pub mod error;
 pub mod retry;
 pub mod sse;
@@ -48,7 +49,8 @@ impl Token {
 pub enum ConfigFetch {
     Ok(String),
     Unauthorized,
-    Failed,
+    /// Another status, or `None` when the request did not complete.
+    Failed(Option<u16>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -147,15 +149,15 @@ impl MessageStream {
 
 impl Gateway {
     pub fn new(token: Option<Token>) -> Self {
+        Self::with_base(api_url(), token)
+    }
+
+    pub fn with_base(base: String, token: Option<Token>) -> Self {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(30))
             .build()
             .expect("HTTP client with default TLS settings");
-        Gateway {
-            base: api_url(),
-            http,
-            token,
-        }
+        Gateway { base, http, token }
     }
 
     pub fn base(&self) -> &str {
@@ -190,15 +192,15 @@ impl Gateway {
             .send()
             .await
         else {
-            return ConfigFetch::Failed;
+            return ConfigFetch::Failed(None);
         };
         match response.status().as_u16() {
             401 => ConfigFetch::Unauthorized,
             200..=299 => response
                 .text()
                 .await
-                .map_or(ConfigFetch::Failed, ConfigFetch::Ok),
-            _ => ConfigFetch::Failed,
+                .map_or(ConfigFetch::Failed(None), ConfigFetch::Ok),
+            status => ConfigFetch::Failed(Some(status)),
         }
     }
 

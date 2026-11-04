@@ -742,7 +742,8 @@ pub(crate) async fn compact(
     trigger: Trigger,
     cancel: &CancellationToken,
 ) -> Outcome {
-    let settings = Settings::from_config(&shared.config);
+    let current = shared.loaded();
+    let settings = Settings::from_config(&current.config);
     if trigger != Trigger::Manual && !settings.auto {
         return Outcome::Skipped;
     }
@@ -755,12 +756,12 @@ pub(crate) async fn compact(
             return Outcome::Skipped;
         }
     }
-    let configured = shared
+    let configured = current
         .agents
         .get("compaction")
         .and_then(|a| a.model.as_deref())
         .and_then(ModelRef::parse)
-        .and_then(|r| crate::model::resolve(&shared.models, &r).ok());
+        .and_then(|r| crate::model::resolve(&current.models, &r).ok());
     let model = configured.unwrap_or_else(|| selection.model.clone());
     let same_model = model.id == selection.model.id;
     let cap = ceiling(model.context, settings.buffer.as_ref())

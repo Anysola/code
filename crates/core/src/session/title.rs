@@ -134,9 +134,10 @@ fn lower_variant(model: &Model, selected: Option<&str>) -> Option<String> {
 /// The title agent's model (its variant, else a minimal one); else `small_model`; else the
 /// session's model at a lower variant. The session's model is the one fallback.
 fn candidates(shared: &Shared, session: &SessionRow) -> Vec<(Model, Option<String>)> {
+    let loaded = shared.loaded();
     let resolve = |r: &ModelRef| {
         crate::model::resolve(
-            &shared.models,
+            &loaded.models,
             &ModelRef {
                 variant: None,
                 ..r.clone()
@@ -148,9 +149,9 @@ fn candidates(shared: &Shared, session: &SessionRow) -> Vec<(Model, Option<Strin
         .model
         .as_ref()
         .and_then(ModelRef::from_json)
-        .or_else(|| shared.config.model().and_then(ModelRef::parse));
+        .or_else(|| loaded.config.model().and_then(ModelRef::parse));
     let primary = primary_ref.as_ref().and_then(resolve);
-    let preferred = match shared
+    let preferred = match loaded
         .agents
         .get("title")
         .and_then(|a| a.model.as_deref())
@@ -160,7 +161,7 @@ fn candidates(shared: &Shared, session: &SessionRow) -> Vec<(Model, Option<Strin
             let variant = r.variant.clone().or_else(|| minimal(&m));
             (m, variant)
         }),
-        None => match shared
+        None => match loaded
             .config
             .get("small_model")
             .and_then(|v| v.as_str())

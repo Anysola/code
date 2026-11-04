@@ -79,8 +79,8 @@ impl Called {
 /// What the `opencode` namespace tools need from the running core besides the tool context.
 pub trait Host: Send + Sync {
     fn db(&self) -> &crate::storage::Db;
-    fn models(&self) -> &[crate::model::Model];
-    fn config(&self) -> &crate::config::Config;
+    fn models(&self) -> std::sync::Arc<[crate::model::Model]>;
+    fn config(&self) -> std::sync::Arc<crate::config::Config>;
 }
 
 pub trait NamespaceTool: Send + Sync {

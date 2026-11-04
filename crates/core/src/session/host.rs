@@ -32,7 +32,12 @@ impl SessionHost for Host {
     }
 
     fn skill(&self, id: &str) -> Option<Skill> {
-        self.shared.skills.iter().find(|s| s.id == id).cloned()
+        self.shared
+            .loaded()
+            .skills
+            .iter()
+            .find(|s| s.id == id)
+            .cloned()
     }
 
     fn subagent<'a>(

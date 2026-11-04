@@ -58,7 +58,7 @@ struct State {
     script: Script,
     search: Mutex<Reply>,
     version: Mutex<Value>,
-    config: Mutex<Option<Value>>,
+    config: Mutex<Option<Reply>>,
     requests: Mutex<Vec<Recorded>>,
     /// Plain-text files served at other paths (instruction URLs).
     files: Mutex<Vec<(String, String)>>,
@@ -162,12 +162,12 @@ async fn handle(
         headers: Vec::new(),
     };
     let reply = match path.as_str() {
-        "/v1/code/config" => ok(state
+        "/v1/code/config" => state
             .config
             .lock()
             .unwrap()
             .clone()
-            .unwrap_or_else(|| default_config(&base))),
+            .unwrap_or_else(|| ok(default_config(&base))),
         "/v1/code/me" => ok(
             json!({"plan": "team", "access": "paid", "credits": {"available": 731, "renewsAt": "2026-11-23T00:00:00Z"}, "lowBalance": false, "usageToday": {"requests": 3, "credits": 9}}),
         ),
@@ -272,6 +272,14 @@ impl FakeGateway {
     }
 
     pub fn set_config(&self, body: Value) {
-        *self.state.config.lock().unwrap() = Some(body);
+        self.set_config_reply(Reply::Json {
+            status: 200,
+            body,
+            headers: Vec::new(),
+        });
+    }
+
+    pub fn set_config_reply(&self, reply: Reply) {
+        *self.state.config.lock().unwrap() = Some(reply);
     }
 }

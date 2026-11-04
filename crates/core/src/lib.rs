@@ -29,4 +29,5 @@ pub mod text;
 pub mod time;
 pub mod tool;
 pub mod version;
+pub mod watch;
 pub mod worktree;

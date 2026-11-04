@@ -271,10 +271,8 @@ fn lock_local(data: &mut Map<String, Value>) {
 
 /// The remote document: only `providers.anysola`, an Anysola `model`, `agents`, and the legacy
 /// `small_model` as the title agent's model. The provider is pinned to `<api>/v1/code`.
-pub fn remote_document(body: &str, api_url: &str) -> Option<Map<String, Value>> {
-    let Value::Object(input) = serde_json::from_str::<Value>(body).ok()? else {
-        return None;
-    };
+pub fn remote_document(body: &Value, api_url: &str) -> Option<Map<String, Value>> {
+    let input = body.as_object()?;
     let mut doc = Map::new();
     if let Some(model) = input.get("model").filter(|m| is_anysola_ref(m)) {
         doc.insert("model".into(), model.clone());
@@ -320,8 +318,8 @@ pub fn remote_document(body: &str, api_url: &str) -> Option<Map<String, Value>> 
 /// What to load besides files.
 #[derive(Debug, Clone, Default)]
 pub struct LoadOptions {
-    /// Raw body of the gateway's `/config` (live or cached).
-    pub remote: Option<String>,
+    /// Body of the gateway's `/config` (live or cached).
+    pub remote: Option<Value>,
     pub api_url: String,
 }
 
@@ -411,7 +409,7 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
     };
     if let Some(remote) = options
         .remote
-        .as_deref()
+        .as_ref()
         .and_then(|body| remote_document(body, &options.api_url))
     {
         loader.config.apply(Document {
@@ -497,7 +495,7 @@ mod tests {
             "small_model": "anysola/claude-haiku-5-5",
             "providers": {"anysola": {"settings": {"baseURL": "https://elsewhere"}, "models": {"m": {}}}, "other": {}},
         });
-        let doc = remote_document(&body.to_string(), "http://x").unwrap();
+        let doc = remote_document(&body, "http://x").unwrap();
         assert_eq!(doc["agents"]["title"]["model"], "anysola/claude-haiku-5-5");
         assert_eq!(
             doc["providers"]["anysola"]["settings"]["baseURL"],

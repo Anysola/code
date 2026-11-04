@@ -212,9 +212,8 @@ async fn worktree_create(
 
 /// Config `worktree.directory` (`~/` is home, relative is the project root), else the data dir.
 fn worktree_base(ctx: &ToolContext) -> PathBuf {
-    let configured = ctx
-        .host
-        .config()
+    let config = ctx.host.config();
+    let configured = config
         .get("worktree")
         .and_then(|w| w.get("directory"))
         .and_then(Value::as_str);
@@ -288,9 +287,8 @@ fn models(input: Value, ctx: &ToolContext) -> Called {
     let provider_name = "Anysola";
     // Anysola serves only chat models.
     let chat = text(&input, "type").is_none_or(|t| t == "chat");
-    let matching: Vec<&crate::model::Model> = ctx
-        .host
-        .models()
+    let models = ctx.host.models();
+    let matching: Vec<&crate::model::Model> = models
         .iter()
         .filter(|_| chat)
         .filter(|_| {

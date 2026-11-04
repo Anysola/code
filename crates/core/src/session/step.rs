@@ -72,12 +72,13 @@ fn instructions(
 ) -> Result<String, SessionError> {
     let directory = std::path::PathBuf::from(&session.directory);
     let worktree = shared.project.worktree.clone();
+    let loaded = shared.loaded();
     let files = instructions::discover(
         &shared.paths,
         &directory,
         &worktree,
-        &shared.config.instructions,
-        &shared.remote_instructions,
+        &loaded.config.instructions,
+        &loaded.remote_instructions,
     );
     let environment = Environment {
         git: shared.project.vcs == Some("git"),
@@ -90,7 +91,7 @@ fn instructions(
         .map(|inventory| inventory.summary());
     let sources = instructions::sources(
         catalog.as_ref(),
-        crate::skill::guidance(&shared.skills, rules),
+        crate::skill::guidance(&loaded.skills, rules),
         files,
         &crate::time::date_string(),
         &environment,
@@ -115,13 +116,14 @@ fn context(
 ) -> Result<Context, SessionError> {
     let rules = selection.agent.permissions.clone();
     let mut tools = shared.registry.active(&rules);
-    if !shared.config.websearch_enabled() {
+    let loaded = shared.loaded();
+    if !loaded.config.websearch_enabled() {
         tools.retain(|t| t.name() != "websearch");
     }
     let env = DefinitionEnv {
-        shell_name: crate::tool::shell::shell_name(shared.config.shell()),
+        shell_name: crate::tool::shell::shell_name(loaded.config.shell()),
         year: process_year(),
-        subagents: shared.agents.subagents_for(&rules),
+        subagents: loaded.agents.subagents_for(&rules),
     };
     let definitions = Registry::definitions(&tools, &env);
     let names: Vec<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
@@ -669,7 +671,7 @@ async fn run_stream(
         scope: Arc::new(Scope {
             configured,
             project_id: shared.project.id.clone(),
-            policies: Arc::new(shared.config.policies()),
+            policies: Arc::new(shared.loaded().config.policies()),
         }),
         asks: shared.asks.clone(),
     });
@@ -1003,8 +1005,8 @@ fn handle(
                 permissions: gate.clone(),
                 cancel: cancel.clone(),
                 env: shared.env.clone(),
-                configured_shell: shared.config.shell().map(str::to_string),
-                limits: shared.config.tool_output(),
+                configured_shell: shared.loaded().config.shell().map(str::to_string),
+                limits: shared.loaded().config.tool_output(),
                 locks: shared.locks.clone(),
                 notifier: shared.notifier.clone(),
                 web_search: Arc::new(crate::search::GatewaySearch::new(
@@ -1018,7 +1020,7 @@ fn handle(
             };
             let tools = ctx.tools.clone();
             let output_dir = shared.paths.tool_output_dir();
-            let images = crate::media::Limits::from_config(shared.config.get("media"));
+            let images = crate::media::Limits::from_config(shared.loaded().config.get("media"));
             tasks.spawn(async move {
                 let result = execute(&tools, &name, input, &tool_ctx, capped).await;
                 let result = result.map(|out| {

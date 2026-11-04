@@ -5,5 +5,5 @@ mod gateway;
 mod home;
 pub mod sse;
 
-pub use gateway::{FakeGateway, Recorded, Reply, Script};
+pub use gateway::{FakeGateway, Recorded, Reply, Script, default_config};
 pub use home::{Output, TestHome};
