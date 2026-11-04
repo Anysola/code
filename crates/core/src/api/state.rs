@@ -56,7 +56,13 @@ impl Loaded {
         let mut skills = crate::skill::discover(paths, &config, directory).await;
         let policies = config.policies();
         skills.retain(|skill| policies.allows("skill.use", &skill.id));
-        let models = crate::model::catalog(&config).into();
+        let models = if config.anysola_allowed("provider.use")
+            && config.anysola_allowed("integration.use")
+        {
+            crate::model::catalog(&config).into()
+        } else {
+            Arc::from([])
+        };
         Loaded {
             config: Arc::new(config),
             agents,

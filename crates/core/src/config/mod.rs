@@ -86,8 +86,16 @@ impl Config {
             .filter(|s| !s.is_empty())
     }
 
+    /// Off with `websearch: false`, or when a policy denies the Anysola integration that serves it.
     pub fn websearch_enabled(&self) -> bool {
         self.get("websearch") != Some(&Value::Bool(false))
+            && self.anysola_allowed("integration.use")
+    }
+
+    /// Whether policies let the Anysola provider or integration be used (`provider.use` /
+    /// `integration.use` on `anysola`; a device login carries no account to qualify the resource).
+    pub fn anysola_allowed(&self, action: &str) -> bool {
+        self.policies().allows(action, crate::model::PROVIDER)
     }
 
     pub fn tool_output(&self) -> OutputLimits {

@@ -109,3 +109,48 @@ fn watched_files_reload_before_the_next_step() {
     }
     assert!(core.loaded().commands.get("hi").is_some());
 }
+
+#[test]
+fn policies_withhold_the_provider_and_skills() {
+    let gateway = FakeGateway::start(|request, _| text(request, "ok"));
+    let env = env(&gateway.url);
+    env.home.write(
+        "proj/.claude/skills/deploy/SKILL.md",
+        "---\ndescription: Deploys\n---\nDeploy.",
+    );
+    env.home.write(
+        "proj/.claude/skills/lint/SKILL.md",
+        "---\ndescription: Lints\n---\nLint.",
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    assert_eq!(core.loaded().skills.len(), 2);
+    assert!(core.loaded().config.websearch_enabled());
+    drop(core);
+
+    env.home.write(
+        "proj/opencode.json",
+        r#"{"policies": [{"action": "skill.use", "resource": "dep*", "effect": "deny"}]}"#,
+    );
+    let core = runtime.block_on(common::core(&env));
+    let skills: Vec<String> = core.loaded().skills.iter().map(|s| s.id.clone()).collect();
+    assert_eq!(skills, ["lint"]);
+    assert!(!core.loaded().models.is_empty());
+    drop(core);
+
+    env.home.write(
+        "proj/opencode.json",
+        r#"{"policies": [{"action": "provider.use", "resource": "*", "effect": "deny"}]}"#,
+    );
+    let core = runtime.block_on(common::core(&env));
+    assert!(core.loaded().models.is_empty());
+    drop(core);
+
+    env.home.write(
+        "proj/opencode.json",
+        r#"{"policies": [{"action": "integration.use", "resource": "anysola", "effect": "deny"}]}"#,
+    );
+    let core = runtime.block_on(common::core(&env));
+    assert!(core.loaded().models.is_empty());
+    assert!(!core.loaded().config.websearch_enabled());
+}
