@@ -2,8 +2,10 @@
 //!
 //! A ruleset is an ordered list; the last rule matching both action and resource wins and no match
 //! means `ask`. The interactive side (asking, replies, saved "always" rules) lives behind
-//! [`PermissionGate`], implemented by the session layer.
+//! [`PermissionGate`], implemented by the session layer. Managed [`policy`] statements can deny
+//! what rules allow.
 
+pub mod policy;
 mod wildcard;
 
 use futures_util::future::BoxFuture;
@@ -66,9 +68,12 @@ pub struct PermissionRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PermissionError {
-    /// A rule denies the request.
-    #[error("Permission denied: {action}")]
-    Blocked { action: String },
+    /// A rule or a policy denies the request; a policy says why.
+    #[error("{}", reason.clone().unwrap_or_else(|| format!("Permission denied: {action}")))]
+    Blocked {
+        action: String,
+        reason: Option<String>,
+    },
     /// The user rejected without a message: the step ends.
     #[error("The user declined this tool call")]
     Declined,

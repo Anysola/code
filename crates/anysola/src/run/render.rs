@@ -393,6 +393,7 @@ impl Renderer {
             Event::Interrupted { .. } | Event::Succeeded { .. } => return true,
             Event::RetryScheduled { .. }
             | Event::PermissionAsked { .. }
+            | Event::PermissionReplied { .. }
             | Event::Credits(_)
             | Event::TitleChanged { .. } => {}
         }

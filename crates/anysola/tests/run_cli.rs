@@ -643,3 +643,58 @@ fn sigint_interrupts_with_exit_130() {
         "a user interrupt reports no error"
     );
 }
+
+#[test]
+fn shell_permissions_policies_and_scanner() {
+    let gateway = FakeGateway::start(|request: &Recorded, _| {
+        let model = request.json()["model"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let stream = if request.is_title() {
+            Stream::new().text("Title")
+        } else if request.json()["messages"].as_array().unwrap().len() == 1 {
+            Stream::new()
+                .tool("t1", "shell", json!({"command": "git push"}))
+                .tool("t2", "shell", json!({"command": "touch made; echo 'open"}))
+                .tool("t3", "shell", json!({"command": "cd /tmp && ls"}))
+        } else {
+            Stream::new().text("Done.")
+        };
+        Reply::Sse {
+            body: stream.finish(&model, Some(1)),
+            before: None,
+        }
+    });
+    let home = TestHome::new(&gateway.url);
+    std::fs::write(
+        home.project().join("opencode.json"),
+        r#"{"policies":[{"action":"tool.use","resource":"shell:git *","effect":"deny"}],"permission":{"external_directory":"ask"}}"#,
+    )
+    .unwrap();
+    let out = home.run(BIN, &["run", "go"], None, None);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert!(
+        out.stderr
+            .contains("permission requested: external_directory (/tmp/*); auto-rejecting"),
+        "{}",
+        out.stderr
+    );
+    assert!(!home.project().join("made").exists());
+    let main = main_requests(&gateway);
+    let results = &main[1].json()["messages"][2]["content"];
+    let text = |i: usize| {
+        results[i]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    };
+    assert_eq!(
+        text(0),
+        r#"{"error":{"type":"permission.rejected","message":"Blocked by configuration policy"},"content":[]}"#
+    );
+    assert_eq!(
+        text(1),
+        r#"{"error":{"type":"unknown","message":"Portable shell scanner cannot analyze command: unterminated-quote"},"content":[]}"#
+    );
+}
