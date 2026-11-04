@@ -462,16 +462,6 @@ impl Db {
         })?;
         Ok(id)
     }
-
-    /// Removes every credential of an integration; returns how many there were.
-    pub fn remove_integration_credentials(&self, integration_id: &str) -> Result<usize> {
-        self.with(|c| {
-            c.execute(
-                "DELETE FROM credential WHERE integration_id = ?1",
-                [integration_id],
-            )
-        })
-    }
 }
 
 #[cfg(test)]

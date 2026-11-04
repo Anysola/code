@@ -177,10 +177,10 @@ pub struct McpAddArgs {
     pub command: Vec<String>,
     #[arg(long)]
     pub url: Option<String>,
-    #[arg(long)]
-    pub header: Vec<String>,
-    #[arg(long)]
-    pub env: Vec<String>,
+    #[arg(long, value_parser = key_value)]
+    pub header: Vec<(String, String)>,
+    #[arg(long, value_parser = key_value)]
+    pub env: Vec<(String, String)>,
     #[arg(long)]
     pub global: bool,
 }
@@ -275,6 +275,15 @@ fn budget(value: &str) -> Result<u64, String> {
         }
         Err(_) => Err("Schema validation failed: Expected an integer".into()),
     }
+}
+
+fn key_value(value: &str) -> Result<(String, String), String> {
+    value
+        .split_once('=')
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .ok_or_else(|| {
+            format!("Invalid key=value format. Expected format: key=value, got: {value}")
+        })
 }
 
 fn max_count(value: &str) -> Result<u64, String> {

@@ -2,6 +2,7 @@
 //! Timestamps are epoch milliseconds. A session driven by one process carries a busy marker that
 //! other processes respect.
 
+mod credential;
 mod inbox;
 mod instruction;
 mod permission;

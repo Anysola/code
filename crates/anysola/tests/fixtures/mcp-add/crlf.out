@@ -1,0 +1,21 @@
+{
+  "a": 1,
+  "mcp": {
+    // servers
+    "servers": {
+      "x": {
+        "type": "local",
+        "command": [
+          "y"
+        ]
+      },
+      "n": {
+        "type": "remote",
+        "url": "https://x/y",
+        "headers": {
+          "K": "V"
+        }
+      }, // trailing
+    },
+  },
+}

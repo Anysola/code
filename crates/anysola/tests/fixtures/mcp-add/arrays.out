@@ -1,0 +1,20 @@
+{
+  "list": [1, 2,
+  3],
+  "x": {
+    "y": {
+      "z": null
+    }
+  },
+  "mcp": {
+    "servers": {
+      "n": {
+        "type": "remote",
+        "url": "https://x/y",
+        "headers": {
+          "K": "V"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "mcp": {
+    "servers": {
+      "ctx": {
+        "type": "local",
+        "command": [
+          "npx",
+          "-y",
+          "@upstash/context7-mcp",
+          "--api-key",
+          "K"
+        ]
+      }
+    }
+  }
+}
