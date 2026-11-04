@@ -254,6 +254,8 @@ mod tests {
             supports_binding: None,
             supports_effort_updates: None,
             input: vec!["text".into(), "image".into()],
+            note: None,
+            credits_per_turn: None,
             variants: vec![],
         }
     }
