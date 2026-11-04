@@ -681,3 +681,67 @@ fn log_file_levels_and_printing() {
         "{after}"
     );
 }
+
+#[test]
+fn config_sources_in_precedence_order() {
+    let gateway = FakeGateway::start(answer("ok"));
+    let mut home = TestHome::new(&gateway.url);
+    let agents: String = (1..=7)
+        .map(|n| format!("\"a{n}\": {{\"mode\": \"primary\", \"description\": \"layer {n}\"}}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let layer = |n: u32| format!("{{\"default_agent\": \"a{n}\"}}");
+    home.write(
+        ".config/opencode/opencode.json",
+        &format!("{{\"default_agent\": \"a1\", \"agents\": {{{agents}}}}}"),
+    );
+    home.write(".anysola/config.json", &layer(2));
+    let explicit = home.write("explicit.json", &layer(3));
+    home.write("opencode.json", &layer(4));
+    home.write("proj/opencode.jsonc", &layer(5));
+    home.write("proj/.opencode/opencode.json", &layer(6));
+    home.set_env("OPENCODE_CONFIG", &explicit.display().to_string());
+    home.set_env("OPENCODE_CONFIG_CONTENT", &layer(7));
+    let agent = |home: &TestHome| {
+        let output = home.run(BIN, &["run", "hi"], None, None);
+        assert_eq!(output.code, 0, "{}", output.stderr);
+        output
+            .stderr
+            .lines()
+            .find_map(|l| l.strip_prefix("> "))
+            .and_then(|l| l.split(" · ").next())
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(agent(&home), "a7");
+    home.remove_env("OPENCODE_CONFIG_CONTENT");
+    assert_eq!(agent(&home), "a6");
+    std::fs::remove_file(home.home().join("proj/.opencode/opencode.json")).unwrap();
+    assert_eq!(agent(&home), "a5");
+    std::fs::remove_file(home.home().join("proj/opencode.jsonc")).unwrap();
+    assert_eq!(agent(&home), "a4");
+    home.set_env("OPENCODE_DISABLE_PROJECT_CONFIG", "1");
+    assert_eq!(agent(&home), "a3");
+    home.remove_env("OPENCODE_CONFIG");
+    assert_eq!(agent(&home), "a2");
+    std::fs::remove_file(home.home().join(".anysola/config.json")).unwrap();
+    assert_eq!(agent(&home), "a1");
+}
+
+#[test]
+fn ignored_keys_and_the_plugins_warning() {
+    let gateway = FakeGateway::start(answer("ok"));
+    let mut home = TestHome::new(&gateway.url);
+    home.set_env(
+        "OPENCODE_CONFIG_CONTENT",
+        r#"{"lsp": {"x": {}}, "share": "manual", "enterprise": {"url": "u"}, "update": false, "plugin": ["a"], "plugins": ["b"]}"#,
+    );
+    home.write(".anysola/config.json", r#"{"plugins": ["c"]}"#);
+    let output = home.run(BIN, &["run", "--print-logs", "hi"], None, None);
+    assert_eq!(output.code, 0, "{}", output.stderr);
+    let warnings = output
+        .stderr
+        .matches("Plugins are not supported since Anysola Code 1.0; ignoring \\\"plugins\\\".")
+        .count();
+    assert_eq!(warnings, 1, "{}", output.stderr);
+}
