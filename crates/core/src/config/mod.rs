@@ -32,6 +32,18 @@ struct Document {
     managed: bool,
 }
 
+/// A config source as `anysola debug config` lists it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Source {
+    /// A directory that exists and was read for files and definitions.
+    Directory(PathBuf),
+    /// A parsed document (a file path, or `OPENCODE_CONFIG_CONTENT`), after normalization.
+    Document {
+        path: String,
+        data: Map<String, Value>,
+    },
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     /// Top-level keys, latest document wins (maps below are merged separately).
@@ -52,6 +64,8 @@ pub struct Config {
     pub directories: Vec<PathBuf>,
     /// Problems worth one warning line each (malformed documents, ignored keys).
     pub warnings: Vec<String>,
+    /// Every local source in load order (the gateway document is not one).
+    pub sources: Vec<Source>,
     /// Policy statements of ordinary documents, earliest-loaded last.
     policies: Vec<Policy>,
     /// Policy statements of managed documents, earliest-loaded last.
@@ -373,6 +387,10 @@ impl Loader<'_> {
             Ok(Value::Object(map)) => {
                 let mut data = normalize::normalize(map);
                 lock_local(&mut data);
+                self.config.sources.push(Source::Document {
+                    path: source.to_string(),
+                    data: data.clone(),
+                });
                 self.config.apply(Document {
                     data,
                     managed: self.managed,
@@ -393,6 +411,11 @@ impl Loader<'_> {
     }
 
     fn directory(&mut self, dir: &Path, files: &[&str]) {
+        if dir.is_dir() {
+            self.config
+                .sources
+                .push(Source::Directory(dir.to_path_buf()));
+        }
         for name in files {
             self.file(&dir.join(name));
         }
