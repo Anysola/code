@@ -60,18 +60,69 @@ struct Input {
     background: Option<bool>,
 }
 
-// M1b: until the shell scanner is ported, the whole command is the one resource and the save
-// pattern is its first word; the scanner will supply per-command resources, arity-based save
-// patterns and the `cd` directories for the external check.
-fn permission(command: &str) -> Option<PermissionRequest> {
-    let command = command.trim();
-    let first = command.split_whitespace().next()?;
-    Some(PermissionRequest {
+/// The base environment's value of `name` (case-insensitive on Windows).
+fn variable(ctx: &ToolContext, name: &str) -> Option<String> {
+    ctx.env
+        .iter()
+        .find(|(key, _)| {
+            let key = key.to_string_lossy();
+            if cfg!(windows) {
+                key.eq_ignore_ascii_case(name)
+            } else {
+                key == name
+            }
+        })
+        .map(|(_, value)| value.to_string_lossy().into_owned())
+}
+
+fn scan_command(
+    ctx: &ToolContext,
+    command: &str,
+    shell: &str,
+    cwd: &Path,
+) -> Result<parse::Parsed, ToolError> {
+    let home = ctx.paths.home.to_string_lossy();
+    let lookup = |name: &str| variable(ctx, name);
+    let host = parse::Host {
+        home: &home,
+        env: &lookup,
+    };
+    parse::scan(command, shell, &cwd.to_string_lossy(), &host)
+        .map_err(|reason| ToolError::unknown(parse::error_text(reason)))
+}
+
+/// Checks the working directory and every static `cd` target as external directories, then asks
+/// `shell` for the scanned commands. A command the scanner cannot analyze fails before any ask.
+async fn authorize(
+    ctx: &ToolContext,
+    command: &str,
+    shell: &str,
+    target: &access::Target,
+) -> Result<(), ToolError> {
+    let parsed = scan_command(ctx, command, shell, &target.absolute)?;
+    let directories: Vec<access::Target> = parsed
+        .directories
+        .iter()
+        .map(|dir| access::resolve_at(ctx, &target.absolute, dir, Some(Kind::Directory)))
+        .collect();
+    let mut targets = vec![target];
+    targets.extend(directories.iter());
+    access::authorize_external(ctx, &targets).await?;
+    if parsed.commands.is_empty() {
+        return Ok(());
+    }
+    let (resources, save) = parsed
+        .commands
+        .into_iter()
+        .map(|c| (c.resource, c.save))
+        .unzip();
+    ctx.ask(PermissionRequest {
         action: "shell".into(),
-        resources: vec![command.into()],
-        save: vec![format!("{first} *")],
+        resources,
+        save,
         ..Default::default()
     })
+    .await
 }
 
 /// Checked after approval, which can outlive the directory.
@@ -150,10 +201,8 @@ impl ShellTool {
         let directory = ctx.directory.to_string_lossy();
         let workdir = input.workdir.as_deref().unwrap_or(&directory);
         let target = access::resolve(ctx, workdir, Some(Kind::Directory));
-        access::authorize_external(ctx, &[&target]).await?;
-        if let Some(request) = permission(&input.command) {
-            ctx.ask(request).await?;
-        }
+        let shell = select::resolve(ctx.configured_shell.as_deref());
+        authorize(ctx, &input.command, &shell, &target).await?;
         check_workdir(&target.absolute)?;
 
         let background = input.background == Some(true);
@@ -164,7 +213,6 @@ impl ShellTool {
         std::fs::create_dir_all(&directory).map_err(|e| ToolError::unknown(e.to_string()))?;
         let id = crate::ids::shell();
         let file = directory.join(format!("{id}.out"));
-        let shell = select::resolve(ctx.configured_shell.as_deref());
         let job = Job {
             program: &shell,
             args: select::args(&shell, &input.command),
@@ -511,7 +559,44 @@ mod tests {
         assert_eq!(asked[0].resources, [format!("{workdir}/*")]);
         assert_eq!(asked[1].action, "shell");
         assert_eq!(asked[1].resources, ["git status --short"]);
-        assert_eq!(asked[1].save, ["git *"]);
+        assert_eq!(asked[1].save, ["git status *"]);
+    }
+
+    #[tokio::test]
+    async fn static_cd_targets_are_external_directories() {
+        let _serial = SERIAL.lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let test = setup(dir.path());
+        let target = outside.path().display().to_string();
+        run(
+            &test,
+            json!({"command": format!("cd {target} && npm run build --x")}),
+        )
+        .await
+        .unwrap();
+        let asked = test.gate.asked.lock().unwrap();
+        assert_eq!(asked[0].action, "external_directory");
+        assert_eq!(asked[0].resources, [format!("{target}/*")]);
+        assert_eq!(asked[1].resources, ["npm run build --x"]);
+        assert_eq!(asked[1].save, ["npm run build *"]);
+    }
+
+    #[tokio::test]
+    async fn unanalyzable_commands_fail_before_running() {
+        let _serial = SERIAL.lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let test = setup(dir.path());
+        let error = run(&test, json!({"command": "touch made; echo 'open"}))
+            .await
+            .unwrap_err();
+        assert_eq!(error.type_tag(), "unknown");
+        assert_eq!(
+            error.message,
+            "Portable shell scanner cannot analyze command: unterminated-quote"
+        );
+        assert!(!dir.path().join("made").exists());
+        assert!(test.gate.asked.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
