@@ -568,7 +568,7 @@ screens: `V/tui/screens/*.txt`.
 
 ## M6 — Packaging, CI, release, install
 
-- [ ] Release workflow on tag `v<ver>` (and manual dry run): builds the six targets of decision 8, smoke test (exact `--version` line; `--help` contains `anysola <subcommand>` and not `opencode command line`) — spec/cli.md §4.1 (needs a real run)
+- [x] Release workflow on tag `v<ver>` (and manual dry run): builds the six targets of decision 8, smoke test (exact `--version` line; `--help` contains `anysola <subcommand>` and not `opencode command line`) — spec/cli.md §4.1 (needs a real run) — dry run 42032562617: six builds with smoke tests, pack (15 assets, SHA256SUMS verified, 13 npm tarballs)
 - [x] Archives: `anysola-<target>.tar.gz` (Linux; mtime 0, owner/group 0, numeric owner, single entry `anysola`, mode 0755) and `.zip` (darwin/windows; `zip -X`, entry `anysola`/`anysola.exe`), the 12 names with the byte-identical duplicates of decision 8 — spec/cli.md §4.1, V/cli/release.txt (script/pack.sh; checked locally with real linux arm64/x64 musl builds)
 - [ ] [mac] ad-hoc codesign; [win] unsigned — spec/cli.md §4.1 (needs a real run)
 - [ ] GitHub release `v<ver>` titled `Anysola Code <ver>`, assets = 12 archives + `install.sh` + `install.ps1` + `SHA256SUMS` (GNU `<hex>  <name>`), prerelease when the version has `-` — spec/cli.md §4.1, V/cli/release.txt (needs a real run)
@@ -577,7 +577,7 @@ screens: `V/tui/screens/*.txt`.
 - [x] `install` (POSIX sh) and `install.ps1` unchanged in behaviour and flags (target detection, `/v1/code/version` default, SHA256 verification, atomic replace, PATH edits, `$GITHUB_PATH` under Actions, [win] rename-aside of a running exe, user PATH) and served by the www `/install` routes — spec/cli.md §4.3, V/cli/install-sh.txt, V/cli/install-ps1.txt (byte-identical to 0.5.1; `install` run locally against served 1.0 archives on linux arm64 glibc/musl and x64 musl)
 - [ ] `/v1/code/version` semantics for update notices and the minimum gate unchanged; Admin Release flow unchanged — spec/cli.md §4.3, ARCHITECTURE.md "Contracts that do not change" (needs a real run)
 - [ ] install-test matrix after each release: `curl | sh` on ubuntu x64/arm, macOS arm/intel, `irm | iex` on windows-2025 and windows-11-arm (PowerShell 5.1); asserts `^Anysola Code [0-9]`, `update --print`, `uninstall --dry-run` containing `Installation method: curl`; reinstall while installed — spec/cli.md §4.1 (needs a real run)
-- [ ] CI on every push: build + tests + smoke run on Linux x64/arm64, macOS arm64/x64, Windows x64/arm64; `script/budget.sh` (binary ≤ 25 MB, archive ≤ 10 MB, `--version` ≤ 15 ms / 10 MB RSS, idle TUI ≤ 40 MB RSS against the fake gateway) — ARCHITECTURE.md "Why", "Testing" (needs a real run)
+- [x] CI on every push: build + tests + smoke run on Linux x64/arm64, macOS arm64/x64, Windows x64/arm64; `script/budget.sh` (binary ≤ 25 MB, archive ≤ 10 MB, `--version` ≤ 15 ms / 10 MB RSS, idle TUI ≤ 40 MB RSS against the fake gateway) — ARCHITECTURE.md "Why", "Testing" (needs a real run) — green on all six platforms, run 42028928944
 - [ ] Updating from 0.5.1 to 1.0.0 works through both 0.5.1 update paths (`anysola update` script and npm) — spec/protocol.md §1.10 (needs a real run)
 
 ---
