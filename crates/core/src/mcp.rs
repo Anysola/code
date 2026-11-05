@@ -67,6 +67,13 @@ pub struct Form {
     pub fields: Vec<Value>,
 }
 
+/// An OAuth sign-in in progress: open `url`; `done` settles when the browser comes back.
+pub struct SignIn {
+    pub url: String,
+    pub instructions: String,
+    pub done: oneshot::Receiver<Result<(), String>>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum FormReply {
     Answered(Map<String, Value>),
@@ -111,6 +118,9 @@ pub trait Mcp: Send + Sync {
 
     /// Disables a server until [`Mcp::connect`] or the end of the process (config is untouched).
     fn disconnect(&self, name: &str);
+
+    /// Starts signing in to a remote server; the server reconnects with the new credential.
+    fn authorize<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<SignIn, String>>;
 }
 
 /// Forms waiting for a front end.

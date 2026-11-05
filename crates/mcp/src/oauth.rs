@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use anysola_core::mcp::SignIn;
 use anysola_core::storage::Db;
 use base64::Engine;
 use futures_util::FutureExt;
@@ -431,13 +432,6 @@ impl Auth for Provider {
     }
 }
 
-/// A sign-in in progress: open `url`; `done` settles when the callback arrives.
-pub struct Attempt {
-    pub url: String,
-    pub instructions: String,
-    pub done: oneshot::Receiver<Result<(), String>>,
-}
-
 fn random_base64url(len: usize) -> String {
     let bytes: Vec<u8> = (0..len).map(|_| rand::random::<u8>()).collect();
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
@@ -540,7 +534,7 @@ async fn register(
 
 /// Starts signing in to `name`: the callback server listens, the client is registered, and the
 /// returned URL waits for the browser. On success the new credential replaces the old ones.
-pub async fn authorize(db: Arc<Db>, name: &str, server: &Value) -> Result<Attempt, String> {
+pub async fn authorize(db: Arc<Db>, name: &str, server: &Value) -> Result<SignIn, String> {
     let client = crate::http::client();
     let url = server["url"].as_str().unwrap_or_default().to_string();
     let integration = integration_id(name, &url);
@@ -642,7 +636,7 @@ pub async fn authorize(db: Arc<Db>, name: &str, server: &Value) -> Result<Attemp
     tokio::spawn(async move {
         let _ = sender.send(serve(listener, &path, &state, &exchange).await);
     });
-    Ok(Attempt {
+    Ok(SignIn {
         url: authorization.to_string(),
         instructions: format!(
             "Authorize {name} in your browser. This window will close automatically."

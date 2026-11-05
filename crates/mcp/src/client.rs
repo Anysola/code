@@ -402,6 +402,39 @@ mod tests {
     }
 
     #[test]
+    fn specs_from_config() {
+        let dir = Path::new("/w");
+        let local = Spec::from_config(
+            &json!({"type": "local", "command": ["opencode", "mcp"], "cwd": "sub", "environment": {"A": "1"}}),
+            dir,
+        );
+        assert_eq!(
+            local.transport,
+            Kind::Local {
+                command: vec!["opencode".into(), "mcp".into()],
+                cwd: dir.join("sub"),
+                environment: vec![("BUN_BE_BUN".into(), "1".into()), ("A".into(), "1".into())],
+            }
+        );
+        assert_eq!(
+            (local.startup, local.catalog, local.execution),
+            (
+                Duration::from_secs(30),
+                Duration::from_secs(30),
+                Duration::from_secs(12 * 60 * 60)
+            )
+        );
+        let remote = Spec::from_config(
+            &json!({"type": "remote", "url": "https://h/mcp", "codemode": false, "timeout": {"startup": 5}, "protocol": "legacy"}),
+            dir,
+        );
+        assert_eq!(
+            (remote.codemode, remote.startup, remote.protocol),
+            (false, Duration::from_millis(5), None)
+        );
+    }
+
+    #[test]
     fn malformed_tools() {
         assert!(valid_tool(
             &json!({"name": "a", "inputSchema": {"type": "object"}})

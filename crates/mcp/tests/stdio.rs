@@ -169,3 +169,50 @@ fn server_through_the_stack() {
     assert_eq!(expanded, "Hello \"Ada\" \"\"");
     rt.block_on(mcp.shutdown());
 }
+
+#[test]
+fn config_changes_restart_only_changed_servers() {
+    let gateway = FakeGateway::start(|request, _| text(request, "unused"));
+    let env = env(&gateway.url);
+    let write = |echo: serde_json::Value| {
+        let config =
+            json!({"mcp": {"servers": {"testsrv": fake_server("fake_mcp"), "glob1": echo}}});
+        env.home.write("proj/opencode.json", &config.to_string());
+    };
+    write(json!({"type": "local", "command": ["echo", "hi"]}));
+    let rt = runtime();
+    let (core, mcp) = rt.block_on(async {
+        let core = Core::start(&env.home.project()).await.unwrap();
+        let mcp = Runtime::attach(&core);
+        mcp.settled(Duration::from_secs(20)).await;
+        (core, mcp)
+    });
+    let mut events = core.subscribe();
+    write(json!({"type": "local", "command": ["echo", "hi"], "disabled": true}));
+    let changed = rt.block_on(async {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let mut changed = Vec::new();
+            while let Ok(event) = events.recv().await {
+                if let anysola_core::events::Event::McpStatusChanged { server } = event {
+                    let done = server.name == "glob1" && server.status == Status::Disabled;
+                    changed.push(server.name);
+                    if done {
+                        return changed;
+                    }
+                }
+            }
+            changed
+        })
+        .await
+        .unwrap()
+    });
+    assert_eq!(changed, ["glob1"]);
+    assert_eq!(
+        mcp.servers()
+            .into_iter()
+            .map(|s| s.status)
+            .collect::<Vec<_>>(),
+        [Status::Disabled, Status::Connected]
+    );
+    rt.block_on(mcp.shutdown());
+}

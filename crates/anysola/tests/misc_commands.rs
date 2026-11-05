@@ -297,16 +297,42 @@ fn mcp_logout_removes_the_servers_credentials() {
 }
 
 #[test]
-fn mcp_list_and_auth_wait_for_the_runtime() {
+fn mcp_list_shows_live_statuses_and_auth_refuses_without_a_server() {
     let home = TestHome::new("http://127.0.0.1:9");
-    for args in [&["mcp", "list"][..], &["mcp", "auth", "x"]] {
-        let out = anysola(&home, &home.project(), args);
-        assert_eq!(
-            (out.stderr.as_str(), out.code),
-            (
-                "Error: MCP servers are not available in this build yet.\n",
-                1
-            )
-        );
-    }
+    let project = home.project();
+    let out = anysola(&home, &project, &["mcp", "list"]);
+    assert_eq!(out.stdout, "No MCP servers configured\n");
+    home.write(
+        "proj/opencode.json",
+        r#"{"mcp": {"servers": {
+            "glob1": {"type": "local", "command": ["echo", "hi"]},
+            "bad1": {"type": "local", "command": ["/nonexistent/cmd", "--flag"]},
+            "off": {"type": "local", "command": ["x"], "disabled": true}}}}"#,
+    );
+    let out = anysola(&home, &project, &["mcp", "list"]);
+    assert_eq!(
+        (out.stdout.as_str(), out.code),
+        (
+            "✗ bad1   failed: NotFound: ChildProcess.spawn (/nonexistent/cmd --flag)\n\
+             ✗ glob1  failed: Connection closed: MCP server process exited with code 0\n\
+             ○ off    disabled\n",
+            0
+        )
+    );
+    let out = anysola(&home, &project, &["mcp", "auth"]);
+    assert_eq!(
+        (out.stdout.as_str(), out.code),
+        (
+            "│\n■  Pass an MCP server name when running without an interactive terminal\n│\n└  Failed\n\n",
+            1
+        )
+    );
+    let out = anysola(&home, &project, &["mcp", "auth", "glob1"]);
+    assert_eq!(
+        (out.stdout.as_str(), out.code),
+        (
+            "┌  Authenticate an MCP server\n│\n■  MCP server \"glob1\" is not an OAuth-capable remote server\n│\n└  Failed\n\n",
+            1
+        )
+    );
 }
