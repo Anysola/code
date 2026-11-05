@@ -75,6 +75,22 @@ impl Drop for Blocking {
     }
 }
 
+/// Background commands still running: (id, session, command).
+static BACKGROUND: Mutex<Vec<(u64, String, String)>> = Mutex::new(Vec::new());
+
+fn background() -> std::sync::MutexGuard<'static, Vec<(u64, String, String)>> {
+    BACKGROUND.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The commands of the session's background shells that are still running.
+pub fn background_commands(session_id: &str) -> Vec<String> {
+    background()
+        .iter()
+        .filter(|(_, session, _)| session == session_id)
+        .map(|(_, _, command)| command.clone())
+        .collect()
+}
+
 /// Moves the session's running foreground commands to the background (their tool calls return
 /// the background result at once); returns their commands.
 pub fn background_all(session_id: &str) -> Vec<String> {
@@ -354,9 +370,12 @@ impl Tool for ShellTool {
 /// Posts the `<shell …>` message into the session once a background command ends. The wait is
 /// detached from the turn: interrupting the turn does not stop a background command.
 fn notify_when_done(started: Started, command: String, ctx: &ToolContext) {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let notifier = ctx.notifier.clone();
     let session_id = ctx.session_id.clone();
     let limits = ctx.limits;
+    let entry = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    background().push((entry, session_id.clone(), command.clone()));
     tokio::spawn(async move {
         let Started {
             id,
@@ -365,6 +384,7 @@ fn notify_when_done(started: Started, command: String, ctx: &ToolContext) {
             mut running,
         } = started;
         let ended = running.wait().await;
+        background().retain(|(id, ..)| *id != entry);
         let (state, text) = match Finished::read(&file, ended, limits, timeout) {
             Ok(finished) => ("completed", finished.content().join("\n\n")),
             Err(error) => ("error", error.to_string()),

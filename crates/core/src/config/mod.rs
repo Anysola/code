@@ -31,6 +31,8 @@ struct Document {
     data: Map<String, Value>,
     /// From a managed (system) directory: its policies outrank every other document's.
     managed: bool,
+    /// The directory of the document's file; relative `references` paths resolve against it.
+    dir: Option<PathBuf>,
 }
 
 /// A config source as `anysola debug config` lists it.
@@ -70,6 +72,9 @@ pub struct Config {
     pub instructions: Vec<String>,
     /// `skills` sources of every document, deduplicated.
     pub skills: Vec<String>,
+    /// `references` of every document by name (a later document's entry replaces an earlier one
+    /// in place), with the directory of the document that defined it.
+    pub references: Vec<(String, Value, Option<PathBuf>)>,
     /// `providers.anysola` merged.
     pub provider: Map<String, Value>,
     /// Problems worth one warning line each (malformed documents, ignored keys).
@@ -157,6 +162,7 @@ impl Config {
             config.apply(Document {
                 data: data.as_object().cloned().unwrap_or_default(),
                 managed: false,
+                dir: None,
             });
         }
         config
@@ -197,6 +203,13 @@ impl Config {
             Some(Value::Object(map)) => map,
             _ => Map::new(),
         };
+        for (name, value) in map(data.remove("references")) {
+            let entry = (name, value, document.dir.clone());
+            match self.references.iter_mut().find(|r| r.0 == entry.0) {
+                Some(existing) => *existing = entry,
+                None => self.references.push(entry),
+            }
+        }
         let agents = map(data.remove("agents"));
         let commands = map(data.remove("commands"));
         if !agents.is_empty() || !commands.is_empty() {
@@ -513,6 +526,7 @@ impl Loader<'_> {
                 self.config.apply(Document {
                     data,
                     managed: self.managed,
+                    dir: Some(dir.to_path_buf()),
                 });
             }
             _ => self
@@ -561,6 +575,7 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
         loader.config.apply(Document {
             data: remote,
             managed: false,
+            dir: None,
         });
     }
     let legacy = paths.legacy_config_dir();
@@ -629,6 +644,7 @@ mod tests {
         let doc = |value: Value, managed: bool| Document {
             data: value.as_object().unwrap().clone(),
             managed,
+            dir: None,
         };
         let deny =
             |resource: &str| json!({"action": "tool.use", "resource": resource, "effect": "deny"});

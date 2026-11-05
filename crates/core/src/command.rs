@@ -20,6 +20,8 @@ pub enum Template {
     Builtin(&'static str),
     /// A user template: `$ARGUMENTS`, `$1..$N`, ``!`cmd` ``.
     User(String),
+    /// `/goal`: the arguments are the objective or a control word, handled by the goal loop.
+    Goal,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -112,6 +114,16 @@ impl Commands {
                 model: None,
                 subagent: false,
                 template: Template::Builtin(REVIEW),
+            },
+            Command {
+                name: "goal".into(),
+                description: Some(
+                    "keep working until an objective is met [pause|resume|clear]".into(),
+                ),
+                agent: None,
+                model: None,
+                subagent: false,
+                template: Template::Goal,
             },
         ];
         let defined = config.entries.iter().flat_map(|entry| match entry {
@@ -265,6 +277,7 @@ pub async fn render(
         Template::User(template) => {
             interpolate(&substitute(template, input), shell, cwd, env).await
         }
+        Template::Goal => Ok(input.to_string()),
     }
 }
 

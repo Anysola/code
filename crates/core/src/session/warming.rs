@@ -220,7 +220,7 @@ async fn keep_warm(shared: Arc<Shared>, session_id: String, id: u64) {
                         .map(drop),
                     None => return,
                 };
-                if let Err(error) = result {
+                if let Err(super::step::GenerateError::Failed(error)) = result {
                     crate::log::warn(
                         "failed to warm session",
                         &[("session", &session_id), ("error", &error.message)],

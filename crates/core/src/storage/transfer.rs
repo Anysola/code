@@ -270,6 +270,12 @@ impl Db {
                 tx.execute(
                     "WITH RECURSIVE tree(id) AS (
                         SELECT ?1 UNION ALL SELECT session.id FROM session JOIN tree ON session.parent_id = tree.id)
+                     DELETE FROM kv WHERE key IN (SELECT ?2 || id FROM tree)",
+                    rusqlite::params![id, super::GOAL_PREFIX],
+                )?;
+                tx.execute(
+                    "WITH RECURSIVE tree(id) AS (
+                        SELECT ?1 UNION ALL SELECT session.id FROM session JOIN tree ON session.parent_id = tree.id)
                      DELETE FROM session WHERE id IN (SELECT id FROM tree)",
                     [id],
                 )?;
