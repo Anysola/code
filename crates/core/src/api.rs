@@ -163,6 +163,8 @@ pub(crate) struct Shared {
     pub owner: String,
     pub turns: Mutex<std::collections::HashMap<String, CancellationToken>>,
     pub warming: crate::session::Warming,
+    /// Background summaries held until automatic compaction takes them.
+    pub precomputed: Mutex<std::collections::HashMap<String, crate::session::compaction::Held>>,
 }
 
 impl Shared {
@@ -281,6 +283,7 @@ impl Core {
             owner: format!("{}:{}", std::process::id(), crate::ids::part()),
             turns: Mutex::default(),
             warming: Default::default(),
+            precomputed: Mutex::default(),
         };
         Ok(Core {
             shared: Arc::new(shared),

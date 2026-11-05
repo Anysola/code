@@ -56,6 +56,7 @@ pub enum Outcome {
 }
 
 /// The config sources, agent, model and variant a step runs with.
+#[derive(Clone)]
 pub(crate) struct Selection {
     pub sources: Arc<Loaded>,
     pub agent: Agent,

@@ -233,7 +233,11 @@ pub(crate) async fn drive(
             StepEnd::Overflow(error) => return Outcome::Failed(error.to_session_error()),
             StepEnd::Continue if capped => return Outcome::Succeeded,
             StepEnd::Continue => {}
-            StepEnd::Stop => return Outcome::Succeeded,
+            StepEnd::Stop => {
+                // The session goes idle, which leaves a background summary time to finish.
+                precompute_idle(shared, session, selection);
+                return Outcome::Succeeded;
+            }
             StepEnd::Failed(error) => return Outcome::Failed(error),
             StepEnd::Interrupted(reason) => return Outcome::Interrupted(reason),
         }
@@ -259,6 +263,27 @@ pub(crate) async fn drive(
             length_finishes = 0;
         }
     }
+}
+
+fn precompute_idle(shared: &Arc<Shared>, session: &SessionRow, selection: &Selection) {
+    if !compaction::Settings::from_config(&selection.sources.config).precompute {
+        return;
+    }
+    let Ok(ctx) = context(shared, session, selection) else {
+        return;
+    };
+    let history = compaction::history(shared, &session.id).messages;
+    let target = Target {
+        provider: &selection.reference.provider,
+        id: &selection.model.id,
+        input: &selection.model.input,
+    };
+    let estimate = compaction::estimate_prompt(&history, &target, &ctx.system, &ctx.definitions);
+    let prefix = compaction::Prefix {
+        system: &ctx.system,
+        tools: &ctx.definitions,
+    };
+    compaction::precompute(shared, session, selection, prefix, estimate);
 }
 
 /// `/compact`: a manual compaction of the session's history.
@@ -436,7 +461,9 @@ async fn step(
     };
     let trigger = compaction::Trigger::Auto(estimate);
     match compaction::compact(shared, session, selection, prefix, trigger, cancel).await {
-        compaction::Outcome::Skipped => {}
+        compaction::Outcome::Skipped => {
+            compaction::precompute(shared, session, selection, prefix, estimate)
+        }
         compaction::Outcome::Completed => return StepEnd::Compacted,
         compaction::Outcome::Failed(error) => return StepEnd::Failed(error),
     }

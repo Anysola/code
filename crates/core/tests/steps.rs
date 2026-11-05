@@ -501,3 +501,57 @@ fn warming_pings_after_each_interval_until_the_duration_ends() {
     wait(500);
     assert_eq!(pings().len(), sent.len(), "no pings after the duration");
 }
+
+#[test]
+fn background_compaction_is_swapped_in_when_due() {
+    let gateway = FakeGateway::start(|request, _| {
+        if request.is_title() {
+            return text(request, "title");
+        }
+        if summarize(request) {
+            return text(request, "## Objective\n- background");
+        }
+        let input = if request.body.contains("THIRD") {
+            1_000
+        } else if request.body.contains("SECOND") {
+            900_000
+        } else {
+            800_000
+        };
+        sse(
+            request,
+            Stream::new()
+                .usage(json!({"input_tokens": input, "output_tokens": 1}))
+                .text("ok"),
+        )
+    });
+    let env = env(&gateway.url);
+    env.home.write(
+        "proj/opencode.json",
+        r#"{"experimental": {"background_compaction": true}}"#,
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    for text in ["FIRST", "SECOND", "THIRD"] {
+        let outcome = runtime
+            .block_on(core.prompt(&session.id, prompt(text), TurnOptions::default()))
+            .unwrap();
+        assert_eq!(outcome, Outcome::Succeeded);
+    }
+    let summaries: Vec<_> = gateway.messages().into_iter().filter(summarize).collect();
+    assert_eq!(summaries.len(), 1, "only the background summary ran");
+    // It covered what came before the first response.
+    assert_eq!(transcript(&summaries[0])[0], "user: FIRST");
+    let last = gateway
+        .messages()
+        .into_iter()
+        .rfind(|r| !r.is_title() && r.body.contains("THIRD"))
+        .unwrap();
+    let opening = transcript(&last);
+    assert!(
+        opening[0].contains("<summary>\n## Objective\n- background\n</summary>")
+            && opening[0].contains("<recent-context>\n[Assistant]: ok\n\n[User]: SECOND"),
+        "{opening:?}"
+    );
+}
