@@ -236,6 +236,13 @@ impl Keymap {
         }
     }
 
+    /// The first of `ids` bound to exactly `strokes`.
+    pub fn find<'a>(&self, strokes: &[Stroke], ids: &[&'a str]) -> Option<&'a str> {
+        ids.iter()
+            .copied()
+            .find(|id| self.matches(id, strokes) == Match::Exact)
+    }
+
     /// Every binding of `id` as shown in the palette: `ctrl+c, ctrl+d, ctrl+x q`.
     pub fn all(&self, id: &str) -> String {
         let mut shown: Vec<String> = Vec::new();

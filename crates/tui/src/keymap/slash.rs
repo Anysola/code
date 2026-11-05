@@ -335,7 +335,7 @@ pub const SLASH: &[Slash] = &[
         description: None,
         id: "diff.open",
         group: "VCS",
-        session: true,
+        session: false,
         arguments: false,
     },
     Slash {

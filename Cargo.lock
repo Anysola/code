@@ -96,6 +96,7 @@ dependencies = [
  "anysola-core",
  "anysola-migrate",
  "anysola-testkit",
+ "anysola-tui",
  "base64 0.22.1",
  "chrono",
  "clap",
