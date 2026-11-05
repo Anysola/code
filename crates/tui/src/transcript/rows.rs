@@ -686,6 +686,7 @@ pub fn patch_rows(
         split,
         filetype: filetype(path),
         wrap,
+        digits: 0,
     };
     Some(diff::render(patch, &options, theme))
 }

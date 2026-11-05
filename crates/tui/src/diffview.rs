@@ -91,7 +91,10 @@ impl Diff {
         for file in self.list() {
             starts.push(at);
             let options = crate::view::patch_options(self, screen, &file.path);
-            at += 3 + crate::transcript::diff::render(&file.patch, &options, theme).len();
+            at += 3 + match crate::transcript::diff::virtual_chunks(&file.patch) {
+                Some(_) => crate::transcript::diff::counts(&file.patch).1,
+                None => crate::transcript::diff::render(&file.patch, &options, theme).len(),
+            };
         }
         starts
     }
@@ -114,25 +117,55 @@ impl Diff {
         screen: u16,
         theme: &crate::theme::Theme,
     ) -> Vec<crate::transcript::markdown::Line> {
-        let render = |file: &File| {
-            let options = crate::view::patch_options(self, screen, &file.path);
-            crate::transcript::diff::render(&file.patch, &options, theme)
+        self.rendered_window(screen, theme, 0..0)
+    }
+
+    /// [`Diff::rendered`] with virtualized patches laid out only in the 128-line chunks around
+    /// `window` (plus one on each side); the others are blank rows of the same height.
+    pub fn rendered_window(
+        &self,
+        screen: u16,
+        theme: &crate::theme::Theme,
+        window: std::ops::Range<usize>,
+    ) -> Vec<crate::transcript::markdown::Line> {
+        use crate::transcript::diff::{VIRTUAL_CHUNK_LINES, counts, render, virtual_chunks};
+        let render = |file: &File, at: usize, out: &mut Vec<crate::transcript::markdown::Line>| {
+            let mut options = crate::view::patch_options(self, screen, &file.path);
+            let Some(chunks) = virtual_chunks(&file.patch) else {
+                out.extend(render(&file.patch, &options, theme));
+                return;
+            };
+            // Chunks lay out unwrapped so each is exactly as tall as its lines.
+            options.wrap = false;
+            options.digits = ((chunks.len() - 1) * VIRTUAL_CHUNK_LINES
+                + counts(chunks.last().unwrap()).1)
+                .to_string()
+                .len();
+            let first = window.start.saturating_sub(at) / VIRTUAL_CHUNK_LINES;
+            let last = window.end.saturating_sub(at) / VIRTUAL_CHUNK_LINES;
+            for (index, chunk) in chunks.iter().enumerate() {
+                if !window.is_empty() && index + 1 >= first && index <= last + 1 {
+                    out.extend(render(chunk, &options, theme));
+                } else {
+                    out.extend(std::iter::repeat_n(Vec::new(), counts(chunk).1));
+                }
+            }
         };
+        let mut lines = Vec::new();
         if self.single {
-            return self
-                .list()
-                .get(self.selected)
-                .map(render)
-                .unwrap_or_default();
+            if let Some(file) = self.list().get(self.selected) {
+                render(file, 0, &mut lines);
+            }
+            return lines;
         }
         let bold = ratatui::style::Style::new()
             .fg(theme.fg("text.base"))
             .add_modifier(ratatui::style::Modifier::BOLD);
-        let mut lines = Vec::new();
         for file in self.list() {
             lines.push(vec![ratatui::text::Span::styled(file.path.clone(), bold)]);
             lines.push(Vec::new());
-            lines.extend(render(file));
+            let at = lines.len();
+            render(file, at, &mut lines);
             lines.push(Vec::new());
         }
         lines
@@ -317,5 +350,36 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn long_new_files_lay_out_only_the_chunks_in_view() {
+        let theme = crate::theme::Catalog::bundled()
+            .load("anysola", crate::theme::Mode::Dark)
+            .unwrap();
+        let body: String = (1..=3500).map(|n| format!("+line {n}\n")).collect();
+        let patch = format!("--- /dev/null\n+++ b/big.txt\n@@ -0,0 +1,3500 @@\n{body}");
+        let mut view = Diff::new(Source::Uncommitted);
+        view.single = true;
+        view.files = Some(Ok(vec![File {
+            path: "big.txt".into(),
+            patch,
+            reviewed: false,
+        }]));
+        assert_eq!(view.length(120, &theme), 3499);
+        view.scroll = 3000;
+        let lines = view.rendered_window(120, &theme, 3000..3040);
+        let text = |n: usize| {
+            lines[n]
+                .iter()
+                .map(|s| s.content.to_string())
+                .collect::<String>()
+        };
+        assert!(text(3000).contains("3001") && text(3000).contains("line 3001"));
+        assert!(
+            text(2900).contains("line 2901"),
+            "the chunk before stays laid out"
+        );
+        assert!(text(10).is_empty() && text(3499).is_empty());
     }
 }
