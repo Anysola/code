@@ -45,6 +45,18 @@ pub struct Account {
     pub signed_out: bool,
 }
 
+/// Length of the labels' fade-in.
+pub const FADE_MS: u64 = 160;
+
+impl State {
+    /// Opacity of the prompt's metadata labels, 0 to 1.
+    pub fn meta_alpha(&self) -> f32 {
+        self.meta_fade.map_or(1.0, |start| {
+            (self.now.saturating_sub(start) as f32 / FADE_MS as f32).clamp(0.0, 1.0)
+        })
+    }
+}
+
 impl Account {
     pub fn from_me(me: Value) -> Account {
         let credits = me.get("credits");
@@ -400,6 +412,9 @@ pub struct State {
     /// Open dialogs; the last one is on top.
     pub dialogs: Vec<crate::dialog::Dialog>,
     pub account: Account,
+    /// When the prompt's agent, model and variant labels began fading in (first draw of the
+    /// app instance); `None` shows them fully.
+    pub meta_fade: Option<u64>,
     /// The sidebar's `Getting started` card was dismissed with `✕`.
     pub onboarding_dismissed: bool,
     /// `~/my-app:master`.
@@ -472,6 +487,7 @@ impl State {
             dialogs: Vec::new(),
             account: Account::default(),
             onboarding_dismissed: false,
+            meta_fade: None,
             location: String::new(),
             directory: String::new(),
             home: String::new(),

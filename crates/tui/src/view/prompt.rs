@@ -86,7 +86,10 @@ pub fn draw_box(
         .term(c.theme.decrease(c.theme.get("background.raised.base"), 1));
     let h = box_height(state, w);
     c.fill(Rect::new(x + 1, y, w.saturating_sub(1), h - 1), bg);
-    let rail = Style::new().fg(highlight).bg(bg);
+    let alpha = state.meta_alpha();
+    let rail = Style::new()
+        .fg(blend(c.theme.fg("border.base"), highlight, alpha))
+        .bg(bg);
     for row in y..y + h - 1 {
         c.put(x, row, "┃", rail, 1);
     }
@@ -179,6 +182,19 @@ pub fn draw_box(
     cursor
 }
 
+/// `from` moved `alpha` of the way to `to`; colours that are not RGB switch at the half.
+pub fn blend(from: Color, to: Color, alpha: f32) -> Color {
+    match (from, to) {
+        (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) => {
+            let mix =
+                |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * alpha).round() as u8;
+            Color::Rgb(mix(r1, r2), mix(g1, g2), mix(b1, b2))
+        }
+        _ if alpha >= 0.5 => to,
+        _ => from,
+    }
+}
+
 fn metadata(
     c: &mut Canvas,
     state: &State,
@@ -192,6 +208,9 @@ fn metadata(
         c.put(x, y, "Shell", Style::new().fg(highlight).bg(bg), room);
         return;
     }
+    let alpha = state.meta_alpha();
+    let fade = |color: Color| blend(bg, color, alpha);
+    let highlight = fade(highlight);
     let muted = c.style("text.muted").bg(bg);
     let mut spans: Vec<Span> = Vec::new();
     if state.width >= 44 {
@@ -217,6 +236,7 @@ fn metadata(
             .style("text.feedback.warning.base")
             .bg(bg)
             .add_modifier(Modifier::BOLD);
+        let warning = warning.fg(fade(c.theme.fg("text.feedback.warning.base")));
         suffix.push(Span::styled(variant.clone(), warning));
     }
     let used = |spans: &[Span]| spans.iter().map(|s| width(&s.content)).sum::<usize>();
@@ -225,7 +245,8 @@ fn metadata(
     }
     let left = budget.saturating_sub(used(&spans) + used(&suffix));
     let name = text::truncate(&model.name, left.max(9));
-    spans.push(Span::styled(name, c.style("text.base").bg(bg)));
+    let name_style = Style::new().fg(fade(c.theme.fg("text.base"))).bg(bg);
+    spans.push(Span::styled(name, name_style));
     spans.extend(suffix);
     c.spans(x, y, &spans, room);
 }

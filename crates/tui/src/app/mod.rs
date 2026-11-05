@@ -73,6 +73,8 @@ pub struct App {
     pub state: State,
     theme: Theme,
     catalog: Catalog,
+    /// The labels' fade-in has been started once, as 0.5.1 plays it once per app instance.
+    faded: bool,
     keymap: Keymap,
     tui: Tui,
     history: History,
@@ -247,6 +249,7 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
         core,
         theme,
         catalog,
+        faded: false,
         keymap,
         tui,
         history,
@@ -457,13 +460,23 @@ impl App {
 
     fn ticking(&self) -> bool {
         let busy = self.state.sessions.values().any(|s| s.busy);
-        busy || self.state.toast.is_some()
+        busy || self.fading()
+            || self.state.toast.is_some()
             || !self.pending.is_empty()
             || self.state.interrupt_armed.is_some()
     }
 
+    /// The metadata labels are still fading in.
+    fn fading(&self) -> bool {
+        self.state.meta_fade.is_some() && self.state.meta_alpha() < 1.0
+    }
+
     fn draw(&mut self, terminal: &mut Terminal<Backend>) {
         self.state.now = now();
+        if self.state.meta_fade.is_none() && self.state.settings.animations && !self.faded {
+            self.faded = true;
+            self.state.meta_fade = Some(self.state.now);
+        }
         let expired = self
             .state
             .toast

@@ -1296,3 +1296,19 @@ fn pending_title_shimmers() {
     session.busy = true;
     assert!(render(&state).contains("New session"));
 }
+
+/// `util/signal.ts` `createFadeIn`: the labels start at the background colour and reach full
+/// strength after 160 ms.
+#[test]
+fn metadata_fade_in() {
+    let mut state = session(170, 40, Vec::new());
+    state.meta_fade = Some(1000);
+    state.now = 1000;
+    assert_eq!(state.meta_alpha(), 0.0);
+    state.now = 1080;
+    assert_eq!(state.meta_alpha(), 0.5);
+    state.now = 1200;
+    assert_eq!(state.meta_alpha(), 1.0);
+    state.meta_fade = None;
+    assert_eq!(state.meta_alpha(), 1.0);
+}
