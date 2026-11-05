@@ -539,7 +539,7 @@ screens: `V/tui/screens/*.txt`.
 - [x] [cond: `attention.notifications` / `attention.sound`] notifications and sounds for done/subagent done/question/permission/error with title/message limits, focus-out rule, built-in sounds, volume, Settings rows; `Session failed` toast always — spec/tui.md §Attention & notifications (notifications as OSC 777 + OSC 9 on focus-out; sounds are 0.5.1's MP3s played by the system player: afplay, paplay/pw-play/ffplay/mpv, PowerShell)
 - [x] Program status records (OSC 7501) per tab/session, cleared on exit — spec/tui.md §Attention & notifications (`status.rs`: probed with `ESC ] 7501 ; ?` next to the OSC 11 query (DA1 when the theme mode is locked), records only when answered; title/msg base64 as the protocol encodes them)
 - [x] Animations (runtime default on), `app.toggle.animations`, spinner frames, static fallbacks — spec/tui.md §Animations
-- [ ] Locale helpers (`time`, `datetime`, `1.2K`/`3.4M`, grapheme-aware truncation, east-asian width) — spec/tui.md §Locale helpers, §Rust implementation notes (`text.rs` has number, width, grapheme truncation; not yet: `time`/`datetime` locale formats)
+- [x] Locale helpers (`time`, `datetime`, `1.2K`/`3.4M`, grapheme-aware truncation, east-asian width) — spec/tui.md §Locale helpers, §Rust implementation notes (en-US formats in the viewer's timezone)
 - [x] Toasts for MCP needs-auth/failed (once per state change, action `Open MCP servers`) and `Invalid model format: <arg>` — spec/tui.md §Toasts, spec/integrations.md §1.8 (`› Open MCP servers` runs `/mcps`; `Invalid model format` is unreachable in 0.5.1: `app.tsx:665` reads `args.model`, which the root command never sets (`cli/src/commands/handlers/default.ts:133-139`, no `--model` flag), so 1.0 has no such toast)
 
 ---

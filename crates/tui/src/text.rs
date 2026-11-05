@@ -247,6 +247,22 @@ pub fn ago(ms: u64, now: u64) -> String {
     }
 }
 
+/// Locale short time in the viewer's timezone (`3:04 PM`; the 0.5.1 default locale is en-US).
+pub fn time(ms: u64) -> String {
+    local(ms).format("%-I:%M %p").to_string()
+}
+
+/// `<time> · <locale date>` (`3:04 PM · 11/5/2026`).
+pub fn datetime(ms: u64) -> String {
+    format!("{} · {}", time(ms), local(ms).format("%-m/%-d/%Y"))
+}
+
+fn local(ms: u64) -> chrono::DateTime<chrono::Local> {
+    chrono::DateTime::from_timestamp_millis(ms as i64)
+        .unwrap_or_default()
+        .with_timezone(&chrono::Local)
+}
+
 /// UTC calendar date of a millisecond timestamp.
 fn civil(ms: u64) -> (i64, u32, u32) {
     let days = (ms / 86_400_000) as i64;
@@ -306,6 +322,11 @@ mod tests {
         let now = parse_iso("2026-11-05T00:00:00Z").unwrap();
         assert_eq!(short_date(renews, now), "23 Nov");
         assert_eq!(ago(now - 90_000, now), "1m ago");
+        let stamp = datetime(now);
+        let (clock, date) = stamp.split_once(" · ").unwrap();
+        assert!(clock.ends_with("AM") || clock.ends_with("PM"));
+        assert!(date.ends_with("2026") || date.ends_with("2025"));
+        assert_eq!(time(now), clock);
         assert_eq!(path("~/my-app:master", 8), "…/my-ap…");
         assert_eq!(truncate_middle("abcdefghij", 5), "ab…ij");
         assert_eq!(truncate("Fix typo in hello.txt", 16), "Fix typo in hel…");
