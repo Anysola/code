@@ -45,12 +45,14 @@ pub fn user_data(prompt: &Prompt) -> Value {
             mime: mime.clone(),
             source: json!({"type": "inline"}),
             name: Some(name.clone()),
+            extra: Default::default(),
         })
         .collect();
     encode(&UserData {
         time: Created { created: now_ms() },
         text: prompt.text.clone(),
-        files,
+        files: Some(files),
+        extra: Default::default(),
     })
 }
 

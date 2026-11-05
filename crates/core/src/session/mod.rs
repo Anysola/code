@@ -61,9 +61,10 @@ pub(crate) struct Selection {
 }
 
 fn select(shared: &Shared, session: &SessionRow) -> Result<Selection, SessionError> {
+    let loaded = shared.loaded();
     let agent = match session.agent.as_deref() {
-        Some(id) => shared.agents.get(id).cloned(),
-        None => shared.agents.default_agent().cloned(),
+        Some(id) => loaded.agents.get(id).cloned(),
+        None => loaded.agents.default_agent().cloned(),
     }
     .ok_or_else(|| {
         SessionError::new(
@@ -85,9 +86,9 @@ fn select(shared: &Shared, session: &SessionRow) -> Result<Selection, SessionErr
         .as_deref()
         .and_then(ModelRef::parse)
         .or_else(|| session.model.as_ref().and_then(ModelRef::from_json))
-        .or_else(|| shared.config.model().and_then(ModelRef::parse))
+        .or_else(|| loaded.config.model().and_then(ModelRef::parse))
         .ok_or_else(no_route)?;
-    let model = crate::model::resolve(&shared.models, &reference)
+    let model = crate::model::resolve(&loaded.models, &reference)
         .map_err(|error| SessionError::new("provider.no-route", error.to_string()))?;
     Ok(Selection {
         agent,
@@ -101,6 +102,7 @@ fn synthetic(shared: &Shared, session_id: &str, text: String) {
         time: Created { created: now_ms() },
         text,
         description: None,
+        extra: Default::default(),
     });
     let _ = shared
         .db
@@ -270,6 +272,7 @@ async fn turn(
     options: TurnOptions,
     cancel: &CancellationToken,
 ) -> Outcome {
+    shared.refresh().await;
     let prepared = select(shared, session).and_then(|selection| {
         plan_reminders(shared, &session.id, &selection.agent.id);
         step::settle_context(shared, session, &selection)?;

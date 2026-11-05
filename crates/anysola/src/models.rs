@@ -18,9 +18,9 @@ pub async fn models() -> i32 {
     let loaded = async {
         let db = Db::open(&paths.database())?;
         let gateway = Gateway::new(Token::resolve(&db)?);
-        let remote = anysola_core::api::remote_config(&gateway, &db).await?;
+        let remote = anysola_core::gateway::config::fetch(&gateway, &db).await;
         Ok::<_, anysola_core::storage::StorageError>(LoadOptions {
-            remote,
+            remote: remote.body,
             api_url: gateway.base().to_string(),
         })
     };

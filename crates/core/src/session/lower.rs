@@ -68,7 +68,7 @@ fn user(data: &UserData, target: &Target) -> Option<Value> {
     if !data.text.trim().is_empty() {
         content.push(text_block(&data.text));
     }
-    for file in &data.files {
+    for file in data.files.iter().flatten() {
         let mime = file.mime.to_lowercase();
         if mime.starts_with("image/") || mime == "application/pdf" {
             content.push(match unsupported(&mime, file.name.as_deref(), target) {

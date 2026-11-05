@@ -116,7 +116,7 @@ impl SessionHost for TestSession {
 /// A database outside the test directory, so it never shows up in listings.
 struct TestHost {
     db: crate::storage::Db,
-    config: crate::config::Config,
+    config: Arc<crate::config::Config>,
     _dir: tempfile::TempDir,
 }
 
@@ -125,7 +125,7 @@ impl TestHost {
         let dir = tempfile::tempdir().expect("temp dir");
         TestHost {
             db: crate::storage::Db::open(&dir.path().join("test.db")).expect("test database"),
-            config: crate::config::Config::default(),
+            config: Arc::default(),
             _dir: dir,
         }
     }
@@ -136,12 +136,12 @@ impl crate::codemode::Host for TestHost {
         &self.db
     }
 
-    fn models(&self) -> &[crate::model::Model] {
-        &[]
+    fn models(&self) -> Arc<[crate::model::Model]> {
+        Arc::new([])
     }
 
-    fn config(&self) -> &crate::config::Config {
-        &self.config
+    fn config(&self) -> Arc<crate::config::Config> {
+        self.config.clone()
     }
 }
 

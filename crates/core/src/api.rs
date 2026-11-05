@@ -12,11 +12,11 @@ use crate::time::now_ms;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
-use crate::agent::Agents;
-use crate::config::{Config, LoadOptions};
+use crate::config::Config;
 use crate::credits::Credits;
 use crate::events::{CreditsSnapshot, Event};
-use crate::gateway::{ConfigFetch, Gateway, Token};
+use crate::gateway::config::Remote;
+use crate::gateway::{Gateway, Token};
 use crate::model::{Model, ModelRef};
 use crate::paths::Paths;
 use crate::project::Project;
@@ -25,7 +25,6 @@ use crate::session::inbox::Delivery;
 use crate::session::question::Questions;
 use crate::session::subagent::Jobs;
 use crate::session::{Outcome, TurnOptions};
-use crate::skill::Skill;
 use crate::storage::{Db, SessionRow};
 use crate::tool::question::QuestionReply;
 use crate::tool::registry::Registry;
@@ -33,8 +32,9 @@ use crate::tool::{PathLocks, SessionNotifier};
 
 mod commands;
 mod revert;
+mod state;
 
-const CONFIG_CACHE_KEY: &str = "anysola:config";
+pub use state::Loaded;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
@@ -99,12 +99,16 @@ pub(crate) struct Shared {
     pub gateway: Arc<Gateway>,
     pub events: broadcast::Sender<Event>,
     pub credits: Arc<Credits>,
-    pub config: Config,
-    pub agents: Agents,
-    pub commands: crate::command::Commands,
-    pub models: Vec<Model>,
+    loaded: std::sync::RwLock<Arc<Loaded>>,
+    /// The last `/config` result.
+    remote: Mutex<Remote>,
+    /// Watched files and the remote document bump this; [`Shared::refresh`] reloads.
+    changes: Arc<crate::watch::Changes>,
+    /// The generation of `changes` that `loaded` reflects.
+    applied: std::sync::atomic::AtomicU64,
+    reloading: tokio::sync::Mutex<()>,
+    watch: crate::watch::Watch,
     pub registry: Registry,
-    pub skills: Vec<Skill>,
     pub asks: Arc<Asks>,
     pub questions: Questions,
     pub jobs: Jobs,
@@ -115,8 +119,6 @@ pub(crate) struct Shared {
     pub project: Project,
     /// The shadow repository of the project's files; `None` outside git or with `snapshots: false`.
     pub snapshots: Option<Arc<crate::snapshot::Store>>,
-    /// The configured `instructions` URLs, fetched when the config loaded.
-    pub remote_instructions: Vec<crate::instructions::InstructionFile>,
     /// `<pid>:<nonce>` for busy markers.
     pub owner: String,
     pub turns: Mutex<std::collections::HashMap<String, CancellationToken>>,
@@ -127,12 +129,12 @@ impl crate::codemode::Host for Shared {
         &self.db
     }
 
-    fn models(&self) -> &[Model] {
-        &self.models
+    fn models(&self) -> Arc<[Model]> {
+        self.loaded().models.clone()
     }
 
-    fn config(&self) -> &Config {
-        &self.config
+    fn config(&self) -> Arc<Config> {
+        self.loaded().config.clone()
     }
 }
 
@@ -156,41 +158,17 @@ impl SessionNotifier for StoreNotifier {
     }
 }
 
-/// The gateway's `/config` body: live (and cached), else the last cached one.
-pub async fn remote_config(gateway: &Gateway, db: &Db) -> crate::storage::Result<Option<String>> {
-    Ok(match gateway.config().await {
-        ConfigFetch::Ok(body) => {
-            db.kv_set(CONFIG_CACHE_KEY, &Value::String(body.clone()))?;
-            Some(body)
-        }
-        ConfigFetch::Unauthorized | ConfigFetch::Failed => db
-            .kv_get(CONFIG_CACHE_KEY)?
-            .and_then(|v| v.as_str().map(str::to_string)),
-    })
-}
-
 impl Core {
-    /// Opens storage, loads the remote config (live, else cached) and every config source.
+    /// Opens storage, loads the remote config (live, else cached) and every config source, and
+    /// starts watching them.
     pub async fn start(directory: &Path) -> Result<Core, CoreError> {
         let paths = Arc::new(Paths::from_env());
         let db = Arc::new(Db::open(&paths.database())?);
         let token = Token::resolve(&db)?;
         let gateway = Arc::new(Gateway::new(token));
-        let remote = remote_config(&gateway, &db).await?;
-        let options = LoadOptions {
-            remote,
-            api_url: gateway.base().to_string(),
-        };
-        let config = crate::config::load(&paths, directory, &options);
-        for warning in &config.warnings {
-            crate::log::warn(warning, &[]);
-        }
-        let agents = Agents::load(&config, &paths);
-        let commands = crate::command::Commands::load(&config);
-        let remote_instructions =
-            crate::instructions::fetch_remote(&gateway, &config.instructions).await;
-        let skills = crate::skill::discover(&paths, &config, directory).await;
-        let models = crate::model::catalog(&config);
+        let remote = crate::gateway::config::fetch(&gateway, &db).await;
+        let loaded = Loaded::load(&paths, &gateway, directory, &remote, None).await;
+        let config = loaded.config.clone();
         let project = crate::project::identify(directory);
         let snapshots = (project.vcs == Some("git")
             && config.get("snapshots") != Some(&Value::Bool(false)))
@@ -213,12 +191,13 @@ impl Core {
             gateway,
             events,
             credits,
-            config,
-            commands,
-            agents,
-            models,
+            loaded: std::sync::RwLock::new(Arc::new(loaded)),
+            remote: Mutex::new(remote),
+            changes: Arc::default(),
+            applied: Default::default(),
+            reloading: Default::default(),
+            watch: Default::default(),
             registry: Registry::builtin(),
-            skills,
             asks,
             questions: Questions::default(),
             jobs: Jobs::default(),
@@ -227,30 +206,43 @@ impl Core {
             notifier,
             directory: directory.to_path_buf(),
             project,
-            remote_instructions,
             snapshots,
             owner: format!("{}:{}", std::process::id(), crate::ids::part()),
             turns: Mutex::default(),
         };
-        Ok(Core {
-            shared: Arc::new(shared),
-        })
+        shared.arm_watch(&shared.loaded());
+        let shared = Arc::new(shared);
+        if shared.gateway.token().is_some() {
+            tokio::spawn(state::poll_remote(Arc::downgrade(&shared)));
+        }
+        Ok(Core { shared })
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.shared.events.subscribe()
     }
 
-    pub fn config(&self) -> &Config {
-        &self.shared.config
+    /// The current config and what was built from it.
+    pub fn loaded(&self) -> Arc<Loaded> {
+        self.shared.loaded()
     }
 
-    pub fn agents(&self) -> &Agents {
-        &self.shared.agents
+    /// Reloads the config sources if any changed (the loop does this before every step).
+    pub async fn refresh(&self) {
+        self.shared.refresh().await
     }
 
-    pub fn models(&self) -> &[Model] {
-        &self.shared.models
+    /// Fetches the remote config document again (done every 10 minutes while signed in).
+    pub async fn refresh_remote(&self) {
+        self.shared.refresh_remote().await
+    }
+
+    /// `Run \`anysola login\` to sign in to Anysola` after `/config` answered 401.
+    pub fn connection_status(&self) -> Option<&'static str> {
+        self.shared
+            .remote()
+            .needs_auth
+            .then_some(crate::gateway::config::SIGNED_OUT)
     }
 
     pub fn session(&self, id: &str) -> Result<Option<SessionRow>, CoreError> {
@@ -387,7 +379,7 @@ impl Core {
 
     /// Selects the agent for the session's next turns, recorded as an `agent-switched` message.
     pub fn select_agent(&self, session_id: &str, agent: &str) -> Result<(), CoreError> {
-        if self.shared.agents.get(agent).is_none() {
+        if self.shared.loaded().agents.get(agent).is_none() {
             return Err(CoreError::AgentNotFound(agent.to_string()));
         }
         let db = &self.shared.db;
@@ -403,7 +395,7 @@ impl Core {
     /// Selects the model (and variant) for the session's next turns. A change is recorded as a
     /// `model-switched` message, which becomes an effort marker when only the effort changed.
     pub fn select_model(&self, session_id: &str, model: &ModelRef) -> Result<(), CoreError> {
-        crate::model::resolve(&self.shared.models, model)?;
+        crate::model::resolve(&self.shared.loaded().models, model)?;
         let db = &self.shared.db;
         let session = db.session(session_id)?.ok_or(CoreError::SessionNotFound)?;
         let previous = session.model.as_ref().and_then(ModelRef::from_json);
@@ -522,7 +514,7 @@ impl Core {
 
 /// Attached images as the model should get them.
 fn normalize(shared: &Shared, mut prompt: Prompt) -> Result<Prompt, CoreError> {
-    let limits = crate::media::Limits::from_config(shared.config.get("media"));
+    let limits = crate::media::Limits::from_config(shared.loaded().config.get("media"));
     for (mime, data, name) in &mut prompt.files {
         if !crate::media::RESIZABLE.contains(&mime.as_str()) {
             continue;

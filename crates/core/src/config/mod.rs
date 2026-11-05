@@ -1,10 +1,11 @@
 //! Core config: discovery of every source, parsing (JSONC, substitution, V1 normalization), the
 //! Anysola provider lock, and the merge into one [`Config`].
 //!
-//! Sources, lowest precedence first: the gateway's remote document, `~/.config/opencode`
-//! (`OPENCODE_CONFIG_DIR`), `~/.anysola/config.json`, `OPENCODE_CONFIG`, project `opencode.json[c]`
-//! files farthest first, project `.opencode/` directories farthest first, `OPENCODE_CONFIG_CONTENT`,
-//! then managed settings.
+//! Sources, lowest precedence first: managed policies, the gateway's remote document,
+//! `~/.config/opencode` (`OPENCODE_CONFIG_DIR`), `~/.anysola/config.json`, `OPENCODE_CONFIG`,
+//! project `opencode.json[c]` files farthest first, project `.opencode/` directories farthest
+//! first, `OPENCODE_CONFIG_CONTENT`, then managed settings (the system directory, then macOS MDM
+//! preferences). Managed policies outrank all others although their settings load last.
 
 pub mod jsonc;
 mod normalize;
@@ -44,24 +45,33 @@ pub enum Source {
     },
 }
 
+/// A source of agent and command definitions, in load order: later entries override earlier ones,
+/// so a project's markdown agent overrides a global document's agent of the same id.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Entry {
+    /// A document's `agents` and `commands`.
+    Document {
+        agents: Map<String, Value>,
+        commands: Map<String, Value>,
+    },
+    /// A config directory whose `agent/`, `command/`, … folders hold markdown definitions.
+    Directory(PathBuf),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     /// Top-level keys, latest document wins (maps below are merged separately).
     values: Map<String, Value>,
-    /// `agents.<id>` merged field by field, `permissions` concatenated.
-    pub agents: Map<String, Value>,
+    /// Agent and command sources in load order.
+    pub entries: Vec<Entry>,
     /// Top-level `permissions` of every document, in load order.
     pub permissions: Vec<Rule>,
     /// `instructions` of every document, deduplicated.
     pub instructions: Vec<String>,
-    /// `commands.<name>`, later documents replacing whole entries.
-    pub commands: Map<String, Value>,
     /// `skills` sources of every document, deduplicated.
     pub skills: Vec<String>,
     /// `providers.anysola` merged.
     pub provider: Map<String, Value>,
-    /// Directories that hold markdown definitions (`agent/`, `command/`, …), lowest precedence first.
-    pub directories: Vec<PathBuf>,
     /// Problems worth one warning line each (malformed documents, ignored keys).
     pub warnings: Vec<String>,
     /// Every local source in load order (the gateway document is not one).
@@ -91,8 +101,16 @@ impl Config {
             .filter(|s| !s.is_empty())
     }
 
+    /// Off with `websearch: false`, or when a policy denies the Anysola integration that serves it.
     pub fn websearch_enabled(&self) -> bool {
         self.get("websearch") != Some(&Value::Bool(false))
+            && self.anysola_allowed("integration.use")
+    }
+
+    /// Whether policies let the Anysola provider or integration be used (`provider.use` /
+    /// `integration.use` on `anysola`; a device login carries no account to qualify the resource).
+    pub fn anysola_allowed(&self, action: &str) -> bool {
+        self.policies().allows(action, crate::model::PROVIDER)
     }
 
     pub fn tool_output(&self) -> OutputLimits {
@@ -106,6 +124,14 @@ impl Config {
             max_lines: field("max_lines").map_or(defaults.max_lines, |v| v as usize),
             max_bytes: field("max_bytes").map_or(defaults.max_bytes, |v| v as usize),
         }
+    }
+
+    /// Directories that hold markdown definitions (`agent/`, `command/`, …), lowest precedence first.
+    pub fn directories(&self) -> impl Iterator<Item = &PathBuf> {
+        self.entries.iter().filter_map(|entry| match entry {
+            Entry::Directory(dir) => Some(dir),
+            Entry::Document { .. } => None,
+        })
     }
 
     pub fn models(&self) -> Option<&Map<String, Value>> {
@@ -154,18 +180,14 @@ impl Config {
                 }
             }
         }
-        if let Some(Value::Object(commands)) = data.remove("commands") {
-            self.commands.extend(commands);
-        }
-        if let Some(Value::Object(agents)) = data.remove("agents") {
-            for (id, agent) in agents {
-                merge_agent(
-                    self.agents
-                        .entry(id)
-                        .or_insert_with(|| Value::Object(Map::new())),
-                    agent,
-                );
-            }
+        let map = |value: Option<Value>| match value {
+            Some(Value::Object(map)) => map,
+            _ => Map::new(),
+        };
+        let agents = map(data.remove("agents"));
+        let commands = map(data.remove("commands"));
+        if !agents.is_empty() || !commands.is_empty() {
+            self.entries.push(Entry::Document { agents, commands });
         }
         if let Some(Value::Object(mut providers)) = data.remove("providers")
             && let Some(Value::Object(anysola)) = providers.remove("anysola")
@@ -222,22 +244,6 @@ fn policy_statements(data: &mut Map<String, Value>) -> Vec<Policy> {
     out
 }
 
-fn merge_agent(base: &mut Value, next: Value) {
-    let (Value::Object(base), Value::Object(next)) = (base, next) else {
-        return;
-    };
-    for (key, value) in next {
-        match (key.as_str(), base.get_mut(&key), value) {
-            ("permissions", Some(Value::Array(existing)), Value::Array(more)) => {
-                existing.extend(more)
-            }
-            (_, _, value) => {
-                base.insert(key, value);
-            }
-        }
-    }
-}
-
 fn deep_merge(base: &mut Map<String, Value>, next: Map<String, Value>) {
     for (key, value) in next {
         match (base.get_mut(&key), value) {
@@ -285,10 +291,8 @@ fn lock_local(data: &mut Map<String, Value>) {
 
 /// The remote document: only `providers.anysola`, an Anysola `model`, `agents`, and the legacy
 /// `small_model` as the title agent's model. The provider is pinned to `<api>/v1/code`.
-pub fn remote_document(body: &str, api_url: &str) -> Option<Map<String, Value>> {
-    let Value::Object(input) = serde_json::from_str::<Value>(body).ok()? else {
-        return None;
-    };
+pub fn remote_document(body: &Value, api_url: &str) -> Option<Map<String, Value>> {
+    let input = body.as_object()?;
     let mut doc = Map::new();
     if let Some(model) = input.get("model").filter(|m| is_anysola_ref(m)) {
         doc.insert("model".into(), model.clone());
@@ -334,8 +338,8 @@ pub fn remote_document(body: &str, api_url: &str) -> Option<Map<String, Value>> 
 /// What to load besides files.
 #[derive(Debug, Clone, Default)]
 pub struct LoadOptions {
-    /// Raw body of the gateway's `/config` (live or cached).
-    pub remote: Option<String>,
+    /// Body of the gateway's `/config` (live or cached).
+    pub remote: Option<Value>,
     pub api_url: String,
 }
 
@@ -361,16 +365,81 @@ pub fn upward(start: &Path, home: &Path) -> Vec<PathBuf> {
     out
 }
 
-fn managed_dirs() -> Vec<PathBuf> {
+/// The system configuration directory: managed settings that override everything.
+fn system_dir() -> PathBuf {
     if cfg!(windows) {
-        std::env::var_os("ProgramData")
-            .map(|d| PathBuf::from(d).join("opencode"))
-            .into_iter()
-            .collect()
+        let base = std::env::var_os("ProgramData").unwrap_or_else(|| "C:\\ProgramData".into());
+        PathBuf::from(base).join("opencode")
     } else if cfg!(target_os = "macos") {
-        vec![PathBuf::from("/Library/Application Support/opencode")]
+        PathBuf::from("/Library/Application Support/opencode")
     } else {
-        vec![PathBuf::from("/etc/opencode")]
+        PathBuf::from("/etc/opencode")
+    }
+}
+
+/// A path with symlinks resolved as far as it exists, so a symlinked global root is recognized.
+fn resolve(path: &Path) -> PathBuf {
+    if let Ok(real) = path.canonicalize() {
+        return real;
+    }
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => resolve(parent).join(name),
+        _ => path.to_path_buf(),
+    }
+}
+
+/// macOS MDM managed preferences (`ai.opencode.managed`), converted to JSON by `plutil`.
+#[cfg(any(target_os = "macos", test))]
+mod preferences {
+    use serde_json::Value;
+
+    /// Keys macOS and MDM profiles add that are not config.
+    const METADATA: [&str; 6] = [
+        "PayloadDisplayName",
+        "PayloadIdentifier",
+        "PayloadType",
+        "PayloadUUID",
+        "PayloadVersion",
+        "_manualProfile",
+    ];
+
+    pub fn strip_metadata(json: &str) -> String {
+        match serde_json::from_str::<Value>(json) {
+            Ok(Value::Object(mut map)) => {
+                map.retain(|key, _| !METADATA.contains(&key.as_str()));
+                crate::json::compact(&Value::Object(map))
+            }
+            _ => json.to_string(),
+        }
+    }
+
+    /// The most specific plist present, as JSON text.
+    #[cfg(target_os = "macos")]
+    pub fn load() -> Option<(std::path::PathBuf, String)> {
+        let user = std::env::var("USER").unwrap_or_else(|_| "user".into());
+        let base = std::path::Path::new("/Library/Managed Preferences");
+        let plist = [
+            base.join(&user).join("ai.opencode.managed.plist"),
+            base.join("ai.opencode.managed.plist"),
+        ]
+        .into_iter()
+        .find(|p| p.is_file())?;
+        let output = std::process::Command::new("plutil")
+            .args(["-convert", "json", "-o", "-"])
+            .arg(&plist)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success());
+        let Some(output) = output else {
+            crate::log::warn(
+                "failed to convert managed preferences",
+                &[("source", &plist.display().to_string())],
+            );
+            return None;
+        };
+        let text = strip_metadata(&String::from_utf8_lossy(&output.stdout));
+        Some((plist, text))
     }
 }
 
@@ -420,7 +489,9 @@ impl Loader<'_> {
             self.file(&dir.join(name));
         }
         if dir.is_dir() {
-            self.config.directories.push(dir.to_path_buf());
+            self.config
+                .entries
+                .push(Entry::Directory(dir.to_path_buf()));
         }
     }
 }
@@ -434,7 +505,7 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
     };
     if let Some(remote) = options
         .remote
-        .as_deref()
+        .as_ref()
         .and_then(|body| remote_document(body, &options.api_url))
     {
         loader.config.apply(Document {
@@ -450,20 +521,34 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
     }
     let project_disabled =
         env_flag("OPENCODE_DISABLE_PROJECT_CONFIG") || env_flag("OPENCODE_CONFIG_PROJECT_DISABLE");
-    let global_roots = [legacy.clone(), paths.data.clone()];
-    if !project_disabled && !global_roots.iter().any(|root| root == directory) {
+    let system = system_dir();
+    let config_roots: Vec<PathBuf> = [&system, &legacy, &paths.data]
+        .into_iter()
+        .map(|dir| resolve(dir))
+        .collect();
+    let global_roots: Vec<PathBuf> = config_roots
+        .iter()
+        .cloned()
+        .chain([".claude", ".agents"].map(|name| resolve(&paths.home.join(name))))
+        .collect();
+    let global_files: Vec<PathBuf> = [&system, &legacy]
+        .into_iter()
+        .flat_map(|dir| NAMES.map(|name| resolve(&dir.join(name))))
+        .chain([resolve(&paths.data.join("config.json"))])
+        .collect();
+    if !project_disabled && !config_roots.contains(&resolve(directory)) {
         let walk: Vec<PathBuf> = upward(directory, &paths.home).into_iter().rev().collect();
         for dir in &walk {
             for name in NAMES {
                 let file = dir.join(name);
-                if !global_roots.iter().any(|root| file.starts_with(root)) {
+                if !global_files.contains(&resolve(&file)) {
                     loader.file(&file);
                 }
             }
         }
         for dir in &walk {
             let dot = dir.join(".opencode");
-            if !global_roots.contains(&dot) {
+            if !global_roots.contains(&resolve(&dot)) {
                 loader.directory(&dot, &NAMES);
             }
         }
@@ -474,8 +559,11 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
         loader.text(&content, directory, "OPENCODE_CONFIG_CONTENT");
     }
     loader.managed = true;
-    for dir in managed_dirs() {
-        loader.directory(&dir, &NAMES);
+    loader.directory(&system, &NAMES);
+    #[cfg(target_os = "macos")]
+    if let Some((plist, text)) = preferences::load() {
+        let dir = plist.parent().unwrap_or(Path::new("/")).to_path_buf();
+        loader.text(&text, &dir, &plist.display().to_string());
     }
     loader.config
 }
@@ -520,7 +608,7 @@ mod tests {
             "small_model": "anysola/claude-haiku-5-5",
             "providers": {"anysola": {"settings": {"baseURL": "https://elsewhere"}, "models": {"m": {}}}, "other": {}},
         });
-        let doc = remote_document(&body.to_string(), "http://x").unwrap();
+        let doc = remote_document(&body, "http://x").unwrap();
         assert_eq!(doc["agents"]["title"]["model"], "anysola/claude-haiku-5-5");
         assert_eq!(
             doc["providers"]["anysola"]["settings"]["baseURL"],
@@ -577,6 +665,47 @@ mod tests {
         assert_eq!(config.shell(), Some("bash"));
         assert_eq!(config.instructions, vec!["x.md"]);
         assert_eq!(config.permissions.len(), 1);
-        assert_eq!(config.agents["build"]["steps"], 3);
+        assert_eq!(
+            config.entries.iter().rev().nth(1),
+            Some(&Entry::Document {
+                agents: json!({"build": {"steps": 3}}).as_object().unwrap().clone(),
+                commands: Map::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn preference_metadata_is_stripped() {
+        assert_eq!(
+            preferences::strip_metadata(
+                r#"{"PayloadUUID":"x","_manualProfile":true,"model":"anysola/m","PayloadType":"t"}"#
+            ),
+            r#"{"model":"anysola/m"}"#
+        );
+        assert_eq!(preferences::strip_metadata("[1]"), "[1]");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walk_skipped_in_a_symlinked_global_root() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let real = root.path().join("dotfiles/opencode");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::create_dir_all(home.join(".config")).unwrap();
+        std::os::unix::fs::symlink(&real, home.join(".config/opencode")).unwrap();
+        std::fs::write(real.join("opencode.json"), r#"{"shell":"zsh"}"#).unwrap();
+        std::fs::create_dir_all(real.join(".opencode")).unwrap();
+        std::fs::write(real.join(".opencode/opencode.json"), r#"{"shell":"fish"}"#).unwrap();
+        let paths = Paths::isolated(home.clone());
+        let config = load(&paths, &real, &LoadOptions::default());
+        assert_eq!(config.shell(), Some("zsh"));
+        let project = home.join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("opencode.json"), r#"{"shell":"bash"}"#).unwrap();
+        assert_eq!(
+            load(&paths, &project, &LoadOptions::default()).shell(),
+            Some("bash")
+        );
     }
 }
