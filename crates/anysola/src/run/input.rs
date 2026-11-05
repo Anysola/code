@@ -48,6 +48,18 @@ fn stdin_kind() -> StdinKind {
             }
         }
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_TYPE_CHAR, FILE_TYPE_DISK, GetFileType,
+        };
+        // SAFETY: GetFileType only inspects the handle, which stdin keeps open.
+        let kind = unsafe { GetFileType(std::io::stdin().as_raw_handle()) };
+        if kind == FILE_TYPE_DISK || kind == FILE_TYPE_CHAR {
+            return StdinKind::Immediate;
+        }
+    }
     StdinKind::Stream
 }
 

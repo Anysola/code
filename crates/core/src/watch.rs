@@ -281,6 +281,8 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         assert!(changes.generation() > 0);
+        // One write can arrive as several events (create, modify, close).
+        tokio::time::sleep(Duration::from_millis(200)).await;
         let seen = changes.generation();
         std::fs::write(dir.join("main.rs"), "y").unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;

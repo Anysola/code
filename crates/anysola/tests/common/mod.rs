@@ -268,12 +268,15 @@ pub fn normalize_body(body: &Value, places: &Places, capture: bool) -> Value {
     // The `<env>` block names the host's platform and temp dir.
     let platform = Regex::new(r"(?m)^  Platform: \w+$").unwrap();
     let temp = Regex::new(r"Prefer \S+ over generic system temporary").unwrap();
+    // The shell tool names the host's OS and shell.
+    let shell = Regex::new(r"Commands run on [^.]+\.").unwrap();
     let f = |s: &str| {
         let mut s = places.apply(s);
         s = platform.replace_all(&s, "  Platform: <OS>").into_owned();
         s = temp
             .replace_all(&s, "Prefer <TEMP> over generic system temporary")
             .into_owned();
+        s = shell.replace_all(&s, "Commands run on <OS>.").into_owned();
         s = date.replace_all(&s, "Today's date: <DATE>").into_owned();
         s = signature.replace_all(&s, "SIG_N").into_owned();
         if capture {

@@ -334,12 +334,20 @@ async fn signals(
     }
     #[cfg(not(unix))]
     {
-        while tokio::signal::ctrl_c().await.is_ok() {
+        let mut deadline = None;
+        loop {
+            tokio::select! {
+                result = tokio::signal::ctrl_c() => if result.is_err() { return },
+                () = async { deadline.as_mut().expect("guarded").await }, if deadline.is_some() => {
+                    exit_pending(&format!("shutdown did not finish within {}s", SHUTDOWN_DEADLINE.as_secs()));
+                }
+            }
             if exit.swap(130, Ordering::Relaxed) == 130 {
                 std::process::exit(130);
             }
             user_interrupt.store(true, Ordering::Relaxed);
             core.interrupt(&session_id);
+            deadline = Some(Box::pin(tokio::time::sleep(SHUTDOWN_DEADLINE)));
         }
     }
 }
