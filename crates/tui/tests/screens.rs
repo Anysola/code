@@ -25,8 +25,70 @@ fn capture(name: &str) -> String {
     std::fs::read_to_string(path).unwrap()
 }
 
+/// Terminal sizes every rendered screen is also drawn at: drawing must not panic (debug builds
+/// catch the arithmetic that would wrap in release) however small or large the terminal is.
+const SIZES: &[(u16, u16)] = &[
+    (1, 1),
+    (2, 2),
+    (8, 3),
+    (12, 5),
+    (20, 6),
+    (24, 8),
+    (24, 60),
+    (26, 9),
+    (30, 9),
+    (300, 8),
+    (32, 100),
+    (40, 12),
+    (44, 14),
+    (52, 16),
+    (64, 20),
+    (80, 24),
+    (100, 30),
+    (140, 40),
+    (220, 60),
+];
+
+fn sweep(state: &State, theme: &anysola_tui::theme::Theme) {
+    for &(width, height) in SIZES {
+        for left in [0, 20] {
+            let mut sized = state.clone();
+            sized.width = width;
+            sized.height = height;
+            sized.left = if width > 60 { left } else { 0 };
+            let total = width + sized.left;
+            let mut buffer = Buffer::empty(Rect::new(0, 0, total, height));
+            let drawn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                anysola_tui::view::draw(&sized, theme, &mut buffer)
+            }));
+            assert!(
+                drawn.is_ok(),
+                "drawing panicked at {width}x{height} (left {})",
+                sized.left
+            );
+            // The sizes the app works out between frames (pty, scrolling, pane drags).
+            let sizes = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                use anysola_tui::view;
+                let _ = view::terminal_size(&sized);
+                let _ = view::pane_width(&sized);
+                let _ = view::session_content_width(&sized);
+                let _ = view::diff_width(&sized);
+                if let Some(session) = sized.session() {
+                    let w = view::session_content_width(&sized);
+                    let _ = view::transcript_rows(&sized, session, theme, w);
+                }
+                if let Some(diff) = &sized.diff {
+                    let _ = view::diff_tree_width(diff, width);
+                }
+            }));
+            assert!(sizes.is_ok(), "layout sizes panicked at {width}x{height}");
+        }
+    }
+}
+
 fn render(state: &State) -> String {
     let theme = Catalog::bundled().load("anysola", ThemeMode::Dark).unwrap();
+    sweep(state, &theme);
     let mut buffer = Buffer::empty(Rect::new(0, 0, state.width, state.height));
     anysola_tui::view::draw(state, &theme, &mut buffer);
     let mut out = Vec::new();

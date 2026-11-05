@@ -205,6 +205,14 @@ fn toast_without_action_closes() {
 }
 
 #[test]
+fn a_tiny_terminal_asks_for_more_room() {
+    let state = session(20, 6, Vec::new());
+    let (buffer, drawn) = draw(&state);
+    find(&buffer, "Terminal too small", false);
+    assert!(drawn.hits.is_empty());
+}
+
+#[test]
 fn jump_to_latest() {
     let items = (0..80)
         .map(|i| Item::Notice(format!("notice {i}")))

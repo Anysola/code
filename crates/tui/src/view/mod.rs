@@ -173,6 +173,9 @@ pub fn round(value: f64) -> u16 {
 /// Draws the frame; with a vertical tab column the routes draw beside it, in their own
 /// coordinates (`state.width` is what is left of the terminal).
 pub fn draw(state: &State, theme: &Theme, buf: &mut Buffer) -> Drawn {
+    if state.width < MIN_WIDTH || state.height < MIN_HEIGHT {
+        return too_small(theme, buf);
+    }
     if state.left == 0 {
         return draw_body(state, theme, buf);
     }
@@ -190,6 +193,27 @@ pub fn draw(state: &State, theme: &Theme, buf: &mut Buffer) -> Drawn {
     Drawn {
         cursor: drawn.cursor.map(|(x, y)| (x + state.left, y)),
         hits: drawn.hits,
+    }
+}
+
+/// Below this the screens do not fit; the frame only asks for a larger terminal.
+pub const MIN_WIDTH: u16 = 24;
+pub const MIN_HEIGHT: u16 = 8;
+
+fn too_small(theme: &Theme, buf: &mut Buffer) -> Drawn {
+    let area = buf.area;
+    let mut c = Canvas::new(buf, theme);
+    c.fill(area, theme.fg("background.base"));
+    let lines = ["Terminal too small", "Make the window larger"];
+    let top = area.height.saturating_sub(lines.len() as u16) / 2;
+    for (i, line) in lines.iter().enumerate() {
+        let x = area.width.saturating_sub(width(line) as u16) / 2;
+        let style = c.style(if i == 0 { "text.base" } else { "text.muted" });
+        c.put(x, top + i as u16, line, style, area.width as usize);
+    }
+    Drawn {
+        cursor: None,
+        hits: Vec::new(),
     }
 }
 

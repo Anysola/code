@@ -274,7 +274,13 @@ fn option(c: &mut Canvas, f: &Frame, y: u16, s: &Select, index: usize, active: b
             (false, Some(t)) => tone(c, t),
             _ => secondary,
         };
-        c.put(f.right - footer_w as u16, y, &o.footer, style, footer_w);
+        c.put(
+            f.right.saturating_sub(footer_w as u16),
+            y,
+            &o.footer,
+            style,
+            footer_w,
+        );
     }
 }
 

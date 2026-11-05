@@ -148,7 +148,7 @@ pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u1
     drop(cache);
     if session.history_loading {
         let label = "Loading session history…";
-        let lx = x + w - width(label) as u16;
+        let lx = (x + w).saturating_sub(width(label) as u16);
         c.put(
             lx,
             status_y,
@@ -158,7 +158,7 @@ pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u1
         );
     } else if session.scroll > 0 {
         let label = "Jump to latest ↓";
-        let lx = x + w - width(label) as u16;
+        let lx = (x + w).saturating_sub(width(label) as u16);
         c.put(
             lx,
             status_y,
