@@ -4,7 +4,7 @@
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 
-use super::Canvas;
+use super::{Canvas, Hit};
 use crate::state::Dock;
 use crate::text::width;
 
@@ -29,9 +29,15 @@ pub fn draw(c: &mut Canvas, dock: &Dock, x: u16, y: u16, w: u16) {
         } else {
             muted
         };
-        at = c.put(at, y + 1, tab.label(), style, room) + 2;
+        let end = c.put(at, y + 1, tab.label(), style, room);
+        c.hit(Rect::new(at, y + 1, end - at, 1), Hit::DockTab(i));
+        at = end + 2;
     }
     c.put(right.saturating_sub(3), y + 1, "esc", muted, 3);
+    c.hit(
+        Rect::new(right.saturating_sub(3), y + 1, 3, 1),
+        Hit::Key("esc".into()),
+    );
     let first = dock.selected.saturating_sub(ROWS - 1);
     if dock.rows.is_empty() {
         c.put(left, y + 2, dock.empty(), muted, room);
@@ -55,10 +61,19 @@ pub fn draw(c: &mut Canvas, dock: &Dock, x: u16, y: u16, w: u16) {
         if right_w > 0 {
             c.put(right - right_w as u16, ry, &row.right, muted, right_w);
         }
+        c.hit(Rect::new(x, ry, w, 1), Hit::DockRow(first + i));
     }
     let mut hx = left;
     for (label, key) in dock.hints() {
+        let start = hx;
         hx = c.put(hx, y + h - 2, label, muted, room) + 1;
-        hx = c.put(hx, y + h - 2, key, base, room) + 2;
+        hx = c.put(hx, y + h - 2, key, base, room);
+        if key != "←/→" {
+            c.hit(
+                Rect::new(start, y + h - 2, hx - start, 1),
+                Hit::Key(key.into()),
+            );
+        }
+        hx += 2;
     }
 }

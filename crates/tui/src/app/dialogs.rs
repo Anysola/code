@@ -521,6 +521,53 @@ impl App {
         }
     }
 
+    /// Highlights a list option under the pointer.
+    pub(super) fn hover_option(&mut self, index: usize) {
+        let Some(Dialog::Select(s)) = self.state.dialogs.last_mut() else {
+            return;
+        };
+        let Some(at) = s.matches().iter().position(|&i| i == index) else {
+            return;
+        };
+        if s.selected != at {
+            s.selected = at;
+            self.after_move();
+        }
+    }
+
+    /// A click on a control of the open dialog: picks it, then acts as Enter (or Space).
+    pub(super) fn dialog_click(&mut self, hit: crate::view::Hit) {
+        use crate::view::Hit;
+        let enter = Stroke::parse("enter").expect("enter");
+        match (self.state.dialogs.last_mut(), hit) {
+            (Some(Dialog::Select(_)), Hit::Option(index)) => {
+                self.hover_option(index);
+                self.choose_option();
+            }
+            (Some(Dialog::Body(b)), Hit::Button(i)) => {
+                b.active = i;
+                self.dialog_key(&enter);
+            }
+            (Some(Dialog::Confirm(k)), Hit::Button(i)) => {
+                k.yes = i == 1;
+                self.dialog_key(&enter);
+            }
+            (Some(Dialog::Export(e)), Hit::Button(i)) => {
+                e.focus = e.fields() + i;
+                self.dialog_key(&enter);
+            }
+            (Some(Dialog::Export(e)), Hit::Field(field)) => {
+                e.focus = field;
+                self.dialog_key(&Stroke::parse("space").expect("space"));
+            }
+            (Some(Dialog::Export(e)), Hit::Format(json)) => {
+                e.focus = 0;
+                e.json = json;
+            }
+            _ => {}
+        }
+    }
+
     fn close_dialog(&mut self) {
         if let Some(Dialog::Select(Select {
             kind: Kind::Themes { original },

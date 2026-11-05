@@ -1,9 +1,10 @@
 //! Home: the ANYSOLA wordmark (or the A symbol on narrow terminals), the prompt, recent sessions,
 //! and the plan line with the version at the bottom.
 
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
-use super::{Canvas, prompt, round};
+use super::{Canvas, Hit, prompt, round};
 use crate::state::State;
 use crate::text::{self, width};
 
@@ -70,7 +71,11 @@ pub fn draw(c: &mut Canvas, state: &State) -> Option<(u16, u16)> {
         let notice = format!("/update to install v{version}");
         let x = center(width(&notice) as u16);
         let end = c.put(x, y, "/update", c.style("text.action.primary.selected"), 7);
-        c.put(end, y, &notice[7..], c.style("text.muted"), notice.len());
+        let end = c.put(end, y, &notice[7..], c.style("text.muted"), notice.len());
+        c.hit(
+            Rect::new(x, y, end - x, 1),
+            Hit::Command("opencode.update".into()),
+        );
         y += 1;
     }
     let x = center(prompt_w);
@@ -95,7 +100,11 @@ fn recent_sessions(c: &mut Canvas, state: &State, x: u16, y: u16, w: u16) {
         let hint = format!("{key} all sessions");
         let hx = x + w - width(&hint) as u16;
         let end = c.put(hx, y, key, muted, w as usize);
-        c.put(end, y, " all sessions", faint, w as usize);
+        let end = c.put(end, y, " all sessions", faint, w as usize);
+        c.hit(
+            Rect::new(hx, y, end - hx, 1),
+            Hit::Command("session.list".into()),
+        );
     }
     for (i, session) in state.recent.iter().enumerate() {
         let row = y + 1 + i as u16;

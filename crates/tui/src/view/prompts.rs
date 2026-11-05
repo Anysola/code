@@ -5,8 +5,8 @@ use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 use serde_json::Value;
 
-use super::Canvas;
 use super::session::draw_row;
+use super::{Canvas, Hit};
 use crate::state::{Permission, Question, State};
 use crate::text::{self, width};
 use crate::transcript::markdown::Line;
@@ -210,8 +210,17 @@ fn reject_reason(c: &mut Canvas, state: &State, reason: &str, x: u16, y: u16, w:
     };
     let at = c.put(actions_x, actions_y, "enter", footer_base, 5);
     let at = c.put(at + 1, actions_y, "confirm", footer_muted, 7);
-    let at = c.put(at + 2, actions_y, "esc", footer_base, 3);
-    c.put(at + 1, actions_y, "cancel", footer_muted, 6);
+    c.hit(
+        Rect::new(actions_x, actions_y, at - actions_x, 1),
+        Hit::Key("enter".into()),
+    );
+    let esc = at + 2;
+    let at = c.put(esc, actions_y, "esc", footer_base, 3);
+    let end = c.put(at + 1, actions_y, "cancel", footer_muted, 6);
+    c.hit(
+        Rect::new(esc, actions_y, end - esc, 1),
+        Hit::Key("esc".into()),
+    );
 }
 
 pub fn permission(c: &mut Canvas, state: &State, p: &Permission, x: u16, y: u16, w: u16, h: u16) {
@@ -285,13 +294,14 @@ pub fn permission(c: &mut Canvas, state: &State, p: &Permission, x: u16, y: u16,
             (c.theme.fg("text.action.primary.base"), footer_bg)
         };
         let label = format!(" {option} ");
-        c.put(
+        let end = c.put(
             bx,
             by,
             &label,
             Style::new().fg(fg).bg(button_bg),
             label.len(),
         );
+        c.hit(Rect::new(bx, by, end - bx, 1), Hit::Choice(i));
         if narrow(state) {
             by += 1;
         } else {
@@ -328,6 +338,11 @@ pub fn permission(c: &mut Canvas, state: &State, p: &Permission, x: u16, y: u16,
     };
     let hy = if narrow(state) { by } else { y + h - 2 };
     c.spans(hx, hy, &hints, total);
+    let confirm = width("enter confirm") as u16;
+    c.hit(
+        Rect::new(hx + total as u16 - confirm, hy, confirm, 1),
+        Hit::Key("enter".into()),
+    );
 }
 
 pub fn question_height(q: &Question, w: u16) -> u16 {
@@ -429,6 +444,7 @@ pub fn question(c: &mut Canvas, q: &Question, x: u16, y: u16, w: u16) {
             style,
             room,
         );
+        c.hit(Rect::new(x + 1, at, w.saturating_sub(2), 1), Hit::Choice(i));
         if !description.is_empty() {
             c.put(
                 end + 1,
@@ -464,6 +480,21 @@ fn hints(c: &mut Canvas, x: u16, y: u16, w: u16, action: &str, bg: Color) {
         Span::styled("dismiss", muted),
     ];
     c.spans(x + 3, y, &spans, w.saturating_sub(6) as usize);
+    // `enter <action>` and `esc dismiss` work as their keys.
+    let mut at = x + 3;
+    for (i, span) in spans.iter().enumerate() {
+        let key = match i {
+            4 => Some("enter"),
+            6 => Some("esc"),
+            _ => None,
+        };
+        let w = width(&span.content) as u16;
+        if let Some(key) = key {
+            let label = width(spans[i + 1].content.trim_end()) as u16;
+            c.hit(Rect::new(at, y, w + label, 1), Hit::Key(key.into()));
+        }
+        at += w;
+    }
 }
 
 pub const LOCATION_HEIGHT: u16 = 9;

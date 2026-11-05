@@ -887,7 +887,10 @@ fn thinking(parts: &[&Part], ctx: &Ctx) -> Vec<Row> {
             label.push_str(&format!(" · {} steps", parts.len()));
         }
         label.push_str(&format!(" · {}", duration(end.saturating_sub(start))));
-        rows.push(Row::text(3, vec![Span::styled(label, done)]));
+        let mut row = Row::text(3, vec![Span::styled(label, done)]);
+        // A click shows or hides the thinking, like `session.toggle.thinking`.
+        row.group = Some("thinking".into());
+        rows.push(row);
     }
     if ctx.thinking {
         let rail = Some(ctx.theme.fg("border.base"));

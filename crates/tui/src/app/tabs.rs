@@ -118,6 +118,16 @@ impl App {
         }
     }
 
+    /// Closes the tab at `index` (a middle click); the session stays in Recently closed.
+    pub(super) fn close_tab(&mut self, index: usize) {
+        let id = self.state.tabs.remove(index).session_id;
+        if matches!(&self.state.route, crate::state::Route::Session(s) if *s == id) {
+            self.state.route = crate::state::Route::Home;
+        }
+        self.closed.push(id);
+        self.refresh_recent();
+    }
+
     /// `session.tab.select.N` (1-based).
     pub(super) fn select_tab(&mut self, number: usize) {
         let id = number
@@ -184,12 +194,7 @@ impl App {
             }
             MouseEventKind::Down(MouseButton::Middle) => {
                 if let Some(Some(index)) = crate::view::vertical_tab_at(&self.state, mouse.row) {
-                    let id = self.state.tabs.remove(index).session_id;
-                    if matches!(&self.state.route, crate::state::Route::Session(s) if *s == id) {
-                        self.state.route = crate::state::Route::Home;
-                    }
-                    self.closed.push(id);
-                    self.refresh_recent();
+                    self.close_tab(index);
                 }
                 true
             }

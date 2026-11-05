@@ -5,7 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
-use super::{Canvas, prompt, prompts};
+use super::{Canvas, Hit, prompt, prompts};
 use crate::state::{DiffView, Session, State};
 use crate::text::{self, width};
 use crate::transcript::rows::{self, Ctx, Row};
@@ -165,6 +165,10 @@ pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u1
             label,
             c.style("text.action.secondary.base"),
             label.len(),
+        );
+        c.hit(
+            Rect::new(lx, status_y, width(label) as u16, 1),
+            Hit::Command("session.last".into()),
         );
     }
     match &state.pane {
@@ -384,6 +388,10 @@ fn sidebar(c: &mut Canvas, state: &State, session: &Session, x: u16, top: u16) {
                 let word_x = tx + room as u16 - width(word) as u16;
                 c.put(tx + 2, y, name, bold, room.saturating_sub(width(word) + 3));
                 c.put(word_x, y, word, word_style, width(word));
+                c.hit(
+                    Rect::new(tx, y, room as u16, 1),
+                    Hit::Command("mcp.list".into()),
+                );
             }
         }
         y += 1;
@@ -391,8 +399,22 @@ fn sidebar(c: &mut Canvas, state: &State, session: &Session, x: u16, top: u16) {
     let todos = latest_todos(session);
     if !todos.is_empty() {
         y += 1;
-        c.put(tx, y, "Todo", bold, room);
-        for (status, content) in todos {
+        // Like MCP, a list of more than two folds under its header (`sidebar/todo.tsx`).
+        let many = todos.len() > 2;
+        let mut x = tx;
+        if many {
+            x = c.put(tx, y, if state.todo_closed { "▶" } else { "▼" }, base, 1) + 1;
+        }
+        let end = c.put(x, y, "Todo", bold, room);
+        if many {
+            c.hit(Rect::new(tx, y, end - tx, 1), Hit::ToggleTodos);
+        }
+        let shown = if many && state.todo_closed {
+            0
+        } else {
+            todos.len()
+        };
+        for (status, content) in todos.into_iter().take(shown) {
             y += 1;
             let (marker, style) = match status.as_str() {
                 "completed" => ("[✓]", base),

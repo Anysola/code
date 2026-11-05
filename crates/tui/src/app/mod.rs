@@ -93,6 +93,8 @@ pub struct App {
     selection: Option<((u16, u16), (u16, u16))>,
     /// The last frame, for copying selections.
     last: Buffer,
+    /// The last frame's clickable controls, in the routes' coordinates.
+    hits: Vec<(ratatui::layout::Rect, crate::view::Hit)>,
     /// The text the popup was hidden for with Esc; it stays hidden until the text changes.
     popup_hidden: Option<String>,
     title: String,
@@ -289,6 +291,7 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
         files: None,
         selection: None,
         last: Buffer::empty(ratatui::layout::Rect::default()),
+        hits: Vec::new(),
         popup_hidden: None,
         title: String::new(),
         deferred: None,
@@ -591,8 +594,10 @@ impl App {
         }
         let selection = self.selection;
         let left = self.state.left;
+        let mut hits = Vec::new();
         let frame = terminal.draw(|frame| {
             let drawn = crate::view::draw(&self.state, &self.theme, frame.buffer_mut());
+            hits = drawn.hits;
             if let Some((a, b)) = selection {
                 highlight(
                     frame.buffer_mut(),
@@ -606,6 +611,7 @@ impl App {
             }
         });
         if let Ok(frame) = frame {
+            self.hits = hits;
             // Hit tests read the routes' own coordinates, right of a vertical tab column.
             self.last = if left == 0 {
                 frame.buffer.clone()
@@ -818,7 +824,7 @@ impl App {
     }
 
     /// Loads a session into the state, adds its tab and shows it.
-    fn open_session(&mut self, id: &str) {
+    pub(super) fn open_session(&mut self, id: &str) {
         let Ok(Some(row)) = self.core.session(id) else {
             self.toast(None, format!("Session not found: {id}"), Variant::Error);
             return;

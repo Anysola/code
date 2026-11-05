@@ -4,7 +4,7 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
-use super::Canvas;
+use super::{Canvas, Hit};
 use crate::dialog::{
     Action, Body, Confirm, Dialog, Export, Line, Prompt, Row, Select, Tone, list_limit,
 };
@@ -83,7 +83,11 @@ fn panel(c: &mut Canvas, f: &Frame, bottom: u16) {
         }
     }
     let bg = c.theme.term(c.theme.dialog.get("background.base"));
-    c.fill(Rect::new(f.x, f.top, f.w, bottom.saturating_sub(f.top)), bg);
+    let rect = Rect::new(f.x, f.top, f.w, bottom.saturating_sub(f.top));
+    c.fill(rect, bg);
+    // The backdrop covers everything drawn so far.
+    c.hits.clear();
+    c.hit(rect, Hit::Panel);
 }
 
 fn header(c: &mut Canvas, f: &Frame, title: &Line, close: &str) {
@@ -91,7 +95,12 @@ fn header(c: &mut Canvas, f: &Frame, title: &Line, close: &str) {
     let room = f.room().saturating_sub(width(close) + 1);
     put_line(c, f.left, y, title, room);
     let style = tone(c, Tone::Muted);
-    c.put(f.right - width(close) as u16, y, close, style, width(close));
+    let x = f.right - width(close) as u16;
+    c.put(x, y, close, style, width(close));
+    c.hit(
+        Rect::new(x, y, width(close) as u16, 1),
+        Hit::Key("esc".into()),
+    );
 }
 
 /// `<title> <key>` actions: left ones from the left edge, right ones against the right edge.
@@ -104,14 +113,18 @@ fn actions(c: &mut Canvas, f: &Frame, y: u16, actions: &[Action]) {
     };
     let mut x = f.left;
     for a in actions.iter().filter(|a| !a.right) {
-        x = put_line(c, x, y, &spans(a), f.room()) + 2;
+        let end = put_line(c, x, y, &spans(a), f.room());
+        c.hit(Rect::new(x, y, end - x, 1), Hit::Key(a.key.clone()));
+        x = end + 2;
     }
     let right: Vec<Line> = actions.iter().filter(|a| a.right).map(spans).collect();
     let total: usize =
         right.iter().map(line_width).sum::<usize>() + 2 * right.len().saturating_sub(1);
     let mut x = f.right.saturating_sub(total as u16);
-    for line in &right {
-        x = put_line(c, x, y, line, f.room()) + 2;
+    for (a, line) in actions.iter().filter(|a| a.right).zip(&right) {
+        let end = put_line(c, x, y, line, f.room());
+        c.hit(Rect::new(x, y, end - x, 1), Hit::Key(a.key.clone()));
+        x = end + 2;
     }
 }
 
@@ -196,7 +209,13 @@ fn select(c: &mut Canvas, s: &Select) -> Option<(u16, u16)> {
                     c.put(f.left, y, &s.options[index].category, style, f.room());
                 }
                 Row::Blank => {}
-                Row::Option(index) => option(c, &f, y, s, index, active == Some(index)),
+                Row::Option(index) => {
+                    option(c, &f, y, s, index, active == Some(index));
+                    c.hit(
+                        Rect::new(f.left - 3, y, f.right + 5 - f.left, 1),
+                        Hit::Option(index),
+                    );
+                }
             }
         }
     }
@@ -259,7 +278,8 @@ fn option(c: &mut Canvas, f: &Frame, y: u16, s: &Select, index: usize, active: b
     }
 }
 
-fn body(c: &mut Canvas, b: &Body) {
+/// Draws a plain dialog; returns the row and column its first line starts at.
+fn body(c: &mut Canvas, b: &Body) -> (u16, u16) {
     let height = c.buf.area.height;
     let rows = b.lines.len().min(height.saturating_sub(10) as usize);
     let footer = !b.footer.is_empty() || !b.actions.is_empty() || !b.buttons.is_empty();
@@ -276,10 +296,21 @@ fn body(c: &mut Canvas, b: &Body) {
         put_line(c, f.left, top + 3 + i as u16, line, f.room());
     }
     if !footer {
-        return;
+        return (top + 3, f.left);
     }
     let y = top + 3 + rows as u16 + 1;
-    put_line(c, f.left, y, &b.footer, f.room());
+    let end = put_line(c, f.left, y, &b.footer, f.room());
+    if matches!(b.kind, crate::dialog::BodyKind::Image { .. }) {
+        let next = width("next →") as u16;
+        c.hit(
+            Rect::new(f.left, y, width("← previous") as u16, 1),
+            Hit::Key("left".into()),
+        );
+        c.hit(
+            Rect::new(end.saturating_sub(next), y, next, 1),
+            Hit::Key("right".into()),
+        );
+    }
     actions(c, &f, y, &b.actions);
     let total: usize =
         b.buttons.iter().map(|t| width(t) + 2).sum::<usize>() + b.buttons.len().saturating_sub(1);
@@ -299,8 +330,10 @@ fn body(c: &mut Canvas, b: &Body) {
             let style = tone(c, Tone::Muted);
             c.put(x + 1, y, title, style, w as usize);
         }
+        c.hit(Rect::new(x, y, w, 1), Hit::Button(i));
         x += w + 1;
     }
+    (top + 3, f.left)
 }
 
 fn prompt(c: &mut Canvas, p: &Prompt) -> Option<(u16, u16)> {
@@ -324,7 +357,13 @@ fn prompt(c: &mut Canvas, p: &Prompt) -> Option<(u16, u16)> {
             (" enter".to_string(), Tone::Muted),
         ],
     };
-    put_line(c, f.left, top + 5, &footer, f.room());
+    let end = put_line(c, f.left, top + 5, &footer, f.room());
+    if p.busy.is_none() {
+        c.hit(
+            Rect::new(f.left, top + 5, end - f.left, 1),
+            Hit::Key("enter".into()),
+        );
+    }
     p.busy
         .is_none()
         .then_some((f.left + width(&p.text).min(f.room()) as u16, y))
@@ -375,5 +414,23 @@ fn export(c: &mut Canvas, e: &Export) {
     let mut b = Body::new(crate::dialog::BodyKind::Status, "Export session", lines);
     b.buttons = vec!["Copy".into(), "Export".into()];
     b.active = e.focus.checked_sub(e.fields()).unwrap_or(usize::MAX);
-    body(c, &b);
+    let (top, left) = body(c, &b);
+    let markdown = width("◉ Markdown") as u16;
+    c.hit(Rect::new(left, top + 1, markdown, 1), Hit::Format(false));
+    c.hit(
+        Rect::new(left + markdown + 2, top + 1, width("◉ JSON") as u16, 1),
+        Hit::Format(true),
+    );
+    for field in 1..e.fields() {
+        let w = width(
+            &b.lines[2 + field]
+                .iter()
+                .map(|(t, _)| t.as_str())
+                .collect::<String>(),
+        );
+        c.hit(
+            Rect::new(left, top + 2 + field as u16, w as u16, 1),
+            Hit::Field(field),
+        );
+    }
 }

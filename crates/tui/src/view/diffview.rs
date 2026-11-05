@@ -3,7 +3,7 @@
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 
-use super::Canvas;
+use super::{Canvas, Hit};
 use crate::diffview::Diff;
 use crate::text::width;
 use crate::transcript::diff;
@@ -39,6 +39,10 @@ pub fn draw(c: &mut Canvas, view: &Diff) {
     let bold = c.style("text.base").add_modifier(Modifier::BOLD);
     let muted = c.style("text.muted");
     let x = c.put(2, 0, view.source.title(), bold, area.width as usize);
+    c.hit(
+        Rect::new(2, 0, x.saturating_sub(2), 1),
+        Hit::Key("d".into()),
+    );
     if !files.is_empty() {
         c.put(
             x + 2,
@@ -57,6 +61,9 @@ pub fn draw(c: &mut Canvas, view: &Diff) {
             muted,
             width(help),
         );
+        let x = area.width - 2 - width(help) as u16;
+        c.hit(Rect::new(x, 0, 11, 1), Hit::Key("?".into()));
+        c.hit(Rect::new(x + 13, 0, 9, 1), Hit::Key("esc".into()));
     }
     let body = Rect::new(0, 2, area.width, area.height.saturating_sub(2));
     let message = match &view.files {

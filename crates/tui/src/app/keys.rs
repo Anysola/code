@@ -10,6 +10,7 @@ use crate::composer::{AtomKind, Mode};
 use crate::keymap::Stroke;
 use crate::state::{PopupAction, Route, Variant};
 use crate::term;
+use crate::view::Hit;
 
 /// Commands reachable from anywhere, checked in this order.
 const GLOBAL: &[&str] = &[
@@ -735,6 +736,9 @@ impl App {
         }
         mouse.column -= self.state.left;
         let at = (mouse.column, mouse.row);
+        if self.hit_mouse(mouse.kind, at) {
+            return;
+        }
         match mouse.kind {
             MouseEventKind::ScrollUp => self.scroll(3),
             MouseEventKind::ScrollDown => self.scroll(-3),
@@ -892,6 +896,103 @@ impl App {
         }
     }
 
+    /// Clicks on the controls the last frame drew; true when the event is used up. With a
+    /// dialog open the screen behind it is inert: wheel moves the list, a click outside closes.
+    fn hit_mouse(&mut self, kind: MouseEventKind, at: (u16, u16)) -> bool {
+        let dialog = !self.state.dialogs.is_empty();
+        let hit = crate::view::hit_at(&self.hits, at).cloned();
+        match kind {
+            MouseEventKind::Down(MouseButton::Left) => match hit {
+                Some(hit) => {
+                    self.selection = None;
+                    self.click(hit);
+                    true
+                }
+                None if dialog => {
+                    self.dialog_key(&Stroke::parse("esc").expect("esc"));
+                    true
+                }
+                None => false,
+            },
+            MouseEventKind::Down(MouseButton::Middle) => {
+                if let Some(Hit::Tab(index)) = hit {
+                    self.close_tab(index);
+                }
+                true
+            }
+            MouseEventKind::Moved if dialog => {
+                if let Some(Hit::Option(index)) = hit {
+                    self.hover_option(index);
+                }
+                true
+            }
+            MouseEventKind::ScrollUp if dialog => {
+                self.dialog_key(&Stroke::parse("up").expect("up"));
+                true
+            }
+            MouseEventKind::ScrollDown if dialog => {
+                self.dialog_key(&Stroke::parse("down").expect("down"));
+                true
+            }
+            _ => dialog,
+        }
+    }
+
+    fn click(&mut self, hit: Hit) {
+        match hit {
+            Hit::Tab(index) => self.select_tab(index + 1),
+            Hit::NewTab => self.run_command("session.new", None),
+            Hit::Key(key) => {
+                if let Some(stroke) = Stroke::parse(&key) {
+                    self.key(stroke);
+                }
+            }
+            Hit::Command(id) => self.run_command(&id, None),
+            Hit::Panel => {}
+            Hit::Option(_) | Hit::Button(_) | Hit::Field(_) | Hit::Format(_) => {
+                self.dialog_click(hit)
+            }
+            Hit::Choice(index) => {
+                let Some(session) = self.state.session_mut() else {
+                    return;
+                };
+                let key = if let Some(p) = session.permission.as_mut() {
+                    p.selected = index;
+                    "enter"
+                } else if let Some(q) = session.question.as_mut() {
+                    q.selected = index;
+                    let multiple = q.questions.get(q.tab).and_then(|a| a.multiple) == Some(true);
+                    if multiple { "space" } else { "enter" }
+                } else {
+                    return;
+                };
+                self.key(Stroke::parse(key).expect("key"));
+            }
+            Hit::DockTab(index) => {
+                if let Some(dock) = self.state.dock.as_mut()
+                    && dock.tab != index
+                {
+                    dock.tab = index;
+                    dock.selected = 0;
+                    self.refresh_dock();
+                }
+            }
+            Hit::DockRow(index) => {
+                if let Some(dock) = self.state.dock.as_mut() {
+                    dock.selected = index;
+                    self.key(Stroke::parse("enter").expect("enter"));
+                }
+            }
+            Hit::ToggleTodos => self.state.todo_closed = !self.state.todo_closed,
+            Hit::CloseToast => {
+                if let Some(toast) = self.state.toast.as_mut() {
+                    toast.until = 0;
+                }
+                self.state.toast_hover = None;
+            }
+        }
+    }
+
     fn copy_selection(&mut self, anchor: (u16, u16), end: (u16, u16)) {
         let text = selected_text(&self.last, anchor, end);
         term::copy(&text);
@@ -928,6 +1029,15 @@ impl App {
         }
         if id == "revert" {
             self.run_command("session.redo", None);
+            return true;
+        }
+        if id == "thinking" {
+            self.run_command("session.toggle.thinking", None);
+            return true;
+        }
+        if let Some(child) = id.strip_prefix("child:") {
+            let child = child.to_string();
+            self.open_session(&child);
             return true;
         }
         if id.starts_with("shell:") {

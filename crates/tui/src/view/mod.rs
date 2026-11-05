@@ -41,17 +41,78 @@ pub fn transcript_rows(
     session::transcript(state, s, theme, width).len()
 }
 
-/// Where the terminal cursor goes after drawing.
+/// Where the terminal cursor goes after drawing, and what the drawn controls do when clicked.
 pub struct Drawn {
     pub cursor: Option<(u16, u16)>,
+    /// Clickable areas in drawing order: the last one containing a point is on top.
+    pub hits: Vec<(Rect, Hit)>,
+}
+
+/// What a click on a drawn control does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Hit {
+    /// A horizontal tab, by index into `state.tabs`.
+    Tab(usize),
+    /// `+ New session` or `+` in the horizontal strip.
+    NewTab,
+    /// Acts as if the key (`esc`, `enter`, `ctrl+d`) were pressed.
+    Key(String),
+    /// Runs a command by id.
+    Command(String),
+    /// The open dialog's panel: clicks on it stay in the dialog, clicks outside close it.
+    Panel,
+    /// An option of the open list dialog, by index into its options.
+    Option(usize),
+    /// A button of the open dialog (`Cancel`, `Copy`), by position.
+    Button(usize),
+    /// A focusable field of the export dialog; `Format(json)` picks the format.
+    Field(usize),
+    Format(bool),
+    /// An option of the pending permission or question, by position.
+    Choice(usize),
+    /// A tab of the composer dock, and one of its rows, by index.
+    DockTab(usize),
+    DockRow(usize),
+    /// Dismisses the toast.
+    CloseToast,
+    /// Folds or unfolds the sidebar's todo list.
+    ToggleTodos,
 }
 
 pub struct Canvas<'a> {
     pub buf: &'a mut Buffer,
     pub theme: &'a Theme,
+    pub hits: Vec<(Rect, Hit)>,
+}
+
+impl<'a> Canvas<'a> {
+    pub fn new(buf: &'a mut Buffer, theme: &'a Theme) -> Canvas<'a> {
+        Canvas {
+            buf,
+            theme,
+            hits: Vec::new(),
+        }
+    }
+}
+
+/// The control on top at `at`, among `hits` in drawing order.
+pub fn hit_at(hits: &[(Rect, Hit)], at: (u16, u16)) -> Option<&Hit> {
+    let at = ratatui::layout::Position::new(at.0, at.1);
+    hits.iter()
+        .rev()
+        .find(|(r, _)| r.contains(at))
+        .map(|(_, h)| h)
 }
 
 impl Canvas<'_> {
+    /// Marks `rect` (clipped to the buffer) as the clickable area of `hit`.
+    pub fn hit(&mut self, rect: Rect, hit: Hit) {
+        let rect = rect.intersection(self.buf.area);
+        if !rect.is_empty() {
+            self.hits.push((rect, hit));
+        }
+    }
+
     pub fn style(&self, path: &str) -> Style {
         Style::new().fg(self.theme.fg(path))
     }
@@ -122,9 +183,11 @@ pub fn draw(state: &State, theme: &Theme, buf: &mut Buffer) -> Drawn {
             }
         }
     }
-    vertical_tabs(&mut Canvas { buf, theme }, state);
+    vertical_tabs(&mut Canvas::new(buf, theme), state);
+    // Hits stay in the routes' own coordinates, like the mouse handler reads them.
     Drawn {
         cursor: drawn.cursor.map(|(x, y)| (x + state.left, y)),
+        hits: drawn.hits,
     }
 }
 
@@ -256,7 +319,7 @@ fn vertical_tabs(c: &mut Canvas, state: &State) {
 
 fn draw_body(state: &State, theme: &Theme, buf: &mut Buffer) -> Drawn {
     let area = buf.area;
-    let mut c = Canvas { buf, theme };
+    let mut c = Canvas::new(buf, theme);
     let base = Style::new()
         .fg(theme.fg("text.base"))
         .bg(theme.fg("background.base"));
@@ -285,13 +348,12 @@ fn draw_body(state: &State, theme: &Theme, buf: &mut Buffer) -> Drawn {
             let top = u16::from(state.strip());
             let area = Rect::new(0, 0, state.width - x, state.height - top);
             let mut panel = Buffer::empty(area);
-            diffview::draw(
-                &mut Canvas {
-                    buf: &mut panel,
-                    theme: c.theme,
-                },
-                view,
-            );
+            let mut docked = Canvas::new(&mut panel, c.theme);
+            diffview::draw(&mut docked, view);
+            let hits = std::mem::take(&mut docked.hits);
+            for (r, hit) in hits {
+                c.hit(Rect::new(r.x + x, r.y + top, r.width, r.height), hit);
+            }
             for (px, py) in (0..area.width).flat_map(|px| (0..area.height).map(move |py| (px, py)))
             {
                 c.buf[(x + px, top + py)] = panel[(px, py)].clone();
@@ -299,6 +361,7 @@ fn draw_body(state: &State, theme: &Theme, buf: &mut Buffer) -> Drawn {
             cursor
         }
         Some(view) => {
+            c.hits.clear();
             diffview::draw(&mut c, view);
             None
         }
@@ -318,7 +381,10 @@ fn draw_body(state: &State, theme: &Theme, buf: &mut Buffer) -> Drawn {
     if let Some(toast) = &state.toast {
         self::toast(&mut c, state, toast);
     }
-    Drawn { cursor }
+    Drawn {
+        cursor,
+        hits: c.hits,
+    }
 }
 
 const TAB_WIDTH: usize = 22;
@@ -375,15 +441,18 @@ fn tabs(c: &mut Canvas, state: &State) {
                     c.put(x as u16 + 1, 0, mark, c.style(color), 1);
                 }
                 c.put(x as u16 + 3, 0, &tab.title, style, w.saturating_sub(3));
+                c.hit(Rect::new(x as u16, 0, w as u16, 1), Hit::Tab(index));
             }
             None => {
                 c.put(x as u16 + 1, 0, "+ New session", muted, w.saturating_sub(1));
+                c.hit(Rect::new(x as u16, 0, w as u16, 1), Hit::NewTab);
             }
         }
         x += w;
     }
     if !home {
         c.put(x as u16 + 1, 0, "+", muted, 1);
+        c.hit(Rect::new(x as u16, 0, ADD_TAB_WIDTH as u16, 1), Hit::NewTab);
     }
 }
 
@@ -465,5 +534,9 @@ fn toast(c: &mut Canvas, state: &State, toast: &crate::state::Toast) {
     );
     for (i, (text, style)) in lines.iter().enumerate() {
         c.put(x + 3, 2 + i as u16, text, *style, room);
+    }
+    // A toast with an action runs it from `› label`; one without closes on any click.
+    if toast.action.is_none() {
+        c.hit(rect, Hit::CloseToast);
     }
 }

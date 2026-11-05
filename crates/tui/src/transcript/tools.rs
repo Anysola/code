@@ -171,6 +171,12 @@ pub fn render(tool: &Tool, ctx: &Ctx) -> Vec<Vec<Row>> {
                 "│"
             };
             let mut rows = inline(icon, format!("{agent} Subagent — {description}"), tool, ctx);
+            // A click opens the child session.
+            if let Some(child) = tool.metadata.get("sessionID").and_then(Value::as_str)
+                && let Some(row) = rows.first_mut()
+            {
+                row.group = Some(format!("child:{child}"));
+            }
             let background = tool.status == Status::Completed
                 && tool.metadata.get("status").and_then(Value::as_str) == Some("running");
             if background && let Some(row) = rows.first_mut() {
