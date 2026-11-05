@@ -101,6 +101,7 @@ dependencies = [
  "futures-util",
  "libc",
  "regex",
+ "rusqlite",
  "serde_json",
  "tempfile",
  "tokio",

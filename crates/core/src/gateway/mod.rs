@@ -1,6 +1,7 @@
 //! Client for the Anysola gateway (`<api>/v1/code/*`): remote config, version check, web search and
 //! streamed model calls, with the exact header sets 0.5.1 sent.
 
+pub mod account;
 pub mod error;
 pub mod retry;
 pub mod sse;
