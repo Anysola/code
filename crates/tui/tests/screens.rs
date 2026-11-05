@@ -1421,3 +1421,13 @@ fn expanded_thought_is_markdown() {
     assert!(screen.contains("Use cat then stop"), "{screen}");
     assert!(!screen.contains("**"));
 }
+
+/// `dialogs.md` §5 and §19: a search with no hit names what was searched.
+#[test]
+fn empty_search_texts() {
+    let mut state = base(120, 30);
+    let mut skills = lists::skills(&[("a".into(), "b".into())]);
+    skills.query = "zzz".into();
+    state.dialogs.push(Dialog::Select(skills));
+    assert!(render(&state).contains("No skills found"));
+}
