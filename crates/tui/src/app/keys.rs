@@ -656,10 +656,18 @@ impl App {
     /// A pasted local image or PDF path becomes an `[Image N]`/`[PDF N]` chip.
     fn attach(&mut self, text: &str) -> bool {
         let trimmed = text.trim().trim_matches(['\'', '"']);
-        let path = trimmed
-            .strip_prefix("file://")
-            .unwrap_or(trimmed)
-            .replace("\\ ", " ");
+        // `file:///C:/My%20Docs/a.png` (Windows) and `file:///home/a%20b.png` decode to a path.
+        let from_url = trimmed
+            .starts_with("file://")
+            .then(|| url::Url::parse(trimmed).ok()?.to_file_path().ok())
+            .flatten();
+        let path = match from_url {
+            Some(path) => path.to_string_lossy().into_owned(),
+            None => trimmed
+                .strip_prefix("file://")
+                .unwrap_or(trimmed)
+                .replace("\\ ", " "),
+        };
         let lower = path.to_lowercase();
         let mime = [
             (".png", "image/png"),
