@@ -408,7 +408,9 @@ impl Renderer {
             | Event::PermissionReplied { .. }
             | Event::Credits(_)
             | Event::TitleChanged { .. }
-            | Event::GoalChanged { .. } => {}
+            | Event::GoalChanged { .. }
+            | Event::FormAsked { .. }
+            | Event::McpStatusChanged { .. } => {}
         }
         false
     }

@@ -391,6 +391,31 @@ impl Runtime {
         .await
     }
 
+    /// Starts signing in to a remote server; once the credential is stored the server restarts
+    /// with it.
+    pub async fn authorize(&self, name: &str) -> Result<crate::oauth::Attempt, String> {
+        let config = self
+            .config(name)
+            .ok_or_else(|| format!("MCP server not found: {name}"))?;
+        let mut attempt =
+            crate::oauth::authorize(self.core.db().clone(), name, &config).await?;
+        let (sender, done) = tokio::sync::oneshot::channel();
+        let inner = std::mem::replace(&mut attempt.done, done);
+        let (me, name) = (self.me.clone(), name.to_string());
+        tokio::spawn(async move {
+            let result = inner
+                .await
+                .unwrap_or_else(|_| Err("Authorization expired".into()));
+            if result.is_ok()
+                && let Some(runtime) = me.upgrade()
+            {
+                runtime.start(&name);
+            }
+            let _ = sender.send(result);
+        });
+        Ok(attempt)
+    }
+
     /// Closes every connection (the process is ending).
     pub async fn shutdown(&self) {
         let connections: Vec<Arc<Connection>> = self

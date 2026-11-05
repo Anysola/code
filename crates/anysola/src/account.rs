@@ -57,7 +57,7 @@ pub async fn sign_in(db: &Db) -> Result<(), String> {
 }
 
 /// Best effort: the URL is already on screen.
-fn open_browser(url: &str) {
+pub fn open_browser(url: &str) {
     let mut command = if cfg!(windows) {
         let mut command = std::process::Command::new("cmd");
         command.args(["/c", "start", ""]);
