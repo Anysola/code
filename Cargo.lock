@@ -236,6 +236,7 @@ dependencies = [
  "anysola-core",
  "anysola-testkit",
  "base64 0.22.1",
+ "chrono",
  "crossterm",
  "futures-util",
  "ignore",

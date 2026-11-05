@@ -31,6 +31,14 @@ pub fn local_year() -> i32 {
 /// minute: "2-digit"})` in local time, e.g. `Nov 23, 03:00 AM`. Blank → `None`; unparsable → the
 /// value itself.
 pub fn short_local(value: &str) -> Option<String> {
+    short_in(value, &chrono::Local)
+}
+
+/// `short_local` in a given time zone.
+pub fn short_in<Tz: chrono::TimeZone>(value: &str, zone: &Tz) -> Option<String>
+where
+    Tz::Offset: std::fmt::Display,
+{
     if value.is_empty() {
         return None;
     }
@@ -45,7 +53,7 @@ pub fn short_local(value: &str) -> Option<String> {
         });
     Some(match parsed {
         Some(at) => at
-            .with_timezone(&chrono::Local)
+            .with_timezone(zone)
             .format("%b %-d, %I:%M %p")
             .to_string(),
         None => value.to_string(),

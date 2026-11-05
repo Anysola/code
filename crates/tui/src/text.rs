@@ -112,19 +112,7 @@ pub fn pad_right(text: &str, total: usize) -> String {
     format!("{text}{}", " ".repeat(total.saturating_sub(w)))
 }
 
-/// `1,234` (en-US grouping, rounded).
-pub fn credits(value: f64) -> String {
-    let rounded = value.round() as i64;
-    let digits = rounded.unsigned_abs().to_string();
-    let mut out = String::new();
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    if rounded < 0 { format!("-{out}") } else { out }
-}
+pub use anysola_core::gateway::format::credits;
 
 /// `950`, `1.2K`, `3.4M`.
 pub fn compact(value: u64) -> String {
