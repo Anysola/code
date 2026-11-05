@@ -64,17 +64,13 @@ impl App {
                 tokio::spawn(async move { core.refresh().await });
             }
             ("session.compact", Some(current)) => {
-                if let Some(s) = self.state.sessions.get_mut(&current) {
-                    s.busy = true;
+                if let Some(s) = self.state.sessions.get_mut(&current)
+                    && s.busy
+                {
+                    s.compact_queued = true;
+                    return;
                 }
-                let (core, tx) = (self.core.clone(), self.tx.clone());
-                tokio::spawn(async move {
-                    let error = core.compact(&current).await.err().map(|e| e.to_string());
-                    let _ = tx.send(Msg::Done {
-                        session_id: current,
-                        error,
-                    });
-                });
+                self.compact(&current);
             }
             ("session.undo", Some(current)) => self.undo(&current),
             ("session.redo", Some(current)) => {
@@ -258,6 +254,7 @@ impl App {
                 let _ = self.tui.set(&["theme", "mode"], value);
             }
             ("prompt.images.view", _) => self.view_image(0),
+            ("prompt.paste", _) => self.paste_clipboard(),
             ("session.queued_prompts", Some(current)) => self.open_queue(&current),
             ("diff.open", _) if self.state.diff.is_some() => self.state.diff = None,
             ("diff.open", _) => self.open_diff(crate::diffview::Source::All),
@@ -701,6 +698,34 @@ impl App {
         }
     }
 
+    fn compact(&mut self, session: &str) {
+        if let Some(s) = self.state.sessions.get_mut(session) {
+            s.busy = true;
+            s.compact_queued = false;
+        }
+        let (core, tx) = (self.core.clone(), self.tx.clone());
+        let session = session.to_string();
+        tokio::spawn(async move {
+            let error = core.compact(&session).await.err().map(|e| e.to_string());
+            let _ = tx.send(Msg::Done {
+                session_id: session,
+                error,
+            });
+        });
+    }
+
+    /// A `/compact` asked mid-turn starts once the turn is over.
+    pub(super) fn run_queued_compaction(&mut self, session: &str) {
+        if self
+            .state
+            .sessions
+            .get(session)
+            .is_some_and(|s| s.compact_queued && !s.busy)
+        {
+            self.compact(session);
+        }
+    }
+
     fn editor(&mut self, terminal: &mut Terminal<Backend>) {
         let program = std::env::var("VISUAL")
             .ok()
@@ -717,6 +742,7 @@ impl App {
                 Variant::Error,
             );
         };
+        let marks = self.state.composer.mention_marks();
         let file = std::env::temp_dir().join(format!("{}.md", now()));
         if std::fs::write(&file, self.state.composer.expanded()).is_err() {
             return;
@@ -738,7 +764,7 @@ impl App {
                     _ => content,
                 };
                 if !content.is_empty() {
-                    self.state.composer.set(&content);
+                    self.state.composer.realign(&content, &marks);
                 }
             }
             Ok(status) => {

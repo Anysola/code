@@ -93,6 +93,7 @@ impl Stash {
 pub fn age(timestamp: u64, now: u64) -> String {
     match now.saturating_sub(timestamp) / 60_000 {
         0 => "just now".into(),
+        m if m >= 10_080 => crate::text::datetime(timestamp),
         _ => crate::text::ago(timestamp, now),
     }
 }

@@ -151,7 +151,7 @@ impl App {
         true
     }
 
-    fn in_child(&self) -> bool {
+    pub(super) fn in_child(&self) -> bool {
         self.state
             .session()
             .and_then(|s| self.core.session(&s.id).ok().flatten())

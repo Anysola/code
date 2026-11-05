@@ -48,6 +48,16 @@ pub struct Assistant {
     pub usage: u64,
     /// When the user input of this turn was created (start of the footer's duration).
     pub turn_start: u64,
+    /// A failed step waiting to be tried again.
+    pub retry: Option<Retry>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Retry {
+    /// When the next attempt is due.
+    pub at: u64,
+    pub attempt: u32,
+    pub message: String,
 }
 
 // Tools dominate the parts; boxing them buys nothing.
@@ -225,6 +235,7 @@ pub fn from_messages(
                     output_tokens: data.tokens.map_or(0, |t| t.output),
                     usage: data.tokens.map_or(0, |t| total(&t)),
                     turn_start,
+                    retry: None,
                 }));
             }
             Message::Shell(data) => {
@@ -309,7 +320,9 @@ pub fn apply(items: &mut Vec<Item>, event: &Event, now: u64, name: Names) {
             model_id,
             ..
         } => {
-            if assistant(items, message_id).is_none() {
+            if let Some(a) = assistant(items, message_id) {
+                a.retry = None;
+            } else {
                 let turn_start = items
                     .iter()
                     .rev()
@@ -329,8 +342,27 @@ pub fn apply(items: &mut Vec<Item>, event: &Event, now: u64, name: Names) {
                 }));
             }
         }
+        Event::RetryScheduled {
+            attempt,
+            delay_ms,
+            error,
+            ..
+        } => {
+            let last = items.iter_mut().rev().find_map(|item| match item {
+                Item::Assistant(a) => Some(a),
+                _ => None,
+            });
+            if let Some(a) = last {
+                a.retry = Some(Retry {
+                    at: now + delay_ms,
+                    attempt: *attempt,
+                    message: error.message.clone(),
+                });
+            }
+        }
         Event::TextStarted { message_id, .. } => {
             if let Some(a) = assistant(items, message_id) {
+                a.retry = None;
                 a.parts.push(Part::Text {
                     text: String::new(),
                     done: false,
@@ -466,6 +498,7 @@ pub fn apply(items: &mut Vec<Item>, event: &Event, now: u64, name: Names) {
             ..
         } => {
             if let Some(a) = assistant(items, message_id) {
+                a.retry = None;
                 a.completed = Some(now);
                 a.terminal = *last || finish != "tool-calls";
                 a.output_tokens = tokens.output;
@@ -476,6 +509,7 @@ pub fn apply(items: &mut Vec<Item>, event: &Event, now: u64, name: Names) {
             message_id, error, ..
         } => {
             if let Some(a) = assistant(items, message_id) {
+                a.retry = None;
                 a.completed = Some(now);
                 a.terminal = true;
                 if error.message == "Step interrupted" {

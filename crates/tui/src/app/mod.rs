@@ -73,6 +73,11 @@ pub struct App {
     pub state: State,
     theme: Theme,
     catalog: Catalog,
+    /// Unsent prompts of the tabs that are not shown, by route key, and the key shown now.
+    drafts: std::collections::HashMap<String, crate::composer::Composer>,
+    draft_route: String,
+    /// The labels' fade-in has been started once, as 0.5.1 plays it once per app instance.
+    faded: bool,
     keymap: Keymap,
     tui: Tui,
     history: History,
@@ -177,6 +182,35 @@ fn theme_dirs(paths: &Paths, directory: &Path) -> Vec<PathBuf> {
     dirs
 }
 
+#[cfg(unix)]
+async fn recv_signal(signal: &mut Option<tokio::signal::unix::Signal>) -> Option<()> {
+    match signal {
+        Some(signal) => signal.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+#[cfg(not(unix))]
+async fn recv_signal(_: &mut Option<()>) -> Option<()> {
+    std::future::pending().await
+}
+
+/// Stashes the prompt of the tab `left` and brings back the draft of the tab `shown`.
+fn swap_draft(
+    drafts: &mut std::collections::HashMap<String, crate::composer::Composer>,
+    left: String,
+    shown: &str,
+    composer: &mut crate::composer::Composer,
+) {
+    let current = std::mem::take(composer);
+    if !current.is_empty() {
+        drafts.insert(left, current);
+    }
+    if let Some(draft) = drafts.remove(shown) {
+        *composer = draft;
+    }
+}
+
 /// Runs the UI; a panic shows the crash screen, whose Restart starts the UI again.
 pub async fn run(core: Core, mut options: Options) -> Result<(), String> {
     use futures_util::FutureExt;
@@ -234,6 +268,9 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
         core,
         theme,
         catalog,
+        drafts: Default::default(),
+        draft_route: String::new(),
+        faded: false,
         keymap,
         tui,
         history,
@@ -276,6 +313,11 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
         app.toast(Some(title), message, Variant::Error);
     }
     let mut input = EventStream::new();
+    #[cfg(unix)]
+    let mut reload_signal =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined2()).ok();
+    #[cfg(not(unix))]
+    let mut reload_signal: Option<()> = None;
     loop {
         app.draw(&mut terminal);
         if app.quit {
@@ -293,6 +335,7 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
                 Err(broadcast::error::RecvError::Closed) => {}
             },
             Some(message) = rx.recv() => app.message(message),
+            Some(()) = recv_signal(&mut reload_signal) => app.reload_themes(&paths),
             _ = tokio::time::sleep(Duration::from_millis(80)), if tick => {}
         }
         if let Some(receiver) = app.resubscribe.take() {
@@ -317,6 +360,26 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
 }
 
 impl App {
+    /// `SIGUSR2`: rescans the theme directories and reloads the current theme, keeping the
+    /// current one when the scan or the load fails.
+    fn reload_themes(&mut self, paths: &Paths) {
+        let mut catalog = Catalog::bundled();
+        let result = catalog
+            .discover(&theme_dirs(paths, self.core.directory()))
+            .and_then(|()| catalog.load(&self.theme.name, self.theme.mode));
+        match result {
+            Ok(theme) => {
+                self.catalog = catalog;
+                self.theme = theme;
+            }
+            Err(error) => self.toast(
+                Some("Failed to reload themes".into()),
+                error,
+                Variant::Error,
+            ),
+        }
+    }
+
     fn init(&mut self, paths: &Paths, options: &Options) {
         let directory = self.core.directory().to_path_buf();
         self.state.location = location(&directory, &paths.home);
@@ -326,6 +389,7 @@ impl App {
         self.state.auto = options.auto || self.tui.auto_accept();
         self.state.example = (now() / 7) as usize % 3;
         self.state.hints = crate::state::Hints {
+            redo: self.keymap.first("session.redo"),
             agents: self.keymap.first("agent.cycle"),
             commands: self.keymap.first("command.palette.show"),
             sessions: self.keymap.first("session.list"),
@@ -418,13 +482,39 @@ impl App {
 
     fn ticking(&self) -> bool {
         let busy = self.state.sessions.values().any(|s| s.busy);
-        busy || self.state.toast.is_some()
+        busy || self.fading()
+            || self.state.toast.is_some()
             || !self.pending.is_empty()
             || self.state.interrupt_armed.is_some()
     }
 
+    /// The metadata labels are still fading in.
+    fn fading(&self) -> bool {
+        self.state.meta_fade.is_some() && self.state.meta_alpha() < 1.0
+    }
+
+    /// Leaving a tab keeps its unsent prompt, restored when it is shown again (not persisted).
+    fn sync_draft(&mut self) {
+        let key = match &self.state.route {
+            Route::Home => String::new(),
+            Route::Session(id) => id.clone(),
+        };
+        if key == self.draft_route {
+            return;
+        }
+        let left = std::mem::replace(&mut self.draft_route, key.clone());
+        swap_draft(&mut self.drafts, left, &key, &mut self.state.composer);
+        self.popup_hidden = None;
+        self.state.popup = None;
+    }
+
     fn draw(&mut self, terminal: &mut Terminal<Backend>) {
+        self.sync_draft();
         self.state.now = now();
+        if self.state.meta_fade.is_none() && self.state.settings.animations && !self.faded {
+            self.faded = true;
+            self.state.meta_fade = Some(self.state.now);
+        }
         let expired = self
             .state
             .toast
@@ -573,6 +663,7 @@ impl App {
                     self.toast(Some("Failed to send prompt".into()), error, Variant::Error);
                 }
                 self.reload(&session_id);
+                self.run_queued_compaction(&session_id);
                 self.fetch_account();
                 self.resume_relocate();
             }
@@ -590,6 +681,7 @@ impl App {
             let account = match &reply {
                 Ok(r) if r.ok() => Account::from_me(r.body.clone()),
                 other => Account {
+                    signed_out: matches!(other, Ok(r) if r.status == 401),
                     error: Some(crate::menus::anysola::error_text(other)),
                     ..Account::default()
                 },
@@ -733,6 +825,33 @@ impl App {
         let Ok(messages) = self.core.messages(id) else {
             return;
         };
+        let revert = boundary.as_deref().map(|boundary| {
+            let hidden = messages.iter().skip_while(|(m, _)| m != boundary);
+            let files = self.core.revert_files(id).unwrap_or_default();
+            crate::state::Revert {
+                count: hidden
+                    .filter(|(_, m)| matches!(m, anysola_core::session::message::Message::User(_)))
+                    .count(),
+                files: files
+                    .iter()
+                    .map(|f| {
+                        let text = |k: &str| f.get(k).and_then(|v| v.as_str()).unwrap_or_default();
+                        let number = |k: &str| f.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+                        let mark = match text("status") {
+                            "added" => 'A',
+                            "deleted" => 'D',
+                            _ => 'M',
+                        };
+                        (
+                            mark,
+                            text("file").to_string(),
+                            number("additions"),
+                            number("deletions"),
+                        )
+                    })
+                    .collect(),
+            }
+        });
         let loaded = self.core.loaded();
         let names = |model: &str| display_name(&loaded.models, model);
         let items = model::from_messages(messages, boundary.as_deref(), &names);
@@ -741,6 +860,7 @@ impl App {
             let awaiting = session.permission.is_some();
             session.items = items;
             session.reverted = reverted;
+            session.revert = revert;
             if let Some(title) = title {
                 session.title = title;
             }
@@ -809,4 +929,23 @@ pub fn selected_text(buf: &Buffer, a: (u16, u16), b: (u16, u16)) -> String {
         lines.push(line.trim_end().to_string());
     }
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod draft_tests {
+    use super::*;
+
+    #[test]
+    fn tabs_keep_their_own_drafts() {
+        let mut drafts = Default::default();
+        let mut composer = crate::composer::Composer::default();
+        composer.insert("home text");
+        swap_draft(&mut drafts, String::new(), "ses_a", &mut composer);
+        assert!(composer.is_empty());
+        composer.insert("in a");
+        swap_draft(&mut drafts, "ses_a".into(), "", &mut composer);
+        assert_eq!(composer.text, "home text");
+        swap_draft(&mut drafts, String::new(), "ses_a", &mut composer);
+        assert_eq!(composer.text, "in a");
+    }
 }

@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod attention;
+pub mod clipboard;
 pub mod complete;
 pub mod composer;
 pub mod crash;

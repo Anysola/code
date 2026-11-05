@@ -81,6 +81,8 @@ pub struct Options<'a> {
     pub width: usize,
     pub split: bool,
     pub filetype: &'a str,
+    /// Long lines wrap by word (`diffs.wrap`); otherwise they are cut at the edge.
+    pub wrap: bool,
 }
 
 struct Colors {
@@ -129,6 +131,7 @@ fn side(
     number_width: usize,
     room: usize,
     filetype: &str,
+    wrap: bool,
     theme: &Theme,
     c: &Colors,
 ) -> Vec<Line> {
@@ -168,7 +171,11 @@ fn side(
             )
         })
         .collect();
-    let wrapped = wrap_spans(&code, code_room);
+    let wrapped = if wrap {
+        wrap_spans(&code, code_room)
+    } else {
+        vec![clip_spans(code, code_room)]
+    };
     wrapped
         .into_iter()
         .enumerate()
@@ -242,6 +249,7 @@ pub fn render(patch: &str, options: &Options, theme: &Theme) -> Vec<Line> {
                     number_width,
                     options.width,
                     options.filetype,
+                    options.wrap,
                     theme,
                     &c,
                 ));
@@ -274,6 +282,7 @@ pub fn render(patch: &str, options: &Options, theme: &Theme) -> Vec<Line> {
                     number_width,
                     left_width,
                     options.filetype,
+                    options.wrap,
                     theme,
                     &c,
                 );
@@ -282,6 +291,7 @@ pub fn render(patch: &str, options: &Options, theme: &Theme) -> Vec<Line> {
                     number_width,
                     right_width,
                     options.filetype,
+                    options.wrap,
                     theme,
                     &c,
                 );
@@ -315,6 +325,22 @@ pub fn counts(patch: &str) -> (usize, usize) {
     )
 }
 
+/// The part of `line` that fits `room` columns.
+fn clip_spans(line: Line, room: usize) -> Line {
+    let mut used = 0;
+    let mut out = Vec::new();
+    for span in line {
+        let left = room.saturating_sub(used);
+        if left == 0 {
+            break;
+        }
+        let text = crate::text::clip(&span.content, left);
+        used += width(&text);
+        out.push(Span::styled(text, span.style));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,6 +354,7 @@ mod tests {
             width,
             split,
             filetype: "",
+            wrap: true,
         };
         render(PATCH, &options, &theme)
             .iter()
@@ -343,6 +370,7 @@ mod tests {
             width: 40,
             split: false,
             filetype: "",
+            wrap: true,
         };
         assert_eq!(hunk_rows(&render(patch, &options, &theme)), [0, 2]);
     }
@@ -353,5 +381,22 @@ mod tests {
         let split = text(true, 116);
         assert_eq!(split.len(), 1);
         assert_eq!(split[0].find("1 +"), Some(60));
+    }
+
+    #[test]
+    fn no_wrap_cuts_at_the_edge() {
+        let theme = Catalog::bundled().load("anysola", Mode::Dark).unwrap();
+        let patch = "--- a\n+++ a\n@@ -1,1 +1,1 @@\n-a\n+one two three four five six seven\n";
+        let rows = |wrap| {
+            let options = Options {
+                width: 20,
+                split: false,
+                filetype: "",
+                wrap,
+            };
+            render(patch, &options, &theme).len()
+        };
+        assert!(rows(true) > rows(false));
+        assert_eq!(rows(false), 2);
     }
 }

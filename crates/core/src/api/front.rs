@@ -144,6 +144,16 @@ impl Core {
         }))
     }
 
+    /// The staged revert's file changes (`file`, `status`, `additions`, `deletions`).
+    pub fn revert_files(&self, session_id: &str) -> Result<Vec<Value>, CoreError> {
+        Ok(self
+            .shared
+            .db
+            .revert(session_id)?
+            .and_then(|r| r.get("files").and_then(Value::as_array).cloned())
+            .unwrap_or_default())
+    }
+
     pub fn signed_in(&self) -> bool {
         self.shared.gateway.token().is_some()
     }

@@ -111,6 +111,7 @@ impl App {
                     self.key(stroke);
                 }
             }
+            Event::Paste(text) if text.is_empty() => self.paste_clipboard(),
             Event::Paste(text) => {
                 if !self.pane_paste(&text) {
                     self.paste(&text)
@@ -321,12 +322,38 @@ impl App {
 
     fn permission_key(&mut self, stroke: &Stroke) {
         let exit = self.is("app.exit", stroke);
+        // A child session asks why before rejecting.
+        let child = self.in_child();
         let Some(session) = self.state.session_mut() else {
             return;
         };
         let Some(permission) = session.permission.as_mut() else {
             return;
         };
+        if let Some(reason) = permission.reject.as_mut() {
+            match stroke.key.as_str() {
+                "return" => {
+                    let text = reason.trim().to_string();
+                    let id = permission.request_id.clone();
+                    let reply = Reply::Reject((!text.is_empty()).then_some(text));
+                    self.core.reply_permission(&id, reply);
+                }
+                "escape" => permission.reject = None,
+                "backspace" => {
+                    reason.pop();
+                }
+                "space" => reason.push(' '),
+                key if key.chars().count() == 1 && !stroke.ctrl => {
+                    reason.push_str(&if stroke.shift {
+                        key.to_uppercase()
+                    } else {
+                        key.to_string()
+                    });
+                }
+                _ => {}
+            }
+            return;
+        }
         let count = permission.options().len();
         match stroke.key.as_str() {
             "left" | "h" => permission.selected = (permission.selected + count - 1) % count,
@@ -336,10 +363,17 @@ impl App {
                 let reply = match permission.options()[permission.selected] {
                     "Allow once" => Reply::Once,
                     "Always allow" => Reply::Always,
+                    _ if child => {
+                        permission.reject = Some(String::new());
+                        return;
+                    }
                     _ => Reply::Reject(None),
                 };
                 let id = permission.request_id.clone();
                 self.core.reply_permission(&id, reply);
+            }
+            _ if child && (stroke.key == "escape" || exit) => {
+                permission.reject = Some(String::new());
             }
             _ if stroke.key == "escape" || exit => {
                 let id = permission.request_id.clone();
@@ -547,6 +581,23 @@ impl App {
         true
     }
 
+    /// The popup row under the pointer.
+    fn popup_row(&self, at: (u16, u16)) -> Option<usize> {
+        let popup = self.state.popup.as_ref()?;
+        let area = popup.area.get();
+        let inside = area.contains(ratatui::layout::Position::new(at.0, at.1));
+        let row = popup.offset + usize::from(at.1.wrapping_sub(area.y));
+        (inside && row < popup.rows.len()).then_some(row)
+    }
+
+    fn hover_popup(&mut self, at: (u16, u16)) {
+        if let Some(row) = self.popup_row(at)
+            && let Some(popup) = self.state.popup.as_mut()
+        {
+            popup.selected = row;
+        }
+    }
+
     fn choose(&mut self, complete: bool) {
         let Some(popup) = self.state.popup.take() else {
             return;
@@ -614,13 +665,22 @@ impl App {
         let Ok(bytes) = std::fs::read(&path) else {
             return false;
         };
+        let name = std::path::Path::new(&path)
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        self.attach_bytes(mime, bytes, name);
+        true
+    }
+
+    /// Adds an `[Image N]`/`[PDF N]` chip for the bytes (20 MiB limit, toast past it).
+    fn attach_bytes(&mut self, mime: &str, bytes: Vec<u8>, name: String) {
         if bytes.len() > 20 * 1024 * 1024 {
             self.toast(
                 None,
                 "Attachments are limited to 20 MiB".into(),
                 Variant::Warning,
             );
-            return true;
+            return;
         }
         let kind = if mime == "application/pdf" {
             "PDF"
@@ -637,14 +697,26 @@ impl App {
             + 1;
         use base64::Engine;
         let data = base64::engine::general_purpose::STANDARD.encode(bytes);
-        let name = std::path::Path::new(&path)
-            .file_name()
-            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         self.state.composer.insert_atom(
             &format!("[{kind} {n}]"),
             AtomKind::Attachment(mime.into(), data, name),
         );
-        true
+    }
+
+    /// `ctrl+v` and an empty bracketed paste: the clipboard's image, else its text.
+    pub(super) fn paste_clipboard(&mut self) {
+        match crate::clipboard::read() {
+            Ok(Some(crate::clipboard::Content::Image(bytes))) => {
+                self.attach_bytes("image/png", bytes, "clipboard".into());
+            }
+            Ok(Some(crate::clipboard::Content::Text(text))) => {
+                if !self.pane_paste(&text) {
+                    self.paste(&text);
+                }
+            }
+            Ok(None) => {}
+            Err(message) => self.toast(None, message, Variant::Error),
+        }
     }
 
     fn mouse(&mut self, mouse: crossterm::event::MouseEvent) {
@@ -656,6 +728,13 @@ impl App {
                 if self.state.diff.is_some()
                     && self.state.dialogs.is_empty()
                     && self.diff_click(button == MouseButton::Right, at) => {}
+            MouseEventKind::Down(MouseButton::Left) if self.popup_row(at).is_some() => {
+                self.hover_popup(at);
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.popup_row(at).is_some() => {
+                self.hover_popup(at);
+                self.choose(false);
+            }
             MouseEventKind::Down(MouseButton::Left) => {
                 // A click while text is selected only clears the selection.
                 if self.selection.is_some_and(|(a, b)| a != b) {
@@ -710,6 +789,21 @@ impl App {
                     self.selection = None;
                     return self.run_command("mcp.list", None);
                 }
+                if self.state.session().is_some()
+                    && crate::view::onboarding_shown(&self.state)
+                    && at.0 >= crate::view::pane_width(&self.state)
+                {
+                    if over_text(&self.last, at, "✕") {
+                        self.selection = None;
+                        self.state.onboarding_dismissed = true;
+                        return;
+                    }
+                    if over_text(&self.last, at, "Sign in") || over_text(&self.last, at, "/connect")
+                    {
+                        self.selection = None;
+                        return self.run_command("provider.connect", None);
+                    }
+                }
                 if self.state.mcp_list.len() > 2
                     && at.0 >= crate::view::pane_width(&self.state)
                     && (over_text(&self.last, at, "▼ MCP") || over_text(&self.last, at, "▶ MCP"))
@@ -727,6 +821,7 @@ impl App {
                 }
             }
             MouseEventKind::Moved => {
+                self.hover_popup(at);
                 let over = crate::view::toast_rect(&self.state)
                     .is_some_and(|r| r.contains(ratatui::layout::Position::new(at.0, at.1)));
                 self.hover_toast(over);
@@ -746,15 +841,27 @@ impl App {
                 if let Some((anchor, end)) = self.selection {
                     if anchor == end {
                         self.selection = None;
-                    } else {
-                        let text = selected_text(&self.last, anchor, end);
-                        term::copy(&text);
-                        self.toast(None, "Copied to clipboard".into(), Variant::Info);
+                    } else if self.state.settings.copy_on_select {
+                        self.copy_selection(anchor, end);
                     }
+                }
+            }
+            MouseEventKind::Down(MouseButton::Right)
+                if !self.state.settings.copy_on_select
+                    && self.selection.is_some_and(|(a, b)| a != b) =>
+            {
+                if let Some((anchor, end)) = self.selection {
+                    self.copy_selection(anchor, end);
                 }
             }
             _ => {}
         }
+    }
+
+    fn copy_selection(&mut self, anchor: (u16, u16), end: (u16, u16)) {
+        let text = selected_text(&self.last, anchor, end);
+        term::copy(&text);
+        self.toast(None, "Copied to clipboard".into(), Variant::Info);
     }
 
     /// A click on an exploration group's row opens or closes it.
@@ -774,6 +881,15 @@ impl App {
         let Some(id) = hit else {
             return false;
         };
+        if let Some(call_id) = id.strip_prefix("execute:") {
+            let call_id = call_id.to_string();
+            self.open_execute(&call_id);
+            return true;
+        }
+        if id == "revert" {
+            self.run_command("session.redo", None);
+            return true;
+        }
         if !session.toggled.remove(&id) {
             session.toggled.insert(id);
         }
@@ -862,13 +978,14 @@ impl App {
                 .collect();
             let rows =
                 crate::complete::directory_rows(&query, self.core.directory(), &home, &recents);
-            self.state.popup = (!rows.is_empty()).then_some(crate::state::Popup {
-                trigger: '/',
+            self.state.popup = Some(crate::state::Popup {
+                trigger: 'd',
                 start,
                 rows,
                 selected: 0,
                 offset: 0,
                 pad: 0,
+                area: Default::default(),
             });
             return;
         }
@@ -946,6 +1063,7 @@ impl App {
             selected: 0,
             offset: 0,
             pad,
+            area: Default::default(),
         });
     }
 }

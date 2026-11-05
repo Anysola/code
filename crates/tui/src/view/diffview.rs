@@ -26,6 +26,7 @@ pub fn patch_options<'a>(view: &Diff, screen: u16, path: &'a str) -> diff::Optio
         width,
         split: width >= 100,
         filetype: crate::transcript::highlight::filetype(path),
+        wrap: true,
     }
 }
 

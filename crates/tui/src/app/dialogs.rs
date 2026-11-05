@@ -1028,6 +1028,18 @@ impl App {
                 self.state.dialogs.pop();
                 self.open_usage(days);
             }
+            (BodyKind::Execute { code, .. }, "c") => {
+                if !code.is_empty() {
+                    term::copy(&code);
+                    self.toast(None, "Copied to clipboard".into(), Variant::Success);
+                }
+            }
+            (BodyKind::Execute { output, .. }, "o") => {
+                if !output.is_empty() {
+                    term::copy(&output);
+                    self.toast(None, "Copied to clipboard".into(), Variant::Success);
+                }
+            }
             (BodyKind::Exported { path: text } | BodyKind::Error { details: text }, "c") => {
                 term::copy(&text);
                 self.toast(None, "Copied to clipboard".into(), Variant::Success);
@@ -1151,6 +1163,71 @@ impl App {
                 }
             })));
         });
+    }
+
+    /// The `Execute` dialog of a call: status, numbered code and output.
+    pub(super) fn open_execute(&mut self, call_id: &str) {
+        use crate::transcript::model::{Item, Part, Status};
+        let Some(tool) = self.state.session().and_then(|s| {
+            s.items.iter().rev().find_map(|item| match item {
+                Item::Assistant(a) => a.parts.iter().find_map(|p| match p {
+                    Part::Tool(t) if t.call_id == call_id => Some(t.clone()),
+                    _ => None,
+                }),
+                _ => None,
+            })
+        }) else {
+            return;
+        };
+        let code = tool.str("code").unwrap_or_default().to_string();
+        let output = crate::text::strip_ansi(tool.output.trim());
+        let failed = tool.metadata.get("error") == Some(&serde_json::Value::Bool(true))
+            || tool.status == Status::Failed;
+        let (status, tone) = match tool.status {
+            Status::Streaming => ("Receiving code…", Tone::Muted),
+            Status::Running => ("Running", Tone::Muted),
+            _ if failed => ("Failed", Tone::Error),
+            _ => ("Completed", Tone::Muted),
+        };
+        let digits = code.lines().count().to_string().len();
+        let mut lines: Vec<crate::dialog::Line> = vec![vec![("Code".into(), Tone::Bold)]];
+        if code.is_empty() {
+            lines.push(vec![("Waiting for code…".into(), Tone::Muted)]);
+        }
+        for (i, line) in code.lines().enumerate() {
+            lines.push(vec![
+                (format!("{:>digits$} ", i + 1), Tone::Muted),
+                (line.to_string(), Tone::Base),
+            ]);
+        }
+        lines.push(Vec::new());
+        lines.push(vec![("Output".into(), Tone::Bold)]);
+        if output.is_empty() {
+            let text = if tool.status == Status::Completed {
+                "No output"
+            } else {
+                "Waiting for output…"
+            };
+            lines.push(vec![(text.into(), Tone::Muted)]);
+        }
+        let output_tone = if failed { Tone::Error } else { Tone::Base };
+        lines.extend(output.lines().map(|l| vec![(l.to_string(), output_tone)]));
+        let mut body = Body::new(
+            BodyKind::Execute {
+                code,
+                output: output.clone(),
+            },
+            "execute",
+            lines,
+        );
+        body.title.push((format!("  {status}"), tone));
+        body.size = Size::Large;
+        body.actions = vec![
+            crate::dialog::Action::left("copy code", "c"),
+            crate::dialog::Action::left("copy output", "o"),
+            crate::dialog::Action::right("scroll", "↑/↓"),
+        ];
+        self.push(Dialog::Body(body));
     }
 
     /// `Image <i> of <n>` over the composer's image attachments (no inline graphics: the name).

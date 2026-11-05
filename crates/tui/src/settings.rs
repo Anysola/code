@@ -121,8 +121,12 @@ impl Tui {
             sidebar: self.str(&["session", "sidebar"]) != Some("hide"),
             paste_compact: self.str(&["prompt", "paste"]) != Some("full"),
             animations: flag(&["animations"], true),
+            copy_on_select: self
+                .str(&["terminal", "copy"])
+                .map_or(!cfg!(windows), |mode| mode == "select"),
             title: flag(&["terminal", "title"], true),
             grouping: self.str(&["session", "grouping"]) != Some("none"),
+            diff_wrap: self.str(&["diffs", "wrap"]) != Some("none"),
             verbosity: match self.str(&["session", "verbosity"]) {
                 Some("low") => Verbosity::Low,
                 Some("high") => Verbosity::High,
@@ -185,5 +189,15 @@ mod tests {
         let again = Tui::load(path);
         assert!(!again.settings().title);
         assert_eq!(again.theme_name(), "dracula");
+    }
+
+    #[test]
+    fn copy_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tui.json");
+        std::fs::write(&path, r#"{"terminal": {"copy": "manual"}}"#).unwrap();
+        assert!(!Tui::load(path.clone()).settings().copy_on_select);
+        std::fs::write(&path, r#"{"terminal": {"copy": "select"}}"#).unwrap();
+        assert!(Tui::load(path).settings().copy_on_select);
     }
 }

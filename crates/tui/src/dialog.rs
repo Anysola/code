@@ -365,15 +365,32 @@ impl Select {
 #[derive(Debug, Clone, PartialEq)]
 pub enum BodyKind {
     Credits,
-    Usage { days: u32 },
+    Usage {
+        days: u32,
+    },
     Help,
-    Debug { report: String },
+    Debug {
+        report: String,
+    },
     Status,
     Update,
-    Exported { path: String },
-    Btw { answer: String },
-    Image { index: usize },
-    Error { details: String },
+    Exported {
+        path: String,
+    },
+    Btw {
+        answer: String,
+    },
+    /// An `execute` call's program and output.
+    Execute {
+        code: String,
+        output: String,
+    },
+    Image {
+        index: usize,
+    },
+    Error {
+        details: String,
+    },
     DiffHelp,
     Goal,
 }

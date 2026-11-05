@@ -202,6 +202,7 @@ impl App {
                     subject,
                     selected: 0,
                     fullscreen: false,
+                    reject: None,
                 });
                 self.attention(&target, true);
                 self.alert(&target, "Permission needs input", Sound::Permission);

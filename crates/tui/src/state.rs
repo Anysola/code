@@ -41,6 +41,20 @@ pub struct Account {
     pub me: Option<Value>,
     /// Why `/me` failed.
     pub error: Option<String>,
+    /// `/me` refused the token, so no provider is connected.
+    pub signed_out: bool,
+}
+
+/// Length of the labels' fade-in.
+pub const FADE_MS: u64 = 160;
+
+impl State {
+    /// Opacity of the prompt's metadata labels, 0 to 1.
+    pub fn meta_alpha(&self) -> f32 {
+        self.meta_fade.map_or(1.0, |start| {
+            (self.now.saturating_sub(start) as f32 / FADE_MS as f32).clamp(0.0, 1.0)
+        })
+    }
 }
 
 impl Account {
@@ -72,6 +86,7 @@ impl Account {
                 .and_then(Value::as_f64),
             free,
             low: me.get("lowBalance") == Some(&Value::Bool(true)),
+            signed_out: false,
             error: None,
             me: Some(me),
         }
@@ -98,6 +113,8 @@ pub struct Permission {
     pub subject: Option<String>,
     pub selected: usize,
     pub fullscreen: bool,
+    /// The reason being typed for a rejection in a child session.
+    pub reject: Option<String>,
 }
 
 impl Permission {
@@ -124,6 +141,14 @@ pub struct Question {
     pub form: Option<Vec<(String, String)>>,
 }
 
+/// A staged revert: the user messages it hides and the files it changed.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Revert {
+    pub count: usize,
+    /// `(A|M|D, path, additions, deletions)`.
+    pub files: Vec<(char, String, u64, u64)>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Session {
     pub id: String,
@@ -140,6 +165,10 @@ pub struct Session {
     pub queued: Vec<String>,
     /// A revert is staged (`/redo` is available).
     pub reverted: bool,
+    /// What the staged revert undid, for the banner at the end of the transcript.
+    pub revert: Option<Revert>,
+    /// `/compact` was asked while a turn ran and starts when it ends.
+    pub compact_queued: bool,
     pub layout: LayoutCache,
     /// The session's `/goal`, if set.
     pub goal: Option<anysola_core::session::goal::Goal>,
@@ -208,6 +237,8 @@ pub struct Popup {
     pub offset: usize,
     /// Display column the descriptions start at (`/` rows pad names to the longest + 2).
     pub pad: usize,
+    /// Where the last frame drew the rows, for mouse hover and clicks.
+    pub area: std::cell::Cell<ratatui::layout::Rect>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -243,8 +274,11 @@ pub struct Settings {
     pub sidebar: bool,
     pub paste_compact: bool,
     pub animations: bool,
+    /// `terminal.copy`: `select` copies on mouse release, `manual` on right-click.
+    pub copy_on_select: bool,
     pub title: bool,
     pub grouping: bool,
+    pub diff_wrap: bool,
     pub verbosity: Verbosity,
 }
 
@@ -266,8 +300,10 @@ impl Default for Settings {
             sidebar: true,
             paste_compact: true,
             animations: true,
+            copy_on_select: !cfg!(windows),
             title: true,
             grouping: true,
+            diff_wrap: true,
             verbosity: Verbosity::Medium,
         }
     }
@@ -359,6 +395,7 @@ pub struct Pane {
 /// Footer and hint keys as the keymap displays them.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Hints {
+    pub redo: Option<String>,
     pub agents: Option<String>,
     pub commands: Option<String>,
     pub sessions: Option<String>,
@@ -395,6 +432,11 @@ pub struct State {
     /// Open dialogs; the last one is on top.
     pub dialogs: Vec<crate::dialog::Dialog>,
     pub account: Account,
+    /// When the prompt's agent, model and variant labels began fading in (first draw of the
+    /// app instance); `None` shows them fully.
+    pub meta_fade: Option<u64>,
+    /// The sidebar's `Getting started` card was dismissed with `✕`.
+    pub onboarding_dismissed: bool,
     /// `~/my-app:master`.
     pub location: String,
     pub directory: String,
@@ -464,6 +506,8 @@ impl State {
             toast: None,
             dialogs: Vec::new(),
             account: Account::default(),
+            onboarding_dismissed: false,
+            meta_fade: None,
             location: String::new(),
             directory: String::new(),
             home: String::new(),

@@ -57,6 +57,8 @@ pub struct Ctx<'a> {
     pub home: &'a str,
     /// `session.grouping` is not `none`.
     pub grouping: bool,
+    /// Edit diffs wrap by word (`diffs.wrap`).
+    pub diff_wrap: bool,
     pub verbosity: Verbosity,
     /// Groups the user opened (or closed, when they start open).
     pub toggled: &'a std::collections::HashSet<String>,
@@ -398,6 +400,21 @@ fn assistant(
         }
     }
     flush(&mut thoughts, groups);
+    if let Some(retry) = &a.retry {
+        let seconds = retry.at.saturating_sub(ctx.now).div_ceil(1000);
+        let head = if seconds > 0 {
+            format!("Retrying in {seconds}s")
+        } else {
+            "Retry due".to_string()
+        };
+        groups.push(vec![Row::text(
+            3,
+            vec![Span::styled(
+                format!("⚠ {head} · attempt {} · {}", retry.attempt, retry.message),
+                ctx.style("text.feedback.warning.base"),
+            )],
+        )]);
+    }
     if !a.terminal {
         return;
     }
@@ -546,6 +563,87 @@ fn thinking(parts: &[&Part], ctx: &Ctx) -> Vec<Row> {
 }
 
 /// Shell output under its command: the last 10 lines with an `(N earlier lines)` note.
+/// What closes the transcript: `◇ Compaction queued` and the revert banner (a click on it
+/// redoes, through the `revert` group id).
+pub fn tail(
+    queued: bool,
+    revert: Option<&crate::state::Revert>,
+    redo_key: Option<&str>,
+    ctx: &Ctx,
+) -> Vec<Row> {
+    let mut rows = Vec::new();
+    if queued {
+        let label = " ◇ Compaction queued ";
+        let side = ctx.width.saturating_sub(3 + text::width(label)) / 2;
+        let rule = format!("{}{label}{}", "─".repeat(side), "─".repeat(side));
+        rows.push(Row::text(
+            3,
+            vec![Span::styled(rule, ctx.style("border.base"))],
+        ));
+    }
+    let Some(revert) = revert else { return rows };
+    let bg = ctx.theme.fg("background.raised.base");
+    let muted = ctx.style("text.muted");
+    let base = ctx.style("text.base");
+    let banner = |spans: Line| Row {
+        rail: Some(bg),
+        bg: Some(bg),
+        indent: 3,
+        spans,
+        group: Some("revert".into()),
+    };
+    rows.push(Row::default());
+    rows.push(banner(Vec::new()));
+    let plural = if revert.count == 1 { "" } else { "s" };
+    rows.push(banner(vec![Span::styled(
+        format!("{} message{plural} reverted", revert.count),
+        muted,
+    )]));
+    if !revert.files.is_empty() {
+        rows.push(banner(Vec::new()));
+        for (mark, path, added, removed) in &revert.files {
+            let counts = (if *added > 0 {
+                format!(" +{added}")
+            } else {
+                String::new()
+            }) + &(if *removed > 0 {
+                format!(" -{removed}")
+            } else {
+                String::new()
+            });
+            let room = ctx.width.saturating_sub(5 + text::width(&counts));
+            let mut spans = vec![
+                Span::styled(format!("{mark} "), muted),
+                Span::styled(text::truncate_file_path(&ctx.path(path), room.max(2)), base),
+            ];
+            if *added > 0 {
+                spans.push(Span::styled(
+                    format!(" +{added}"),
+                    Style::new().fg(ctx.theme.fg("diff.text.added")),
+                ));
+            }
+            if *removed > 0 {
+                spans.push(Span::styled(
+                    format!(" -{removed}"),
+                    Style::new().fg(ctx.theme.fg("diff.text.removed")),
+                ));
+            }
+            rows.push(banner(spans));
+        }
+        rows.push(banner(Vec::new()));
+    }
+    let mut spans = Vec::new();
+    if let Some(key) = redo_key {
+        spans.push(Span::styled(key.to_string(), base));
+        spans.push(Span::styled(" or /redo to restore", muted));
+    } else {
+        spans.push(Span::styled("/redo to restore", muted));
+    }
+    rows.push(banner(spans));
+    rows.push(banner(Vec::new()));
+    rows
+}
+
 pub fn collapsed_output(output: &str, ctx: &Ctx) -> Vec<Line> {
     let output = output.trim_end_matches('\n');
     if output.is_empty() {
@@ -574,6 +672,7 @@ pub fn patch_rows(
     path: &str,
     width: usize,
     split: bool,
+    wrap: bool,
     theme: &Theme,
 ) -> Option<Vec<Line>> {
     let patch = metadata
@@ -586,6 +685,7 @@ pub fn patch_rows(
         width,
         split,
         filetype: filetype(path),
+        wrap,
     };
     Some(diff::render(patch, &options, theme))
 }
@@ -614,6 +714,7 @@ mod tests {
             directory: "/w",
             home: "/h",
             grouping: true,
+            diff_wrap: true,
             verbosity: Verbosity::Medium,
             toggled: &toggled,
         };

@@ -92,6 +92,7 @@ fn base(width: u16, height: u16) -> State {
         context: Some(1_000_000),
     });
     state.hints = Hints {
+        redo: None,
         agents: Some("shift+tab".into()),
         commands: Some("ctrl+p".into()),
         sessions: Some("ctrl+x l".into()),
@@ -203,6 +204,7 @@ fn slash_popup() {
         selected: 0,
         offset: 0,
         pad: 12,
+        area: Default::default(),
     });
     assert_screen(&state, "slash-popup");
 }
@@ -268,6 +270,7 @@ fn at_mention_popup() {
         selected: 0,
         offset: 0,
         pad: 0,
+        area: Default::default(),
     });
     assert_screen(&state, "at-mention-popup");
 }
@@ -420,6 +423,7 @@ fn permission_shell() {
             subject: Some("cat hello.txt && ls".into()),
             selected: 0,
             fullscreen: false,
+            reject: None,
         },
     );
     assert_screen(&state, "permission-shell");
@@ -439,6 +443,7 @@ fn permission_edit_diff() {
             subject: Some("hello.txt".into()),
             selected: 0,
             fullscreen: false,
+            reject: None,
         },
     );
     assert_screen(&state, "permission-edit-diff");
@@ -923,6 +928,7 @@ fn slash_popup_scroll_series() {
             selected: offset,
             offset,
             pad,
+            area: Default::default(),
         });
         assert_screen(&state, &name);
     }
@@ -1118,6 +1124,7 @@ fn cd_recent_asks_before_removal() {
         selected: 0,
         offset: 0,
         pad: 0,
+        area: Default::default(),
     });
     state.popup_confirm = true;
     let screen = render(&state);
@@ -1246,4 +1253,255 @@ fn footer_goal_status() {
         updated_at: 0,
     });
     assert!(render(&state).contains("↓ 2 subagents · ◎ goal paused"));
+}
+
+/// `component/prompt/autocomplete.tsx`: an empty `/cd` argument popup says so.
+#[test]
+fn no_matching_directories() {
+    let mut state = session(120, 36, Vec::new());
+    state.popup = Some(Popup {
+        trigger: 'd',
+        start: 4,
+        rows: Vec::new(),
+        selected: 0,
+        offset: 0,
+        pad: 0,
+        area: Default::default(),
+    });
+    assert!(render(&state).contains("No matching directories"));
+    let area = state.popup.as_ref().unwrap().area.get();
+    assert_eq!(area.height, 1);
+}
+
+/// `feature-plugins/sidebar/footer.tsx`: the `Getting started` card shows only when signed out
+/// and the terminal is at least 22 rows tall.
+#[test]
+fn getting_started_card() {
+    let mut state = session(170, 40, Vec::new());
+    state.account.signed_out = true;
+    let screen = render(&state);
+    for text in ["Getting started", "Sign in with your Anysola", "/connect"] {
+        assert!(screen.contains(text), "{text}");
+    }
+    state.onboarding_dismissed = true;
+    assert!(!render(&state).contains("Getting started"));
+    state.onboarding_dismissed = false;
+    state.account.signed_out = false;
+    assert!(!render(&state).contains("Getting started"));
+}
+
+/// `component/title-shimmer.tsx`: a pending title keeps its text while it shimmers.
+#[test]
+fn pending_title_shimmers() {
+    let mut state = session(170, 40, Vec::new());
+    let session = state.sessions.get_mut("ses_b").unwrap();
+    session.title.clear();
+    session.busy = true;
+    assert!(render(&state).contains("New session"));
+}
+
+/// `util/signal.ts` `createFadeIn`: the labels start at the background colour and reach full
+/// strength after 160 ms.
+#[test]
+fn metadata_fade_in() {
+    let mut state = session(170, 40, Vec::new());
+    state.meta_fade = Some(1000);
+    state.now = 1000;
+    assert_eq!(state.meta_alpha(), 0.0);
+    state.now = 1080;
+    assert_eq!(state.meta_alpha(), 0.5);
+    state.now = 1200;
+    assert_eq!(state.meta_alpha(), 1.0);
+    state.meta_fade = None;
+    assert_eq!(state.meta_alpha(), 1.0);
+}
+
+/// `routes/session/index.tsx` `AssistantRetry`: counts down each second, then says it is due.
+#[test]
+fn retry_countdown() {
+    use anysola_tui::transcript::model::Retry;
+    let assistant = Assistant {
+        id: "msg_a".into(),
+        agent: "build".into(),
+        model: "Claude Sonnet 5.5".into(),
+        created: now(),
+        turn_start: now(),
+        retry: Some(Retry {
+            at: now() + 4500,
+            attempt: 2,
+            message: "Overloaded".into(),
+        }),
+        ..Assistant::default()
+    };
+    let mut state = session(120, 36, vec![Item::Assistant(assistant)]);
+    state.now = now();
+    assert!(render(&state).contains("⚠ Retrying in 5s · attempt 2 · Overloaded"));
+    state.now = now() + 4600;
+    assert!(render(&state).contains("⚠ Retry due · attempt 2 · Overloaded"));
+}
+
+/// `routes/session/permission.tsx` `PermissionReject`: the reason dialog of a child session.
+#[test]
+fn permission_reject_reason() {
+    let mut state = session(120, 50, turn(false, false));
+    asking(
+        &mut state,
+        Permission {
+            request_id: "per_3".into(),
+            action: "shell".into(),
+            resources: vec!["ls".into()],
+            save: Vec::new(),
+            metadata: json!(null),
+            subject: Some("ls".into()),
+            selected: 1,
+            fullscreen: false,
+            reject: Some("use cat".into()),
+        },
+    );
+    let screen = render(&state);
+    for text in [
+        "△ Reject permission",
+        "Tell Anysola Code what to do differently",
+        "use cat",
+        "enter confirm",
+        "esc cancel",
+    ] {
+        assert!(screen.contains(text), "{text}");
+    }
+    assert!(!screen.contains("Permission required"));
+}
+
+/// `routes/session/index.tsx` `RevertMessage` and `CompactionQueued`.
+#[test]
+fn revert_banner_and_queued_compaction() {
+    use anysola_tui::state::Revert;
+    let mut state = session(120, 40, Vec::new());
+    state.hints.redo = Some("ctrl+x r".into());
+    let s = state.sessions.get_mut("ses_b").unwrap();
+    s.compact_queued = true;
+    s.revert = Some(Revert {
+        count: 2,
+        files: vec![
+            ('M', "src/main.rs".into(), 3, 1),
+            ('A', "notes.md".into(), 5, 0),
+        ],
+    });
+    let screen = render(&state);
+    for text in [
+        "◇ Compaction queued",
+        "2 messages reverted",
+        "M src/main.rs +3 -1",
+        "A notes.md +5",
+        "ctrl+x r or /redo to restore",
+    ] {
+        assert!(screen.contains(text), "{text}");
+    }
+}
+
+/// `routes/session/group-view.tsx`: expanded thoughts are markdown, not source text.
+#[test]
+fn expanded_thought_is_markdown() {
+    let assistant = Assistant {
+        id: "msg_a".into(),
+        agent: "build".into(),
+        model: "Claude Sonnet 5.5".into(),
+        created: now(),
+        turn_start: now(),
+        terminal: true,
+        parts: vec![Part::Reasoning {
+            text: "**Plan**\n\nUse `cat` then **stop**".into(),
+            start: now(),
+            end: Some(now() + 2),
+        }],
+        ..Assistant::default()
+    };
+    let mut state = session(120, 36, vec![Item::Assistant(assistant)]);
+    state.settings.thinking = true;
+    let screen = render(&state);
+    assert!(screen.contains("Use cat then stop"), "{screen}");
+    assert!(!screen.contains("**"));
+}
+
+/// `dialogs.md` §5 and §19: a search with no hit names what was searched.
+#[test]
+fn empty_search_texts() {
+    let mut state = base(120, 30);
+    let mut skills = lists::skills(&[("a".into(), "b".into())]);
+    skills.query = "zzz".into();
+    state.dialogs.push(Dialog::Select(skills));
+    assert!(render(&state).contains("No skills found"));
+}
+
+/// `routes/session/index.tsx` `Execute`: nested calls and the runtime error preview.
+#[test]
+fn execute_rows() {
+    let mut call = tool("execute", json!({"code": "x"}), Status::Completed);
+    call.metadata = json!({
+        "error": true,
+        "toolCalls": [
+            {"tool": "opencode.models", "status": "completed", "input": {"query": "x"}},
+            {"tool": "opencode.worktree_list", "status": "error"},
+        ],
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    call.output = "\x1b[31mTypeError: boom\x1b[0m\nat line 1".into();
+    let assistant = Assistant {
+        id: "msg_a".into(),
+        agent: "build".into(),
+        model: "Claude Sonnet 5.5".into(),
+        created: now(),
+        turn_start: now(),
+        parts: vec![Part::Tool(call)],
+        ..Assistant::default()
+    };
+    let screen = render(&session(120, 36, vec![Item::Assistant(assistant)]));
+    for text in [
+        "✗ execute",
+        "› opencode.models [query=x]",
+        "✗ opencode.worktree_list",
+        "↳ TypeError: boom",
+        "  at line 1",
+    ] {
+        assert!(screen.contains(text), "{text}\n{screen}");
+    }
+}
+
+/// `dialog-execute.tsx`: title, status and the copy actions of the Execute dialog.
+#[test]
+fn execute_dialog_frame() {
+    use anysola_tui::dialog::{Action, Body, BodyKind, Size, Tone};
+    let mut state = base(120, 30);
+    let lines = vec![
+        vec![("Code".into(), Tone::Bold)],
+        vec![(" 1 ".into(), Tone::Muted), ("return 1".into(), Tone::Base)],
+        vec![("Output".into(), Tone::Bold)],
+        vec![("No output".into(), Tone::Muted)],
+    ];
+    let mut body = Body::new(
+        BodyKind::Execute {
+            code: "return 1".into(),
+            output: String::new(),
+        },
+        "execute",
+        lines,
+    );
+    body.title.push(("  Completed".into(), Tone::Muted));
+    body.size = Size::Large;
+    body.actions = vec![
+        Action::left("copy code", "c"),
+        Action::left("copy output", "o"),
+    ];
+    state.dialogs.push(Dialog::Body(body));
+    let screen = render(&state);
+    for text in [
+        "execute",
+        "Completed",
+        "return 1",
+        "copy code c",
+        "copy output o",
+    ] {
+        assert!(screen.contains(text), "{text}");
+    }
 }

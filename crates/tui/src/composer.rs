@@ -18,6 +18,9 @@ pub enum AtomKind {
     Attachment(String, String, String),
 }
 
+/// A mention before an external edit: kind, text and offset in the expanded text.
+pub type Mark = (AtomKind, String, usize);
+
 /// A placeholder occupying `start..end` of the text; edits never split it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Atom {
@@ -49,6 +52,46 @@ pub struct Composer {
     pub mode: Mode,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
+}
+
+/// Order-preserving pairs of `(item, candidate)` with the most matches, then the least total
+/// distance between an item's old offset and its candidate.
+fn assign(items: &[usize], candidates: &[usize]) -> Vec<(usize, usize)> {
+    let (n, m) = (items.len(), candidates.len());
+    // best[i][j] = (matches, -cost) for items i.. and candidates j..
+    let mut best = vec![vec![(0usize, 0i64); m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            let (matches, cost) = best[i + 1][j + 1];
+            let distance = items[i].abs_diff(candidates[j]) as i64;
+            let matched = (matches + 1, cost - distance);
+            best[i][j] = [matched, best[i + 1][j], best[i][j + 1]]
+                .into_iter()
+                .reduce(|a, b| {
+                    if b.0 > a.0 || (b.0 == a.0 && b.1 > a.1) {
+                        b
+                    } else {
+                        a
+                    }
+                })
+                .unwrap_or_default();
+        }
+    }
+    let (mut i, mut j, mut pairs) = (0, 0, Vec::new());
+    while i < n && j < m {
+        let (matches, cost) = best[i][j];
+        let distance = items[i].abs_diff(candidates[j]) as i64;
+        if (matches, cost) == (best[i + 1][j + 1].0 + 1, best[i + 1][j + 1].1 - distance) {
+            pairs.push((i, candidates[j]));
+            i += 1;
+            j += 1;
+        } else if best[i + 1][j] == (matches, cost) {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    pairs
 }
 
 /// A paste at least this big collapses into `[Pasted ~N lines]`.
@@ -419,6 +462,66 @@ impl Composer {
         out
     }
 
+    /// File, agent and skill mentions as `(kind, text, offset in `expanded()`)`, for
+    /// [`Composer::realign`] after the text was edited elsewhere.
+    pub fn mention_marks(&self) -> Vec<Mark> {
+        let mut atoms: Vec<&Atom> = self.atoms.iter().collect();
+        atoms.sort_by_key(|a| a.start);
+        let mut delta = 0isize;
+        let mut marks = Vec::new();
+        for atom in atoms {
+            match &atom.kind {
+                AtomKind::Paste(full) => {
+                    delta += full.len() as isize - (atom.end - atom.start) as isize;
+                }
+                AtomKind::Attachment(..) => {}
+                kind => marks.push((
+                    kind.clone(),
+                    self.text[atom.start..atom.end].to_string(),
+                    (atom.start as isize + delta) as usize,
+                )),
+            }
+        }
+        marks
+    }
+
+    /// Replaces the text with `content` and re-attaches earlier mentions to the occurrences of
+    /// their text that keep as many mentions as possible, nearest to where each used to be.
+    pub fn realign(&mut self, content: &str, marks: &[Mark]) {
+        self.set(content);
+        let mut groups: Vec<(&str, Vec<&Mark>)> = Vec::new();
+        for mark in marks {
+            match groups.iter_mut().find(|(text, _)| *text == mark.1) {
+                Some((_, items)) => items.push(mark),
+                None => groups.push((&mark.1, vec![mark])),
+            }
+        }
+        groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(b.0)));
+        let mut protected: Vec<(usize, usize)> = Vec::new();
+        for (text, mut items) in groups {
+            if text.is_empty() {
+                continue;
+            }
+            items.sort_by_key(|m| m.2);
+            let candidates: Vec<usize> = content.match_indices(text).map(|(at, _)| at).collect();
+            let free: Vec<usize> = candidates
+                .iter()
+                .copied()
+                .filter(|&c| !protected.iter().any(|&(s, e)| c < e && c + text.len() > s))
+                .collect();
+            let starts: Vec<usize> = items.iter().map(|m| m.2).collect();
+            for (item, at) in assign(&starts, &free) {
+                self.atoms.push(Atom {
+                    start: at,
+                    end: at + text.len(),
+                    kind: items[item].0.clone(),
+                });
+            }
+            protected.extend(candidates.iter().map(|&c| (c, c + text.len())));
+        }
+        self.atoms.sort_by_key(|a| a.start);
+    }
+
     /// `(mime, data, name)` of the attached images and PDFs.
     pub fn attachments(&self) -> Vec<(String, String, String)> {
         self.atoms
@@ -594,6 +697,20 @@ impl History {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mentions_follow_an_external_edit() {
+        let mut c = Composer::default();
+        c.insert_atom("@a.rs", AtomKind::File);
+        c.insert("then ");
+        c.insert_atom("@a.rs", AtomKind::File);
+        let marks = c.mention_marks();
+        c.realign("intro @a.rs and @a.rs and more", &marks);
+        let spans: Vec<_> = c.atoms.iter().map(|a| (a.start, a.end)).collect();
+        assert_eq!(spans, vec![(6, 11), (16, 21)]);
+        c.realign("@a.rs gone? @b.rs", &marks);
+        assert_eq!(c.atoms.len(), 1);
+    }
+
     use super::*;
 
     #[test]

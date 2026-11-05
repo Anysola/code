@@ -176,7 +176,11 @@ fn select(c: &mut Canvas, s: &Select) -> Option<(u16, u16)> {
         let text = if s.query.trim().is_empty() {
             s.empty
         } else {
-            "No results found"
+            match s.kind {
+                crate::dialog::Kind::Sessions { .. } => "No sessions found",
+                crate::dialog::Kind::Skills => "No skills found",
+                _ => "No results found",
+            }
         };
         let style = tone(c, Tone::Muted);
         c.put(f.left, list, text, style, f.room());

@@ -121,7 +121,7 @@ fn body(c: &Canvas, state: &State, p: &Permission, w: u16) -> (Vec<Line>, bool) 
         let map = p.metadata.as_object().cloned().unwrap_or_default();
         let path = p.subject.clone().unwrap_or_else(|| first(p));
         let room = w.saturating_sub(5) as usize;
-        return match patch_rows(&map, &path, room, state.width > 120, c.theme) {
+        return match patch_rows(&map, &path, room, state.width > 120, true, c.theme) {
             Some(diff) => (diff, true),
             None => (text_lines(vec!["No diff provided".into()]), false),
         };
@@ -130,6 +130,9 @@ fn body(c: &Canvas, state: &State, p: &Permission, w: u16) -> (Vec<Line>, bool) 
 }
 
 pub fn permission_height(c: &Canvas, state: &State, p: &Permission, w: u16) -> u16 {
+    if p.reject.is_some() {
+        return 5 + if narrow(state) { 4 } else { 3 };
+    }
     let (title, _) = presentation(p);
     let (lines, grows) = body(c, state, p, w);
     let header = 1 + u16::from(title.is_some());
@@ -148,7 +151,73 @@ pub fn permission_height(c: &Canvas, state: &State, p: &Permission, w: u16) -> u
     }
 }
 
+/// `Reject permission`: the reason asked for when a child session's request is rejected.
+fn reject_reason(c: &mut Canvas, state: &State, reason: &str, x: u16, y: u16, w: u16, h: u16) {
+    let bg = c.theme.fg("background.raised.base");
+    let footer_bg = c
+        .theme
+        .term(c.theme.decrease(c.theme.get("background.raised.base"), 1));
+    let rail_color = c.theme.fg("text.feedback.error.base");
+    c.fill(Rect::new(x, y, w, h), bg);
+    let footer_h = if narrow(state) { 4 } else { 3 };
+    c.fill(
+        Rect::new(x + 1, y + h - footer_h, w - 1, footer_h),
+        footer_bg,
+    );
+    for row in y..y + h {
+        let row_bg = if row >= y + h - footer_h {
+            footer_bg
+        } else {
+            bg
+        };
+        c.put(x, row, "┃", Style::new().fg(rail_color).bg(row_bg), 1);
+    }
+    let end = c.put(
+        x + 3,
+        y + 1,
+        "△",
+        c.style("text.feedback.error.base").bg(bg),
+        1,
+    );
+    c.put(
+        end + 1,
+        y + 1,
+        "Reject permission",
+        c.style("text.base").bg(bg),
+        w as usize,
+    );
+    c.put(
+        x + 3,
+        y + 3,
+        "Tell Anysola Code what to do differently",
+        c.style("text.muted").bg(bg),
+        w.saturating_sub(6) as usize,
+    );
+    let input_y = y + h - footer_h + 1;
+    let footer_base = c.style("text.base").bg(footer_bg);
+    let footer_muted = c.style("text.muted").bg(footer_bg);
+    c.put(
+        x + 3,
+        input_y,
+        reason,
+        footer_base,
+        w.saturating_sub(6) as usize,
+    );
+    let (actions_y, actions_x) = if narrow(state) {
+        (input_y + 1, x + 3)
+    } else {
+        (input_y, x + w - 3 - 26)
+    };
+    let at = c.put(actions_x, actions_y, "enter", footer_base, 5);
+    let at = c.put(at + 1, actions_y, "confirm", footer_muted, 7);
+    let at = c.put(at + 2, actions_y, "esc", footer_base, 3);
+    c.put(at + 1, actions_y, "cancel", footer_muted, 6);
+}
+
 pub fn permission(c: &mut Canvas, state: &State, p: &Permission, x: u16, y: u16, w: u16, h: u16) {
+    if let Some(reason) = &p.reject {
+        return reject_reason(c, state, reason, x, y, w, h);
+    }
     let bg = c.theme.fg("background.raised.base");
     let footer_bg = c
         .theme
