@@ -1397,3 +1397,27 @@ fn revert_banner_and_queued_compaction() {
         assert!(screen.contains(text), "{text}");
     }
 }
+
+/// `routes/session/group-view.tsx`: expanded thoughts are markdown, not source text.
+#[test]
+fn expanded_thought_is_markdown() {
+    let assistant = Assistant {
+        id: "msg_a".into(),
+        agent: "build".into(),
+        model: "Claude Sonnet 5.5".into(),
+        created: now(),
+        turn_start: now(),
+        terminal: true,
+        parts: vec![Part::Reasoning {
+            text: "**Plan**\n\nUse `cat` then **stop**".into(),
+            start: now(),
+            end: Some(now() + 2),
+        }],
+        ..Assistant::default()
+    };
+    let mut state = session(120, 36, vec![Item::Assistant(assistant)]);
+    state.settings.thinking = true;
+    let screen = render(&state);
+    assert!(screen.contains("Use cat then stop"), "{screen}");
+    assert!(!screen.contains("**"));
+}
