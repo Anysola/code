@@ -120,6 +120,7 @@ pub(crate) struct Shared {
     /// `<pid>:<nonce>` for busy markers.
     pub owner: String,
     pub turns: Mutex<std::collections::HashMap<String, CancellationToken>>,
+    pub formatters: Option<crate::formatter::Formatters>,
     /// Set once the front end shuts down: background completions no longer wake sessions.
     pub closing: std::sync::atomic::AtomicBool,
 }
@@ -135,6 +136,10 @@ impl crate::codemode::Host for Shared {
 
     fn config(&self) -> &Config {
         &self.config
+    }
+
+    fn formatters(&self) -> Option<&crate::formatter::Formatters> {
+        self.formatters.as_ref()
     }
 }
 
@@ -228,6 +233,7 @@ impl Core {
             .collect();
         let asks = Arc::new(Asks::new(db.clone(), events.clone()));
         let registry = Registry::builtin(&config);
+        let formatters = crate::formatter::Formatters::from_config(&config, paths.data.join("bin"));
         let shared = Arc::new_cyclic(|weak| Shared {
             notifier: Arc::new(StoreNotifier {
                 shared: weak.clone(),
@@ -254,6 +260,7 @@ impl Core {
             snapshots,
             owner: format!("{}:{}", std::process::id(), crate::ids::part()),
             turns: Mutex::default(),
+            formatters,
             closing: Default::default(),
         });
         Ok(Core { shared })

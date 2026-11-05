@@ -440,3 +440,66 @@ fn text_tool_lines() {
         .concat()
     );
 }
+
+/// `formatter` config: a custom formatter runs after edit and write with `$FILE` substituted; the
+/// model text is unchanged, edit's diff shows the formatted file, the BOM survives.
+#[cfg(unix)]
+#[test]
+fn formatters_run_after_edits() {
+    let gateway = FakeGateway::start(|request: &Recorded, _| {
+        let body = request.json();
+        let model = body["model"].as_str().unwrap_or_default().to_string();
+        let calls = [
+            ("write", json!({"path": "n.x", "content": "new\n"})),
+            (
+                "edit",
+                json!({"path": "a.x", "oldString": "one", "newString": "two"}),
+            ),
+        ];
+        let done = body.to_string().matches("tool_result").count();
+        let stream = match calls.get(done) {
+            Some((name, input)) if !request.is_title() => {
+                Stream::new().tool(&format!("t{done}"), name, input.clone())
+            }
+            _ => Stream::new().text("Done."),
+        };
+        Reply::Sse {
+            body: stream.finish(&model, None),
+            before: None,
+        }
+    });
+    let mut home = TestHome::new(&gateway.url);
+    home.set_env(
+        "OPENCODE_CONFIG_CONTENT",
+        r#"{"formatter": {"upper": {"command": ["sh", "-c", "tr a-z A-Z < \"$0\" > \"$0.t\" && mv \"$0.t\" \"$0\"", "$FILE"], "extensions": [".x"]}}}"#,
+    );
+    std::fs::write(home.project().join("a.x"), "\u{FEFF}one\n").unwrap();
+    let out = run_in(&home, &["run", "--format", "json", "--auto", "go"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(
+        std::fs::read_to_string(home.project().join("n.x")).unwrap(),
+        "NEW\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.project().join("a.x")).unwrap(),
+        "\u{FEFF}TWO\n"
+    );
+    let tools: Vec<Value> = out
+        .stdout
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .filter(|l| l["type"] == "tool_use")
+        .collect();
+    assert_eq!(
+        tools[0]["part"]["state"]["output"],
+        "Created file successfully: n.x"
+    );
+    assert_eq!(
+        tools[1]["part"]["state"]["output"],
+        "Edited a.x (1 replacement)"
+    );
+    let patch = tools[1]["part"]["state"]["metadata"]["metadata"]["files"][0]["patch"]
+        .as_str()
+        .unwrap();
+    assert!(patch.ends_with("@@ -1,1 +1,1 @@\n-one\n+TWO\n"), "{patch}");
+}

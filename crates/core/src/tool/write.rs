@@ -94,6 +94,7 @@ async fn write(input: &Input, ctx: &ToolContext) -> ToolResult {
     mutation::write_file(&target.absolute, &mutation::join_bom(content, bom))
         .await
         .map_err(|_| failed())?;
+    mutation::format(ctx, &target.absolute, bom).await;
     let verb = if existing_bom.is_some() {
         "Wrote"
     } else {

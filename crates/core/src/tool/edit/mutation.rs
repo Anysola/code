@@ -72,6 +72,24 @@ pub(crate) async fn write_file(path: &Path, content: &str) -> std::io::Result<()
     tokio::fs::write(path, content).await
 }
 
+/// Runs the configured formatters on a written file. When one succeeded, the file's BOM state is
+/// restored; returns the file's text (without BOM) as it now is.
+pub(crate) async fn format(
+    ctx: &super::super::ToolContext,
+    path: &Path,
+    bom: bool,
+) -> Option<String> {
+    let formatters = ctx.host.formatters()?;
+    if !formatters.format(path, &ctx.directory, &ctx.worktree).await {
+        return None;
+    }
+    let file = read_text(path).await.ok()?;
+    if file.bom != bom {
+        let _ = tokio::fs::write(path, join_bom(&file.text, bom)).await;
+    }
+    Some(file.text)
+}
+
 /// Mutations of one file serialize on its canonical path (the path itself when it does not exist).
 pub(crate) async fn lock_key(path: &Path) -> PathBuf {
     tokio::fs::canonicalize(path)

@@ -143,6 +143,10 @@ pub fn warn(message: &str, fields: &[(&str, &str)]) {
     write(Level::Warn, message, fields);
 }
 
+pub fn error(message: &str, fields: &[(&str, &str)]) {
+    write(Level::Error, message, fields);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -134,6 +134,8 @@ async fn edit(input: &Input, ctx: &ToolContext) -> ToolResult {
     mutation::write_file(&target.absolute, &mutation::join_bom(after, bom))
         .await
         .map_err(|_| failed())?;
+    let formatted = mutation::format(ctx, &target.absolute, bom).await;
+    let after = formatted.as_deref().unwrap_or(after);
     let file = FileDiff::new(&target.resource, source, after, Status::Modified);
     let plural = if count == 1 { "" } else { "s" };
     Ok(ToolOutput::text(format!(

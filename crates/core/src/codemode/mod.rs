@@ -81,6 +81,10 @@ pub trait Host: Send + Sync {
     fn db(&self) -> &crate::storage::Db;
     fn models(&self) -> &[crate::model::Model];
     fn config(&self) -> &crate::config::Config;
+    /// The formatters edits and writes run, when config `formatter` enables them.
+    fn formatters(&self) -> Option<&crate::formatter::Formatters> {
+        None
+    }
 }
 
 pub trait NamespaceTool: Send + Sync {
