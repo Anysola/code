@@ -856,9 +856,9 @@ fn draw(diagram: &Diagram, compact: bool) -> Vec<String> {
     let mut active: HashMap<String, Vec<i32>> = HashMap::new();
     let mut last_event: HashMap<String, i32> = HashMap::new();
     let close = |active: &mut HashMap<String, Vec<i32>>,
-                     who: &str,
-                     y: i32,
-                     out: &mut Vec<(i32, i32, i32)>| {
+                 who: &str,
+                 y: i32,
+                 out: &mut Vec<(i32, i32, i32)>| {
         if let (Some(start), Some(i)) = (active.get_mut(who).and_then(Vec::pop), layout.at(who)) {
             out.push((layout.centers[i], start, y));
         }
@@ -1175,7 +1175,9 @@ mod tests {
     #[test]
     fn full_height_groups_like_merman() {
         assert_eq!(
-            full("sequenceDiagram\n  participant Browser\n  box Backend\n    participant API\n    participant Cache\n    participant DB\n  end\n  Browser->>API: GET /users/42\n  API->>Cache: get user:42"),
+            full(
+                "sequenceDiagram\n  participant Browser\n  box Backend\n    participant API\n    participant Cache\n    participant DB\n  end\n  Browser->>API: GET /users/42\n  API->>Cache: get user:42"
+            ),
             [
                 "                   ╭─ Backend ───────────────────────────────╮",
                 "Browser            │ API              Cache              DB  │",
