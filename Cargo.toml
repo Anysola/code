@@ -50,6 +50,7 @@ anysola-core = { path = "crates/core" }
 anysola-mcp = { path = "crates/mcp" }
 anysola-migrate = { path = "crates/migrate" }
 anysola-testkit = { path = "crates/testkit" }
+anysola-tui = { path = "crates/tui" }
 
 [profile.release]
 opt-level = 3

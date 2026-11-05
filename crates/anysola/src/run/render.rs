@@ -403,6 +403,8 @@ impl Renderer {
             }
             Event::Interrupted { .. } | Event::Succeeded { .. } => return true,
             Event::RetryScheduled { .. }
+            | Event::TextDelta { .. }
+            | Event::ReasoningDelta { .. }
             | Event::PermissionAsked { .. }
             | Event::QuestionAsked { .. }
             | Event::PermissionReplied { .. }
