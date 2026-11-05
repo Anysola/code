@@ -3,10 +3,13 @@
 use std::path::PathBuf;
 
 use anysola_core::events::CreditsSnapshot;
+use anysola_core::gateway::account::Reply;
 use anysola_tui::composer::{AtomKind, Mode};
+use anysola_tui::dialog::{Dialog, Select};
+use anysola_tui::menus::{anysola, lists, palette, settings};
 use anysola_tui::state::{
     Account, Hints, ModelChoice, Permission, Popup, PopupAction, PopupRow, Recent, Route, Session,
-    State, Tab,
+    State, Tab, Toast, Variant,
 };
 use anysola_tui::text::parse_iso;
 use anysola_tui::theme::{Catalog, Mode as ThemeMode};
@@ -74,7 +77,7 @@ fn base(width: u16, height: u16) -> State {
         plan: Some("team".into()),
         renews: parse_iso("2026-11-23T00:00:00Z"),
         available: Some(731.0),
-        free: None,
+        ..Account::default()
     };
     state.model = Some(ModelChoice {
         provider: "anysola".into(),
@@ -91,6 +94,7 @@ fn base(width: u16, height: u16) -> State {
         fullscreen: Some("ctrl+f".into()),
     };
     state.example = 1;
+    state.zone = chrono::FixedOffset::east_opt(3 * 3600).unwrap();
     state
 }
 
@@ -298,6 +302,7 @@ fn turn(edit_done: bool, shell_done: bool) -> Vec<Item> {
         text: "fix the typo in hello.txt".into(),
         agent: "build".into(),
         files: Vec::new(),
+        created: parse_iso("2026-11-05T14:02:00Z").unwrap(),
     }];
     let mut parts = vec![Part::Tool(todo), Part::Tool(shell)];
     if shell_done {
@@ -431,4 +436,326 @@ fn permission_edit_diff() {
         },
     );
     assert_screen(&state, "permission-edit-diff");
+}
+
+fn dialog(mut state: State, dialog: Dialog) -> State {
+    state.dialogs.push(dialog);
+    state
+}
+
+/// The home screen the dialog captures were taken over.
+fn under(example: usize) -> State {
+    let mut state = base(120, 36);
+    state.example = example;
+    state
+}
+
+fn select(select: Select) -> Dialog {
+    Dialog::Select(select)
+}
+
+#[test]
+fn help() {
+    let state = dialog(under(2), Dialog::Body(lists::help("ctrl+p")));
+    assert_screen(&state, "help");
+}
+
+#[test]
+fn debug() {
+    let info = lists::DebugInfo {
+        // [fix] §B9: the real version, not upstream 2.2.5.
+        version: "2.2.5".into(),
+        date: "2026-11-04T14:00:36.759Z".into(),
+        os: "Linux 7.0.0-1013-oracle (arm64)".into(),
+        terminal: "xterm-256color in screen".into(),
+        session: None,
+        model: Some("anysola/claude-sonnet-5-5".into()),
+    };
+    let state = dialog(under(1), Dialog::Body(lists::debug(&info)));
+    assert_screen(&state, "debug");
+}
+
+fn me() -> serde_json::Value {
+    json!({
+        "plan": "team",
+        "access": "paid",
+        "credits": {"available": 731, "renewsAt": "2026-11-23T00:00:00Z"},
+        "usageToday": {"requests": 3, "credits": 9},
+    })
+}
+
+#[test]
+fn credits_dialog() {
+    let me = me();
+    let view = anysola::CreditsView {
+        me: Ok(&me),
+        balance: Some(731.0),
+        session: None,
+        low: false,
+        zone: under(1).zone,
+        now: now(),
+    };
+    let state = dialog(under(1), Dialog::Body(anysola::credits_dialog(&view)));
+    assert_screen(&state, "credits");
+}
+
+fn usage_reply() -> Result<Reply, String> {
+    Ok(Reply {
+        status: 200,
+        body: json!({
+            "totals": {"requests": 42, "credits": 318, "cacheHitRate": 0.64},
+            "byDay": [
+                {"date": "2026-11-02", "requests": 20, "credits": 150},
+                {"date": "2026-11-03", "requests": 22, "credits": 168},
+            ],
+            "byModel": [
+                {"model": "claude-sonnet-5-5", "requests": 30, "credits": 290},
+                {"model": "claude-haiku-5-5", "requests": 12, "credits": 28},
+            ],
+            "creditsAvailable": 731,
+            "renewsAt": "2026-11-23T00:00:00Z",
+        }),
+    })
+}
+
+#[test]
+fn usage_7_and_30_days() {
+    for (days, name) in [(7, "usage-7d"), (30, "usage-30d")] {
+        let body = anysola::usage_dialog(days, Some(&usage_reply()), under(1).zone);
+        let state = dialog(under(1), Dialog::Body(body));
+        assert_screen(&state, name);
+    }
+}
+
+#[test]
+fn devices() {
+    let body = json!({"tokens": [
+        {"id": "tok_1", "name": "laptop", "client": "Anysola Code 0.5.1 · linux", "current": true, "lastUsedAt": "2026-11-04T09:12:00Z"},
+        {"id": "tok_2", "name": "ci-runner", "client": "Anysola Code 0.5.0 · linux"},
+    ]});
+    let state = dialog(
+        under(1),
+        select(anysola::devices_dialog(&body, under(1).zone)),
+    );
+    assert_screen(&state, "devices");
+}
+
+#[test]
+fn status_in_session() {
+    let mut state = session(120, 36, turn(true, true));
+    state.sessions.get_mut("ses_b").unwrap().credits = credits(0, 12, None, 731);
+    let state = dialog(state, Dialog::Body(lists::status(&[])));
+    assert_screen(&state, "status-in-session");
+}
+
+#[test]
+fn mcps_empty() {
+    let state = dialog(under(1), select(lists::mcps(&[])));
+    assert_screen(&state, "mcps");
+}
+
+#[test]
+fn connect() {
+    let state = dialog(under(1), select(lists::connect(lists::Connection::Env)));
+    assert_screen(&state, "connect");
+}
+
+#[test]
+fn update_current() {
+    let state = dialog(
+        under(1),
+        Dialog::Body(lists::update(&lists::Update::Current)),
+    );
+    assert_screen(&state, "update");
+}
+
+#[test]
+fn theme_picker() {
+    let names = Catalog::bundled().names();
+    let state = dialog(under(1), select(lists::themes(&names, "anysola")));
+    assert_screen(&state, "theme-picker");
+}
+
+#[test]
+fn agent_picker() {
+    let agents = vec![
+        (
+            "build".into(),
+            "The default agent. Executes tools based on configured permissions.".into(),
+        ),
+        (
+            "plan".into(),
+            "Read-only agent for exploring the codebase and planning changes.".into(),
+        ),
+    ];
+    let state = dialog(under(2), select(lists::agents(&agents, "build")));
+    assert_screen(&state, "agent-picker");
+}
+
+#[test]
+fn model_picker() {
+    let row = |id: &str, name: &str, note: &str, estimate: Option<f64>| lists::ModelRow {
+        provider: "anysola".into(),
+        id: id.into(),
+        name: name.into(),
+        note: Some(note.into()),
+        estimate,
+    };
+    let rows = vec![
+        row("auto", "Auto", "Picks Haiku or Sonnet per turn", None),
+        row(
+            "claude-sonnet-5-5",
+            "Claude Sonnet 5.5",
+            "Default",
+            Some(6.0),
+        ),
+        row("claude-haiku-5-5", "Claude Haiku 5.5", "Fastest", Some(1.0)),
+    ];
+    let mut state = under(1);
+    state.composer.set("Ask");
+    let models = lists::models(&rows, Some("claude-sonnet-5-5"), &[], &[]);
+    assert_screen(&dialog(state, select(models)), "model-picker");
+}
+
+#[test]
+fn settings_dialog() {
+    let mut state = under(1);
+    state.composer.set("Ask");
+    // [fix] §B11: Animations reads `on` when unset; the 0.5.1 capture shows `off`.
+    let tui = json!({"animations": false});
+    let state = dialog(state, select(settings::dialog(&tui, 0)));
+    assert_screen(&state, "settings");
+}
+
+fn session_items() -> Vec<lists::SessionItem> {
+    ["ses_b", "ses_a"]
+        .iter()
+        .map(|id| lists::SessionItem {
+            id: id.to_string(),
+            title: "Fix typo in hello.txt".into(),
+            updated: now() - 60_000,
+            elsewhere: None,
+            marker: None,
+        })
+        .collect()
+}
+
+#[test]
+fn session_list() {
+    let mut state = home(120, 36);
+    state.example = 1;
+    let list = lists::sessions(&session_items(), Some("my-app"), now(), state.zone);
+    assert_screen(&dialog(state, select(list)), "session-list");
+}
+
+#[test]
+fn sessions_empty() {
+    let list = lists::sessions(&[], Some("my-app"), now(), under(1).zone);
+    assert_screen(&dialog(under(1), select(list)), "sessions-empty");
+}
+
+#[test]
+fn worktrees() {
+    let mut state = under(1);
+    state.example = 0;
+    let list = lists::worktrees("~/my-app", &[], false);
+    assert_screen(&dialog(state, select(list)), "worktrees");
+}
+
+#[test]
+fn timeline() {
+    let mut state = session(120, 36, turn(true, true));
+    state.sessions.get_mut("ses_b").unwrap().credits = credits(0, 12, None, 731);
+    let messages = vec![(
+        "msg_u".to_string(),
+        "fix the typo in hello.txt".to_string(),
+        parse_iso("2026-11-05T14:02:00Z").unwrap(),
+    )];
+    let list = lists::timeline(&messages, state.zone);
+    assert_screen(&dialog(state, select(list)), "timeline");
+}
+
+#[test]
+fn command_palette() {
+    let mut state = under(1);
+    state.composer.set("Ask");
+    let keymap = anysola_tui::keymap::Keymap::defaults();
+    let cx = palette::Context {
+        connected: true,
+        tabs: true,
+        variants: true,
+        ..palette::Context::default()
+    };
+    let list = palette::dialog(&keymap, &cx);
+    assert_screen(&dialog(state, select(list)), "command-palette");
+}
+
+#[test]
+fn exit_summary() {
+    let summary = anysola::Summary {
+        title: "Fix typo in hello.txt".into(),
+        id: "ses_e59221e89ffevUnouuY8RLvFMr".into(),
+        turns: 1,
+        spent: 12,
+        updated: None,
+    };
+    let text = anysola::exit_summary(&summary);
+    let plain: String = {
+        let mut out = String::new();
+        let mut chars = text.chars();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                for c in chars.by_ref() {
+                    if c == 'm' {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    };
+    let want: Vec<String> = capture("exit-summary")
+        .lines()
+        .map(|l| l.trim_end().to_string())
+        .collect();
+    let got: Vec<String> = plain.lines().map(|l| l.trim_end().to_string()).collect();
+    assert_eq!(got, want[..got.len()]);
+    assert!(want[got.len()..].iter().all(String::is_empty));
+}
+
+#[test]
+fn budget_toasts() {
+    let mut state = session(120, 36, turn(true, true));
+    state.sessions.get_mut("ses_b").unwrap().credits = credits(0, 12, Some(50), 731);
+    state.toast = Some(Toast {
+        title: None,
+        message: anysola::budget_text(12, Some(50)),
+        variant: Variant::Success,
+        until: u64::MAX,
+    });
+    assert_screen(&state, "budget-set-toast");
+    let mut home = under(1);
+    home.toast = Some(Toast {
+        title: None,
+        message: "Open a session first, or set one for new sessions: /budget default <credits>"
+            .into(),
+        variant: Variant::Warning,
+        until: u64::MAX,
+    });
+    assert_screen(&home, "budget-toast-home");
+}
+
+#[test]
+fn home_low_balance_event_banner() {
+    let mut state = home(120, 36);
+    state.example = 1;
+    let mut me = me();
+    me["credits"]["available"] = json!(64);
+    me["event"] = json!({"label": "Double credits weekend", "until": "2026-11-09T21:00:00Z"});
+    state.account = Account::from_me(me);
+    state.recent[0].updated = now() - 70_000;
+    state.recent[1].updated = now() - 130_000;
+    assert_screen(&state, "home-low-balance-event-banner");
 }

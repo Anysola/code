@@ -35,8 +35,20 @@ pub fn fail(message: &str) -> i32 {
 
 /// The first start after 0.5.x imports its data. A failure is reported and retried next start;
 /// stdout stays untouched.
-fn import(paths: &anysola_core::paths::Paths) {
-    match anysola_migrate::run(paths) {
+fn import(paths: &anysola_core::paths::Paths, interactive: bool) {
+    use std::io::IsTerminal;
+    let overlay = interactive
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
+        && anysola_migrate::pending(paths);
+    let result = if overlay {
+        anysola_tui::term::behind("Importing sessions from Anysola Code 0.5.x…", || {
+            anysola_migrate::run(paths)
+        })
+    } else {
+        anysola_migrate::run(paths)
+    };
+    match result {
         Ok(Some(counts)) if counts.sessions > 0 => ui::println(&format!(
             "Imported {} sessions from Anysola Code 0.5.x.",
             counts.sessions
@@ -122,7 +134,7 @@ fn main() {
         ) => false,
     };
     if imports {
-        import(&paths);
+        import(&paths, cli.command.is_none());
     }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

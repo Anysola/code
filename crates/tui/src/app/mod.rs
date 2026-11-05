@@ -12,10 +12,10 @@ use crossterm::event::EventStream;
 use futures_util::StreamExt;
 use ratatui::Terminal;
 use ratatui::buffer::Buffer;
-use serde_json::Value;
 use tokio::sync::{broadcast, mpsc};
 
 use crate::composer::History;
+use crate::dialog::{BodyKind, Dialog};
 use crate::keymap::{Keymap, Stroke};
 use crate::settings::Tui;
 use crate::state::{Account, ModelChoice, Recent, Route, Session, State, Toast, Variant};
@@ -23,9 +23,12 @@ use crate::term::{self, Backend};
 use crate::theme::{Catalog, Theme};
 use crate::transcript::model;
 
+mod anysola;
 mod commands;
+mod dialogs;
 mod events;
 mod keys;
+mod models;
 
 /// How bare `anysola` was started.
 #[derive(Debug, Default, Clone)]
@@ -45,6 +48,8 @@ enum Msg {
     },
     Reload(String),
     Toast(Option<String>, String, Variant),
+    /// Work finished in the background that updates the app itself.
+    Apply(Box<dyn FnOnce(&mut App) + Send>),
 }
 
 /// The OSC 11 reply must arrive within this long; first frame waits for it.
@@ -55,6 +60,7 @@ pub struct App {
     core: Core,
     pub state: State,
     theme: Theme,
+    catalog: Catalog,
     keymap: Keymap,
     tui: Tui,
     history: History,
@@ -73,19 +79,35 @@ pub struct App {
     title: String,
     deferred: Option<commands::Deferred>,
     quit: bool,
+    /// Stashed prompts, oldest first.
+    stash: Vec<String>,
+    models: models::Models,
+    db_path: PathBuf,
+    /// The budget gate let the next prompt through once.
+    gate_passed: bool,
+    /// `/update` installed this version; `restart` re-executes after leaving.
+    installed: Option<String>,
+    restart: bool,
+    /// Debounces `/me` after credits events.
+    account_generation: u64,
 }
 
 fn now() -> u64 {
     anysola_core::time::now_ms()
 }
 
-/// `~/my-app:master`: the directory with home abbreviated and the git branch.
-fn location(directory: &Path, home: &Path) -> String {
-    let shown = match directory.strip_prefix(home) {
+/// The path with the home directory shown as `~`.
+fn abbreviate(directory: &Path, home: &Path) -> String {
+    match directory.strip_prefix(home) {
         Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
         Ok(rest) => format!("~/{}", rest.display()),
         Err(_) => directory.display().to_string(),
-    };
+    }
+}
+
+/// `~/my-app:master`: the directory with home abbreviated and the git branch.
+fn location(directory: &Path, home: &Path) -> String {
+    let shown = abbreviate(directory, home);
     let branch = directory.ancestors().find_map(|dir| {
         let git = dir.join(".git");
         let head = if git.is_dir() {
@@ -154,6 +176,7 @@ pub async fn run(core: Core, options: Options) -> Result<(), String> {
         state: State::new(anysola_core::version::VERSION),
         core,
         theme,
+        catalog,
         keymap,
         tui,
         history,
@@ -167,6 +190,13 @@ pub async fn run(core: Core, options: Options) -> Result<(), String> {
         title: String::new(),
         deferred: None,
         quit: false,
+        stash: Vec::new(),
+        models: models::Models::load(paths.data.join("state").join("model.json")),
+        db_path: paths.database(),
+        gate_passed: false,
+        installed: None,
+        restart: false,
+        account_generation: 0,
     };
     app.init(&paths, &options);
     if let Some((title, message)) = failure {
@@ -195,6 +225,15 @@ pub async fn run(core: Core, options: Options) -> Result<(), String> {
     }
     term::restore();
     app.core.shutdown();
+    if let Some(summary) = app.summary() {
+        print!("{}", crate::menus::anysola::exit_summary(&summary));
+    }
+    if app.restart
+        && let Ok(exe) = std::env::current_exe()
+    {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        let _ = std::process::Command::new(exe).args(args).status();
+    }
     Ok(())
 }
 
@@ -232,6 +271,25 @@ impl App {
             .and_then(|r| self.model_choice(&r));
         self.refresh_recent();
         self.fetch_account();
+        self.check_update(false);
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let mut ticks = 0u64;
+            loop {
+                tokio::time::sleep(Duration::from_secs(300)).await;
+                ticks += 1;
+                let update = ticks.is_multiple_of(2);
+                let apply = move |app: &mut App| {
+                    app.fetch_account();
+                    if update {
+                        app.check_update(false);
+                    }
+                };
+                if tx.send(Msg::Apply(Box::new(apply))).is_err() {
+                    break;
+                }
+            }
+        });
         let target = match (&options.session, options.continue_last) {
             (Some(id), _) => Some(anysola_core::api::Target::Id(id.clone())),
             (None, true) => Some(anysola_core::api::Target::Continue),
@@ -316,6 +374,22 @@ impl App {
         }
     }
 
+    /// What the exit summary reports: the open session, or only the installed update.
+    fn summary(&self) -> Option<crate::menus::anysola::Summary> {
+        let session = self.state.session();
+        if session.is_none() && self.installed.is_none() {
+            return None;
+        }
+        let credits = session.map(|s| self.core.credits(&s.id));
+        Some(crate::menus::anysola::Summary {
+            title: session.map(|s| s.title.clone()).unwrap_or_default(),
+            id: session.map(|s| s.id.clone()).unwrap_or_default(),
+            turns: credits.as_ref().map_or(0, |c| c.turns),
+            spent: credits.as_ref().map_or(0, |c| c.total),
+            updated: self.installed.clone(),
+        })
+    }
+
     fn toast(&mut self, title: Option<String>, message: String, variant: Variant) {
         self.state.toast = Some(Toast {
             title,
@@ -327,7 +401,18 @@ impl App {
 
     fn message(&mut self, message: Msg) {
         match message {
-            Msg::Account(account) => self.state.account = account,
+            Msg::Account(account) => {
+                if account.me.is_some() || self.state.account.me.is_none() {
+                    self.state.account = account;
+                }
+                if let Some(Dialog::Body(b)) = self.state.dialogs.last()
+                    && b.kind == BodyKind::Credits
+                {
+                    let body = self.credits_body();
+                    self.state.dialogs.pop();
+                    self.state.dialogs.push(Dialog::Body(body));
+                }
+            }
             Msg::Done { session_id, error } => {
                 if let Some(session) = self.state.sessions.get_mut(&session_id) {
                     session.busy = false;
@@ -340,47 +425,38 @@ impl App {
             }
             Msg::Reload(session_id) => self.reload(&session_id),
             Msg::Toast(title, message, variant) => self.toast(title, message, variant),
+            Msg::Apply(apply) => apply(self),
         }
     }
 
-    fn fetch_account(&self) {
+    pub(super) fn fetch_account(&self) {
         let core = self.core.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let Ok(reply) = core.account(Method::GET, "/me").await else {
-                return;
-            };
-            if !reply.ok() {
-                return;
-            }
-            let me = reply.body;
-            let credits = me.get("credits");
-            let quota = me.get("freeQuota").filter(|q| q.is_object());
-            let free = (me.get("access").and_then(Value::as_str) == Some("free"))
-                .then_some(quota)
-                .flatten()
-                .map(|q| {
-                    let used = q
-                        .get("turns")
-                        .or_else(|| q.get("usedTurns"))
-                        .and_then(Value::as_u64);
-                    (
-                        used.unwrap_or(0),
-                        q.get("dailyTurns").and_then(Value::as_u64).unwrap_or(0),
-                    )
-                });
-            let account = Account {
-                plan: me.get("plan").and_then(Value::as_str).map(str::to_string),
-                renews: credits
-                    .and_then(|c| c.get("renewsAt"))
-                    .and_then(Value::as_str)
-                    .and_then(crate::text::parse_iso),
-                available: credits
-                    .and_then(|c| c.get("available"))
-                    .and_then(Value::as_f64),
-                free,
+            let reply = core.account(Method::GET, "/me").await;
+            let account = match &reply {
+                Ok(r) if r.ok() => Account::from_me(r.body.clone()),
+                other => Account {
+                    error: Some(crate::menus::anysola::error_text(other)),
+                    ..Account::default()
+                },
             };
             let _ = tx.send(Msg::Account(account));
+        });
+    }
+
+    /// `/me` again 1.5 s after the last credits event.
+    fn account_soon(&mut self) {
+        let generation = self.account_generation.wrapping_add(1);
+        self.account_generation = generation;
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            let _ = tx.send(Msg::Apply(Box::new(move |app: &mut App| {
+                if app.account_generation == generation {
+                    app.fetch_account();
+                }
+            })));
         });
     }
 
@@ -437,6 +513,7 @@ impl App {
     /// Rebuilds a session's transcript from storage (turn end, lag, revert).
     fn reload(&mut self, id: &str) {
         let boundary = self.core.revert_boundary(id).ok().flatten();
+        let reverted = boundary.is_some();
         let Ok(messages) = self.core.messages(id) else {
             return;
         };
@@ -447,6 +524,7 @@ impl App {
         if let Some(session) = self.state.sessions.get_mut(id) {
             let awaiting = session.permission.is_some();
             session.items = items;
+            session.reverted = reverted;
             if let Some(title) = title {
                 session.title = title;
             }

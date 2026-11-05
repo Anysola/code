@@ -34,6 +34,14 @@ pub enum Error {
     Json(#[from] serde_json::Error),
 }
 
+/// There is 0.5.x data that was not imported yet.
+pub fn pending(paths: &Paths) -> bool {
+    source::Source::locate(paths).database.is_some()
+        && Db::open(&paths.database())
+            .and_then(|db| db.kv_get(MARKER))
+            .is_ok_and(|marker| marker.is_none())
+}
+
 /// Imports 0.5.x data unless it was imported before or there is none. Returns what was imported.
 pub fn run(paths: &Paths) -> Result<Option<Counts>, Error> {
     let source = source::Source::locate(paths);

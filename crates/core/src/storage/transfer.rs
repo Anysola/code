@@ -258,6 +258,34 @@ impl Db {
         })
     }
 
+    /// Top-level sessions newest first: of one project or of all, whose title contains `query`.
+    pub fn search_sessions(
+        &self,
+        project_id: Option<&str>,
+        query: &str,
+        limit: u64,
+    ) -> Result<Vec<SessionSummary>> {
+        self.with(|c| {
+            let mut statement = c.prepare(
+                "SELECT id, title, project_id, directory, time_created, time_updated FROM session
+                 WHERE (?1 IS NULL OR project_id = ?1) AND parent_id IS NULL AND time_archived IS NULL
+                   AND instr(lower(title), lower(?2)) > 0
+                 ORDER BY time_updated DESC, id DESC LIMIT ?3",
+            )?;
+            let rows = statement.query_map(params![project_id, query, limit as i64], |r| {
+                Ok(SessionSummary {
+                    id: r.get(0)?,
+                    title: r.get(1)?,
+                    project_id: r.get(2)?,
+                    directory: r.get(3)?,
+                    time_created: r.get::<_, i64>(4)? as u64,
+                    time_updated: r.get::<_, i64>(5)? as u64,
+                })
+            })?;
+            rows.collect()
+        })
+    }
+
     /// Deletes a session and its descendants; false when it does not exist.
     pub fn delete_session(&self, id: &str) -> Result<bool> {
         self.with(|c| {

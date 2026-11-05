@@ -7,7 +7,7 @@ use super::{Canvas, prompt, round};
 use crate::state::State;
 use crate::text::{self, width};
 
-const WORDMARK: [&str; 3] = [
+pub const WORDMARK: [&str; 3] = [
     "   ▄█▜▖  ▐█▙▖  ▐█ ▝▜▙▖▗▟▛▘ ▄▛▀▀▀▀▘ ▗▟▀▀▀▀▜▄ ▐█         ▄█▜▖ ",
     " ▗▟▛▘▐█▖ ▐█▝█▄ ▐█   ▝██▘    ▀▀▀▀▜▙ ▐█    ▐█ ▐█       ▗▟▛▘▐█▖",
     "▗█▀   ▜█ ▐█  ▀▙▟█    ██    ▗▄▄▄▄▟▀ ▝▜▄▄▄▄▟▀ ▐█▄▄▄▄▖ ▗█▀   ▜█",
@@ -106,9 +106,11 @@ fn recent_sessions(c: &mut Canvas, state: &State, x: u16, y: u16, w: u16) {
     }
 }
 
-/// `Team · renews 23 Nov` left, the version right.
+/// `Team · renews 23 Nov`, the account banners, and the version right.
 fn home_footer(c: &mut Canvas, state: &State, y: u16) {
     let muted: Style = c.style("text.muted");
+    let max = state.width as usize - 4;
+    let mut x = 2;
     if let Some(plan) = &state.account.plan {
         let mut line = text::title_case(plan);
         if let Some(renews) = state.account.renews {
@@ -117,10 +119,22 @@ fn home_footer(c: &mut Canvas, state: &State, y: u16) {
                 text::short_date(renews, state.now)
             ));
         }
-        c.put(2, y, &line, muted, state.width as usize - 4);
+        x = c.put(x, y, &line, c.style("text.faint"), max) + 2;
+    }
+    let banners =
+        crate::menus::anysola::banners(state.account.me.as_ref(), state.low_balance(), state.zone);
+    for (banner, tone) in banners {
+        let path = match tone {
+            crate::dialog::Tone::Warning => "text.feedback.warning.base",
+            _ => "text.feedback.info.base",
+        };
+        let room = (state.width as usize).saturating_sub(x as usize);
+        x = c.put(x, y, &banner, c.style(path), room) + 2;
     }
     if state.width >= 64 {
-        let x = state.width - 2 - width(&state.version) as u16;
-        c.put(x, y, &state.version, muted, state.version.len());
+        let right = state.width - 2 - width(&state.version) as u16;
+        let at = right.max(x + 2);
+        let room = (state.width as usize).saturating_sub(at as usize);
+        c.put(at, y, &state.version, muted, room);
     }
 }

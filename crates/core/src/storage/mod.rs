@@ -458,11 +458,14 @@ impl Db {
 
     /// Copies a session's messages into a fork. Copied ids get the source sequence as a suffix,
     /// as 0.5.1 named forked rows.
-    pub fn copy_messages(&self, from: &str, to: &str) -> Result<()> {
+    pub fn copy_messages(&self, from: &str, to: &str, through: &str) -> Result<()> {
         let rows = self.messages(from)?;
         for row in rows {
             let id = format!("{}_{}", row.id, row.seq);
             self.append_message(to, &id, &row.kind, &row.data)?;
+            if row.id == through {
+                break;
+            }
         }
         Ok(())
     }

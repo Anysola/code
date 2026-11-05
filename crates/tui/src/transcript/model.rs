@@ -13,6 +13,7 @@ pub enum Item {
         text: String,
         agent: String,
         files: Vec<String>,
+        created: u64,
     },
     Assistant(Assistant),
     Shell {
@@ -201,6 +202,7 @@ pub fn from_messages(
                     text: data.text,
                     agent: agent.clone(),
                     files,
+                    created: data.time.created,
                 });
             }
             Message::Assistant(data) => {

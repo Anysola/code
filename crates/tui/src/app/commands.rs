@@ -21,6 +21,10 @@ pub(super) enum Deferred {
     Suspend,
 }
 
+fn s(text: &str) -> Value {
+    Value::String(text.into())
+}
+
 fn title_of(id: &str) -> String {
     SLASH
         .iter()
@@ -146,19 +150,6 @@ impl App {
                     .tui
                     .set(&["session", "sidebar"], Value::String(value.into()));
             }
-            ("terminal.title.toggle", _) => {
-                self.state.settings.title = !self.state.settings.title;
-                let _ = self.tui.set(
-                    &["terminal", "title"],
-                    Value::Bool(self.state.settings.title),
-                );
-            }
-            ("app.toggle.animations", _) => {
-                self.state.settings.animations = !self.state.settings.animations;
-                let _ = self
-                    .tui
-                    .set(&["animations"], Value::Bool(self.state.settings.animations));
-            }
             (
                 "session.page.up"
                 | "session.page.down"
@@ -192,8 +183,76 @@ impl App {
             ("session.aside", None) => {
                 self.toast(None, "Open a session first".into(), Variant::Warning)
             }
-            (id, _) => self.state.dialog = Some(title_of(id)),
+            ("session.copy", Some(_)) => {
+                let text = self.transcript(true, true);
+                term::copy(&text);
+                self.toast(
+                    None,
+                    "Session transcript copied to clipboard!".into(),
+                    Variant::Success,
+                );
+            }
+            ("prompt.stash", _) if !self.state.composer.is_empty() => {
+                self.stash.push(self.state.composer.expanded());
+                self.state.composer.clear();
+            }
+            ("prompt.stash.pop", _) => {
+                if let Some(text) = self.stash.pop() {
+                    self.state.composer.set(&text);
+                }
+            }
+            ("prompt.stash.list", _) if !self.stash.is_empty() => self.open_stash(),
+            (id, _) if self.toggle(id) => {}
+            (id, session) => {
+                if !self.open_dialog(id, session) && !self.account_command(id, arguments) {
+                    self.toast(
+                        None,
+                        format!("{} is not available here", title_of(id)),
+                        Variant::Info,
+                    );
+                }
+            }
         }
+    }
+
+    /// Palette toggles of a `tui.json` setting; false when `id` is not one.
+    fn toggle(&mut self, id: &str) -> bool {
+        let (path, values): (&[&str], &[Value]) = match id {
+            "terminal.title.toggle" => (
+                &["terminal", "title"],
+                &[Value::Bool(true), Value::Bool(false)],
+            ),
+            "app.toggle.animations" => (&["animations"], &[Value::Bool(true), Value::Bool(false)]),
+            "app.toggle.file_context" => (
+                &["prompt", "editor"],
+                &[Value::Bool(true), Value::Bool(false)],
+            ),
+            "app.toggle.paste_summary" => (&["prompt", "paste"], &[s("compact"), s("full")]),
+            "app.toggle.diffwrap" => (&["diffs", "wrap"], &[s("word"), s("none")]),
+            "session.toggle.thinking" => (&["session", "thinking"], &[s("hide"), s("show")]),
+            "session.toggle.scrollbar" => (
+                &["session", "scrollbar"],
+                &[Value::Bool(false), Value::Bool(true)],
+            ),
+            "session.toggle.exploration_grouping" => {
+                (&["session", "grouping"], &[s("auto"), s("none")])
+            }
+            "session.verbosity.cycle" => (
+                &["session", "verbosity"],
+                &[s("medium"), s("high"), s("low")],
+            ),
+            _ => return false,
+        };
+        let current = path
+            .iter()
+            .try_fold(&self.tui.value, |v, k| v.get(k))
+            .cloned()
+            .unwrap_or_else(|| values[0].clone());
+        let at = values.iter().position(|v| *v == current).unwrap_or(0);
+        let next = values[(at + 1) % values.len()].clone();
+        let _ = self.tui.set(path, next);
+        self.state.settings = self.tui.settings();
+        true
     }
 
     fn cycle_model(&mut self, forward: bool) {
@@ -419,6 +478,11 @@ impl App {
         let Some(id) = self.ensure_session() else {
             return;
         };
+        let busy = self.state.sessions.get(&id).is_some_and(|s| s.busy);
+        if !busy && !queue && !self.budget_allows(&id, &text) {
+            self.state.composer.clear();
+            return;
+        }
         self.commit_choice(&id);
         let prompt = Prompt {
             text: text.clone(),
@@ -440,6 +504,7 @@ impl App {
             text,
             agent,
             files: Vec::new(),
+            created: now(),
         });
         if session.busy || queue {
             let delivery = if queue {

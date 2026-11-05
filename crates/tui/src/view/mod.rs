@@ -9,11 +9,13 @@ use crate::state::{Route, State, Variant};
 use crate::text::{clip, width};
 use crate::theme::Theme;
 
+mod dialog;
 mod home;
 mod prompt;
 mod prompts;
 mod session;
 
+pub use home::WORDMARK;
 pub use prompt::{max_rows, textarea_width};
 
 /// Width of the session pane's content box.
@@ -120,15 +122,14 @@ pub fn draw(state: &State, theme: &Theme, buf: &mut Buffer) -> Drawn {
             None => None,
         },
     };
-    if let Some(title) = &state.dialog {
-        dialog(&mut c, title);
-    }
+    let cursor = match state.dialogs.last() {
+        Some(top) => dialog::draw(&mut c, top),
+        None => cursor,
+    };
     if let Some(toast) = &state.toast {
         self::toast(&mut c, state, toast);
     }
-    Drawn {
-        cursor: cursor.filter(|_| state.dialog.is_none()),
-    }
+    Drawn { cursor }
 }
 
 const TAB_WIDTH: usize = 22;
@@ -191,15 +192,16 @@ fn tabs(c: &mut Canvas, state: &State) {
     }
 }
 
+/// The toast at the top right: coloured side borders, text, and the `x` close mark.
 fn toast(c: &mut Canvas, state: &State, toast: &crate::state::Toast) {
-    let w = 60.min(state.width.saturating_sub(6) as usize);
     let color = match toast.variant {
         Variant::Info => "text.feedback.info.base",
         Variant::Success => "text.feedback.success.base",
         Variant::Warning => "text.feedback.warning.base",
         Variant::Error => "text.feedback.error.base",
     };
-    let inner = w.saturating_sub(6);
+    let max = 60.min(state.width as usize);
+    let room = max.saturating_sub(9);
     let mut lines: Vec<(String, Style)> = Vec::new();
     if let Some(title) = &toast.title {
         lines.push((
@@ -207,47 +209,29 @@ fn toast(c: &mut Canvas, state: &State, toast: &crate::state::Toast) {
             c.style("text.base").add_modifier(Modifier::BOLD),
         ));
     }
-    for line in crate::text::wrap(&toast.message, inner) {
+    for line in crate::text::wrap(&toast.message, room) {
         lines.push((line, c.style("text.base")));
     }
+    let longest = toast
+        .message
+        .lines()
+        .chain(toast.title.as_deref())
+        .map(width)
+        .max()
+        .unwrap_or(0);
+    // A toast whose text wraps takes the full width.
+    let w = (longest + 9).min(max) as u16;
     let h = lines.len() as u16 + 2;
-    let x = state.width.saturating_sub(2 + w as u16);
-    let rect = Rect::new(x, 1, w as u16, h);
+    let x = state.width.saturating_sub(w + 2);
+    let rect = Rect::new(x, 1, w, h);
     c.fill(rect, c.theme.fg("background.raised.high"));
     let border = c.style(color);
     for y in rect.top()..rect.bottom() {
         c.put(rect.left(), y, "┃", border, 1);
         c.put(rect.right() - 1, y, "┃", border, 1);
     }
+    c.put(rect.right() - 4, 2, "x", c.style("text.muted"), 1);
     for (i, (text, style)) in lines.iter().enumerate() {
-        c.put(x + 3, 2 + i as u16, text, *style, inner);
+        c.put(x + 3, 2 + i as u16, text, *style, room);
     }
-}
-
-/// The frame of a dialog this build does not have yet.
-fn dialog(c: &mut Canvas, title: &str) {
-    let area = c.buf.area;
-    let backdrop = Color::Rgb(0, 0, 0);
-    for y in area.top()..area.bottom() {
-        for x in area.left()..area.right() {
-            let cell = &mut c.buf[(x, y)];
-            cell.set_fg(c.theme.fg("text.faint"));
-            cell.set_bg(backdrop);
-        }
-    }
-    let w = 60.min(area.width.saturating_sub(4));
-    let x = (area.width - w) / 2;
-    let y = area.height / 4;
-    let rect = Rect::new(x, y, w, 5);
-    c.fill(rect, c.theme.term(c.theme.dialog.get("background.base")));
-    let bold = c.style("text.base").add_modifier(Modifier::BOLD);
-    c.put(x + 4, y + 1, title, bold, w as usize - 12);
-    c.put(x + w - 7, y + 1, "esc", c.style("text.muted"), 3);
-    c.put(
-        x + 4,
-        y + 3,
-        "Not available in this build yet.",
-        c.style("text.muted"),
-        w as usize - 8,
-    );
 }

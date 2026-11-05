@@ -3,7 +3,9 @@
 pub mod app;
 pub mod complete;
 pub mod composer;
+pub mod dialog;
 pub mod keymap;
+pub mod menus;
 pub mod settings;
 pub mod state;
 pub mod term;

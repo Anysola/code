@@ -9,7 +9,9 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
 use crate::events::{CreditsSnapshot, Event};
-use crate::storage::Db;
+use crate::storage::{Db, StorageError};
+
+const DEFAULT_KEY: &str = "anysola:budget:default";
 
 #[derive(Debug, Clone, Default)]
 struct State {
@@ -67,13 +69,7 @@ impl Credits {
                 ..State::default()
             },
             None => State {
-                budget: budget_of(
-                    self.db
-                        .kv_get("anysola:budget:default")
-                        .ok()
-                        .flatten()
-                        .as_ref(),
-                ),
+                budget: budget_of(self.db.kv_get(DEFAULT_KEY).ok().flatten().as_ref()),
                 ..State::default()
             },
         }
@@ -88,6 +84,15 @@ impl Credits {
         let _ = self
             .events
             .send(Event::Credits(snapshot(session_id, state)));
+    }
+
+    /// The budget new sessions start with.
+    pub fn default_budget(&self) -> Option<u64> {
+        budget_of(self.db.kv_get(DEFAULT_KEY).ok().flatten().as_ref())
+    }
+
+    pub fn set_default_budget(&self, budget: Option<u64>) -> Result<(), StorageError> {
+        self.db.kv_set(DEFAULT_KEY, &json!(budget))
     }
 
     pub fn snapshot(&self, session_id: &str) -> CreditsSnapshot {
@@ -143,7 +148,7 @@ impl Credits {
         &self,
         session_id: &str,
         budget: Option<u64>,
-    ) -> Result<CreditsSnapshot, crate::storage::StorageError> {
+    ) -> Result<CreditsSnapshot, StorageError> {
         let mut state = self.with(session_id, |state| state.clone());
         state.budget = budget.filter(|b| *b >= 1);
         let value = json!({"total": state.total, "turns": state.turns, "budget": state.budget});

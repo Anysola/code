@@ -443,19 +443,44 @@ impl Core {
     }
 
     fn fork(&self, source: &SessionRow) -> Result<SessionRow, CoreError> {
-        let number = self.shared.db.fork_count(&source.id)? + 1;
-        let title = format!("{} (fork #{number})", source.title);
-        let through = self
+        self.fork_before(source, None)
+    }
+
+    /// Forks a session: all of it, or only the messages before `before`.
+    pub fn fork_session(
+        &self,
+        session_id: &str,
+        before: Option<&str>,
+    ) -> Result<SessionRow, CoreError> {
+        let source = self
             .shared
             .db
-            .messages(&source.id)?
+            .session(session_id)?
+            .ok_or(CoreError::SessionNotFound)?;
+        self.fork_before(&source, before)
+    }
+
+    fn fork_before(
+        &self,
+        source: &SessionRow,
+        before: Option<&str>,
+    ) -> Result<SessionRow, CoreError> {
+        let number = self.shared.db.fork_count(&source.id)? + 1;
+        let title = format!("{} (fork #{number})", source.title);
+        let mut messages = self.shared.db.messages(&source.id)?;
+        if let Some(before) = before
+            && let Some(at) = messages.iter().position(|m| m.id == before)
+        {
+            messages.truncate(at);
+        }
+        let through = messages
             .pop()
             .ok_or_else(|| CoreError::ForkEmpty(source.id.clone()))?
             .id;
         let kind = Kind::Fork {
             source: source.id.clone(),
             title,
-            through,
+            through: through.clone(),
         };
         let mut row = self.create(crate::ids::session(), kind)?;
         row.agent = source.agent.clone();
@@ -466,7 +491,9 @@ impl Core {
         if let Some(model) = &row.model {
             self.shared.db.set_model(&row.id, model)?;
         }
-        self.shared.db.copy_messages(&source.id, &row.id)?;
+        self.shared
+            .db
+            .copy_messages(&source.id, &row.id, &through)?;
         // The fork starts from the instructions its source last saw, not its source's baseline.
         if let Some(state) = self.shared.db.instruction_state(&source.id)? {
             self.shared

@@ -66,6 +66,25 @@ pub fn resume(mouse: bool) -> io::Result<()> {
     Ok(())
 }
 
+/// Runs `work` behind a full-screen line of text (the 0.5.x import before the UI starts).
+pub fn behind<T>(text: &str, work: impl FnOnce() -> T) -> T {
+    let mut out = io::stdout();
+    let shown = execute!(out, EnterAlternateScreen, crossterm::cursor::Hide).is_ok();
+    if shown && let Ok((w, h)) = crossterm::terminal::size() {
+        let x = w.saturating_sub(crate::text::width(text) as u16) / 2;
+        let _ = execute!(
+            out,
+            crossterm::cursor::MoveTo(x, h / 2),
+            crossterm::style::Print(text)
+        );
+    }
+    let result = work();
+    if shown {
+        let _ = execute!(out, LeaveAlternateScreen, crossterm::cursor::Show);
+    }
+    result
+}
+
 /// `Anysola Code` at home and for untitled sessions, else `Anysola | <title>` (40/37-char cut).
 pub fn title(session_title: Option<&str>) -> String {
     match session_title.filter(|t| !t.is_empty() && !is_default_title(t)) {
@@ -83,6 +102,26 @@ fn is_default_title(title: &str) -> bool {
 
 pub fn set_title(text: &str) {
     let _ = execute!(io::stdout(), SetTitle(text));
+}
+
+/// Opens a URL in the browser; false when no opener could start.
+pub fn open_url(url: &str) -> bool {
+    let mut command = if cfg!(windows) {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/c", "start", ""]);
+        command
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+    } else {
+        std::process::Command::new("xdg-open")
+    };
+    command
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .is_ok()
 }
 
 /// Copies through the terminal (OSC 52), which also works over SSH.

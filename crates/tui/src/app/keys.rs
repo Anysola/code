@@ -100,13 +100,8 @@ impl App {
         if self.selection.take().is_some() && stroke.key == "escape" {
             return;
         }
-        if self.state.dialog.is_some() {
-            if matches!(stroke.key.as_str(), "escape" | "return")
-                || (stroke.ctrl && stroke.key == "c")
-            {
-                self.state.dialog = None;
-            }
-            return;
+        if !self.state.dialogs.is_empty() {
+            return self.dialog_key(&stroke);
         }
         let mut strokes = std::mem::take(&mut self.pending);
         if now() > self.pending_until {

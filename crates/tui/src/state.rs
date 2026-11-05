@@ -31,6 +31,47 @@ pub struct Account {
     pub available: Option<f64>,
     /// `(used, daily)` turns of a free account.
     pub free: Option<(u64, u64)>,
+    /// The server asks to warn about the balance.
+    pub low: bool,
+    /// The whole `/me` reply.
+    pub me: Option<Value>,
+    /// Why `/me` failed.
+    pub error: Option<String>,
+}
+
+impl Account {
+    pub fn from_me(me: Value) -> Account {
+        let credits = me.get("credits");
+        let quota = me.get("freeQuota").filter(|q| q.is_object());
+        let free = (me.get("access").and_then(Value::as_str) == Some("free"))
+            .then_some(quota)
+            .flatten()
+            .map(|q| {
+                // [fix] §B4: `/me` sends `turns`.
+                let used = q
+                    .get("turns")
+                    .or_else(|| q.get("usedTurns"))
+                    .and_then(Value::as_u64);
+                (
+                    used.unwrap_or(0),
+                    q.get("dailyTurns").and_then(Value::as_u64).unwrap_or(0),
+                )
+            });
+        Account {
+            plan: me.get("plan").and_then(Value::as_str).map(str::to_string),
+            renews: credits
+                .and_then(|c| c.get("renewsAt"))
+                .and_then(Value::as_str)
+                .and_then(crate::text::parse_iso),
+            available: credits
+                .and_then(|c| c.get("available"))
+                .and_then(Value::as_f64),
+            free,
+            low: me.get("lowBalance") == Some(&Value::Bool(true)),
+            error: None,
+            me: Some(me),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -91,6 +132,8 @@ pub struct Session {
     pub credits: Option<CreditsSnapshot>,
     /// Ids of prompts admitted while a turn ran, not yet taken.
     pub queued: Vec<String>,
+    /// A revert is staged (`/redo` is available).
+    pub reverted: bool,
 }
 
 impl Session {
@@ -216,8 +259,8 @@ pub struct State {
     pub composer: Composer,
     pub popup: Option<Popup>,
     pub toast: Option<Toast>,
-    /// A dialog this build does not have yet: its title.
-    pub dialog: Option<String>,
+    /// Open dialogs; the last one is on top.
+    pub dialogs: Vec<crate::dialog::Dialog>,
     pub account: Account,
     /// `~/my-app:master`.
     pub location: String,
@@ -239,6 +282,8 @@ pub struct State {
     pub hints: Hints,
     /// `/update to install v<version>` on the home screen.
     pub update: Option<String>,
+    /// The local time zone dates are shown in.
+    pub zone: chrono::FixedOffset,
 }
 
 impl State {
@@ -253,7 +298,7 @@ impl State {
             composer: Composer::default(),
             popup: None,
             toast: None,
-            dialog: None,
+            dialogs: Vec::new(),
             account: Account::default(),
             location: String::new(),
             directory: String::new(),
@@ -271,6 +316,7 @@ impl State {
             settings: Settings::default(),
             hints: Hints::default(),
             update: None,
+            zone: *chrono::Local::now().offset(),
         }
     }
 
@@ -330,14 +376,27 @@ impl State {
         Some(parts.join(" · "))
     }
 
+    /// The balance when it is low: not free, and the server says so or fewer than 100 remain.
+    pub fn low_balance(&self) -> Option<f64> {
+        let remaining = self.remaining()?;
+        let free = self.account.free.is_some()
+            || self
+                .account
+                .me
+                .as_ref()
+                .and_then(|m| m.get("access"))
+                .and_then(Value::as_str)
+                == Some("free");
+        (!free && (self.account.low || remaining < 100.0)).then_some(remaining)
+    }
+
     /// Low balance or a spent budget colours the status line.
     pub fn status_warning(&self) -> bool {
         let over = self
             .session()
             .and_then(|s| s.credits.as_ref())
             .is_some_and(|c| c.budget.is_some_and(|b| c.total >= b));
-        let low = self.account.free.is_none() && self.remaining().is_some_and(|r| r < 100.0);
-        over || low
+        over || self.low_balance().is_some()
     }
 
     pub fn agent_index(&self, agent: &str) -> usize {

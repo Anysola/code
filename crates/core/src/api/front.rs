@@ -28,6 +28,40 @@ impl Core {
             .root_sessions(&self.shared.project.id, limit)?)
     }
 
+    /// Top-level sessions newest first, of this project or of all, whose title contains `query`.
+    pub fn sessions(
+        &self,
+        all: bool,
+        query: &str,
+        limit: u64,
+    ) -> Result<Vec<SessionSummary>, CoreError> {
+        let project = (!all).then_some(self.shared.project.id.as_str());
+        Ok(self.shared.db.search_sessions(project, query, limit)?)
+    }
+
+    /// Deletes a session and its children; false when it did not exist.
+    pub fn delete_session(&self, session_id: &str) -> Result<bool, CoreError> {
+        Ok(self.shared.db.delete_session(session_id)?)
+    }
+
+    /// `{info, messages}` as `anysola session export` writes it.
+    pub fn export(&self, session_id: &str) -> Result<Option<Value>, CoreError> {
+        Ok(self.shared.db.export_session(session_id)?)
+    }
+
+    pub fn default_budget(&self) -> Option<u64> {
+        self.shared.credits.default_budget()
+    }
+
+    pub fn set_default_budget(&self, budget: Option<u64>) -> Result<(), CoreError> {
+        Ok(self.shared.credits.set_default_budget(budget)?)
+    }
+
+    /// The project's other checkouts.
+    pub fn worktrees(&self) -> Vec<crate::worktree::Worktree> {
+        crate::worktree::list(&self.shared.db, &self.shared.project.id)
+    }
+
     /// The session's stored messages, decoded, oldest first.
     pub fn messages(&self, session_id: &str) -> Result<Vec<(String, Message)>, CoreError> {
         Ok(self

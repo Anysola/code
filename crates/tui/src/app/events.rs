@@ -117,6 +117,7 @@ impl App {
                 if let Some(session) = self.state.sessions.get_mut(&id) {
                     session.credits = Some(snapshot.clone());
                 }
+                self.account_soon();
             }
             Event::TitleChanged { title, .. } => {
                 if let Some(session) = self.state.sessions.get_mut(&id) {
