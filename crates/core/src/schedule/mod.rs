@@ -42,6 +42,11 @@ pub const DISABLED: &str = "Scheduled tasks are disabled; set experimental.sched
 /// Rings when a schedule is created or resumed, so the loop recomputes its sleep.
 static DOORBELL: LazyLock<Notify> = LazyLock::new(Notify::new);
 
+/// Wakes the firing loop, e.g. to see that the process is closing.
+pub(crate) fn ring() {
+    DOORBELL.notify_waiters();
+}
+
 /// Whether config `experimental.schedules` is `true`.
 pub fn enabled(config: &crate::config::Config) -> bool {
     config

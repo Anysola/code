@@ -482,6 +482,11 @@ impl Core {
             time_updated: now,
         };
         self.shared.db.create_session(&row)?;
+        self.emit(Event::SessionCreated {
+            session_id: row.id.clone(),
+            parent_id: row.parent_id.clone(),
+            title: row.title.clone(),
+        });
         Ok(row)
     }
 
@@ -804,6 +809,8 @@ impl Core {
             .store(true, std::sync::atomic::Ordering::Relaxed);
         self.shared.asks.close();
         crate::tool::shell::kill_background_shells();
+        // The firing loop sees `closing` and releases its lease now rather than after a sleep.
+        crate::schedule::ring();
     }
 }
 
