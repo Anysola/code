@@ -567,4 +567,97 @@ mod tests {
             "a dead holder does not block"
         );
     }
+
+    #[test]
+    fn session_row_columns_keep_0_5_1_shapes() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("a.db")).unwrap();
+        let mut row = session("ses_1", "/p");
+        row.version = crate::version::session_version();
+        row.parent_id = Some("ses_0".into());
+        row.fork_session_id = Some("ses_9".into());
+        row.fork_boundary = Some(json!({"type": "through", "messageID": "msg_a"}));
+        db.create_session(&row).unwrap();
+        db.set_agent("ses_1", "plan").unwrap();
+        let model = json!({"id": "claude-sonnet-5-5", "providerID": "anysola", "variant": "high"});
+        db.set_model("ses_1", &model).unwrap();
+        let tokens = TokenTotals {
+            input: 1080,
+            output: 378,
+            reasoning: 0,
+            cache_read: 7200,
+            cache_write: 360,
+        };
+        db.add_tokens("ses_1", tokens).unwrap();
+        db.add_tokens("ses_1", tokens).unwrap();
+        db.set_revert("ses_1", Some(&json!({"messageID": "msg_a"})))
+            .unwrap();
+        assert!(
+            db.acquire("ses_1", &format!("{}:a", std::process::id()))
+                .unwrap()
+        );
+        db.set_idle("ses_1", "succeeded").unwrap();
+        db.with(|c| {
+            c.execute(
+                "UPDATE session SET permission = ?1 WHERE id = 'ses_1'",
+                [r#"[{"action":"edit","resource":"*","effect":"deny"}]"#],
+            )
+        })
+        .unwrap();
+        let columns = db
+            .with(|c| {
+                c.query_row(
+                    "SELECT version, agent, model, tokens_input, tokens_output, tokens_cache_read,
+                        tokens_cache_write, cost, revert, idle_outcome, time_busy IS NOT NULL,
+                        time_idle IS NOT NULL, time_archived, parent_id, fork_boundary
+                     FROM session WHERE id = 'ses_1'",
+                    [],
+                    |r| {
+                        Ok(json!([
+                            r.get::<_, String>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, String>(2)?,
+                            r.get::<_, i64>(3)?,
+                            r.get::<_, i64>(4)?,
+                            r.get::<_, i64>(5)?,
+                            r.get::<_, i64>(6)?,
+                            r.get::<_, f64>(7)?,
+                            r.get::<_, String>(8)?,
+                            r.get::<_, String>(9)?,
+                            r.get::<_, bool>(10)?,
+                            r.get::<_, bool>(11)?,
+                            r.get::<_, Option<i64>>(12)?,
+                            r.get::<_, String>(13)?,
+                            r.get::<_, String>(14)?,
+                        ]))
+                    },
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            columns,
+            json!([
+                format!("2.2.5+anysola.{}", crate::version::VERSION),
+                "plan",
+                r#"{"id":"claude-sonnet-5-5","providerID":"anysola","variant":"high"}"#,
+                2160,
+                756,
+                14400,
+                720,
+                0.0,
+                r#"{"messageID":"msg_a"}"#,
+                "succeeded",
+                true,
+                true,
+                null,
+                "ses_0",
+                r#"{"type":"through","messageID":"msg_a"}"#,
+            ])
+        );
+        let rules = db.session_permissions("ses_1").unwrap();
+        assert_eq!(
+            (rules[0].action.as_str(), rules[0].effect),
+            ("edit", crate::permission::Effect::Deny)
+        );
+    }
 }
