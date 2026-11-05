@@ -65,6 +65,12 @@ fn data_uri(uri: &str) -> Option<(&str, &str)> {
 
 fn user(data: &UserData, target: &Target) -> Option<Value> {
     let mut content = Vec::new();
+    let skills = data.extra.get("skills").and_then(Value::as_array);
+    for skill in skills.into_iter().flatten() {
+        if let Some(text) = skill.get("text").and_then(Value::as_str) {
+            content.push(text_block(text));
+        }
+    }
     if !data.text.trim().is_empty() {
         content.push(text_block(&data.text));
     }
@@ -468,6 +474,26 @@ mod tests {
             "30 MiB passes 25: cut to 10"
         );
         assert_eq!(blocks(2)[0]["type"], "image");
+    }
+
+    #[test]
+    fn invoked_skills_come_first() {
+        let skills = json!([{"id": "pdf", "name": "pdf", "text": "<skill_content name=\"pdf\">", "mention": "@pdf"}]);
+        let history = vec![decode(
+            "user",
+            json!({"time": {"created": 1}, "text": "read @pdf", "skills": skills}),
+        )];
+        let input = vec!["text".to_string()];
+        let target = Target {
+            provider: "anysola",
+            id: "claude-sonnet-5-5",
+            input: &input,
+        };
+        let Entry::Turn(turn) = &lower(&history, &target)[0] else {
+            panic!()
+        };
+        assert_eq!(turn["content"][0]["text"], "<skill_content name=\"pdf\">");
+        assert_eq!(turn["content"][1]["text"], "read @pdf");
     }
 
     #[test]

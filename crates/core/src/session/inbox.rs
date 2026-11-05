@@ -48,11 +48,15 @@ pub fn user_data(prompt: &Prompt) -> Value {
             extra: Default::default(),
         })
         .collect();
+    let mut extra = serde_json::Map::new();
+    if !prompt.skills.is_empty() {
+        extra.insert("skills".into(), json!(prompt.skills));
+    }
     encode(&UserData {
         time: Created { created: now_ms() },
         text: prompt.text.clone(),
         files: Some(files),
-        extra: Default::default(),
+        extra,
     })
 }
 
@@ -194,6 +198,7 @@ mod tests {
         Prompt {
             text: text.into(),
             files: vec![],
+            skills: Vec::new(),
         }
     }
 

@@ -100,6 +100,7 @@ fn server_through_the_stack() {
     let prompt = Prompt {
         text: "hi".into(),
         files: Vec::new(),
+        skills: Vec::new(),
     };
     let outcome = rt
         .block_on(core.prompt(&session.id, prompt, TurnOptions::default()))

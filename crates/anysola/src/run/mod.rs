@@ -138,7 +138,11 @@ pub async fn run(args: RunArgs) -> i32 {
     let code = drive(
         &core,
         &session_id,
-        Prompt { text, files },
+        Prompt {
+            text,
+            files,
+            skills: Vec::new(),
+        },
         mode,
         args.thinking,
         auto,

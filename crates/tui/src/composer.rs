@@ -432,6 +432,20 @@ impl Composer {
             .collect()
     }
 
+    /// The `@<skill>` mentions, in order of appearance.
+    pub fn skills(&self) -> Vec<String> {
+        let mut atoms: Vec<&Atom> = self
+            .atoms
+            .iter()
+            .filter(|a| a.kind == AtomKind::Skill)
+            .collect();
+        atoms.sort_by_key(|a| a.start);
+        atoms
+            .iter()
+            .map(|a| self.text[a.start..a.end].to_string())
+            .collect()
+    }
+
     /// The `@`/`/` token the cursor is in: `(trigger, start offset, query)`.
     pub fn token(&self) -> Option<(char, usize, String)> {
         let before = &self.text[..self.cursor];

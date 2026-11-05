@@ -94,6 +94,8 @@ pub struct Prompt {
     pub text: String,
     /// `(mime, base64 data, file name)` attachments sent as media.
     pub files: Vec<(String, String, String)>,
+    /// Skills the user invoked with `@<skill>`; their content goes before the text.
+    pub skills: Vec<crate::session::message::InvokedSkill>,
 }
 
 pub(crate) struct Shared {

@@ -76,6 +76,7 @@ impl Core {
         let prompt = Prompt {
             text,
             files: Vec::new(),
+            skills: Vec::new(),
         };
         self.prompt(session_id, prompt, options).await
     }
@@ -157,6 +158,7 @@ impl Core {
         let prompt = Prompt {
             text: format!("{}\n{text}", crate::tool::subagent::FIRST_PROMPT),
             files: Vec::new(),
+            skills: Vec::new(),
         };
         let outcome = self
             .prompt(&child.id, prompt, TurnOptions::default())

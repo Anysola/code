@@ -75,6 +75,7 @@ fn subagent_command_reports_to_the_parent() {
             Prompt {
                 text: "start".into(),
                 files: vec![],
+                skills: Vec::new(),
             },
             TurnOptions::default(),
         ))

@@ -45,6 +45,26 @@ pub struct UserData {
     pub extra: Map<String, Value>,
 }
 
+/// A skill the user invoked in a prompt, stored with its loaded `<skill_content>` text.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InvokedSkill {
+    pub id: String,
+    pub name: String,
+    pub text: String,
+    pub mention: String,
+}
+
+impl InvokedSkill {
+    pub fn new(skill: &crate::skill::Skill, mention: &str) -> InvokedSkill {
+        InvokedSkill {
+            id: skill.id.clone(),
+            name: skill.name.clone(),
+            text: crate::skill::content(skill),
+            mention: mention.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SyntheticData {
     pub time: Created,

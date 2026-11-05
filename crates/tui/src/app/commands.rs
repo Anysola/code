@@ -5,6 +5,7 @@ use anysola_core::api::{Prompt, Target};
 use anysola_core::model::ModelRef;
 use anysola_core::session::TurnOptions;
 use anysola_core::session::inbox::Delivery;
+use anysola_core::session::message::InvokedSkill;
 use ratatui::Terminal;
 use serde_json::Value;
 
@@ -484,9 +485,25 @@ impl App {
             return;
         }
         self.commit_choice(&id);
+        let loaded = self.core.loaded();
+        let skills = self
+            .state
+            .composer
+            .skills()
+            .iter()
+            .filter_map(|mention| {
+                let name = mention.trim_start_matches('@');
+                let skill = loaded
+                    .skills
+                    .iter()
+                    .find(|s| s.name == name || s.id == name)?;
+                Some(InvokedSkill::new(skill, mention))
+            })
+            .collect();
         let prompt = Prompt {
             text: text.clone(),
             files: self.state.composer.attachments(),
+            skills,
         };
         self.history.push(Entry {
             text: text.clone(),
