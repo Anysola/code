@@ -96,7 +96,7 @@ pub fn transcript(
 }
 
 pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u16)> {
-    let top = u16::from(!state.tabs.is_empty());
+    let top = u16::from(state.strip());
     let pane = pane_width(state);
     let pad = if state.width < 44 { 1 } else { 2 };
     let x = pad;
@@ -188,7 +188,7 @@ pub fn overlay(c: &mut Canvas, state: &State, session: &Session) {
         }
     }
     let x = state.width.saturating_sub(SIDEBAR_WIDTH);
-    sidebar(c, state, session, x, u16::from(!state.tabs.is_empty()));
+    sidebar(c, state, session, x, u16::from(state.strip()));
 }
 
 /// The account banners (event, low balance) stacked right above the composer; their rows.
@@ -217,7 +217,7 @@ pub fn terminal_width(state: &State) -> u16 {
 
 /// The terminal grid inside the right pane: `(rows, columns)`.
 pub fn terminal_size(state: &State) -> (u16, u16) {
-    let top = u16::from(!state.tabs.is_empty());
+    let top = u16::from(state.strip());
     (
         state.height.saturating_sub(top).max(1),
         terminal_width(state).saturating_sub(2).max(1),
@@ -285,7 +285,7 @@ pub fn terminal_cursor(state: &State) -> Option<(u16, u16)> {
         return None;
     }
     let (row, col) = parser.screen().cursor_position();
-    let top = u16::from(!state.tabs.is_empty());
+    let top = u16::from(state.strip());
     Some((pane_width(state) + 2 + col, top + row))
 }
 

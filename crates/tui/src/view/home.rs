@@ -17,7 +17,7 @@ const WORDMARK_WIDTH: u16 = 60;
 
 pub fn draw(c: &mut Canvas, state: &State) -> Option<(u16, u16)> {
     let (w, h) = (state.width, state.height);
-    let top = u16::from(!state.tabs.is_empty());
+    let top = u16::from(state.strip());
     let footer = if h >= 14 && w >= 44 {
         if h < 16 { 1 } else { 3 }
     } else {

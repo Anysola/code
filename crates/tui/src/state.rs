@@ -278,6 +278,10 @@ pub struct Settings {
     pub source_markdown: bool,
     pub diff_view: DiffView,
     pub sidebar: bool,
+    /// `tabs.layout = vertical`: a tab column on the left instead of the strip.
+    pub tabs_vertical: bool,
+    /// `tabs.indicators = numbers`.
+    pub tab_numbers: bool,
     pub paste_compact: bool,
     pub animations: bool,
     /// `terminal.copy`: `select` copies on mouse release, `manual` on right-click.
@@ -314,6 +318,8 @@ impl Default for Settings {
             source_markdown: false,
             diff_view: DiffView::Auto,
             sidebar: true,
+            tabs_vertical: false,
+            tab_numbers: false,
             turn_tokens: TurnTokens::Off,
             paste_compact: true,
             animations: true,
@@ -450,6 +456,10 @@ pub struct State {
     pub dialogs: Vec<crate::dialog::Dialog>,
     /// The sidebar was opened with its toggle; below 121 columns it shows as an overlay.
     pub sidebar_open: bool,
+    /// Columns the vertical tab column takes this frame (0 without one); `width` excludes them.
+    pub left: u16,
+    /// The vertical tab column's chosen width (`layout.verticalTabsWidth`).
+    pub tabs_width: u16,
     pub account: Account,
     /// When the prompt's agent, model and variant labels began fading in (first draw of the
     /// app instance); `None` shows them fully.
@@ -525,6 +535,8 @@ impl State {
             toast: None,
             dialogs: Vec::new(),
             sidebar_open: false,
+            left: 0,
+            tabs_width: 42,
             account: Account::default(),
             onboarding_dismissed: false,
             meta_fade: None,
@@ -562,6 +574,11 @@ impl State {
             diff: None,
             zone: *chrono::Local::now().offset(),
         }
+    }
+
+    /// The horizontal tab strip takes the top row.
+    pub fn strip(&self) -> bool {
+        !self.tabs.is_empty() && self.left == 0
     }
 
     pub fn session(&self) -> Option<&Session> {

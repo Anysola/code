@@ -729,7 +729,11 @@ impl App {
         }
     }
 
-    fn mouse(&mut self, mouse: crossterm::event::MouseEvent) {
+    fn mouse(&mut self, mut mouse: crossterm::event::MouseEvent) {
+        if self.tabs_mouse(mouse) {
+            return;
+        }
+        mouse.column -= self.state.left;
         let at = (mouse.column, mouse.row);
         match mouse.kind {
             MouseEventKind::ScrollUp => self.scroll(3),

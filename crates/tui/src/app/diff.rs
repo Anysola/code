@@ -244,7 +244,7 @@ impl App {
             0
         };
         let top = if left > 0 {
-            u16::from(!self.state.tabs.is_empty())
+            u16::from(self.state.strip())
         } else {
             0
         };

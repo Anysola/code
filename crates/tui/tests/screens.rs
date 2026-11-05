@@ -1701,3 +1701,46 @@ fn turn_token_table() {
         assert!(screen.contains(text), "{text}\n{screen}");
     }
 }
+
+/// `component/session-tabs.tsx:542-1273`, `ui/layout.ts`: `tabs.layout = vertical` puts the tabs
+/// in a 42-column rail (number or status, title, project) with the routes beside it.
+#[test]
+fn vertical_tabs() {
+    use anysola_tui::view::{vertical_tab_at, vertical_tabs_width};
+    assert_eq!(vertical_tabs_width(170, 42), Some(42));
+    assert_eq!(vertical_tabs_width(105, 42), None);
+    assert_eq!(vertical_tabs_width(150, 90), Some(72));
+    let mut state = session(170, 30, turn(true, true));
+    state.settings.tabs_vertical = true;
+    state.settings.tab_numbers = true;
+    state.left = 42;
+    state.width = 128;
+    let screen = render_full(&state, 170);
+    let rows: Vec<&str> = screen.split('\n').collect();
+    let column = |y: usize| rows[y].chars().take(42).collect::<String>();
+    assert!(column(1).starts_with(" 1 "), "{}", column(1));
+    assert!(
+        column(4).starts_with(" 2 Fix typo in hello.txt"),
+        "{}",
+        column(4)
+    );
+    assert!(column(5).contains("my-app"), "{}", column(5));
+    assert!(column(7).starts_with(" + New session"), "{}", column(7));
+    assert_eq!(vertical_tab_at(&state, 4), Some(Some(1)));
+    assert_eq!(vertical_tab_at(&state, 6), None);
+    assert_eq!(vertical_tab_at(&state, 7), Some(None));
+}
+
+fn render_full(state: &State, width: u16) -> String {
+    let theme = Catalog::bundled().load("anysola", ThemeMode::Dark).unwrap();
+    let mut buffer = Buffer::empty(Rect::new(0, 0, width, state.height));
+    anysola_tui::view::draw(state, &theme, &mut buffer);
+    (0..state.height)
+        .map(|y| {
+            (0..width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}

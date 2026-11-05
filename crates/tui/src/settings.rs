@@ -119,6 +119,8 @@ impl Tui {
                 _ => DiffView::Auto,
             },
             sidebar: self.str(&["session", "sidebar"]) != Some("hide"),
+            tabs_vertical: self.str(&["tabs", "layout"]) == Some("vertical"),
+            tab_numbers: self.str(&["tabs", "indicators"]) == Some("numbers"),
             paste_compact: self.str(&["prompt", "paste"]) != Some("full"),
             animations: flag(&["animations"], true),
             copy_on_select: self
