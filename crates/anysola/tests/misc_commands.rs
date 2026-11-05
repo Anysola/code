@@ -213,7 +213,7 @@ fn mcp_add_writes_the_bytes_0_5_1_wrote() {
         &home.project(),
         &["mcp", "add", "g", "--global", "--url", "http://g/x"],
     );
-    let global = home.home().join(".anysola/config.json");
+    let global = home.home().join(".anysola").join("config.json");
     assert_eq!(
         out.stdout,
         format!("MCP server \"g\" added to {}\n", global.display())

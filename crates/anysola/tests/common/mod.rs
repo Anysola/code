@@ -275,6 +275,8 @@ pub fn normalize_body(body: &Value, places: &Places, capture: bool) -> Value {
     let f = |s: &str| {
         let mut s = places.apply(s);
         if cfg!(windows) && !capture {
+            // Windows programs (PowerShell's `echo`) end lines with CRLF.
+            s = s.replace("\r\n", "\n");
             s = windows_tail
                 .replace_all(&s, |c: &regex::Captures| {
                     format!("{}{}", &c[1], c[2].replace('\\', "/"))

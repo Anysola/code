@@ -201,7 +201,7 @@ fn tool_error_replayed_with_thinking() {
     let ours = anysola_testkit::Recorded {
         body: main[1]
             .body
-            .replace("<PROJECT>", &dir.display().to_string()),
+            .replace("<PROJECT>", json_inner(&dir.display().to_string()).as_str()),
         ..main[1].clone()
     };
     assert_request("tool error", &ours, &capture, &our_places(&home, &dir));
@@ -436,4 +436,10 @@ fn instruction_update_wrapped_for_auto() {
     );
     let capture = read_json("session/requests/instruction-update-wrapped-auto.json");
     assert_request("wrapped update", &request, &capture, &places);
+}
+
+/// `text` as it appears inside a JSON string (Windows paths carry backslashes).
+fn json_inner(text: &str) -> String {
+    let quoted = serde_json::Value::from(text).to_string();
+    quoted[1..quoted.len() - 1].to_string()
 }
