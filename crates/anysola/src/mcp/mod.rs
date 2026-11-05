@@ -15,8 +15,8 @@ use anysola_core::storage::Db;
 use anysola_mcp::{Runtime, oauth};
 use serde_json::{Map, Value, json};
 
-use crate::cli::{McpAddArgs, McpCommand};
 use crate::clack;
+use crate::cli::{McpAddArgs, McpCommand};
 
 /// How long `list` waits for servers that are still connecting: the longest startup timeout.
 const STARTUP_DEFAULT: u64 = 30_000;
@@ -146,7 +146,11 @@ async fn list() -> Result<String, String> {
     if servers.is_empty() {
         return Ok("No MCP servers configured".into());
     }
-    let width = servers.iter().map(|s| s.name.chars().count()).max().unwrap_or(0);
+    let width = servers
+        .iter()
+        .map(|s| s.name.chars().count())
+        .max()
+        .unwrap_or(0);
     let lines: Vec<String> = servers
         .iter()
         .map(|server| {

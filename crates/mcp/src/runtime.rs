@@ -397,8 +397,7 @@ impl Runtime {
         let config = self
             .config(name)
             .ok_or_else(|| format!("MCP server not found: {name}"))?;
-        let mut attempt =
-            crate::oauth::authorize(self.core.db().clone(), name, &config).await?;
+        let mut attempt = crate::oauth::authorize(self.core.db().clone(), name, &config).await?;
         let (sender, done) = tokio::sync::oneshot::channel();
         let inner = std::mem::replace(&mut attempt.done, done);
         let (me, name) = (self.me.clone(), name.to_string());

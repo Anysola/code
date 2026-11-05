@@ -87,7 +87,10 @@ fn choices(heading: &str, options: &[Choice], cursor: usize) -> String {
         let (radio, label) = if index == cursor {
             (format!("{GREEN}●{RESET}"), choice.label.clone())
         } else {
-            (format!("{DIM}○{RESET}"), format!("{DIM}{}{RESET}", choice.label))
+            (
+                format!("{DIM}○{RESET}"),
+                format!("{DIM}{}{RESET}", choice.label),
+            )
         };
         let connected = if choice.connected {
             format!(" {GREEN}✓{RESET}")

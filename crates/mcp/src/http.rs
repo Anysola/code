@@ -224,6 +224,10 @@ impl Http {
                 && (status == reqwest::StatusCode::NOT_FOUND
                     || (status == reqwest::StatusCode::BAD_REQUEST
                         && body.contains("Bad Request: Server not initialized")));
+            if expired {
+                // The server forgot the session, so there is nothing to end with DELETE.
+                *self.session.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            }
             return Err(if expired {
                 Error::SessionExpired
             } else {
