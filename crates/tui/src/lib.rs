@@ -13,6 +13,7 @@ pub mod form;
 pub mod hyperlink;
 pub mod keymap;
 pub mod menus;
+pub mod paste;
 pub mod settings;
 pub mod sound;
 pub mod stash;

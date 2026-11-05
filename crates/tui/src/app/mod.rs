@@ -341,7 +341,20 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
         let tick = app.ticking();
         tokio::select! {
             Some(Ok(event)) = input.next() => {
-                app.input(event);
+                // Keys that come in one burst may be a paste typed out (see `paste`).
+                let mut burst = vec![event];
+                while matches!(burst.last(), Some(crossterm::event::Event::Key(_)))
+                    && burst.len() < 100_000
+                {
+                    let gap = Duration::from_millis(crate::paste::BURST_GAP_MS);
+                    match tokio::time::timeout(gap, input.next()).await {
+                        Ok(Some(Ok(event))) => burst.push(event),
+                        _ => break,
+                    }
+                }
+                for event in crate::paste::coalesce(burst) {
+                    app.input(event);
+                }
                 app.run_deferred(&mut terminal);
             }
             event = events.recv() => match event {
