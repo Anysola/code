@@ -676,6 +676,14 @@ impl App {
                     self.state.toast = None;
                     return self.run_command(&command, None);
                 }
+                if self.state.mcp_list.len() > 2
+                    && at.0 >= crate::view::pane_width(&self.state)
+                    && (over_text(&self.last, at, "▼ MCP") || over_text(&self.last, at, "▶ MCP"))
+                {
+                    self.selection = None;
+                    self.state.mcp_closed = !self.state.mcp_closed;
+                    return;
+                }
                 if self.toggle_group(at.1) {
                     self.selection = None;
                     return;

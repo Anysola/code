@@ -419,6 +419,10 @@ pub struct State {
     pub diff: Option<crate::diffview::Diff>,
     /// MCP servers: `(configured, connected, failed)`.
     pub mcp: (usize, usize, usize),
+    /// The sidebar's MCP rows: name, dot colour, status word.
+    pub mcp_list: Vec<(String, &'static str, &'static str)>,
+    /// The sidebar's MCP section is collapsed (only offered with more than two servers).
+    pub mcp_closed: bool,
     /// `/btw` side questions waiting for their answer.
     pub asides: usize,
     /// The footer's `↓ N subagents · N shells` item while the session family has live work.
@@ -474,6 +478,8 @@ impl State {
             pane_width: None,
             asides: 0,
             live: None,
+            mcp_list: Vec::new(),
+            mcp_closed: false,
             popup_confirm: false,
             new_worktree: None,
             worktree_progress: None,

@@ -1204,3 +1204,21 @@ fn toast_action_affordance() {
         "{row}"
     );
 }
+
+/// `feature-plugins/sidebar/mcp.tsx`: one row per server; more than two can collapse.
+#[test]
+fn sidebar_mcp_section() {
+    let mut state = session(170, 40, turn(true, true));
+    state.mcp = (3, 1, 1);
+    state.mcp_list = vec![
+        ("docs".into(), "text.feedback.success.base", "Connected"),
+        ("jira".into(), "text.feedback.error.base", "Error"),
+        ("drive".into(), "text.feedback.warning.base", "Sign in"),
+    ];
+    let screen = render(&state);
+    assert!(screen.contains("▼ MCP"));
+    let row = screen.lines().find(|l| l.contains("• jira")).unwrap();
+    assert!(row.trim_end().ends_with("Error"), "{row}");
+    state.mcp_closed = true;
+    assert!(render(&state).contains("▶ MCP (1 active, 1 error)"));
+}

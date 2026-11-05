@@ -141,6 +141,19 @@ impl App {
             count(|s| matches!(s, Status::Connected)),
             count(|s| matches!(s, Status::Failed { .. })),
         );
+        self.state.mcp_list = rows
+            .iter()
+            .map(|r| {
+                let (dot, word) = match &r.status {
+                    Status::Connected => ("text.feedback.success.base", "Connected"),
+                    Status::Pending => ("text.muted", "Connecting"),
+                    Status::Failed { .. } => ("text.feedback.error.base", "Error"),
+                    Status::NeedsAuth { .. } => ("text.feedback.warning.base", "Sign in"),
+                    _ => ("text.muted", "Disabled"),
+                };
+                (r.name.clone(), dot, word)
+            })
+            .collect();
     }
 
     pub(super) fn event(&mut self, event: Event) {

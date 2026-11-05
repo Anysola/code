@@ -299,6 +299,38 @@ fn sidebar(c: &mut Canvas, state: &State, session: &Session, x: u16, top: u16) {
             y += 1;
         }
     }
+    if !state.mcp_list.is_empty() {
+        y += 1;
+        let (on, bad) = (state.mcp.1, state.mcp.2);
+        let many = state.mcp_list.len() > 2;
+        let mut x = tx;
+        if many {
+            x = c.put(tx, y, if state.mcp_closed { "▶" } else { "▼" }, base, 1) + 1;
+        }
+        let end = c.put(x, y, "MCP", bold, room);
+        if many && state.mcp_closed {
+            let errors = match bad {
+                0 => String::new(),
+                1 => ", 1 error".into(),
+                n => format!(", {n} errors"),
+            };
+            c.put(end + 1, y, &format!("({on} active{errors})"), muted, room);
+        } else {
+            for (name, dot, word) in &state.mcp_list {
+                y += 1;
+                c.put(tx, y, "•", c.style(dot).bg(bg), 1);
+                let word_style = if *word == "Error" {
+                    c.style("text.feedback.error.base").bg(bg)
+                } else {
+                    muted
+                };
+                let word_x = tx + room as u16 - width(word) as u16;
+                c.put(tx + 2, y, name, bold, room.saturating_sub(width(word) + 3));
+                c.put(word_x, y, word, word_style, width(word));
+            }
+        }
+        y += 1;
+    }
     let todos = latest_todos(session);
     if !todos.is_empty() {
         y += 1;
