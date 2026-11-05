@@ -77,6 +77,11 @@ impl Paths {
     }
 
     /// Plan files stay where 0.5.1 named them in the plan-mode prompt.
+    /// Checkouts of git `references`.
+    pub fn repos_dir(&self) -> PathBuf {
+        self.data.join("repos")
+    }
+
     pub fn plan_dir(&self) -> PathBuf {
         self.home.join(".opencode").join("plan")
     }

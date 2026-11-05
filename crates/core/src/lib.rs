@@ -20,6 +20,7 @@ pub mod model;
 pub mod paths;
 pub mod permission;
 pub mod project;
+pub mod reference;
 pub mod search;
 pub mod session;
 pub mod skill;

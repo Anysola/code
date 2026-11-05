@@ -91,6 +91,7 @@ fn instructions(
         .map(|inventory| inventory.summary());
     let sources = instructions::sources(
         catalog.as_ref(),
+        crate::reference::guidance(&sources.references),
         crate::skill::guidance(&sources.skills, rules),
         files,
         &crate::time::date_string(),

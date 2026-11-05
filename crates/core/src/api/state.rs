@@ -24,6 +24,7 @@ pub struct Loaded {
     pub commands: Commands,
     pub models: Arc<[Model]>,
     pub skills: Vec<Skill>,
+    pub references: Vec<crate::reference::Reference>,
     /// The configured `instructions` URLs, fetched when the config loaded.
     pub remote_instructions: Vec<InstructionFile>,
     /// The formatters edits and writes run, when config `formatter` enables them.
@@ -65,6 +66,8 @@ impl Loaded {
         } else {
             Arc::from([])
         };
+        let references =
+            crate::reference::list(&config, &paths.home, directory, &paths.repos_dir());
         let formatters = crate::formatter::Formatters::from_config(&config, paths.data.join("bin"))
             .map(Arc::new);
         Loaded {
@@ -74,6 +77,7 @@ impl Loaded {
             commands,
             models,
             skills,
+            references,
             remote_instructions,
         }
     }
@@ -117,6 +121,13 @@ impl Shared {
         )
         .await;
         self.arm_watch(&next);
+        if next.references != previous.references {
+            tokio::spawn(crate::reference::materialize(
+                self.db.clone(),
+                self.paths.repos_dir(),
+                next.references.clone(),
+            ));
+        }
         *self.loaded.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(next);
         self.applied.store(generation, Ordering::SeqCst);
     }

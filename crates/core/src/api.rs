@@ -252,11 +252,22 @@ impl Core {
         if shared.gateway.token().is_some() {
             tokio::spawn(state::poll_remote(Arc::downgrade(&shared)));
         }
+        tokio::spawn(crate::reference::keep_fresh(Arc::downgrade(&shared)));
         Ok(Core { shared })
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.shared.events.subscribe()
+    }
+
+    /// The configured references (the composer's `@alias` list leaves out hidden ones).
+    pub fn references(&self) -> Vec<crate::reference::Reference> {
+        self.loaded().references.clone()
+    }
+
+    /// `@alias[/path]` (without the `@`) as the path it names.
+    pub fn resolve_reference(&self, mention: &str) -> Option<PathBuf> {
+        crate::reference::resolve(&self.loaded().references, mention)
     }
 
     /// The current config and what was built from it.

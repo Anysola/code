@@ -286,7 +286,11 @@ pub fn normalize(input: Map<String, Value>) -> Map<String, Value> {
         out.insert("permissions".into(), Value::Array(permissions));
     }
 
-    for (legacy, native) in [("provider", "providers"), ("command", "commands")] {
+    for (legacy, native) in [
+        ("provider", "providers"),
+        ("command", "commands"),
+        ("reference", "references"),
+    ] {
         let mut merged = input
             .get(legacy)
             .and_then(Value::as_object)
@@ -326,6 +330,8 @@ pub fn normalize(input: Map<String, Value>) -> Map<String, Value> {
         "providers",
         "command",
         "commands",
+        "reference",
+        "references",
         "model",
         "snapshot",
         "plugin",
