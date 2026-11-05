@@ -6,6 +6,7 @@ pub mod complete;
 pub mod composer;
 pub mod dialog;
 pub mod editor;
+pub mod form;
 pub mod keymap;
 pub mod menus;
 pub mod settings;

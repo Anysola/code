@@ -46,6 +46,72 @@ impl App {
         crate::attention::notify(title, message);
     }
 
+    /// An MCP server's form, asked as questions in the open session.
+    fn form(&mut self, form: &anysola_core::mcp::Form) {
+        let Some(session) = self.state.session_mut() else {
+            self.core
+                .reply_form(&form.id, anysola_core::mcp::FormReply::Cancelled);
+            return;
+        };
+        let (questions, fields) = crate::form::questions(form);
+        session.question = Some(Question {
+            request_id: form.id.clone(),
+            answers: vec![Vec::new(); questions.len()],
+            questions,
+            tab: 0,
+            selected: 0,
+            custom: None,
+            form: Some(fields),
+        });
+        let id = session.id.clone();
+        self.attention(&id, true);
+        self.alert(&id, "Input needs response");
+    }
+
+    /// Toasts when a server starts needing sign-in or fails (once per change).
+    fn mcp_status(&mut self, server: &anysola_core::mcp::Server) {
+        use anysola_core::mcp::Status;
+        let previous = self
+            .mcp_seen
+            .insert(server.name.clone(), server.status.clone());
+        if previous.as_ref() == Some(&server.status) {
+            return;
+        }
+        match &server.status {
+            Status::NeedsAuth { .. } => self.toast(
+                Some("MCP server needs authentication".into()),
+                format!("Connect \"{}\" to use its tools.", server.name),
+                Variant::Warning,
+            ),
+            Status::Failed { .. } => self.toast(
+                Some(format!("MCP server failed: {}", server.name)),
+                "Run /mcps to view details.".into(),
+                Variant::Error,
+            ),
+            _ => {}
+        }
+        let rows = self.mcp_rows();
+        self.count_mcp(&rows);
+        if let Some(crate::dialog::Dialog::Select(s)) = self.state.dialogs.last_mut()
+            && s.kind == crate::dialog::Kind::Mcps
+        {
+            let query = s.query.clone();
+            let mut fresh = crate::menus::lists::mcps(&rows);
+            fresh.query = query;
+            *s = fresh;
+        }
+    }
+
+    pub(super) fn count_mcp(&mut self, rows: &[crate::menus::lists::McpRow]) {
+        use anysola_core::mcp::Status;
+        let count = |f: fn(&Status) -> bool| rows.iter().filter(|r| f(&r.status)).count();
+        self.state.mcp = (
+            rows.len(),
+            count(|s| matches!(s, Status::Connected)),
+            count(|s| matches!(s, Status::Failed { .. })),
+        );
+    }
+
     pub(super) fn event(&mut self, event: Event) {
         let id = event.session_id().to_string();
         match &event {
@@ -126,6 +192,7 @@ impl App {
                     tab: 0,
                     selected: 0,
                     custom: None,
+                    form: None,
                 });
                 self.attention(&target, true);
                 self.alert(&target, "Input needs response");
@@ -144,6 +211,8 @@ impl App {
                     tab.title = title.clone();
                 }
             }
+            Event::FormAsked { form } => self.form(form),
+            Event::McpStatusChanged { server } => self.mcp_status(server),
             Event::Succeeded { .. } | Event::Failed { .. } | Event::Interrupted { .. } => {
                 if let Some(session) = self.state.sessions.get_mut(&id) {
                     session.busy = false;

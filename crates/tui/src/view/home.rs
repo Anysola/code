@@ -111,6 +111,22 @@ fn home_footer(c: &mut Canvas, state: &State, y: u16) {
     let muted: Style = c.style("text.muted");
     let max = state.width as usize - 4;
     let mut x = 2;
+    let (configured, connected, failed) = state.mcp;
+    if configured > 0 {
+        let (dot, label) = if failed > 0 {
+            ("text.feedback.error.base", format!("{failed} MCP failed"))
+        } else if connected > 0 {
+            ("text.feedback.success.base", format!("{connected} MCP"))
+        } else {
+            ("text.muted", format!("{connected} MCP"))
+        };
+        x = c.put(x, y, "⊙ ", c.style(dot), max);
+        x = c.put(x, y, &label, c.style("text.base"), max);
+        if state.width >= 64 {
+            x = c.put(x + 1, y, "/mcps", muted, max);
+        }
+        x += 2;
+    }
     if let Some(plan) = &state.account.plan {
         let mut line = text::title_case(plan);
         if let Some(renews) = state.account.renews {

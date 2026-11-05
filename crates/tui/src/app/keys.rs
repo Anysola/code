@@ -321,15 +321,23 @@ impl App {
                 "return" => {
                     let id = q.request_id.clone();
                     let answers = q.answers.clone();
-                    self.core
-                        .reply_question(&id, QuestionReply::Answered(answers));
+                    answer(
+                        &self.core,
+                        q.form.as_deref(),
+                        &id,
+                        QuestionReply::Answered(answers),
+                    );
                     session.question = None;
                 }
                 "left" | "h" => q.tab = total.saturating_sub(1),
                 "escape" => {
                     let id = q.request_id.clone();
-                    self.core
-                        .reply_question(&id, QuestionReply::Dismissed(None));
+                    answer(
+                        &self.core,
+                        q.form.as_deref(),
+                        &id,
+                        QuestionReply::Dismissed(None),
+                    );
                     session.question = None;
                 }
                 _ => {}
@@ -392,8 +400,12 @@ impl App {
                 "left" | "h" => q.tab = q.tab.saturating_sub(1),
                 "escape" => {
                     let id = q.request_id.clone();
-                    self.core
-                        .reply_question(&id, QuestionReply::Dismissed(None));
+                    answer(
+                        &self.core,
+                        q.form.as_deref(),
+                        &id,
+                        QuestionReply::Dismissed(None),
+                    );
                     session.question = None;
                     return;
                 }
@@ -414,8 +426,12 @@ impl App {
         if total == 1 && q.tab >= 1 {
             let id = q.request_id.clone();
             let answers = q.answers.clone();
-            self.core
-                .reply_question(&id, QuestionReply::Answered(answers));
+            answer(
+                &self.core,
+                q.form.as_deref(),
+                &id,
+                QuestionReply::Answered(answers),
+            );
             session.question = None;
         }
     }
@@ -722,5 +738,28 @@ impl App {
             offset: 0,
             pad,
         });
+    }
+}
+
+/// Replies to a question, or to the MCP form it stands for.
+fn answer(
+    core: &anysola_core::api::Core,
+    form: Option<&[(String, String)]>,
+    id: &str,
+    reply: QuestionReply,
+) {
+    match form {
+        Some(fields) => {
+            let reply = match reply {
+                QuestionReply::Answered(answers) => {
+                    anysola_core::mcp::FormReply::Answered(crate::form::values(fields, &answers))
+                }
+                QuestionReply::Dismissed(_) => anysola_core::mcp::FormReply::Cancelled,
+            };
+            core.reply_form(id, reply);
+        }
+        None => {
+            core.reply_question(id, reply);
+        }
     }
 }

@@ -99,6 +99,8 @@ pub struct App {
     /// The editor's file and selection, and whether it went out with a prompt already.
     editor: Option<crate::editor::Selection>,
     editor_sent: bool,
+    /// The last status seen of each MCP server.
+    mcp_seen: std::collections::HashMap<String, anysola_core::mcp::Status>,
 }
 
 fn now() -> u64 {
@@ -211,6 +213,7 @@ pub async fn run(core: Core, options: Options) -> Result<(), String> {
         focused: None,
         editor: None,
         editor_sent: false,
+        mcp_seen: std::collections::HashMap::new(),
     };
     app.init(&paths, &options);
     if let Some((title, message)) = failure {
@@ -287,6 +290,8 @@ impl App {
         self.fetch_account();
         self.check_update(false);
         self.watch_editor(&paths.home);
+        let rows = self.mcp_rows();
+        self.count_mcp(&rows);
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let mut ticks = 0u64;

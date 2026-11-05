@@ -116,6 +116,8 @@ pub struct Question {
     pub answers: Vec<Vec<String>>,
     /// Text typed into the "Type your own answer" row, while editing it.
     pub custom: Option<String>,
+    /// An MCP server's form: the `(key, type)` of each field, in question order.
+    pub form: Option<Vec<(String, String)>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -307,6 +309,8 @@ pub struct State {
     pub hints: Hints,
     /// `/update to install v<version>` on the home screen.
     pub update: Option<String>,
+    /// MCP servers: `(configured, connected, failed)`.
+    pub mcp: (usize, usize, usize),
     /// `/btw` side questions waiting for their answer.
     pub asides: usize,
     /// The terminal pane beside the session, while shown.
@@ -347,6 +351,7 @@ impl State {
             update: None,
             pane: None,
             asides: 0,
+            mcp: (0, 0, 0),
             zone: *chrono::Local::now().offset(),
         }
     }
