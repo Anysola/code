@@ -547,6 +547,7 @@ impl App {
         self.sync_pane();
         self.poll_shell_output();
         self.poll_shells();
+        self.reveal_history();
         let docked = crate::view::diff_docked(&self.state);
         if let Some(view) = self.state.diff.as_mut() {
             view.docked = docked;
@@ -863,6 +864,15 @@ impl App {
         let title = self.core.session(id).ok().flatten().map(|r| r.title);
         if let Some(session) = self.state.sessions.get_mut(id) {
             let awaiting = session.permission.is_some();
+            session.floor = if session.items.is_empty() {
+                crate::transcript::rows::floor_before(
+                    &items,
+                    items.len(),
+                    crate::transcript::rows::TAIL_ROWS,
+                )
+            } else {
+                session.floor.min(items.len())
+            };
             session.items = items;
             session.reverted = reverted;
             session.revert = revert;

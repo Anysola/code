@@ -1601,3 +1601,40 @@ fn background_shell_row() {
         "{screen}"
     );
 }
+
+/// `routes/session/index.tsx:147-148`, `:1560-1563`: only the newest entries are laid out; the
+/// status row says `Loading session history…` while `session.first` lays out the rest.
+#[test]
+fn tail_first_transcript() {
+    let items: Vec<Item> = (0..100)
+        .map(|n| Item::User {
+            id: format!("m{n}"),
+            text: format!("message {n}"),
+            agent: "build".into(),
+            files: Vec::new(),
+            created: now(),
+        })
+        .collect();
+    let floor = anysola_tui::transcript::rows::floor_before(&items, items.len(), 40);
+    assert_eq!(floor, 60);
+    assert_eq!(
+        anysola_tui::transcript::rows::floor_before(&items, floor, 60),
+        0
+    );
+    let mut state = session(100, 30, items);
+    let s = state.sessions.get_mut("ses_b").unwrap();
+    s.floor = floor;
+    let full = {
+        let s = state.sessions.get("ses_b").unwrap().clone();
+        let mut whole = s.clone();
+        whole.floor = 0;
+        let theme = Catalog::bundled().load("anysola", ThemeMode::Dark).unwrap();
+        (
+            anysola_tui::view::transcript_rows(&state, &s, &theme, 96),
+            anysola_tui::view::transcript_rows(&state, &whole, &theme, 96),
+        )
+    };
+    assert!(full.0 * 2 < full.1, "{full:?}");
+    state.sessions.get_mut("ses_b").unwrap().history_loading = true;
+    assert!(render(&state).contains("Loading session history…"));
+}

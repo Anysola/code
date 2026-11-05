@@ -152,6 +152,10 @@ pub struct Revert {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Session {
     pub id: String,
+    /// The first item laid out; older ones mount as the reader scrolls near them.
+    pub floor: usize,
+    /// `session.first` waits a frame to lay out the whole history.
+    pub history_loading: bool,
     /// Background shells of this session's transcript, by shell ID.
     pub shells: HashMap<String, crate::transcript::rows::BackgroundView>,
     pub title: String,

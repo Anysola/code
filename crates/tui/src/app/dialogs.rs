@@ -902,6 +902,9 @@ impl App {
 
     /// Scrolls the transcript so the user message is in view.
     fn jump_to(&mut self, message: &str) {
+        if let Some(s) = self.state.session_mut() {
+            s.floor = 0;
+        }
         let width = crate::view::session_content_width(&self.state);
         let Some(session) = self.state.session() else {
             return;

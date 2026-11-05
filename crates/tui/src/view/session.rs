@@ -82,6 +82,7 @@ pub fn transcript(
         verbosity: state.settings.verbosity,
         toggled: &session.toggled,
         shells: &session.shells,
+        floor: session.floor,
     };
     let mut rows = rows::layout(&session.items, &ctx, Some(&session.layout.0));
     rows.extend(rows::tail(
@@ -144,7 +145,17 @@ pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u1
     cache.hits = hits;
     cache.viewport = (rows.len(), height);
     drop(cache);
-    if session.scroll > 0 {
+    if session.history_loading {
+        let label = "Loading session history…";
+        let lx = x + w - width(label) as u16;
+        c.put(
+            lx,
+            status_y,
+            label,
+            c.style("text.feedback.info.base"),
+            label.len(),
+        );
+    } else if session.scroll > 0 {
         let label = "Jump to latest ↓";
         let lx = x + w - width(label) as u16;
         c.put(

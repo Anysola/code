@@ -187,7 +187,13 @@ impl App {
                     "session.half.page.down" => -view / 2,
                     "session.line.up" => 1,
                     "session.line.down" => -1,
-                    "session.first" => isize::MAX / 4,
+                    "session.first" => {
+                        if let Some(s) = self.state.session_mut().filter(|s| s.floor > 0) {
+                            s.history_loading = true;
+                            return;
+                        }
+                        isize::MAX / 4
+                    }
                     _ => isize::MIN / 4,
                 };
                 self.scroll(rows);

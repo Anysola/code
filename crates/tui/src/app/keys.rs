@@ -970,6 +970,37 @@ impl App {
         }
     }
 
+    /// Mounts older items once the reader is within a screen of the top, and finishes a pending
+    /// `session.first` (the history is laid out the frame after `Loading session history…`).
+    pub(super) fn reveal_history(&mut self) {
+        let width = crate::view::session_content_width(&self.state);
+        let height = self.state.height as usize;
+        let Some(session) = self.state.session() else {
+            return;
+        };
+        if session.floor == 0 {
+            return;
+        }
+        if session.history_loading {
+            if let Some(session) = self.state.session_mut() {
+                session.floor = 0;
+                session.history_loading = false;
+            }
+            return self.scroll(isize::MAX / 4);
+        }
+        let total = crate::view::transcript_rows(&self.state, session, &self.theme, width);
+        if total.saturating_sub(session.scroll) > 2 * height {
+            return;
+        }
+        if let Some(session) = self.state.session_mut() {
+            session.floor = crate::transcript::rows::floor_before(
+                &session.items,
+                session.floor,
+                crate::transcript::rows::BACKFILL_CHUNK,
+            );
+        }
+    }
+
     pub(super) fn scroll(&mut self, rows: isize) {
         let Some(session) = self.state.session() else {
             return;

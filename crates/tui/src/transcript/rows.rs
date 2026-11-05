@@ -62,6 +62,8 @@ pub struct Ctx<'a> {
     pub verbosity: Verbosity,
     /// Groups the user opened (or closed, when they start open).
     pub toggled: &'a std::collections::HashSet<String>,
+    /// Items before this one are not laid out yet (tail-first mounting).
+    pub floor: usize,
     /// Background shells by shell ID, as last polled.
     pub shells: &'a std::collections::HashMap<String, BackgroundView>,
 }
@@ -179,6 +181,26 @@ fn tool_toggles(item: &Item, toggled: &std::collections::HashSet<String>) -> Str
     keys.join(",")
 }
 
+/// Rendered entries newest first mount on open (`routes/session/index.tsx:147-148`).
+pub const TAIL_ROWS: usize = 40;
+/// Older entries mount in chunks this big as the reader nears the top.
+pub const BACKFILL_CHUNK: usize = 60;
+
+/// The first item to lay out so that `budget` entries from `end` back are shown; an assistant
+/// message counts one entry per part.
+pub fn floor_before(items: &[Item], end: usize, budget: usize) -> usize {
+    let mut used = 0;
+    let mut at = end.min(items.len());
+    while at > 0 && used < budget {
+        at -= 1;
+        used += match &items[at] {
+            Item::Assistant(a) => a.parts.len().max(1),
+            _ => 1,
+        };
+    }
+    at
+}
+
 /// An item that no longer changes with time (no spinner, no running duration).
 fn settled(item: &Item) -> bool {
     match item {
@@ -229,7 +251,7 @@ pub fn layout(items: &[Item], ctx: &Ctx, cache: Option<&std::sync::Mutex<Cache>>
     );
     let mut groups: Vec<Vec<Row>> = Vec::new();
     let mut firsts: Vec<(usize, bool)> = Vec::new();
-    for (index, item) in items.iter().enumerate() {
+    for (index, item) in items.iter().enumerate().skip(ctx.floor) {
         if matches!(item, Item::User { .. } | Item::Assistant(_)) {
             firsts.push((groups.len(), matches!(item, Item::User { .. })));
         }
@@ -765,6 +787,7 @@ mod tests {
             verbosity: Verbosity::Medium,
             toggled: &toggled,
             shells: &shells,
+            floor: 0,
         };
         let items = vec![
             Item::User {
