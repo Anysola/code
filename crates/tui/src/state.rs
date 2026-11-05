@@ -433,6 +433,8 @@ pub struct State {
     pub popup_confirm: bool,
     /// A worktree chosen on home, created on the first submit (`(new worktree)` in the footer).
     pub new_worktree: Option<String>,
+    /// The IDE selection's file label and whether it still waits to be sent (accent colour).
+    pub editor_label: Option<(String, bool)>,
     /// `Creating worktree` while that happens.
     pub worktree_progress: Option<String>,
     /// The terminal pane beside the session, while shown.
@@ -484,6 +486,7 @@ impl State {
             mcp_closed: false,
             popup_confirm: false,
             new_worktree: None,
+            editor_label: None,
             worktree_progress: None,
             mcp: (0, 0, 0),
             diff: None,

@@ -429,6 +429,11 @@ impl App {
             view.docked = docked;
         }
         self.state.live = self.live();
+        self.state.editor_label = self
+            .editor
+            .as_ref()
+            .filter(|_| self.tui.editor_context())
+            .map(|s| (crate::editor::file_label(s), !self.editor_sent));
         if let Some(session) = self.state.session_mut() {
             session.missing =
                 !session.directory.is_empty() && !std::path::Path::new(&session.directory).is_dir();

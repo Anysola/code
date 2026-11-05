@@ -138,6 +138,7 @@ pub enum Kind {
     Queue { session: String },
     DiffSource,
     DiffBase,
+    WorkingDirectory,
 }
 
 /// One drawn row of a list dialog.

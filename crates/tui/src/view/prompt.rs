@@ -339,7 +339,22 @@ pub fn footer(c: &mut Canvas, state: &State, x: u16, y: u16, w: u16) {
     for item in &right {
         at = c.spans(at, y, item, (x + w).saturating_sub(at) as usize) + 2;
     }
-    let left_room = (w as usize).saturating_sub(right_width);
+    let mut left_room = (w as usize).saturating_sub(right_width);
+    if let Some((label, pending)) = &state.editor_label {
+        let most = 12.max(48.min(state.width as usize / 3));
+        let label = text::truncate_middle(label, most);
+        let lw = width(&label);
+        if lw + 4 < left_room {
+            let style = if *pending {
+                Style::new().fg(c.theme.term(c.theme.hue("accent", 500)))
+            } else {
+                muted
+            };
+            let lx = x + (left_room - lw - 2) as u16;
+            c.put(lx, y, &label, style, lw);
+            left_room -= lw + 2;
+        }
+    }
     if left_room == 0 {
         return;
     }

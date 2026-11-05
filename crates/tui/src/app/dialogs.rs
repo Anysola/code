@@ -206,6 +206,21 @@ impl App {
         true
     }
 
+    /// A click on the footer's directory label: `Working directory` actions.
+    pub(super) fn working_directory_menu(&mut self) {
+        let options = vec![
+            crate::dialog::Opt::new("Copy path", "location.copy")
+                .description(self.state.directory.clone()),
+            crate::dialog::Opt::new("Open folder", "location.open")
+                .description("in system file manager"),
+            crate::dialog::Opt::new("Workspaces", "session.move")
+                .description("to another working directory"),
+        ];
+        let select =
+            crate::dialog::Select::new(Kind::WorkingDirectory, "Working directory", options);
+        self.push(Dialog::Select(select));
+    }
+
     pub(super) fn palette_context(&self) -> palette::Context {
         let session = self.state.session();
         palette::Context {
@@ -760,6 +775,20 @@ impl App {
                 self.state.dialogs.clear();
                 let before = (!value.is_empty()).then_some(value.as_str());
                 self.fork(before);
+            }
+            Kind::WorkingDirectory => {
+                self.state.dialogs.pop();
+                let directory = self.state.directory.clone();
+                match value.as_str() {
+                    "location.copy" => {
+                        term::copy(&directory);
+                        self.toast(None, "Path copied to clipboard".into(), Variant::Info);
+                    }
+                    "location.open" => {
+                        term::open_url(&directory);
+                    }
+                    _ => self.run_command("session.move", None),
+                }
             }
             Kind::DiffSource => self.diff_source_chosen(&value),
             Kind::DiffBase => self.diff_base_chosen(value),

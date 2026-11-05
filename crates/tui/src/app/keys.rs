@@ -662,6 +662,15 @@ impl App {
                     self.selection = None;
                     return self.run_command("anysola.credits", None);
                 }
+                let busy = self.state.session().is_some_and(|s| s.busy);
+                if !busy
+                    && self.state.new_worktree.is_none()
+                    && at.1 + 3 >= self.state.height
+                    && over_text(&self.last, at, &self.state.location)
+                {
+                    self.selection = None;
+                    return self.working_directory_menu();
+                }
                 if let Some(goal) = self.state.session().and_then(|s| s.goal.as_ref())
                     && over_text(&self.last, at, super::goal_status(goal).0)
                 {

@@ -373,9 +373,60 @@ pub fn zed_selection(db: &Path, cwd: &Path) -> Option<Selection> {
     })
 }
 
+/// The footer's file label: `name.rs#12-20 +1` (`index.*` keeps its directory).
+pub fn file_label(selection: &Selection) -> String {
+    let path = std::path::Path::new(&selection.path);
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let indexed = name.starts_with("index.") && name.matches('.').count() == 1;
+    let file = match path.parent().and_then(|p| p.file_name()) {
+        Some(parent) if indexed => format!("{}/{name}", parent.to_string_lossy()),
+        _ => name,
+    };
+    let first = selection
+        .ranges
+        .iter()
+        .find(|r| r.start != r.end)
+        .or(selection.ranges.first());
+    let mut out = file;
+    if let Some(range) = first.and_then(label) {
+        out.push_str(&range);
+    }
+    if selection.ranges.len() > 1 {
+        out.push_str(&format!(" +{}", selection.ranges.len() - 1));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn footer_labels() {
+        let range = |a: u64, b: u64| Range {
+            text: String::new(),
+            start: (a, 1),
+            end: (b, 4),
+        };
+        let selection = |path: &str, ranges: Vec<Range>| Selection {
+            path: path.into(),
+            ranges,
+        };
+        assert_eq!(
+            file_label(&selection("/w/src/main.rs", vec![range(3, 9)])),
+            "main.rs#3-9"
+        );
+        assert_eq!(
+            file_label(&selection(
+                "/w/app/index.ts",
+                vec![range(4, 4), range(7, 8)]
+            )),
+            "app/index.ts#4 +1"
+        );
+    }
 
     #[test]
     fn reminders() {
