@@ -3,7 +3,7 @@
 //! QuickJS runtime that runs the programs.
 //!
 //! The inventory is a list of namespaces. Built-in tools form the `opencode` namespace; MCP
-//! servers each add one when they connect (M5), and the session then announces the catalog change
+//! servers each add one when they connect, and the session then announces the catalog change
 //! with [`catalog::update`].
 
 pub mod catalog;
@@ -85,6 +85,10 @@ pub trait Host: Send + Sync {
     fn formatters(&self) -> Option<std::sync::Arc<crate::formatter::Formatters>> {
         None
     }
+
+    fn mcp(&self) -> Option<std::sync::Arc<dyn crate::mcp::Mcp>> {
+        None
+    }
 }
 
 pub trait NamespaceTool: Send + Sync {
@@ -119,6 +123,9 @@ pub trait NamespaceTool: Send + Sync {
 pub struct Namespace {
     pub name: String,
     pub description: Option<String>,
+    /// The tools are direct tools `<namespace>_<tool>` rather than Code Mode tools (an MCP
+    /// server with `codemode: false`).
+    pub direct: bool,
     /// In registration order, which is the order `Object.keys(tools.<namespace>)` shows.
     pub tools: Vec<Arc<dyn NamespaceTool>>,
 }
@@ -173,6 +180,7 @@ impl Inventory {
                 Arc::new(Namespace {
                     name: namespace.name.clone(),
                     description: namespace.description.clone(),
+                    direct: namespace.direct,
                     tools,
                 })
             })

@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use super::{Called, Namespace, NamespaceTool};
 use crate::permission::PermissionRequest;
-use crate::tool::{ToolContext, ToolError, access};
+use crate::tool::{ToolContent, ToolContext, ToolError, access};
 
 pub const NAME: &str = "opencode";
 const DESCRIPTION: &str = "Tools for managing OpenCode itself, such as working with sessions and worktrees, searching the available models, and reading MCP resources.";
@@ -75,6 +75,7 @@ pub fn namespace() -> Arc<Namespace> {
     Arc::new(Namespace {
         name: NAME.into(),
         description: Some(DESCRIPTION.into()),
+        direct: false,
         tools,
     })
 }
@@ -330,15 +331,17 @@ fn models(input: Value, ctx: &ToolContext) -> Called {
     Called::output(json!({"providers": providers, "total": matching.len(), "next": next}))
 }
 
-// M5: MCP servers; until then there are none, so every server name is unknown.
-fn servers() -> Vec<String> {
-    Vec::new()
-}
-
 async fn list_mcp_resources(input: Value, ctx: &ToolContext) -> Result<Called, ToolError> {
-    let servers = match text(&input, "server") {
+    let mcp = ctx.host.mcp();
+    let server = text(&input, "server");
+    // Listing every server checks each server name so per-server rules still apply.
+    let servers = match server {
         Some(server) => vec![server.to_string()],
-        None => servers(),
+        None => mcp
+            .iter()
+            .flat_map(|m| m.servers())
+            .map(|s| s.name)
+            .collect(),
     };
     ctx.ask(PermissionRequest {
         action: "opencode_list_mcp_resources".into(),
@@ -347,12 +350,18 @@ async fn list_mcp_resources(input: Value, ctx: &ToolContext) -> Result<Called, T
         metadata: json!({}),
     })
     .await?;
-    if let Some(server) = text(&input, "server") {
-        return Err(ToolError::execution(format!(
-            "MCP server not found: {server}"
-        )));
-    }
-    Ok(Called::output(json!({"resources": [], "templates": []})))
+    let Some(mcp) = mcp else {
+        return match server {
+            Some(server) => Err(ToolError::execution(format!(
+                "MCP server not found: {server}"
+            ))),
+            None => Ok(Called::output(json!({"resources": [], "templates": []}))),
+        };
+    };
+    mcp.list_resources(server)
+        .await
+        .map(Called::output)
+        .map_err(ToolError::execution)
 }
 
 async fn read_mcp_resource(input: Value, ctx: &ToolContext) -> Result<Called, ToolError> {
@@ -365,7 +374,38 @@ async fn read_mcp_resource(input: Value, ctx: &ToolContext) -> Result<Called, To
         metadata: json!({"server": server, "uri": uri}),
     })
     .await?;
-    Err(ToolError::execution(format!(
-        "MCP server not found: {server}"
-    )))
+    let Some(mcp) = ctx.host.mcp() else {
+        return Err(ToolError::execution(format!(
+            "MCP server not found: {server}"
+        )));
+    };
+    let resource = mcp
+        .read_resource(server, uri)
+        .await
+        .map_err(ToolError::execution)?
+        .ok_or_else(|| {
+            ToolError::execution(format!(
+                "MCP server \"{server}\" is not connected or does not expose resources"
+            ))
+        })?;
+    let content = resource["contents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|part| {
+            let mime = part["mimeType"].as_str()?;
+            let blob = part["blob"].as_str()?;
+            (part["type"] == "blob" && crate::media::READABLE.contains(&mime)).then(|| {
+                ToolContent::File {
+                    uri: format!("data:{mime};base64,{blob}"),
+                    mime: mime.to_string(),
+                    name: None,
+                }
+            })
+        })
+        .collect();
+    Ok(Called {
+        output: Some(resource),
+        content,
+    })
 }

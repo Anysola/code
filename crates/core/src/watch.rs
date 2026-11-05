@@ -34,12 +34,19 @@ const DEFINITIONS: [&str; 8] = [
 pub struct Changes {
     generation: AtomicU64,
     last: Mutex<Option<Instant>>,
+    marked: tokio::sync::Notify,
 }
 
 impl Changes {
     pub fn mark(&self) {
         *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
         self.generation.fetch_add(1, Ordering::SeqCst);
+        self.marked.notify_one();
+    }
+
+    /// Waits for the next change (one that came before the wait counts).
+    pub async fn marked(&self) {
+        self.marked.notified().await
     }
 
     pub fn generation(&self) -> u64 {

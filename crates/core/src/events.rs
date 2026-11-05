@@ -153,6 +153,15 @@ pub enum Event {
         session_id: String,
         reason: InterruptReason,
     },
+    /// An MCP server asks for input; answered with [`crate::api::Core::reply_form`]. Session
+    /// [`crate::mcp::GLOBAL`].
+    FormAsked {
+        form: crate::mcp::Form,
+    },
+    /// An MCP server's status changed. Session [`crate::mcp::GLOBAL`].
+    McpStatusChanged {
+        server: crate::mcp::Server,
+    },
     /// The session's `/goal` was set, changed or cleared (`None`).
     GoalChanged {
         session_id: String,
@@ -184,6 +193,7 @@ impl Event {
             | Event::Interrupted { session_id, .. }
             | Event::GoalChanged { session_id, .. } => session_id,
             Event::Credits(snapshot) => &snapshot.session_id,
+            Event::FormAsked { .. } | Event::McpStatusChanged { .. } => crate::mcp::GLOBAL,
         }
     }
 }

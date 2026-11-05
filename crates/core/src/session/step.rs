@@ -89,8 +89,13 @@ fn instructions(
         .registry
         .code_mode(rules)
         .map(|inventory| inventory.summary());
+    let mcp = shared
+        .mcp
+        .get()
+        .and_then(|mcp| crate::mcp::visible_instructions(&mcp.instructions(), rules));
     let sources = instructions::sources(
         catalog.as_ref(),
+        mcp,
         crate::reference::guidance(&sources.references),
         crate::skill::guidance(&sources.skills, rules),
         files,

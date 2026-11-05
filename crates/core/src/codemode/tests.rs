@@ -219,6 +219,7 @@ fn testsrv() -> Arc<Namespace> {
     Arc::new(Namespace {
         name: "testsrv".into(),
         description: None,
+        direct: false,
         tools: vec![
             Arc::new(Echo {
                 name: "echo",

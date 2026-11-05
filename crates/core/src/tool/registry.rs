@@ -82,17 +82,26 @@ impl Registry {
         namespaces.push(namespace);
     }
 
-    /// The Code Mode tools an agent with these rules can reach; `None` when `execute` is denied.
-    pub fn code_mode(&self, rules: &[Rule]) -> Option<Inventory> {
-        (!wholly_disabled("execute", rules)).then(|| self.inventory().visible(rules))
+    pub fn remove_namespace(&self, name: &str) {
+        let mut namespaces = self.namespaces.write().unwrap_or_else(|e| e.into_inner());
+        namespaces.retain(|n| n.name != name);
     }
 
-    fn inventory(&self) -> Inventory {
+    /// The Code Mode tools an agent with these rules can reach; `None` when `execute` is denied.
+    pub fn code_mode(&self, rules: &[Rule]) -> Option<Inventory> {
+        (!wholly_disabled("execute", rules)).then(|| self.inventory(false).visible(rules))
+    }
+
+    /// The Code Mode namespaces (`direct: false`) or the direct ones.
+    fn inventory(&self, direct: bool) -> Inventory {
         Inventory::new(
             self.namespaces
                 .read()
                 .unwrap_or_else(|e| e.into_inner())
-                .clone(),
+                .iter()
+                .filter(|n| n.direct == direct)
+                .cloned()
+                .collect(),
         )
     }
 
@@ -105,13 +114,14 @@ impl Registry {
         };
         let mut direct: Vec<_> = self.tools.iter().filter(|t| enabled(t)).cloned().collect();
         let code_mode = self.code_mode(rules);
+        // Without `execute` the namespace tools would be unreachable, so they become direct.
+        let mut exposed = self.inventory(true).visible(rules).namespaces().to_vec();
         if code_mode.is_none() {
-            // Without `execute` the namespace tools would be unreachable, so they become direct.
-            let visible = self.inventory().visible(rules);
-            for namespace in visible.namespaces() {
-                for tool in &namespace.tools {
-                    direct.push(Arc::new(DirectTool::new(namespace.clone(), tool.clone())));
-                }
+            exposed.extend(self.inventory(false).visible(rules).namespaces().to_vec());
+        }
+        for namespace in &exposed {
+            for tool in &namespace.tools {
+                direct.push(Arc::new(DirectTool::new(namespace.clone(), tool.clone())));
             }
         }
         direct.sort_by(|a, b| a.name().cmp(b.name()));

@@ -23,7 +23,10 @@ fn normalize(document: &Map<String, Value>) -> (Map<String, Value>, Map<String, 
         return (timeout, native);
     };
     for (name, value) in mcp {
-        let typed = matches!(value.get("type").and_then(Value::as_str), Some("local" | "remote"));
+        let typed = matches!(
+            value.get("type").and_then(Value::as_str),
+            Some("local" | "remote")
+        );
         if value.get("type").is_none() && value.get("enabled").is_some_and(Value::is_boolean) {
             crate::log::warn(
                 "omitted enabled-only legacy MCP entry",
@@ -202,9 +205,10 @@ fn apply_defaults(server: &mut Value) {
         host,
         "mcp.posthog.com" | "mcp-eu.posthog.com" | "mcp.us.posthog.com" | "mcp.eu.posthog.com"
     );
-    let has_header = server["headers"]
-        .as_object()
-        .is_some_and(|h| h.keys().any(|k| k.eq_ignore_ascii_case("x-posthog-mcp-mode")));
+    let has_header = server["headers"].as_object().is_some_and(|h| {
+        h.keys()
+            .any(|k| k.eq_ignore_ascii_case("x-posthog-mcp-mode"))
+    });
     if posthog && !url.query_pairs().any(|(k, _)| k == "mode") && !has_header {
         if !server["headers"].is_object() {
             server["headers"] = json!({});
@@ -291,7 +295,10 @@ mod tests {
         let servers: Map<String, Value> = merged.resolve(&policies).into_iter().collect();
         assert_eq!(servers["ex"]["codemode"], json!(false));
         assert_eq!(servers["exr"]["codemode"], json!(false));
-        assert_eq!(servers["ph"]["headers"], json!({"x-posthog-mcp-mode": "tools"}));
+        assert_eq!(
+            servers["ph"]["headers"],
+            json!({"x-posthog-mcp-mode": "tools"})
+        );
         assert_eq!(servers["kept"]["codemode"], json!(true));
         assert!(!servers.contains_key("denied"));
     }

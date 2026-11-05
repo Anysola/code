@@ -15,6 +15,7 @@ pub mod instructions;
 pub mod json;
 pub mod log;
 pub mod markdown;
+pub mod mcp;
 pub mod media;
 pub mod model;
 pub mod paths;

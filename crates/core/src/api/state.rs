@@ -128,8 +128,12 @@ impl Shared {
                 next.references.clone(),
             ));
         }
+        let config = next.config.clone();
         *self.loaded.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(next);
         self.applied.store(generation, Ordering::SeqCst);
+        if let Some(mcp) = self.mcp.get() {
+            mcp.reconcile(config);
+        }
     }
 
     pub(super) fn arm_watch(&self, loaded: &Loaded) {

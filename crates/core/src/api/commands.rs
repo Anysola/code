@@ -9,8 +9,13 @@ use crate::session::inbox::Delivery;
 use crate::session::{Outcome, TurnOptions};
 
 impl Core {
+    /// Built-in, markdown and config commands, then the MCP prompts.
     pub fn commands(&self) -> Commands {
-        self.shared.loaded().commands.clone()
+        let commands = self.shared.loaded().commands.clone();
+        match self.shared.mcp.get() {
+            Some(mcp) => commands.with_prompts(mcp.prompts()),
+            None => commands,
+        }
     }
 
     /// Runs `/<name> <arguments>`: switches to the command's agent and model, then prompts the
@@ -24,24 +29,23 @@ impl Core {
         options: TurnOptions,
     ) -> Result<Outcome, CoreError> {
         let loaded = self.shared.loaded();
-        let command = loaded
-            .commands
+        let command = self
+            .commands()
             .get(name)
             .cloned()
             .ok_or_else(|| CoreError::CommandNotFound(name.to_string()))?;
         let session = self
             .session(session_id)?
             .ok_or(CoreError::SessionNotFound)?;
-        let text = match crate::command::render(
-            &command,
-            arguments,
-            &self.shared.project.worktree,
-            loaded.config.shell(),
-            std::path::Path::new(&session.directory),
-            &self.shared.env,
-        )
-        .await
-        {
+        let mcp = self.shared.mcp.get();
+        let at = crate::command::RenderEnv {
+            project: &self.shared.project.worktree,
+            shell: loaded.config.shell(),
+            cwd: std::path::Path::new(&session.directory),
+            env: &self.shared.env,
+            mcp: mcp.map(|m| m.as_ref()),
+        };
+        let text = match crate::command::render(&command, arguments, &at).await {
             Ok(text) => text,
             Err(message) => {
                 return Ok(Outcome::Failed(SessionError::new("unknown", message)));
