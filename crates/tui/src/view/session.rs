@@ -70,8 +70,9 @@ pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u1
         let y = bottom.saturating_sub(box_h + 1);
         let cursor = prompt::draw_box(c, state, x, y, w, false);
         prompt::footer(c, state, x, y + box_h, w);
+        let banners = banners(c, state, x, y, w);
         prompt::popup(c, state, x, w, y, top);
-        (box_h + 1, cursor)
+        (box_h + 1 + banners, cursor)
     };
     let status_y = bottom.saturating_sub(block_h + 1);
     let height = status_y.saturating_sub(top) as usize;
@@ -99,6 +100,22 @@ pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u1
         None => {}
     }
     cursor
+}
+
+/// The account banners (event, low balance) stacked right above the composer; their rows.
+fn banners(c: &mut Canvas, state: &State, x: u16, composer: u16, w: u16) -> u16 {
+    let banners =
+        crate::menus::anysola::banners(state.account.me.as_ref(), state.low_balance(), state.zone);
+    let count = banners.len() as u16;
+    for (i, (banner, tone)) in banners.into_iter().enumerate() {
+        let path = match tone {
+            crate::dialog::Tone::Warning => "text.feedback.warning.base",
+            _ => "text.feedback.info.base",
+        };
+        let y = composer.saturating_sub(count - i as u16);
+        c.put(x, y, &banner, c.style(path), w as usize);
+    }
+    count
 }
 
 /// The right pane's width: half the screen, at least 24 columns.

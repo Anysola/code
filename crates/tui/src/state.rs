@@ -305,6 +305,8 @@ pub struct State {
     pub shell_example: usize,
     /// When the first Esc of a running session was pressed.
     pub interrupt_armed: Option<u64>,
+    /// The pointer rests on the credit status line (it then shows the renewal date).
+    pub status_hover: bool,
     pub settings: Settings,
     pub hints: Hints,
     /// `/update to install v<version>` on the home screen.
@@ -348,6 +350,7 @@ impl State {
             example: 0,
             shell_example: 0,
             interrupt_armed: None,
+            status_hover: false,
             settings: Settings::default(),
             hints: Hints::default(),
             update: None,
@@ -411,6 +414,14 @@ impl State {
                     crate::text::credits(c.total as f64)
                 ));
             }
+        }
+        if self.status_hover
+            && let Some(renews) = self.account.renews
+        {
+            parts.push(format!(
+                "renews {}",
+                crate::text::short_date(renews, self.now)
+            ));
         }
         Some(parts.join(" · "))
     }

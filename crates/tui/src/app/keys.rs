@@ -611,9 +611,17 @@ impl App {
                     return;
                 }
                 self.selection = Some((at, at));
+                if self.over_account(at) {
+                    self.selection = None;
+                    return self.run_command("anysola.credits", None);
+                }
                 if self.state.route == Route::Home {
                     self.click_recent(mouse.row);
                 }
+            }
+            MouseEventKind::Moved => {
+                self.state.status_hover = false;
+                self.state.status_hover = self.over_status(at);
             }
             MouseEventKind::Drag(MouseButton::Left) => {
                 if let Some((anchor, _)) = self.selection {
@@ -633,6 +641,27 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Whether `at` falls on the credit status line in the last frame.
+    fn over_status(&self, at: (u16, u16)) -> bool {
+        self.state
+            .status_text()
+            .is_some_and(|text| over_text(&self.last, at, &text))
+    }
+
+    /// The status line or the home plan line: both open `/credits` on click.
+    fn over_account(&self, at: (u16, u16)) -> bool {
+        let plan = (self.state.route == Route::Home)
+            .then(|| {
+                self.state
+                    .account
+                    .plan
+                    .as_deref()
+                    .map(crate::text::title_case)
+            })
+            .flatten();
+        self.over_status(at) || plan.is_some_and(|plan| over_text(&self.last, at, &plan))
     }
 
     /// A click on a home `Recent` row opens that session.
@@ -775,6 +804,22 @@ impl App {
     }
 }
 
+/// Whether `text` is drawn on row `at.1` of `buffer` across column `at.0`.
+fn over_text(buffer: &ratatui::buffer::Buffer, (x, y): (u16, u16), text: &str) -> bool {
+    if y >= buffer.area.height {
+        return false;
+    }
+    let row: Vec<&str> = (0..buffer.area.width)
+        .map(|c| buffer[(c, y)].symbol())
+        .collect();
+    let line: String = row.concat();
+    let Some(byte) = line.find(text) else {
+        return false;
+    };
+    let start = crate::text::width(&line[..byte]) as u16;
+    (start..start + crate::text::width(text) as u16).contains(&x)
+}
+
 /// Replies to a question, or to the MCP form it stands for.
 fn answer(
     core: &anysola_core::api::Core,
@@ -795,5 +840,21 @@ fn answer(
         None => {
             core.reply_question(id, reply);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn over_text_hits_only_the_drawn_cells() {
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 30, 2));
+        buffer.set_string(10, 1, "731 credits", ratatui::style::Style::new());
+        assert!(super::over_text(&buffer, (10, 1), "731 credits"));
+        assert!(super::over_text(&buffer, (20, 1), "731 credits"));
+        assert!(!super::over_text(&buffer, (21, 1), "731 credits"));
+        assert!(!super::over_text(&buffer, (12, 0), "731 credits"));
     }
 }

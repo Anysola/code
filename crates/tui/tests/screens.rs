@@ -1010,3 +1010,34 @@ fn open() {
     let list = lists::open(&sessions, &projects, state.width as usize);
     assert_screen(&dialog(state, select(list)), "open");
 }
+
+/// No capture exists; 0.5.1 puts the banners in the composer's top slot.
+#[test]
+fn session_banners_sit_above_the_composer() {
+    let mut state = session(120, 36, turn(true, true));
+    let mut me = me();
+    me["credits"]["available"] = json!(64);
+    me["event"] = json!({"label": "Double credits weekend", "until": "2026-11-09T21:00:00Z"});
+    state.account = Account::from_me(me);
+    let screen = render(&state);
+    let lines: Vec<&str> = screen.lines().collect();
+    let low = lines
+        .iter()
+        .position(|l| l.trim() == "Low balance: 64 credits left · /credits")
+        .expect("low balance banner");
+    assert!(
+        lines[low - 1]
+            .trim()
+            .starts_with("Double credits weekend · until Nov 10")
+    );
+    assert!(lines[low + 1].trim_start().starts_with('┃'));
+}
+
+#[test]
+fn status_line_hover_shows_renewal() {
+    let mut state = session(120, 36, turn(true, true));
+    state.sessions.get_mut("ses_b").unwrap().credits = credits(12, 12, None, 728);
+    state.status_hover = true;
+    let screen = render(&state);
+    assert!(screen.contains("728 credits · this turn 12 · session 12 · renews 23 Nov"));
+}
