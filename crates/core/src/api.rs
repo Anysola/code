@@ -158,6 +158,13 @@ impl crate::codemode::Host for Shared {
     fn mcp(&self) -> Option<Arc<dyn crate::mcp::Mcp>> {
         self.mcp.get().cloned()
     }
+
+    fn code_mode(&self, agent: &str) -> Option<crate::codemode::Inventory> {
+        let loaded = self.loaded();
+        let rules = &loaded.agents.get(agent)?.permissions;
+        let gates = crate::tool::registry::Gates::from_config(&loaded.config);
+        self.registry.code_mode_gated(rules, gates)
+    }
 }
 
 #[derive(Clone)]
@@ -184,23 +191,31 @@ impl SessionNotifier for StoreNotifier {
             None,
             Delivery::Steer,
         );
-        let idle = !shared
-            .turns
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains_key(session_id);
-        if admitted.is_ok() && idle && !shared.closing.load(std::sync::atomic::Ordering::Relaxed) {
-            let session_id = session_id.to_string();
-            tokio::spawn(async move {
-                let _ = drain_session(
-                    &shared,
-                    &session_id,
-                    TurnOptions::default(),
-                    CancellationToken::new(),
-                )
-                .await;
-            });
+        if admitted.is_ok() {
+            wake(&shared, session_id);
         }
+    }
+}
+
+/// Starts a turn for input already in the session's inbox unless one runs in this process; a
+/// running turn takes it at its next step.
+pub(crate) fn wake(shared: &Arc<Shared>, session_id: &str) {
+    let idle = !shared
+        .turns
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains_key(session_id);
+    if idle && !shared.closing.load(std::sync::atomic::Ordering::Relaxed) {
+        let (shared, session_id) = (shared.clone(), session_id.to_string());
+        tokio::spawn(async move {
+            let _ = drain_session(
+                &shared,
+                &session_id,
+                TurnOptions::default(),
+                CancellationToken::new(),
+            )
+            .await;
+        });
     }
 }
 
@@ -265,6 +280,7 @@ impl Core {
             tokio::spawn(state::poll_remote(Arc::downgrade(&shared)));
         }
         tokio::spawn(crate::reference::keep_fresh(Arc::downgrade(&shared)));
+        tokio::spawn(crate::schedule::run(Arc::downgrade(&shared)));
         Ok(Core { shared })
     }
 
@@ -466,6 +482,11 @@ impl Core {
             time_updated: now,
         };
         self.shared.db.create_session(&row)?;
+        self.emit(Event::SessionCreated {
+            session_id: row.id.clone(),
+            parent_id: row.parent_id.clone(),
+            title: row.title.clone(),
+        });
         Ok(row)
     }
 
@@ -788,6 +809,8 @@ impl Core {
             .store(true, std::sync::atomic::Ordering::Relaxed);
         self.shared.asks.close();
         crate::tool::shell::kill_background_shells();
+        // The firing loop sees `closing` and releases its lease now rather than after a sleep.
+        crate::schedule::ring();
     }
 }
 

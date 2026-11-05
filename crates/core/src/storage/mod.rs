@@ -7,11 +7,13 @@ mod inbox;
 mod instruction;
 mod permission;
 mod revert;
+mod schedule;
 mod schema;
 mod transfer;
 
 pub use inbox::InboxRow;
 pub use instruction::{InstructionState, Values};
+pub use schedule::{Guard, ScheduleRow};
 pub use transfer::{ImportError, SessionSummary, sanitize};
 
 use std::path::Path;

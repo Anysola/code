@@ -15,6 +15,7 @@ use serde_json::{Map, Value, json};
 use tokio::sync::{broadcast, oneshot};
 
 use crate::agent::{Agent, current_model, not_found};
+use crate::child::{Child, Compaction, Router, compaction_update};
 use crate::rpc::{Connection, Failure};
 use crate::tool::{self, Tool};
 
@@ -195,6 +196,12 @@ async fn follow(
     let mut totals = Totals::default();
     let mut tools: HashMap<(String, String), Tool> = HashMap::new();
     let mut running: Vec<(String, String)> = Vec::new();
+    let mut children: HashMap<String, Child> = HashMap::new();
+    let router = Router {
+        connection: &agent.connection,
+        root: &session.id,
+        capabilities: *agent.capabilities.lock().unwrap_or_else(|e| e.into_inner()),
+    };
     let mut ended = false;
     loop {
         let event = if ended {
@@ -217,12 +224,74 @@ async fn follow(
             }
         };
         let own = event.session_id() == session.id;
+        let child = children.get(event.session_id()).cloned();
+        let shown = own || child.is_some();
         let cwd = session.directory.as_str();
-        let send = |update: Value| agent.connection.update(&session.id, update);
+        let send = |update: Value| router.send(child.as_ref(), update);
         match event {
+            Event::SessionCreated {
+                session_id,
+                parent_id: Some(parent_id),
+                title,
+            } if parent_id == session.id || children.contains_key(&parent_id) => {
+                let depth = children.get(&parent_id).map_or(1, |p| p.depth + 1);
+                let created = Child {
+                    id: session_id.clone(),
+                    parent_id,
+                    depth,
+                    title,
+                };
+                router.status(&created, "created", None);
+                children.insert(session_id, created);
+            }
+            Event::Started { .. } => {
+                if let Some(child) = &child {
+                    router.status(child, "running", None);
+                }
+            }
+            Event::Succeeded { .. } | Event::Failed { .. } | Event::Interrupted { .. } => {
+                let (status, error) = match &event {
+                    Event::Succeeded { .. } => ("completed", None),
+                    Event::Failed { error, .. } => ("failed", Some(error)),
+                    _ => ("interrupted", None),
+                };
+                if let Some(child) = &child {
+                    router.status(child, status, error);
+                }
+            }
+            Event::CompactionStarted {
+                message_id, reason, ..
+            } if shown => send(compaction_update(
+                &message_id,
+                &reason,
+                Compaction::Started,
+                router.standard_compaction(child.as_ref()),
+            )),
+            Event::CompactionEnded {
+                message_id,
+                reason,
+                summary,
+                ..
+            } if shown => send(compaction_update(
+                &message_id,
+                &reason,
+                Compaction::Completed(&summary),
+                router.standard_compaction(child.as_ref()),
+            )),
+            Event::CompactionFailed {
+                message_id,
+                reason,
+                error,
+                ..
+            } if shown => send(compaction_update(
+                &message_id,
+                &reason,
+                Compaction::Failed(&error),
+                router.standard_compaction(child.as_ref()),
+            )),
             Event::TextDelta {
                 message_id, text, ..
-            } if own => send(
+            } if shown => send(
                 json!({"sessionUpdate": "agent_message_chunk", "messageId": message_id,
                 "content": {"type": "text", "text": text}}),
             ),
@@ -231,7 +300,7 @@ async fn follow(
                 ordinal,
                 text,
                 ..
-            } if own => send(json!({"sessionUpdate": "agent_thought_chunk",
+            } if shown => send(json!({"sessionUpdate": "agent_thought_chunk",
                 "messageId": format!("{message_id}:reasoning:{ordinal}"),
                 "content": {"type": "text", "text": text}})),
             Event::ToolInputStarted {
@@ -245,7 +314,7 @@ async fn follow(
                     name,
                     input: json!({}),
                 };
-                if own {
+                if shown {
                     let mut update = json!({"sessionUpdate": "tool_call"});
                     merge(&mut update, tool::pending(&call, cwd, None));
                     send(update);
@@ -265,7 +334,7 @@ async fn follow(
                     input: json!({}),
                 });
                 call.input = input;
-                if own {
+                if shown {
                     let mut update = json!({"sessionUpdate": "tool_call_update"});
                     merge(&mut update, tool::running(call, cwd));
                     send(update);
@@ -282,7 +351,7 @@ async fn follow(
                 let key = (session_id, call_id.clone());
                 running.retain(|k| *k != key);
                 let call = tools.remove(&key).unwrap_or_else(|| unknown(&call_id));
-                if own {
+                if shown {
                     let mut update = json!({"sessionUpdate": "tool_call_update"});
                     merge(
                         &mut update,
@@ -302,7 +371,7 @@ async fn follow(
                 let key = (session_id, call_id.clone());
                 running.retain(|k| *k != key);
                 let call = tools.remove(&key).unwrap_or_else(|| unknown(&call_id));
-                if own {
+                if shown {
                     let mut update = json!({"sessionUpdate": "tool_call_update"});
                     merge(
                         &mut update,

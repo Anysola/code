@@ -757,6 +757,7 @@ impl Handler for ServerHandler {
                 _ => Err(Error::Rpc {
                     code: -32601,
                     message: "Method not found".into(),
+                    data: None,
                 }),
             }
         }

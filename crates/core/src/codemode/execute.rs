@@ -102,7 +102,7 @@ fn display_input(input: &Value) -> Option<Value> {
     }
 }
 
-async fn run(inventory: &Inventory, code: String, ctx: &ToolContext) -> ToolResult {
+pub(crate) async fn run(inventory: &Inventory, code: String, ctx: &ToolContext) -> ToolResult {
     let index = Arc::new(Index::new(inventory));
     let local = Local {
         keys: inventory

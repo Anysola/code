@@ -547,3 +547,87 @@ fn scripted_client() {
         "anysola acp: incoming message exceeded the 32 MiB limit\n"
     );
 }
+
+#[test]
+fn compaction_and_child_updates_follow_client_capabilities() {
+    let gateway = gateway();
+    let home = TestHome::new(&gateway.url);
+    let cwd = common::my_app(&home);
+    let mut client = Client::start(&home, &cwd);
+    let mut none = Vec::new();
+    let capabilities =
+        json!({"session": {"compaction": {}}, "_meta": {"opencode/child-session-updates": true}});
+    client.call(
+        &request(
+            1,
+            "initialize",
+            json!({"protocolVersion": 1, "clientCapabilities": capabilities}),
+        ),
+        &mut none,
+    );
+    let created = client.call(
+        &request(2, "session/new", json!({"cwd": cwd.display().to_string()})),
+        &mut none,
+    );
+    let session = response(&created)["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let input = base64::engine::general_purpose::STANDARD
+        .encode(r#"{"agent":"general","description":"Look around","prompt":"look"}"#);
+    let turn = client.call(
+        &request(
+            3,
+            "session/prompt",
+            json!({"sessionId": session, "prompt": [{"type": "text", "text": format!("TOOLTEST:subagent:{input}END")}]}),
+        ),
+        &mut none,
+    );
+    let child: Vec<&Value> = turn
+        .iter()
+        .filter(|m| m["method"] == "opencode/session/child_update")
+        .map(|m| &m["params"])
+        .collect();
+    let statuses: Vec<&str> = child
+        .iter()
+        .filter(|p| p["type"] == "status")
+        .filter_map(|p| p["status"].as_str())
+        .collect();
+    assert_eq!(statuses, ["created", "running", "completed"]);
+    assert_eq!(child[0]["rootSessionId"], session.as_str());
+    assert_eq!(child[0]["parentSessionId"], session.as_str());
+    assert_eq!(child[0]["depth"], 1);
+    assert_eq!(child[0]["title"], "Look around");
+    let text = child
+        .iter()
+        .find(|p| p["type"] == "update")
+        .expect("the child's text as a child update");
+    assert_eq!(text["update"]["sessionUpdate"], "agent_message_chunk");
+    assert_eq!(
+        text["update"]["_meta"]["opencode/child-session"]["id"],
+        child[0]["childSessionId"]
+    );
+
+    let compacted = client.call(
+        &request(
+            4,
+            "session/prompt",
+            json!({"sessionId": session, "prompt": [{"type": "text", "text": "/compact"}]}),
+        ),
+        &mut none,
+    );
+    let updates: Vec<&Value> = compacted
+        .iter()
+        .map(|m| &m["params"]["update"])
+        .filter(|u| u["sessionUpdate"] == "compaction_update")
+        .collect();
+    assert_eq!(updates.len(), 2);
+    assert_eq!(updates[0]["status"], "in_progress");
+    // The fake model's answer is not a summary, so this compaction fails as the client hears it.
+    assert_eq!(updates[1]["status"], "failed");
+    assert_eq!(
+        updates[1]["error"],
+        "Compaction summary did not match the required template"
+    );
+    assert_eq!(updates[0]["compactionId"], updates[1]["compactionId"]);
+}

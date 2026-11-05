@@ -808,6 +808,11 @@ pub(crate) async fn compact(
         Ok(seq) => seq,
         Err(error) => return Outcome::Failed(SessionError::new("unknown", error.to_string())),
     };
+    let _ = shared.events.send(crate::events::Event::CompactionStarted {
+        session_id: session.id.clone(),
+        message_id: row.clone(),
+        reason: reason.into(),
+    });
     let reference = ModelRef {
         provider: selection.reference.provider.clone(),
         id: model.id.clone(),
@@ -876,6 +881,20 @@ pub(crate) async fn compact(
     let _ = shared
         .db
         .update_message(&row, &super::message::encode(&data));
+    let _ = shared.events.send(match &data.error {
+        Some(error) => crate::events::Event::CompactionFailed {
+            session_id: session.id.clone(),
+            message_id: row.clone(),
+            reason: reason.into(),
+            error: error.clone(),
+        },
+        None => crate::events::Event::CompactionEnded {
+            session_id: session.id.clone(),
+            message_id: row.clone(),
+            reason: reason.into(),
+            summary: data.summary.clone().unwrap_or_default(),
+        },
+    });
     if outcome == Outcome::Completed {
         // The values the model has seen become the baseline of the history the checkpoint starts.
         let _ = shared.db.instruction_new_epoch(&session.id, seq);

@@ -4,7 +4,8 @@
 //! The shape keeps everything 0.5.1's `opencode.db` stores so its history imports losslessly:
 //! message rows hold the same JSON `data` per `type`, with assistant parts inline.
 
-pub const MIGRATIONS: &[&str] = &[r#"
+pub const MIGRATIONS: &[&str] = &[
+    r#"
 CREATE TABLE project (
     id TEXT PRIMARY KEY,
     worktree TEXT NOT NULL,
@@ -146,4 +147,33 @@ CREATE TABLE job (
     data TEXT NOT NULL,
     time_created INTEGER NOT NULL
 );
-"#];
+"#,
+    r#"
+CREATE TABLE schedule (
+    id TEXT PRIMARY KEY,
+    session_id TEXT REFERENCES session(id) ON DELETE CASCADE,
+    name TEXT,
+    action TEXT NOT NULL,
+    "check" TEXT,
+    "when" TEXT NOT NULL,
+    tz TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    next_due_at INTEGER,
+    ends_at INTEGER,
+    remaining_runs INTEGER,
+    run_count INTEGER NOT NULL DEFAULT 0,
+    checks INTEGER NOT NULL DEFAULT 0,
+    failures INTEGER NOT NULL DEFAULT 0,
+    last_fired_at INTEGER,
+    last_message_id TEXT,
+    last_outcome TEXT,
+    retry_at INTEGER,
+    state TEXT,
+    time_created INTEGER NOT NULL,
+    time_updated INTEGER NOT NULL
+);
+CREATE INDEX schedule_session_idx ON schedule(session_id);
+CREATE INDEX schedule_due_idx ON schedule(next_due_at)
+    WHERE status = 'active' AND next_due_at IS NOT NULL;
+"#,
+];

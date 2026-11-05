@@ -89,6 +89,11 @@ pub trait Host: Send + Sync {
     fn mcp(&self) -> Option<std::sync::Arc<dyn crate::mcp::Mcp>> {
         None
     }
+
+    /// The Code Mode tools the agent can reach (schedule checks resolve theirs here).
+    fn code_mode(&self, _agent: &str) -> Option<Inventory> {
+        None
+    }
 }
 
 pub trait NamespaceTool: Send + Sync {

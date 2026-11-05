@@ -25,6 +25,11 @@ const SUPPORTED: [&str; 5] = [
     "2024-10-07",
 ];
 const MODERN_VERSION: &str = "2026-07-28";
+const PROTOCOL_KEY: &str = "io.modelcontextprotocol/protocolVersion";
+const CLIENT_INFO_KEY: &str = "io.modelcontextprotocol/clientInfo";
+const CLIENT_CAPABILITIES_KEY: &str = "io.modelcontextprotocol/clientCapabilities";
+/// The JSON-RPC error a server answers an unsupported revision with.
+const UNSUPPORTED_PROTOCOL_VERSION: i64 = -32022;
 
 /// A configured server, as the runtime reads it from `mcp.servers.<name>`.
 #[derive(Debug, Clone, PartialEq)]
@@ -150,6 +155,187 @@ fn valid_tool(tool: &Value) -> bool {
         && tool.get("description").is_none_or(Value::is_string)
 }
 
+fn instructions(result: &Value) -> Option<String> {
+    result["instructions"]
+        .as_str()
+        .map(str::trim)
+        .filter(|i| !i.is_empty())
+        .map(str::to_string)
+}
+
+/// What one `server/discover` answer means for the connection.
+enum Verdict {
+    Modern(Value),
+    /// The server named a revision we offer in its rejection: ask again with it, once.
+    Corrective(String, Error),
+    Legacy,
+    Failed(Error),
+}
+
+/// 0.5.1's message for a revision the server does not support (`client.ts:458-463`).
+fn unsupported(message: String, supported: &[String]) -> Error {
+    Error::Other(format!(
+        "{message}; the server supports {}. Set \"protocol\" for this server to one of those or to \"legacy\".",
+        supported.join(", ")
+    ))
+}
+
+fn negotiation_failed(text: &str) -> Error {
+    Error::Other(format!("Version negotiation failed: {text}"))
+}
+
+fn is_modern(version: &str) -> bool {
+    version >= MODERN_VERSION
+}
+
+fn strings(value: &Value) -> Option<Vec<String>> {
+    value
+        .as_array()?
+        .iter()
+        .map(|v| v.as_str().map(str::to_string))
+        .collect()
+}
+
+fn classify_rpc(code: i64, message: String, data: Option<&Value>, fallback: bool) -> Verdict {
+    if code != UNSUPPORTED_PROTOCOL_VERSION {
+        return Verdict::Legacy;
+    }
+    let Some(supported) = data
+        .and_then(|d| strings(&d["supported"]))
+        .filter(|s| !s.is_empty())
+    else {
+        return Verdict::Legacy;
+    };
+    let error = unsupported(message, &supported);
+    let modern: Vec<&String> = supported.iter().filter(|v| is_modern(v)).collect();
+    if modern.iter().any(|v| *v == MODERN_VERSION) {
+        return Verdict::Corrective(MODERN_VERSION.to_string(), error);
+    }
+    if !modern.is_empty() || !fallback {
+        return Verdict::Failed(error);
+    }
+    Verdict::Legacy
+}
+
+/// The 2026-07-28 revision's `server/discover` probe, sent before any initialize (the SDK's
+/// `negotiateEra`): `Some` with the agreed revision and the discover result, `None` to fall back to
+/// the plain initialize. `pinned` has no fallback. 0.5.1's own stdio transport is not the SDK's,
+/// so a probe that closes the process is a connect error rather than a retry on a sibling.
+async fn negotiate(
+    peer: &Peer,
+    stdio: bool,
+    pinned: Option<&str>,
+    client_info: &Value,
+    capabilities: &Value,
+    timeout: Duration,
+) -> Result<Option<(String, Value)>, Error> {
+    let fallback = pinned.is_none();
+    let mut requested = pinned.unwrap_or(MODERN_VERSION).to_string();
+    let mut corrected = false;
+    loop {
+        let envelope = json!({
+            PROTOCOL_KEY: requested,
+            CLIENT_INFO_KEY: client_info,
+            CLIENT_CAPABILITIES_KEY: capabilities,
+        });
+        let reply = peer
+            .request("server/discover", json!({"_meta": envelope}), timeout)
+            .await;
+        let mut closed = false;
+        let verdict = match reply {
+            Ok(result) => {
+                match strings(&result["supportedVersions"]) {
+                    Some(supported) if result["capabilities"].is_object() => {
+                        if supported.contains(&requested) {
+                            Verdict::Modern(result)
+                        } else if fallback {
+                            Verdict::Legacy
+                        } else {
+                            Verdict::Failed(unsupported(
+                                format!("Unsupported protocol version: {requested}"),
+                                &supported,
+                            ))
+                        }
+                    }
+                    _ => Verdict::Legacy,
+                }
+            }
+            Err(Error::Rpc { code, message, data }) => {
+                classify_rpc(code, message, data.as_ref(), fallback)
+            }
+            Err(Error::Unauthorized(message)) => Verdict::Failed(Error::Unauthorized(message)),
+            Err(Error::Http { status, body }) => match status {
+                401 => Verdict::Failed(negotiation_failed(
+                    "the server requires authorization (HTTP 401)",
+                )),
+                403 => Verdict::Failed(negotiation_failed("the server denied access (HTTP 403)")),
+                500.. => Verdict::Failed(negotiation_failed(&format!(
+                    "the server answered the probe with HTTP {status}"
+                ))),
+                _ => match serde_json::from_str::<Value>(&body)
+                    .ok()
+                    .filter(|b| b["error"]["code"].is_i64())
+                {
+                    Some(body) => classify_rpc(
+                        body["error"]["code"].as_i64().unwrap_or_default(),
+                        body["error"]["message"].as_str().unwrap_or_default().to_string(),
+                        body["error"].get("data"),
+                        fallback,
+                    ),
+                    None => Verdict::Legacy,
+                },
+            },
+            Err(Error::Closed(_)) if stdio => {
+                closed = true;
+                Verdict::Legacy
+            }
+            Err(Error::Closed(_)) => Verdict::Failed(Error::Other(
+                "Version negotiation probe failed: Connection closed during the version negotiation probe"
+                    .into(),
+            )),
+            Err(Error::Timeout) if stdio => Verdict::Legacy,
+            Err(Error::Timeout) => Verdict::Failed(Error::Other(format!(
+                "Version negotiation probe timed out after {}ms",
+                timeout.as_millis()
+            ))),
+            Err(error) => Verdict::Failed(Error::Other(format!(
+                "Version negotiation probe failed: {error}"
+            ))),
+        };
+        match verdict {
+            Verdict::Modern(result) => return Ok(Some((requested, result))),
+            Verdict::Corrective(version, error) => {
+                if corrected {
+                    return Err(error);
+                }
+                corrected = true;
+                requested = version;
+            }
+            Verdict::Failed(error) => return Err(error),
+            Verdict::Legacy => {
+                const CLOSED: &str = "the connection closed during the server/discover probe";
+                if let Some(pinned) = pinned {
+                    return Err(negotiation_failed(&if closed {
+                        format!(
+                            "{CLOSED} before the server offered pinned protocol version {pinned} (no fallback in pin mode)"
+                        )
+                    } else {
+                        format!(
+                            "the server did not offer pinned protocol version {pinned} via server/discover (no fallback in pin mode)"
+                        )
+                    }));
+                }
+                if closed {
+                    return Err(negotiation_failed(&format!(
+                        "{CLOSED} (this transport probed in place — the disposable sibling probe requires the SDK's base StdioClientTransport)"
+                    )));
+                }
+                return Ok(None);
+            }
+        }
+    }
+}
+
 impl Connection {
     pub async fn connect(
         server: &str,
@@ -229,14 +415,52 @@ impl Connection {
         http: Option<Arc<Http>>,
         spec: &Spec,
     ) -> Result<Connection, Error> {
-        let offered = match spec.protocol.as_deref() {
-            None => LEGACY_VERSION,
-            Some(_) => MODERN_VERSION,
+        let capabilities = json!({"elicitation": {"form": {}, "url": {}}, "roots": {}});
+        let client_info =
+            json!({"name": "opencode", "version": anysola_core::version::session_version()});
+        let handshake = match spec.protocol.as_deref() {
+            None => Ok(None),
+            Some(protocol) => {
+                let pinned = (protocol != "auto").then_some(protocol);
+                negotiate(
+                    &peer,
+                    http.is_none(),
+                    pinned,
+                    &client_info,
+                    &capabilities,
+                    spec.startup,
+                )
+                .await
+            }
         };
+        let modern = match handshake {
+            Ok(modern) => modern,
+            Err(error) => {
+                peer.close().await;
+                return Err(error);
+            }
+        };
+        if let Some((version, discover)) = modern {
+            peer.set_envelope(json!({
+                PROTOCOL_KEY: version,
+                CLIENT_INFO_KEY: client_info,
+                CLIENT_CAPABILITIES_KEY: capabilities,
+            }));
+            if let Some(http) = &http {
+                http.set_protocol(&version);
+            }
+            return Ok(Connection {
+                peer,
+                capabilities: discover["capabilities"].clone(),
+                instructions: instructions(&discover),
+                catalog: spec.catalog,
+                execution: spec.execution,
+            });
+        }
         let params = json!({
-            "protocolVersion": offered,
-            "capabilities": {"elicitation": {"form": {}, "url": {}}, "roots": {}},
-            "clientInfo": {"name": "opencode", "version": anysola_core::version::session_version()},
+            "protocolVersion": LEGACY_VERSION,
+            "capabilities": capabilities,
+            "clientInfo": client_info,
         });
         let result = match peer.request("initialize", params, spec.startup).await {
             Ok(result) => result,
@@ -246,19 +470,11 @@ impl Connection {
             }
         };
         let version = result["protocolVersion"].as_str().unwrap_or_default();
-        let accepted = match spec.protocol.as_deref() {
-            None => SUPPORTED.contains(&version),
-            Some("auto") => version == MODERN_VERSION || SUPPORTED.contains(&version),
-            Some(pinned) => version == pinned,
-        };
-        if !accepted {
+        if !SUPPORTED.contains(&version) {
             peer.close().await;
-            return Err(Error::Other(match spec.protocol.as_deref() {
-                Some(pinned) if pinned != "auto" => format!(
-                    "Server does not support protocol version {pinned}; the server supports {version}. Set \"protocol\" for this server to one of those or to \"legacy\"."
-                ),
-                _ => format!("Server's protocol version is not supported: {version}"),
-            }));
+            return Err(Error::Other(format!(
+                "Server's protocol version is not supported: {version}"
+            )));
         }
         if let Some(http) = &http {
             http.set_protocol(version);
@@ -268,11 +484,7 @@ impl Connection {
         Ok(Connection {
             peer,
             capabilities: result["capabilities"].clone(),
-            instructions: result["instructions"]
-                .as_str()
-                .map(str::trim)
-                .filter(|i| !i.is_empty())
-                .map(str::to_string),
+            instructions: instructions(&result),
             catalog: spec.catalog,
             execution: spec.execution,
         })

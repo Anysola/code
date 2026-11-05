@@ -20,6 +20,7 @@ grep-searcher.workspace = true
 hex.workspace = true
 ignore.workspace = true
 image.workspace = true
+jiff.workspace = true
 libc.workspace = true
 notify.workspace = true
 rand.workspace = true

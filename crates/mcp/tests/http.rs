@@ -378,3 +378,102 @@ fn oauth_sign_in_storage_and_refresh() {
     );
     rt.block_on(mcp.shutdown());
 }
+
+/// A server for the 2026-07-28 revision answers `server/discover` and takes no initialize; a
+/// 2025 server answers it with "method not found".
+fn era(request: &Recorded, modern: bool) -> Reply {
+    let message = request.json();
+    let id = message["id"].clone();
+    let method = message["method"].as_str().unwrap_or_default();
+    let result = match (method, modern) {
+        ("server/discover", true) => json!({
+            "supportedVersions": ["2026-07-28"],
+            "capabilities": {"tools": {}},
+            "instructions": "Modern server.",
+        }),
+        ("server/discover", false) => {
+            return reply(
+                200,
+                json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "Method not found"}}),
+                Vec::new(),
+            );
+        }
+        _ => return answer(request, ""),
+    };
+    reply(
+        200,
+        json!({"jsonrpc": "2.0", "id": id, "result": result}),
+        Vec::new(),
+    )
+}
+
+#[cfg(not(windows))]
+#[test]
+fn protocol_auto_and_pinned_negotiate_with_server_discover() {
+    let gateway = FakeGateway::start(|request, _| text(request, "unused"));
+    gateway.route("/modern", |request| era(request, true));
+    gateway.route("/legacy", |request| era(request, false));
+    gateway.route("/pinned", |request| era(request, false));
+    let env = env(&gateway.url);
+    let server = |path: &str, protocol: &str| json!({"type": "remote", "url": format!("{}{path}", gateway.url), "oauth": false, "protocol": protocol});
+    env.home.write(
+        "proj/opencode.json",
+        &json!({"mcp": {"servers": {
+            "modern": server("/modern", "auto"),
+            "legacy": server("/legacy", "auto"),
+            "pinned": server("/pinned", "2026-07-28"),
+        }}})
+        .to_string(),
+    );
+    let rt = runtime();
+    let (_core, mcp) = start(&env, &rt);
+    assert_eq!(status(&mcp, "modern"), Status::Connected);
+    assert_eq!(status(&mcp, "legacy"), Status::Connected);
+    assert_eq!(
+        status(&mcp, "pinned"),
+        Status::Failed {
+            error: "Version negotiation failed: the server did not offer pinned protocol version 2026-07-28 via server/discover (no fallback in pin mode)".into()
+        }
+    );
+    rt.block_on(mcp.call_tool("modern", "echo", json!({}), "ses_x"))
+        .unwrap();
+    rt.block_on(mcp.shutdown());
+
+    let methods = |path: &str| -> Vec<String> {
+        gateway
+            .requests_to(path)
+            .iter()
+            .filter(|r| r.method == "POST")
+            .map(|r| r.json()["method"].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+    let modern = gateway.requests_to("/modern");
+    assert_eq!(methods("/modern")[0], "server/discover");
+    assert!(!methods("/modern").contains(&"initialize".to_string()));
+    let probe = modern[0].json();
+    assert_eq!(
+        probe["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"],
+        "2026-07-28"
+    );
+    assert_eq!(
+        probe["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"],
+        json!({"elicitation": {"form": {}, "url": {}}, "roots": {}})
+    );
+    let call = modern
+        .iter()
+        .find(|r| r.json()["method"] == "tools/call")
+        .unwrap();
+    assert_eq!(call.header("mcp-protocol-version"), Some("2026-07-28"));
+    assert_eq!(call.header("mcp-method"), Some("tools/call"));
+    assert_eq!(call.header("mcp-name"), Some("echo"));
+    assert_eq!(
+        call.json()["params"]["_meta"]["io.modelcontextprotocol/clientInfo"]["name"],
+        "opencode"
+    );
+
+    assert_eq!(methods("/legacy")[..2], ["server/discover", "initialize"]);
+    let initialize = gateway.requests_to("/legacy")[1].json();
+    assert_eq!(initialize["params"]["protocolVersion"], "2025-11-25");
+    assert!(initialize["params"].get("_meta").is_none());
+    assert_eq!(methods("/pinned"), ["server/discover"]);
+}

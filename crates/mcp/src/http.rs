@@ -111,13 +111,23 @@ impl Http {
             if let Some(session) = self.session() {
                 request = request.header(SESSION_HEADER, session);
             }
-            if let Some(protocol) = self
-                .protocol
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone()
-            {
+            let claimed = body.and_then(claimed_headers);
+            let protocol = match &claimed {
+                Some((version, _, _)) => Some(version.clone()),
+                None => self
+                    .protocol
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
+            };
+            if let Some(protocol) = protocol {
                 request = request.header("mcp-protocol-version", protocol);
+            }
+            if let Some((_, method, name)) = claimed {
+                request = request.header("mcp-method", method);
+                if let Some(name) = name {
+                    request = request.header("mcp-name", name);
+                }
             }
             if let Some(token) = &token {
                 request = request.bearer_auth(token);
@@ -282,4 +292,36 @@ impl Transport for HttpTransport {
         }
         .boxed()
     }
+}
+
+/// A request whose `_meta` claims a protocol revision (the 2026-07-28 era) also names it, its
+/// method and its target in headers: `(version, method, name)`.
+fn claimed_headers(body: &Value) -> Option<(String, String, Option<String>)> {
+    let method = body.get("method")?.as_str()?;
+    body.get("id").filter(|id| !id.is_null())?;
+    let version = body["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"].as_str()?;
+    let field = match method {
+        "tools/call" | "prompts/get" => "name",
+        "resources/read" => "uri",
+        "tasks/get" | "tasks/update" | "tasks/cancel" => "taskId",
+        _ => return Some((version.into(), method.into(), None)),
+    };
+    let name = body["params"][field].as_str().map(header_value);
+    Some((version.into(), method.into(), name))
+}
+
+/// Values a header cannot carry verbatim go as `=?base64?…?=`.
+fn header_value(value: &str) -> String {
+    use base64::Engine;
+    let plain = !value.is_empty()
+        && value == value.trim()
+        && !(value.starts_with("=?base64?") && value.ends_with("?="))
+        && value.chars().all(|c| c == '\t' || (' '..='~').contains(&c));
+    if plain {
+        return value.to_string();
+    }
+    format!(
+        "=?base64?{}?=",
+        base64::engine::general_purpose::STANDARD.encode(value)
+    )
 }

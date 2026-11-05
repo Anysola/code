@@ -4,7 +4,7 @@
 pub mod compaction;
 pub mod gate;
 pub mod goal;
-mod host;
+pub(crate) mod host;
 pub mod inbox;
 pub mod lower;
 pub mod message;
@@ -65,7 +65,7 @@ pub(crate) struct Selection {
     pub reference: ModelRef,
 }
 
-fn select(shared: &Shared, session: &SessionRow) -> Result<Selection, SessionError> {
+pub(crate) fn select(shared: &Shared, session: &SessionRow) -> Result<Selection, SessionError> {
     let sources = shared.loaded();
     let agent = match session.agent.as_deref() {
         Some(id) => sources.agents.get(id).cloned(),
@@ -355,6 +355,9 @@ pub(crate) async fn drain(
 ) -> Outcome {
     settle_stale(&shared, session_id);
     goal::started(&shared, session_id);
+    let _ = shared.events.send(Event::Started {
+        session_id: session_id.to_string(),
+    });
     let mut outcome = Outcome::Succeeded;
     let mut open = false;
     loop {

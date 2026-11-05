@@ -23,6 +23,10 @@ const PAGE: u64 = 100;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Capabilities {
     pub form_elicitation: bool,
+    /// `session.compaction`: compactions as standard `compaction_update`s.
+    pub compaction: bool,
+    /// `_meta["opencode/child-session-updates"]`: subagent progress as child updates.
+    pub child_updates: bool,
 }
 
 #[derive(Clone)]
@@ -287,6 +291,8 @@ impl Agent {
         let client = &params["clientCapabilities"];
         *self.capabilities.lock().unwrap_or_else(|e| e.into_inner()) = Capabilities {
             form_elicitation: !client["elicitation"]["form"].is_null(),
+            compaction: !client["session"]["compaction"].is_null(),
+            child_updates: client["_meta"]["opencode/child-session-updates"] == true,
         };
         let mut method = json!({
             "description": "Run `anysola login` in the terminal",
