@@ -137,59 +137,95 @@ fn observed<T>(value: Option<T>, encode: impl FnOnce(T) -> Value) -> Observed {
 
 /// Block 2's sources in 0.5.1's order (most shared first, so the baseline stays a reusable
 /// prompt-cache prefix): the Code Mode catalog (its summary), skill guidance, instruction files,
-/// the date, the environment. A changed catalog or skill listing is shown whole again.
+/// the date, the environment, then the session's API entries. MCP server instructions and
+/// references belong between the catalog and the skill guidance. A changed catalog is shown
+/// whole again.
 pub fn sources(
     catalog: Option<&crate::codemode::catalog::Summary>,
-    skills: Option<String>,
+    skills: Option<Value>,
     files: Observed,
     date: &str,
     env: &Environment,
+    entries: &[(String, Option<Value>)],
 ) -> Vec<Source> {
-    vec![
+    let mut out = vec![
         Source {
-            key: "core/codemode",
+            key: "core/codemode".into(),
             observed: observed(catalog, |s| serde_json::to_value(s).unwrap_or_default()),
-            initial: render_catalog,
-            changed: |_, v| render_catalog(v),
-            removed: |_| {
+            initial: Box::new(render_catalog),
+            changed: Box::new(|_, v| render_catalog(v)),
+            removed: Box::new(|_| {
                 Some("Code Mode tools are no longer available. Do not use any previously listed Code Mode tools.".into())
-            },
+            }),
         },
         Source {
-            key: "core/skill-guidance",
-            observed: observed(skills, Value::String),
-            initial: |v| text(v).map(str::to_string),
-            changed: |_, v| text(v).map(str::to_string),
-            removed: state::never,
+            key: "core/skill-guidance".into(),
+            observed: skills.map_or(Observed::Removed, Observed::Value),
+            initial: Box::new(crate::skill::render_guidance),
+            changed: Box::new(crate::skill::guidance_update),
+            removed: Box::new(|_| {
+                Some("Skill guidance is no longer available. Do not use any previously listed skill.".into())
+            }),
         },
         Source {
-            key: "core/instructions",
+            key: "core/instructions".into(),
             observed: files,
-            initial: render_files,
-            changed: render_files_update,
-            removed: |_| Some("Previously loaded instructions no longer apply.".into()),
+            initial: Box::new(render_files),
+            changed: Box::new(render_files_update),
+            removed: Box::new(|_| Some("Previously loaded instructions no longer apply.".into())),
         },
         Source {
-            key: "core/date",
+            key: "core/date".into(),
             observed: Observed::Value(Value::String(date.to_string())),
-            initial: |v| text(v).map(|d| format!("Today's date: {d}")),
-            changed: |_, v| text(v).map(|d| format!("Today's date is now: {d}")),
-            removed: state::never,
+            initial: Box::new(|v| text(v).map(|d| format!("Today's date: {d}"))),
+            changed: Box::new(|_, v| text(v).map(|d| format!("Today's date is now: {d}"))),
+            removed: Box::new(state::never),
         },
         Source {
-            key: "core/environment",
+            key: "core/environment".into(),
             observed: Observed::Value(Value::String(environment(env))),
-            initial: |v| {
+            initial: Box::new(|v| {
                 text(v).map(|e| {
                     format!("Here is some useful information about the environment you are running in:\n{e}")
                 })
-            },
-            changed: |_, v| {
+            }),
+            changed: Box::new(|_, v| {
                 text(v).map(|e| format!("The environment you are running in is now:\n{e}"))
-            },
-            removed: state::never,
+            }),
+            removed: Box::new(state::never),
         },
-    ]
+    ];
+    out.extend(entries.iter().map(|(key, value)| entry(key, value.clone())));
+    out
+}
+
+/// A session entry `api/<key>`: shown as a `<context>` block, with narration only for later
+/// changes and removal.
+fn entry(key: &str, value: Option<Value>) -> Source {
+    let block = |key: &str, value: &Value| {
+        let rendered = match value {
+            Value::String(text) => text.clone(),
+            other => serde_json::to_string_pretty(other).unwrap_or_default(),
+        };
+        format!("<context key=\"{key}\">\n{rendered}\n</context>")
+    };
+    let (initial, changed, removed) = (key.to_string(), key.to_string(), key.to_string());
+    Source {
+        key: format!("api/{key}"),
+        observed: value.map_or(Observed::Removed, Observed::Value),
+        initial: Box::new(move |v| Some(block(&initial, v))),
+        changed: Box::new(move |_, v| {
+            Some(format!(
+                "The context under \"{changed}\" changed and supersedes the previous value:\n{}",
+                block(&changed, v)
+            ))
+        }),
+        removed: Box::new(move |_| {
+            Some(format!(
+                "The context under \"{removed}\" no longer applies. Disregard it."
+            ))
+        }),
+    }
 }
 
 fn has_glob(text: &str) -> bool {

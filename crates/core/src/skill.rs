@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use serde_json::{Value, json};
 use sha1::{Digest, Sha1};
 
 use crate::config::Config;
@@ -435,8 +436,9 @@ pub fn available<'a>(skills: &'a [Skill], rules: &[Rule]) -> Vec<&'a Skill> {
         .collect()
 }
 
-/// The skill guidance source of system block 2; `None` when no skill qualifies.
-pub fn guidance(skills: &[Skill], rules: &[Rule]) -> Option<String> {
+/// The skill guidance source of system block 2: `{id, name, description}` of each listed skill,
+/// sorted by id (0.5.1's stored shape); `None` when no skill qualifies.
+pub fn guidance(skills: &[Skill], rules: &[Rule]) -> Option<Value> {
     let mut listed: Vec<(&str, &str, &str)> = available(skills, rules)
         .into_iter()
         .filter(|s| s.autoinvoke != Some(false))
@@ -450,20 +452,106 @@ pub fn guidance(skills: &[Skill], rules: &[Rule]) -> Option<String> {
         return None;
     }
     listed.sort_by(|a, b| crate::text::locale_compare(a.0, b.0));
+    Some(Value::Array(
+        listed
+            .into_iter()
+            .map(|(id, name, description)| json!({"id": id, "name": name, "description": description}))
+            .collect(),
+    ))
+}
+
+fn summaries(value: &Value) -> Vec<&Value> {
+    value
+        .as_array()
+        .map(|a| a.iter().collect())
+        .unwrap_or_default()
+}
+
+fn field<'a>(skill: &'a Value, key: &str) -> &'a str {
+    skill.get(key).and_then(Value::as_str).unwrap_or_default()
+}
+
+fn entries(skills: &[&Value]) -> Vec<String> {
+    skills
+        .iter()
+        .flat_map(|skill| {
+            [
+                "  <skill>".to_string(),
+                format!("    <id>{}</id>", field(skill, "id")),
+                format!("    <name>{}</name>", field(skill, "name")),
+                format!(
+                    "    <description>{}</description>",
+                    field(skill, "description")
+                ),
+                "  </skill>".to_string(),
+            ]
+        })
+        .collect()
+}
+
+/// The guidance as the model first sees it.
+pub fn render_guidance(value: &Value) -> Option<String> {
+    let skills = summaries(value);
     let mut lines = vec![
         "Skills provide specialized instructions and workflows for specific tasks.".to_string(),
         "Use the skill tool to load a skill when a task matches its description.".into(),
         "The user may also invoke a skill directly. When that happens, its instructions appear in the conversation as a <skill_content> block, the same shape the skill tool returns. A skill that is already present this way does not need to be invoked again.".into(),
-        "<available_skills>".into(),
     ];
-    for (id, name, description) in listed {
-        lines.push("  <skill>".into());
-        lines.push(format!("    <id>{id}</id>"));
-        lines.push(format!("    <name>{name}</name>"));
-        lines.push(format!("    <description>{description}</description>"));
-        lines.push("  </skill>".into());
+    if skills.is_empty() {
+        lines.push("No skills are currently available.".into());
+    } else {
+        lines.push("<available_skills>".into());
+        lines.extend(entries(&skills));
+        lines.push("</available_skills>".into());
     }
-    lines.push("</available_skills>".into());
+    Some(lines.join("\n"))
+}
+
+/// Added, changed and removed skills as deltas; the whole list again when only the order moved.
+pub fn guidance_update(previous: &Value, current: &Value) -> Option<String> {
+    let (before, after) = (summaries(previous), summaries(current));
+    let find = |list: &[&'_ Value], id: &str| list.iter().position(|s| field(s, "id") == id);
+    let added: Vec<&Value> = after
+        .iter()
+        .copied()
+        .filter(|s| find(&before, field(s, "id")).is_none())
+        .collect();
+    let removed: Vec<&str> = before
+        .iter()
+        .map(|s| field(s, "id"))
+        .filter(|id| find(&after, id).is_none())
+        .collect();
+    let changed: Vec<&Value> = after
+        .iter()
+        .copied()
+        .filter(|s| {
+            find(&before, field(s, "id")).is_some_and(|i| {
+                field(before[i], "name") != field(s, "name")
+                    || field(before[i], "description") != field(s, "description")
+            })
+        })
+        .collect();
+    if added.is_empty() && changed.is_empty() && removed.is_empty() {
+        return Some(format!(
+            "The available skills have changed. This list supersedes the previous available skills list.\n{}",
+            render_guidance(current)?
+        ));
+    }
+    let mut lines = Vec::new();
+    if !added.is_empty() {
+        lines.push("New skills are available in addition to those previously listed:".to_string());
+        lines.extend(entries(&added));
+    }
+    if !changed.is_empty() {
+        lines.push("The following skills have changed. Each entry replaces the previously listed skill with the same ID:".into());
+        lines.extend(entries(&changed));
+    }
+    if !removed.is_empty() {
+        lines.push(format!(
+            "The following skill IDs are no longer available and must not be used: {}.",
+            removed.join(", ")
+        ));
+    }
     Some(lines.join("\n"))
 }
 
@@ -640,11 +728,31 @@ mod tests {
             Rule::new("*", "*", Effect::Allow),
             Rule::new("skill", "denied", Effect::Deny),
         ];
-        let text = guidance(&skills, &rules).unwrap();
+        let text = render_guidance(&guidance(&skills, &rules).unwrap()).unwrap();
         assert!(text.ends_with("<available_skills>\n  <skill>\n    <id>Alpha</id>\n    <name>Alpha</name>\n    <description>A</description>\n  </skill>\n  <skill>\n    <id>zeta</id>\n    <name>zeta</name>\n    <description>Z</description>\n  </skill>\n</available_skills>"));
         assert_eq!(
             guidance(&skills, &[Rule::new("*", "*", Effect::Deny)]),
             None
+        );
+    }
+
+    #[test]
+    fn guidance_updates() {
+        let skill =
+            |id: &str, description: &str| json!({"id": id, "name": id, "description": description});
+        let before = json!([skill("a", "A"), skill("b", "B"), skill("c", "C")]);
+        let after = json!([skill("b", "B2"), skill("c", "C"), skill("d", "D")]);
+        assert_eq!(
+            guidance_update(&before, &after).unwrap(),
+            "New skills are available in addition to those previously listed:\n  <skill>\n    <id>d</id>\n    <name>d</name>\n    <description>D</description>\n  </skill>\nThe following skills have changed. Each entry replaces the previously listed skill with the same ID:\n  <skill>\n    <id>b</id>\n    <name>b</name>\n    <description>B2</description>\n  </skill>\nThe following skill IDs are no longer available and must not be used: a."
+        );
+        let reordered = json!([skill("c", "C"), skill("b", "B"), skill("a", "A")]);
+        let restated = guidance_update(&before, &reordered).unwrap();
+        assert!(restated.starts_with("The available skills have changed. This list supersedes the previous available skills list.\nSkills provide specialized"));
+        assert!(
+            render_guidance(&json!([]))
+                .unwrap()
+                .ends_with("again.\nNo skills are currently available.")
         );
     }
 

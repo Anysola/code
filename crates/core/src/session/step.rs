@@ -17,7 +17,7 @@ use super::message::{
 use super::request::{Request, build, output_limit};
 use super::stream::{Action, Assembly};
 use super::{Outcome, Selection, TurnOptions, compaction};
-use crate::api::Shared;
+use crate::api::{Loaded, Shared};
 use crate::events::{Event, InterruptReason};
 use crate::gateway::error::{ApiError, Reason, SessionError};
 use crate::gateway::retry::Retry;
@@ -67,18 +67,18 @@ struct Context {
 /// message on later changes) and returns block 2, the frozen baseline.
 fn instructions(
     shared: &Shared,
+    sources: &Loaded,
     session: &SessionRow,
     rules: &[crate::permission::Rule],
 ) -> Result<String, SessionError> {
     let directory = std::path::PathBuf::from(&session.directory);
     let worktree = shared.project.worktree.clone();
-    let loaded = shared.loaded();
     let files = instructions::discover(
         &shared.paths,
         &directory,
         &worktree,
-        &loaded.config.instructions,
-        &loaded.remote_instructions,
+        &sources.config.instructions,
+        &sources.remote_instructions,
     );
     let environment = Environment {
         git: shared.project.vcs == Some("git"),
@@ -91,10 +91,14 @@ fn instructions(
         .map(|inventory| inventory.summary());
     let sources = instructions::sources(
         catalog.as_ref(),
-        crate::skill::guidance(&loaded.skills, rules),
+        crate::skill::guidance(&sources.skills, rules),
         files,
         &crate::time::date_string(),
         &environment,
+        &shared
+            .db
+            .instruction_entries(&session.id)
+            .map_err(|e| SessionError::new("unknown", e.to_string()))?,
     );
     Ok(instructions::prepare(&shared.db, &session.id, &sources)?.baseline)
 }
@@ -116,14 +120,14 @@ fn context(
 ) -> Result<Context, SessionError> {
     let rules = selection.agent.permissions.clone();
     let mut tools = shared.registry.active(&rules);
-    let loaded = shared.loaded();
-    if !loaded.config.websearch_enabled() {
+    let sources = &selection.sources;
+    if !sources.config.websearch_enabled() {
         tools.retain(|t| t.name() != "websearch");
     }
     let env = DefinitionEnv {
-        shell_name: crate::tool::shell::shell_name(loaded.config.shell()),
+        shell_name: crate::tool::shell::shell_name(sources.config.shell()),
         year: process_year(),
-        subagents: loaded.agents.subagents_for(&rules),
+        subagents: sources.agents.subagents_for(&rules),
     };
     let definitions = Registry::definitions(&tools, &env);
     let names: Vec<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
@@ -131,7 +135,7 @@ fn context(
         Some(system) => system.clone(),
         None => format!("{}\n\n{ANTHROPIC_PROMPT}", default_system(&names)),
     };
-    let block2 = instructions(shared, session, &rules)?;
+    let block2 = instructions(shared, sources, session, &rules)?;
     let system = vec![
         block0,
         identity(&selection.model.name, &selection.model.id),
@@ -161,10 +165,11 @@ enum StepEnd {
     Interrupted(InterruptReason),
 }
 
+/// Runs the turn's steps. Before each one the config sources, agent, model, tools and
+/// instructions are selected again, so changes apply at the next step boundary.
 pub(crate) async fn drive(
     shared: &Arc<Shared>,
     session: &SessionRow,
-    selection: &Selection,
     options: TurnOptions,
     cancel: &CancellationToken,
 ) -> Outcome {
@@ -182,9 +187,15 @@ pub(crate) async fn drive(
                 return Outcome::Interrupted(InterruptReason::Budget);
             }
         }
+        shared.refresh().await;
         // A tool may have moved the session; the next step runs in its new directory.
         let current = shared.db.session(&session.id).ok().flatten();
         let session = current.as_ref().unwrap_or(session);
+        let selection = match super::select(shared, session) {
+            Ok(selection) => selection,
+            Err(error) => return Outcome::Failed(error),
+        };
+        let selection = &selection;
         if number > 1 {
             // Steered input joins the turn at this boundary, after the context it follows.
             if let Err(error) = settle_context(shared, session, selection) {
@@ -198,7 +209,9 @@ pub(crate) async fn drive(
             }
         }
         let capped = selection.agent.steps == Some(number);
-        match step(shared, session, selection, capped, cancel).await {
+        let end = step(shared, session, selection, capped, cancel).await;
+        shared.warming.settled(&session.id);
+        match end {
             StepEnd::Compacted => {
                 number -= 1;
                 continue;
@@ -220,7 +233,11 @@ pub(crate) async fn drive(
             StepEnd::Overflow(error) => return Outcome::Failed(error.to_session_error()),
             StepEnd::Continue if capped => return Outcome::Succeeded,
             StepEnd::Continue => {}
-            StepEnd::Stop => return Outcome::Succeeded,
+            StepEnd::Stop => {
+                // The session goes idle, which leaves a background summary time to finish.
+                precompute_idle(shared, session, selection);
+                return Outcome::Succeeded;
+            }
             StepEnd::Failed(error) => return Outcome::Failed(error),
             StepEnd::Interrupted(reason) => return Outcome::Interrupted(reason),
         }
@@ -246,6 +263,27 @@ pub(crate) async fn drive(
             length_finishes = 0;
         }
     }
+}
+
+fn precompute_idle(shared: &Arc<Shared>, session: &SessionRow, selection: &Selection) {
+    if !compaction::Settings::from_config(&selection.sources.config).precompute {
+        return;
+    }
+    let Ok(ctx) = context(shared, session, selection) else {
+        return;
+    };
+    let history = compaction::history(shared, &session.id).messages;
+    let target = Target {
+        provider: &selection.reference.provider,
+        id: &selection.model.id,
+        input: &selection.model.input,
+    };
+    let estimate = compaction::estimate_prompt(&history, &target, &ctx.system, &ctx.definitions);
+    let prefix = compaction::Prefix {
+        system: &ctx.system,
+        tools: &ctx.definitions,
+    };
+    compaction::precompute(shared, session, selection, prefix, estimate);
 }
 
 /// `/compact`: a manual compaction of the session's history.
@@ -305,6 +343,86 @@ async fn triggered(
     .await
 }
 
+/// A one-shot request from the session's current context with `prompt` as the last user
+/// message; nothing is recorded but instruction updates and credits. Retries only failures that
+/// never reached the model.
+pub(crate) async fn generate(
+    shared: &Arc<Shared>,
+    session: &SessionRow,
+    prompt: &str,
+) -> Result<String, SessionError> {
+    let selection = super::select(shared, session)?;
+    super::warming::context(
+        shared,
+        session,
+        &selection.sources.config,
+        super::warming::Request::KeepAlive,
+    );
+    let ctx = context(shared, session, &selection)?;
+    let history = compaction::history(shared, &session.id).messages;
+    let target = Target {
+        provider: &selection.reference.provider,
+        id: &selection.model.id,
+        input: &selection.model.input,
+    };
+    let estimate = compaction::estimate_prompt(&history, &target, &ctx.system, &ctx.definitions);
+    let mut messages = lower(&history, &target);
+    messages.push(Entry::Turn(
+        json!({"role": "user", "content": [{"type": "text", "text": prompt}]}),
+    ));
+    let variant = selection
+        .reference
+        .variant
+        .as_deref()
+        .and_then(|v| selection.model.variant(v));
+    let (body, mut headers) = build(Request {
+        model: &selection.model,
+        variant,
+        system: ctx.system,
+        tools: ctx.definitions,
+        messages,
+        max_tokens: output_limit(
+            &selection.model,
+            estimate.measured,
+            estimate.estimated,
+            0.01,
+        ),
+        tools_disabled: false,
+    });
+    headers.extend(session_headers(shared, session));
+    let mut retry = Retry::default();
+    let mut stream = loop {
+        match shared.gateway.messages(body.clone(), &headers).await {
+            Ok(stream) => break stream,
+            Err(error) => match retry.next_one_shot(&error) {
+                Some(delay) => tokio::time::sleep(delay).await,
+                None => return Err(error.to_session_error()),
+            },
+        }
+    };
+    let mut assembly = Assembly::default();
+    while let Some(item) = stream.next().await {
+        match item.map_err(|e| e.to_session_error())? {
+            StreamItem::Credits { charged, remaining } => {
+                shared.credits.record(&session.id, charged, remaining)
+            }
+            StreamItem::Event(event) => {
+                assembly
+                    .on_event(&event)
+                    .map_err(|e| e.to_session_error())?;
+            }
+        }
+    }
+    Ok(assembly
+        .parts
+        .iter()
+        .filter_map(|p| match p {
+            Part::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect())
+}
+
 struct Running {
     session_id: String,
     message_id: String,
@@ -343,11 +461,14 @@ async fn step(
     };
     let trigger = compaction::Trigger::Auto(estimate);
     match compaction::compact(shared, session, selection, prefix, trigger, cancel).await {
-        compaction::Outcome::Skipped => {}
+        compaction::Outcome::Skipped => {
+            compaction::precompute(shared, session, selection, prefix, estimate)
+        }
         compaction::Outcome::Completed => return StepEnd::Compacted,
         compaction::Outcome::Failed(error) => return StepEnd::Failed(error),
     }
     let mut messages = lower(&history, &target);
+    super::plan_context(shared, &session.id, &selection.agent.id, &mut messages);
     if capped {
         messages.push(Entry::Turn(
             json!({"role": "assistant", "content": [{"type": "text", "text": MAX_STEPS_PROMPT}]}),
@@ -375,6 +496,12 @@ async fn step(
     });
     headers.extend(session_headers(shared, session));
 
+    super::warming::context(
+        shared,
+        session,
+        &selection.sources.config,
+        super::warming::Request::Step,
+    );
     let message_id = crate::ids::message();
     let start = capture(shared);
     let running = Running {
@@ -582,65 +709,83 @@ fn settle(
     result: Result<ToolOutput, ToolError>,
     interrupted: &SessionError,
 ) {
+    let output = match result {
+        Ok(output) => output,
+        Err(error) => {
+            let error = match error.kind {
+                ToolErrorKind::Interrupted => interrupted.clone(),
+                _ => SessionError::new(error.type_tag(), error.message),
+            };
+            return fail_part(shared, running, index, error);
+        }
+    };
     let Some(Part::Tool {
         id, state, time, ..
     }) = running.data.content.get_mut(index)
     else {
         return;
     };
-    let input = match state {
-        ToolState::Running { input, .. } => input.clone(),
-        ToolState::Streaming { input } => serde_json::from_str(input).unwrap_or(json!({})),
-        _ => return,
+    let Some(input) = settled_input(state) else {
+        return;
     };
     time.completed = Some(now_ms());
-    let (session_id, message_id, call_id) = (
-        running.session_id.clone(),
-        running.message_id.clone(),
-        id.clone(),
+    *state = ToolState::Completed {
+        input,
+        content: output.content.clone(),
+        metadata: output.metadata.clone(),
+    };
+    let call_id = id.clone();
+    send(
+        shared,
+        Event::ToolSucceeded {
+            session_id: running.session_id.clone(),
+            message_id: running.message_id.clone(),
+            call_id,
+            content: output.content,
+            metadata: output.metadata,
+        },
     );
-    match result {
-        Ok(output) => {
-            *state = ToolState::Completed {
-                input,
-                content: output.content.clone(),
-                metadata: output.metadata.clone(),
-            };
-            send(
-                shared,
-                Event::ToolSucceeded {
-                    session_id,
-                    message_id,
-                    call_id,
-                    content: output.content,
-                    metadata: output.metadata,
-                },
-            );
-        }
-        Err(error) => {
-            let error = match error.kind {
-                ToolErrorKind::Interrupted => interrupted.clone(),
-                _ => SessionError::new(error.type_tag(), error.message),
-            };
-            *state = ToolState::Error {
-                input,
-                error: error.clone(),
-                content: Vec::new(),
-                metadata: Map::new(),
-            };
-            send(
-                shared,
-                Event::ToolFailed {
-                    session_id,
-                    message_id,
-                    call_id,
-                    error,
-                    content: Vec::new(),
-                    metadata: Map::new(),
-                },
-            );
-        }
+}
+
+/// The input a still-open call settles with; `None` once it has settled.
+fn settled_input(state: &ToolState) -> Option<Value> {
+    match state {
+        ToolState::Running { input, .. } => Some(input.clone()),
+        ToolState::Streaming { input } => Some(serde_json::from_str(input).unwrap_or(json!({}))),
+        _ => None,
     }
+}
+
+/// Records a tool call as failed and reports it.
+fn fail_part(shared: &Shared, running: &mut Running, index: usize, error: SessionError) {
+    let Some(Part::Tool {
+        id, state, time, ..
+    }) = running.data.content.get_mut(index)
+    else {
+        return;
+    };
+    let Some(input) = settled_input(state) else {
+        return;
+    };
+    time.completed = Some(now_ms());
+    *state = ToolState::Error {
+        input,
+        error: error.clone(),
+        content: Vec::new(),
+        metadata: Map::new(),
+    };
+    let call_id = id.clone();
+    send(
+        shared,
+        Event::ToolFailed {
+            session_id: running.session_id.clone(),
+            message_id: running.message_id.clone(),
+            call_id,
+            error,
+            content: Vec::new(),
+            metadata: Map::new(),
+        },
+    );
 }
 
 type ToolTask = (usize, Result<ToolOutput, ToolError>);
@@ -672,7 +817,7 @@ async fn run_stream(
         scope: Arc::new(Scope {
             configured,
             project_id: shared.project.id.clone(),
-            policies: Arc::new(shared.loaded().config.policies()),
+            policies: Arc::new(selection.sources.config.policies()),
         }),
         asks: shared.asks.clone(),
     });
@@ -749,18 +894,10 @@ async fn run_stream(
             )
             .await;
         }
-        tool_cancel.cancel();
-        let unsettled = collect(shared, &mut running, &mut tasks).await;
+        // Calls already running finish; the ones the stream cut off never ran.
+        collect(shared, &mut running, &mut tasks).await;
+        settle_unfinished(shared, &mut running, &assembly);
         if error.retryable() && assembly.has_output() {
-            for index in unsettled {
-                settle(
-                    shared,
-                    &mut running,
-                    index,
-                    Err(ToolError::interrupted()),
-                    &interrupted_error(),
-                );
-            }
             running.data.finish = Some("unknown".into());
             running.data.time.completed = Some(now_ms());
             running.save(shared);
@@ -770,8 +907,8 @@ async fn run_stream(
         return fail(shared, running, error.to_session_error());
     }
 
-    let unsettled = collect(shared, &mut running, &mut tasks).await;
-    debug_assert!(unsettled.is_empty());
+    collect(shared, &mut running, &mut tasks).await;
+    settle_unfinished(shared, &mut running, &assembly);
     let declined = running.data.content.iter().any(|p| {
         matches!(p, Part::Tool { state: ToolState::Error { error, .. }, .. }
             if error.message == "The user declined this tool call"
@@ -782,11 +919,16 @@ async fn run_stream(
     running.data.raw_finish = assembly.stop_reason.clone();
     running.data.cost = Some(0.0);
     running.data.time.completed = Some(now_ms());
-    let ran_tools = running
-        .data
-        .content
-        .iter()
-        .any(|p| matches!(p, Part::Tool { .. }));
+    // Provider-executed calls ran inside the response; only client calls need another step.
+    let ran_tools = running.data.content.iter().any(|p| {
+        matches!(
+            p,
+            Part::Tool {
+                executed: Some(false) | None,
+                ..
+            }
+        )
+    });
     let _ = shared.db.add_tokens(
         &session.id,
         crate::storage::TokenTotals {
@@ -820,6 +962,14 @@ async fn run_stream(
     } else {
         StepEnd::Stop
     }
+}
+
+/// Fails the calls the response left without an outcome (`Assembly::unfinished`).
+fn settle_unfinished(shared: &Shared, running: &mut Running, assembly: &Assembly) {
+    for (index, error) in assembly.unfinished() {
+        fail_part(shared, running, index, error);
+    }
+    running.save(shared);
 }
 
 fn interrupted_error() -> SessionError {
@@ -1006,8 +1156,8 @@ fn handle(
                 permissions: gate.clone(),
                 cancel: cancel.clone(),
                 env: shared.env.clone(),
-                configured_shell: shared.loaded().config.shell().map(str::to_string),
-                limits: shared.loaded().config.tool_output(),
+                configured_shell: selection.sources.config.shell().map(str::to_string),
+                limits: selection.sources.config.tool_output(),
                 locks: shared.locks.clone(),
                 notifier: shared.notifier.clone(),
                 web_search: Arc::new(crate::search::GatewaySearch::new(
@@ -1021,7 +1171,7 @@ fn handle(
             };
             let tools = ctx.tools.clone();
             let output_dir = shared.paths.tool_output_dir();
-            let images = crate::media::Limits::from_config(shared.loaded().config.get("media"));
+            let images = crate::media::Limits::from_config(selection.sources.config.get("media"));
             tasks.spawn(async move {
                 let result = execute(&tools, &name, input, &tool_ctx, capped).await;
                 let result = result.map(|out| {
@@ -1064,6 +1214,20 @@ async fn execute(
     let result = tokio::select! {
         result = tool.execute(input, ctx) => result,
         _ = ctx.cancel.cancelled() => Err(ToolError::interrupted()),
+    };
+    let result = match result {
+        Err(error)
+            if ctx.agent == "plan"
+                && error.kind == ToolErrorKind::Blocked
+                && matches!(tool.name(), "edit" | "write" | "patch") =>
+        {
+            Err(ToolError::execution(format!(
+                "Cannot use {} to modify files outside the Plan directory: {}",
+                tool.name(),
+                ctx.paths.plan_dir().display()
+            )))
+        }
+        result => result,
     };
     match (result, alias) {
         (Ok(mut output), Some(note)) => {

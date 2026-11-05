@@ -41,6 +41,16 @@ const LEVELS: usize = 5;
 const TRANSCRIPT_CLIP: usize = 2_000;
 const IMAGE_TOKENS: u64 = 1_500;
 const PDF_TOKENS: u64 = 2_000;
+/// Share of the ceiling at which a background summary starts.
+const PRECOMPUTE_RATIO: f64 = 0.85;
+/// Measured prompt tokens below which a background summary is not worth its cost.
+const PRECOMPUTE_MIN_TOKENS: u64 = 64_000;
+/// The most text a swapped-in summary keeps verbatim beside it: twice `keep`, at least this,
+/// at most a quarter of the budget.
+const PRECOMPUTED_TAIL_MIN: u64 = 30_000;
+const PRECOMPUTED_TAIL_SHARE: f64 = 0.25;
+/// Failed background summaries after which no new one starts until the next compaction.
+const PRECOMPUTE_MAX_FAILURES: u32 = 2;
 
 /// About four characters per token (UTF-16 units, as 0.5.1 counted).
 pub fn tokens(text: &str) -> u64 {
@@ -68,6 +78,8 @@ pub struct Settings {
     pub keep: u64,
     /// Room kept free below the window: `"N%"` or tokens.
     pub buffer: Option<Value>,
+    /// `experimental.background_compaction`: summarize ahead of time near the ceiling.
+    pub precompute: bool,
 }
 
 impl Settings {
@@ -81,6 +93,11 @@ impl Settings {
                 .and_then(Value::as_u64)
                 .unwrap_or(15_000),
             buffer: field("buffer").cloned(),
+            precompute: config
+                .get("experimental")
+                .and_then(|e| e.get("background_compaction"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         }
     }
 }
@@ -726,6 +743,7 @@ enum Sent {
 }
 
 /// The system blocks and tools the session's next request would carry.
+#[derive(Clone, Copy)]
 pub(crate) struct Prefix<'a> {
     pub system: &'a [String],
     pub tools: &'a [ToolDefinition],
@@ -735,15 +753,15 @@ pub(crate) struct Prefix<'a> {
 /// plus the summary prompt while that fits; otherwise the history goes as a shortened text
 /// transcript.
 pub(crate) async fn compact(
-    shared: &Shared,
+    shared: &std::sync::Arc<Shared>,
     session: &SessionRow,
     selection: &Selection,
     prefix: Prefix<'_>,
     trigger: Trigger,
     cancel: &CancellationToken,
 ) -> Outcome {
-    let current = shared.loaded();
-    let settings = Settings::from_config(&current.config);
+    let sources = shared.loaded();
+    let settings = Settings::from_config(&sources.config);
     if trigger != Trigger::Manual && !settings.auto {
         return Outcome::Skipped;
     }
@@ -756,17 +774,20 @@ pub(crate) async fn compact(
             return Outcome::Skipped;
         }
     }
-    let configured = current
-        .agents
-        .get("compaction")
-        .and_then(|a| a.model.as_deref())
-        .and_then(ModelRef::parse)
-        .and_then(|r| crate::model::resolve(&current.models, &r).ok());
-    let model = configured.unwrap_or_else(|| selection.model.clone());
+    let held = shared
+        .precomputed
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&session.id);
+    let model = compaction_model(selection);
+    super::warming::context(
+        shared,
+        session,
+        &sources.config,
+        super::warming::Request::Compaction,
+    );
     let same_model = model.id == selection.model.id;
-    let cap = ceiling(model.context, settings.buffer.as_ref())
-        .or_else(|| ceiling(Some(UNKNOWN_WINDOW), settings.buffer.as_ref()))
-        .unwrap_or(UNKNOWN_WINDOW);
+    let cap = model_cap(&model, &settings);
     let budget = match trigger {
         Trigger::Overflow(estimate) => {
             cap.min((estimate.total() as f64 * SHRINK_STEPS[0]).floor() as u64)
@@ -802,12 +823,25 @@ pub(crate) async fn compact(
         cancel,
         tokens: Tokens::default(),
     };
-    let result = tokio::select! {
-        result = summarize(&mut call, &loaded, selection, &prefix, trigger, budget, settings.keep) => result,
+    let swapped = match held {
+        Some(held) => {
+            let request = (prefix.system, selection, &settings);
+            use_precomputed(held, &loaded, request, trigger, budget, cancel).await
+        }
+        None => None,
+    };
+    let result = match swapped {
+        Some((summary, keep, tokens)) => {
+            call.tokens = tokens;
+            Ok((summary, Some(keep)))
+        }
+        None => tokio::select! {
+            result = summarize(&mut call, &loaded.messages, selection, &prefix, trigger, budget, settings.keep, false) => result,
         _ = cancel.cancelled() => Err(SessionError::new(
             if trigger == Trigger::Manual { "aborted" } else { "compaction.interrupted" },
             if trigger == Trigger::Manual { "Compaction cancelled" } else { "Compaction was interrupted" },
         )),
+        },
     };
     let tokens = call.tokens;
     let mut data = CompactionData {
@@ -857,18 +891,240 @@ pub(crate) async fn compact(
     outcome
 }
 
+/// The compaction agent's model when it has one, else the session's.
+fn compaction_model(selection: &Selection) -> Model {
+    let sources = &selection.sources;
+    sources
+        .agents
+        .get("compaction")
+        .and_then(|a| a.model.as_deref())
+        .and_then(ModelRef::parse)
+        .and_then(|r| crate::model::resolve(&sources.models, &r).ok())
+        .unwrap_or_else(|| selection.model.clone())
+}
+
+fn model_cap(model: &Model, settings: &Settings) -> u64 {
+    ceiling(model.context, settings.buffer.as_ref())
+        .or_else(|| ceiling(Some(UNKNOWN_WINDOW), settings.buffer.as_ref()))
+        .unwrap_or(UNKNOWN_WINDOW)
+}
+
+type Summary = Result<(String, Tokens), SessionError>;
+
+/// A background summary of everything before `keep_id`, held until automatic compaction is due.
+pub(crate) struct Held {
+    first_id: Option<String>,
+    keep_id: String,
+    model: (String, Option<String>),
+    /// The system blocks it was written under; other instructions make it stale.
+    system: Vec<String>,
+    tail_limit: u64,
+    /// Background summaries that failed since the last compaction, this one included once it has.
+    failures: u32,
+    result: tokio::sync::watch::Receiver<Option<Summary>>,
+    task: tokio::task::AbortHandle,
+}
+
+impl Held {
+    /// Where its `keep_id` sits in `loaded`, when it still describes this conversation.
+    fn index(&self, loaded: &History, system: &[String], selection: &Selection) -> Option<usize> {
+        let same = self.first_id.as_deref() == loaded.ids.first().map(String::as_str)
+            && system == self.system.as_slice()
+            && self.model.0 == selection.model.id
+            && self.model.1 == selection.reference.variant;
+        same.then(|| loaded.ids.iter().position(|id| *id == self.keep_id))
+            .flatten()
+    }
+
+    fn failed(&self) -> bool {
+        matches!(&*self.result.borrow(), Some(Err(_)))
+    }
+}
+
+/// Estimated text a swapped-in summary keeps verbatim: every message from `index` on.
+fn tail_tokens(messages: &[Message], index: usize) -> u64 {
+    tokens(
+        &messages[index..]
+            .iter()
+            .map(message_to_text)
+            .filter(|t| !t.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+    )
+}
+
+fn tail_limit(keep: u64, budget: u64) -> u64 {
+    (keep * 2)
+        .max(PRECOMPUTED_TAIL_MIN)
+        .min((budget as f64 * PRECOMPUTED_TAIL_SHARE).floor() as u64)
+}
+
+/// `experimental.background_compaction`: once the prompt passes 85% of the ceiling, summarizes
+/// everything before the latest response in the background (the prefix the provider just read,
+/// so the summary request hits the prompt cache). The summary is held, not applied, until
+/// automatic compaction is due. One summary is held per session; a newer response replaces it
+/// when it failed or the tail since it grew too long.
+pub(crate) fn precompute(
+    shared: &std::sync::Arc<Shared>,
+    session: &SessionRow,
+    selection: &Selection,
+    prefix: Prefix<'_>,
+    estimate: Estimate,
+) {
+    let settings = Settings::from_config(&selection.sources.config);
+    if !settings.precompute || !settings.auto {
+        return;
+    }
+    let Some(ceiling) = ceiling(selection.model.context, settings.buffer.as_ref()) else {
+        return;
+    };
+    let total = estimate.total();
+    if total >= ceiling || (total as f64) < ceiling as f64 * PRECOMPUTE_RATIO {
+        return;
+    }
+    let loaded = history(shared, &session.id);
+    let Some(anchor_at) =
+        anchor(&loaded.messages, &selection.reference.provider).filter(|i| *i > 0)
+    else {
+        return;
+    };
+    let Message::Assistant(anchor) = &loaded.messages[anchor_at] else {
+        return;
+    };
+    if anchor
+        .tokens
+        .map_or(0, |t| t.input + t.cache.read + t.cache.write)
+        < PRECOMPUTE_MIN_TOKENS
+    {
+        return;
+    }
+    let mut precomputed = shared.precomputed.lock().unwrap_or_else(|e| e.into_inner());
+    let mut failures = 0;
+    if let Some(existing) = precomputed.get(&session.id) {
+        let failed = existing.failed();
+        failures = existing.failures + u32::from(failed);
+        if let Some(index) = existing.index(&loaded, prefix.system, selection) {
+            if !failed && tail_tokens(&loaded.messages, index) <= existing.tail_limit {
+                return;
+            }
+            // Summarizing up to the same response again would repeat the same request.
+            if existing.keep_id == loaded.ids[anchor_at] || failures >= PRECOMPUTE_MAX_FAILURES {
+                return;
+            }
+        }
+        existing.task.abort();
+        precomputed.remove(&session.id);
+    }
+    // After a model switch nothing is cached for the new model yet.
+    if anchor.model.id != selection.model.id || anchor.model.variant != selection.reference.variant
+    {
+        return;
+    }
+    let model = compaction_model(selection);
+    let cap = model_cap(&model, &settings);
+    let (sender, result) = tokio::sync::watch::channel(None);
+    let (shared_task, session_task, selection_task) =
+        (shared.clone(), session.clone(), selection.clone());
+    let (system, tools) = (prefix.system.to_vec(), prefix.tools.to_vec());
+    let messages = loaded.messages[..anchor_at].to_vec();
+    let keep = settings.keep;
+    let task_system = system.clone();
+    let task = tokio::spawn(async move {
+        let variant = (model.id == selection_task.model.id)
+            .then(|| selection_task.reference.variant.clone())
+            .flatten();
+        let cancel = CancellationToken::new();
+        let mut call = Call {
+            shared: &shared_task,
+            session: &session_task,
+            model: &model,
+            variant: variant.as_deref(),
+            cancel: &cancel,
+            tokens: Tokens::default(),
+        };
+        let prefix = Prefix {
+            system: &task_system,
+            tools: &tools,
+        };
+        let summary = summarize(
+            &mut call,
+            &messages,
+            &selection_task,
+            &prefix,
+            Trigger::Auto(Estimate::default()),
+            cap,
+            keep,
+            true,
+        )
+        .await;
+        let _ = sender.send(Some(summary.map(|(text, _)| (text, call.tokens))));
+    });
+    precomputed.insert(
+        session.id.clone(),
+        Held {
+            first_id: loaded.ids.first().cloned(),
+            keep_id: loaded.ids[anchor_at].clone(),
+            model: (
+                selection.model.id.clone(),
+                selection.reference.variant.clone(),
+            ),
+            system,
+            tail_limit: tail_limit(keep, cap),
+            failures,
+            result,
+            task: task.abort_handle(),
+        },
+    );
+}
+
+/// The held summary, the index of its kept tail and its usage, when it still describes this
+/// conversation and that tail is short; waits for a summary still being written. `None` (after
+/// stopping the background work) when it cannot be used.
+async fn use_precomputed(
+    held: Held,
+    loaded: &History,
+    request: (&[String], &Selection, &Settings),
+    trigger: Trigger,
+    budget: u64,
+    cancel: &CancellationToken,
+) -> Option<(String, usize, Tokens)> {
+    let (system, selection, settings) = request;
+    let index = held.index(loaded, system, selection).filter(|i| {
+        settings.precompute
+            && !matches!(trigger, Trigger::Overflow(_))
+            && tail_tokens(&loaded.messages, *i) <= tail_limit(settings.keep, budget)
+    });
+    let Some(index) = index else {
+        held.task.abort();
+        return None;
+    };
+    let mut result = held.result;
+    let finished = tokio::select! {
+        finished = result.wait_for(Option::is_some) => finished.ok().and_then(|r| r.clone()),
+        _ = cancel.cancelled() => None,
+    };
+    held.task.abort();
+    let (summary, tokens) = finished?.ok()?;
+    Some((summary, index, tokens))
+}
+
+/// Summarizes `messages`. A background summary covers all of them (the messages after them are
+/// kept when it is swapped in); otherwise the newest `keep` tokens stay verbatim beside it.
+#[allow(clippy::too_many_arguments)]
 async fn summarize(
     call: &mut Call<'_>,
-    loaded: &History,
+    messages: &[Message],
     selection: &Selection,
     prefix: &Prefix<'_>,
     trigger: Trigger,
     budget: u64,
     keep: u64,
+    background: bool,
 ) -> Result<(String, Option<usize>), SessionError> {
-    let messages = &loaded.messages;
     let nothing = || SessionError::new("compaction.unavailable", "Nothing to compact yet");
-    let keep_at = split(messages, keep).ok_or_else(nothing)?;
+    let keep_at = split(messages, keep)
+        .ok_or_else(nothing)?
+        .filter(|_| !background);
     let previous = previous(messages);
     let prompt = build_prompt(
         previous.is_some(),

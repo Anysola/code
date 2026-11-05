@@ -14,8 +14,10 @@ mod step;
 mod stream;
 pub mod subagent;
 mod title;
+mod warming;
 
 pub(crate) use step::session_headers as step_headers;
+pub(crate) use warming::Warming;
 
 use std::sync::Arc;
 
@@ -23,7 +25,7 @@ use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::Agent;
-use crate::api::Shared;
+use crate::api::{Loaded, Shared};
 use crate::events::{Event, InterruptReason};
 use crate::gateway::error::SessionError;
 use crate::model::{Model, ModelRef};
@@ -53,18 +55,20 @@ pub enum Outcome {
     Interrupted(InterruptReason),
 }
 
-/// The agent, model and variant a turn runs with.
+/// The config sources, agent, model and variant a step runs with.
+#[derive(Clone)]
 pub(crate) struct Selection {
+    pub sources: Arc<Loaded>,
     pub agent: Agent,
     pub model: Model,
     pub reference: ModelRef,
 }
 
 fn select(shared: &Shared, session: &SessionRow) -> Result<Selection, SessionError> {
-    let loaded = shared.loaded();
+    let sources = shared.loaded();
     let agent = match session.agent.as_deref() {
-        Some(id) => loaded.agents.get(id).cloned(),
-        None => loaded.agents.default_agent().cloned(),
+        Some(id) => sources.agents.get(id).cloned(),
+        None => sources.agents.default_agent().cloned(),
     }
     .ok_or_else(|| {
         SessionError::new(
@@ -86,11 +90,12 @@ fn select(shared: &Shared, session: &SessionRow) -> Result<Selection, SessionErr
         .as_deref()
         .and_then(ModelRef::parse)
         .or_else(|| session.model.as_ref().and_then(ModelRef::from_json))
-        .or_else(|| loaded.config.model().and_then(ModelRef::parse))
+        .or_else(|| sources.config.model().and_then(ModelRef::parse))
         .ok_or_else(no_route)?;
-    let model = crate::model::resolve(&loaded.models, &reference)
+    let model = crate::model::resolve(&sources.models, &reference)
         .map_err(|error| SessionError::new("provider.no-route", error.to_string()))?;
     Ok(Selection {
+        sources,
         agent,
         model,
         reference,
@@ -131,6 +136,47 @@ fn plan_reminders(shared: &Shared, session_id: &str, agent: &str) {
     } else if agent != "plan" && in_plan {
         synthetic(shared, session_id, PLAN_LEAVE.to_string());
     }
+}
+
+/// Plan mode per request: compaction or a committed revert can strip the reminders while the
+/// agent stays put. A missing enter reminder (or a stale one after leaving plan) is added before
+/// the user's prompt and recorded.
+fn plan_context(shared: &Shared, session_id: &str, agent: &str, entries: &mut Vec<lower::Entry>) {
+    let enter = plan_enter(&shared.paths.plan_dir().display().to_string());
+    let user = |entry: &lower::Entry| match entry {
+        lower::Entry::Turn(message) => {
+            message["role"] == "user"
+                && message["content"]
+                    .as_array()
+                    .is_some_and(|c| c.iter().any(|b| b["type"] != "tool_result"))
+        }
+        _ => false,
+    };
+    let last = entries.iter().rev().find_map(|entry| match entry {
+        lower::Entry::Turn(message) if user(entry) => match message["content"].as_array() {
+            Some(content) if content.len() == 1 && content[0]["type"] == "text" => {
+                content[0]["text"]
+                    .as_str()
+                    .filter(|t| *t == enter || *t == PLAN_LEAVE)
+            }
+            _ => None,
+        },
+        _ => None,
+    });
+    let text = match (agent == "plan", last == Some(enter.as_str())) {
+        (true, false) => enter,
+        (false, true) => PLAN_LEAVE.to_string(),
+        _ => return,
+    };
+    let at = match entries.last() {
+        Some(entry) if user(entry) => entries.len() - 1,
+        _ => entries.len(),
+    };
+    entries.insert(
+        at,
+        lower::Entry::Turn(json!({"role": "user", "content": [{"type": "text", "text": text}]})),
+    );
+    synthetic(shared, session_id, text);
 }
 
 /// The `<subagent>` message a parent receives when a child session ends: the child's last
@@ -275,14 +321,12 @@ async fn turn(
     shared.refresh().await;
     let prepared = select(shared, session).and_then(|selection| {
         plan_reminders(shared, &session.id, &selection.agent.id);
-        step::settle_context(shared, session, &selection)?;
-        Ok(selection)
+        step::settle_context(shared, session, &selection)
     });
-    let selection = match prepared {
-        Ok(selection) => selection,
+    if let Err(error) = prepared {
         // Pending input stays in the inbox for the next attempt.
-        Err(error) => return Outcome::Failed(error),
-    };
+        return Outcome::Failed(error);
+    }
     let promoted = match inbox::promote(&shared.db, &session.id, inbox::Scope::Input) {
         Ok(Some(promoted)) => promoted,
         Ok(None) => return Outcome::Succeeded,
@@ -290,7 +334,7 @@ async fn turn(
     };
     let title = (promoted > 0 && is_fallback_title(session))
         .then(|| tokio::spawn(title::generate(shared.clone(), session.clone())));
-    let outcome = step::drive(shared, session, &selection, options, cancel).await;
+    let outcome = step::drive(shared, session, options, cancel).await;
     if let Some(title) = title {
         let _ = title.await;
     }

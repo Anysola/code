@@ -29,6 +29,7 @@ fn continuation(capture: &str, extra_sql: Option<&str>, args: &[&str]) {
     // The imported device login signs the requests, as it did for 0.5.1.
     home.remove_env("ANYSOLA_TOKEN");
     let legacy = home.install_legacy(&fixture(), extra_sql);
+    install_captured_skills(&home);
     let output = run(&home, &legacy.project, args);
     assert_eq!(output.code, 0, "stderr: {}", output.stderr);
     assert!(
@@ -73,6 +74,34 @@ fn continuation(capture: &str, extra_sql: Option<&str>, args: &[&str]) {
         normalize_headers(&request.headers),
         "{capture}: headers"
     );
+}
+
+/// The skills 0.5.1 listed when the fixture was captured (it walked up past the fixture home to
+/// the capturing user's `~/.claude/skills`), so the continuation sees the same skill guidance.
+fn install_captured_skills(home: &TestHome) {
+    let sql = std::fs::read_to_string(fixture().join("opencode.sql")).unwrap();
+    let listing = sql
+        .lines()
+        .filter_map(|l| l.strip_prefix("INSERT INTO instruction_blob VALUES('"))
+        .filter_map(|l| l.split_once("','"))
+        .filter_map(|(_, rest)| rest.strip_suffix("');"))
+        .find_map(|value| {
+            let value: Value = serde_json::from_str(&value.replace("''", "'")).ok()?;
+            value.as_array()?.first()?.get("description")?;
+            Some(value)
+        })
+        .expect("a stored skill listing");
+    for skill in listing.as_array().unwrap() {
+        let field = |key: &str| serde_json::to_string(&skill[key]).unwrap();
+        home.write(
+            &format!(".claude/skills/{}/SKILL.md", skill["id"].as_str().unwrap()),
+            &format!(
+                "---\nname: {}\ndescription: {}\n---\n",
+                field("name"),
+                field("description")
+            ),
+        );
+    }
 }
 
 fn session(kind: &str) -> String {

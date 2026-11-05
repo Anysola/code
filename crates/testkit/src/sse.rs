@@ -102,6 +102,26 @@ impl Stream {
         self
     }
 
+    /// Any content block (server tool calls and results, malformed tool input), with an optional
+    /// `input_json_delta` carrying `partial_json` verbatim.
+    pub fn block(mut self, content_block: Value, partial_json: Option<&str>) -> Self {
+        let i = self.index;
+        self.events.push(event(
+            "content_block_start",
+            json!({"index": i, "content_block": content_block}),
+        ));
+        if let Some(partial) = partial_json {
+            self.events.push(event(
+                "content_block_delta",
+                json!({"index": i, "delta": {"type": "input_json_delta", "partial_json": partial}}),
+            ));
+        }
+        self.events
+            .push(event("content_block_stop", json!({"index": i})));
+        self.index += 1;
+        self
+    }
+
     pub fn stop(mut self, reason: &'static str) -> Self {
         self.stop_reason = Some(reason);
         self

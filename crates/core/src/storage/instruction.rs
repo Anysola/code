@@ -124,6 +124,56 @@ impl Db {
         .map(parse)
     }
 
+    /// The session's API entries ordered by key; a removed entry has no value.
+    pub fn instruction_entries(&self, session_id: &str) -> Result<Vec<(String, Option<Value>)>> {
+        self.with(|c| {
+            let mut statement = c.prepare(
+                "SELECT key, value, removed FROM instruction_entry WHERE session_id = ?1 ORDER BY key",
+            )?;
+            let rows = statement.query_map([session_id], |r| {
+                let removed: bool = r.get(2)?;
+                let value: String = r.get(1)?;
+                Ok((r.get(0)?, if removed { None } else { parse(Some(value)) }))
+            })?;
+            rows.collect()
+        })
+    }
+
+    /// Sets an entry, or marks it removed when `value` is `None`.
+    pub fn instruction_entry_set(
+        &self,
+        session_id: &str,
+        key: &str,
+        value: Option<&Value>,
+    ) -> Result<()> {
+        self.with(|c| {
+            match value {
+                Some(value) => c.execute(
+                    "INSERT INTO instruction_entry (session_id, key, value, removed) VALUES (?1, ?2, ?3, 0)
+                     ON CONFLICT (session_id, key) DO UPDATE SET value = excluded.value, removed = 0",
+                    params![session_id, key, json(value)],
+                ),
+                None => c.execute(
+                    "UPDATE instruction_entry SET value = 'null', removed = 1 WHERE session_id = ?1 AND key = ?2",
+                    params![session_id, key],
+                ),
+            }
+            .map(drop)
+        })
+    }
+
+    /// A fork starts with its source's entries.
+    pub fn instruction_entries_copy(&self, from: &str, to: &str) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO instruction_entry (session_id, key, value, removed)
+                 SELECT ?2, key, value, removed FROM instruction_entry WHERE session_id = ?1",
+                params![from, to],
+            )
+            .map(drop)
+        })
+    }
+
     pub fn delete_message(&self, id: &str) -> Result<()> {
         self.with(|c| {
             c.execute("DELETE FROM message WHERE id = ?1", [id])
