@@ -422,6 +422,10 @@ impl App {
             self.state.height = size.height;
         }
         self.sync_pane();
+        let docked = crate::view::diff_docked(&self.state);
+        if let Some(view) = self.state.diff.as_mut() {
+            view.docked = docked;
+        }
         self.state.live = self.live();
         if let Some(session) = self.state.session_mut() {
             session.missing =

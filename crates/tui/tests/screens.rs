@@ -1161,3 +1161,19 @@ fn home_footer_new_worktree() {
     state.worktree_progress = Some("Creating worktree".into());
     assert!(render(&state).contains("Creating worktree..."));
 }
+
+/// `feature-plugins/system/diff-viewer.tsx`: from 108 columns `/diff` docks beside the session.
+#[test]
+fn diff_docks_beside_a_wide_session() {
+    let mut state = session(120, 36, turn(true, true));
+    state.diff = Some(anysola_tui::diffview::Diff::new(
+        anysola_tui::diffview::Source::All,
+    ));
+    let screen = render(&state);
+    let header = screen.lines().nth(1).unwrap();
+    assert!(header[header.char_indices().nth(60).unwrap().0..].contains("All"), "{header}");
+    assert!(screen.contains("Loading diff…"));
+    state.width = 100;
+    let narrow = render(&state);
+    assert!(narrow.lines().next().unwrap().contains("All"), "full screen below 108");
+}

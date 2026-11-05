@@ -8,9 +8,9 @@ use crate::diffview::Diff;
 use crate::text::width;
 use crate::transcript::diff;
 
-/// The file tree's width: none when hidden or narrower than 88 columns.
+/// The file tree's width: none when hidden, docked or narrower than 88 columns.
 pub fn tree_width(view: &Diff, screen: u16) -> u16 {
-    if view.tree && screen >= 88 {
+    if view.tree && !view.docked && screen >= 88 {
         (screen / 4).clamp(30, 40)
     } else {
         0

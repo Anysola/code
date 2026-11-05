@@ -20,6 +20,7 @@ mod session;
 pub use diffview::{patch_options, tree_width as diff_tree_width};
 pub use home::WORDMARK;
 pub use prompt::{max_rows, textarea_width};
+pub use session::{diff_docked, diff_width};
 pub use session::{pane_width, terminal_size, terminal_width};
 
 /// Width of the session pane's content box.
@@ -130,6 +131,24 @@ pub fn draw(state: &State, theme: &Theme, buf: &mut Buffer) -> Drawn {
         },
     };
     let cursor = match &state.diff {
+        Some(view) if session::diff_docked(state) => {
+            let x = session::pane_width(state);
+            let top = u16::from(!state.tabs.is_empty());
+            let area = Rect::new(0, 0, state.width - x, state.height - top);
+            let mut panel = Buffer::empty(area);
+            diffview::draw(
+                &mut Canvas {
+                    buf: &mut panel,
+                    theme: c.theme,
+                },
+                view,
+            );
+            for (px, py) in (0..area.width).flat_map(|px| (0..area.height).map(move |py| (px, py)))
+            {
+                c.buf[(x + px, top + py)] = panel[(px, py)].clone();
+            }
+            cursor
+        }
         Some(view) => {
             diffview::draw(&mut c, view);
             None

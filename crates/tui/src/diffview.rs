@@ -58,6 +58,10 @@ pub struct Diff {
     pub menu: Option<(u16, u16, usize)>,
     /// The branch `All` and `Committed` compare against, chosen in the picker.
     pub base: Option<String>,
+    /// Full screen even where a session could dock it (`f`, `diffs.fullscreen`).
+    pub fullscreen: bool,
+    /// Drawn as the session's right pane this frame (the app keeps it current).
+    pub docked: bool,
 }
 
 impl Diff {
@@ -71,6 +75,8 @@ impl Diff {
             single: false,
             menu: None,
             base: None,
+            fullscreen: false,
+            docked: false,
         }
     }
 

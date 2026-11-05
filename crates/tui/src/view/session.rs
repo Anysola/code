@@ -13,8 +13,25 @@ use crate::transcript::rows::{self, Ctx, Row};
 pub const SIDEBAR_WIDTH: u16 = 42;
 
 /// Columns of the session pane (the sidebar takes 42 on wide terminals).
+/// The diff viewer sits beside the session (0.5.1 docks it from 108 columns: 64 + 44).
+pub fn diff_docked(state: &State) -> bool {
+    state.diff.as_ref().is_some_and(|d| !d.fullscreen)
+        && matches!(state.route, crate::state::Route::Session(_))
+        && state.pane.is_none()
+        && state.width >= 108
+}
+
+/// The width the diff viewer lays out in.
+pub fn diff_width(state: &State) -> u16 {
+    if diff_docked(state) {
+        terminal_width(state)
+    } else {
+        state.width
+    }
+}
+
 pub fn pane_width(state: &State) -> u16 {
-    if state.pane.is_some() {
+    if state.pane.is_some() || diff_docked(state) {
         state.width - terminal_width(state)
     } else if state.settings.sidebar && state.width > 120 {
         state.width - SIDEBAR_WIDTH

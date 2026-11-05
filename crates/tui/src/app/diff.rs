@@ -12,6 +12,9 @@ impl App {
             view.tree = old.tree;
             view.single = old.single;
             view.base = old.base.clone();
+            view.fullscreen = old.fullscreen;
+        } else {
+            view.fullscreen = self.tui.diff_fullscreen();
         }
         let base = view.base.clone();
         self.state.diff = Some(view);
@@ -36,6 +39,7 @@ impl App {
             return;
         }
         let page = self.state.height.saturating_sub(4) as usize;
+        let width = crate::view::diff_width(&self.state);
         let Some(view) = self.state.diff.as_mut() else {
             return;
         };
@@ -56,37 +60,38 @@ impl App {
             ("d", true) => view.scroll += page / 2,
             ("u", true) => view.scroll = view.scroll.saturating_sub(page / 2),
             ("home" | "g", false) => view.scroll = 0,
-            ("end" | "G", _) => view.scroll = view.length(self.state.width, &self.theme),
+            ("end" | "G", _) => view.scroll = view.length(width, &self.theme),
             ("]", false) => {
-                let starts = view.hunks(self.state.width, &self.theme);
+                let starts = view.hunks(width, &self.theme);
                 if let Some(next) = starts.into_iter().find(|row| *row > view.scroll) {
                     view.scroll = next;
                 }
             }
             ("[", false) => {
-                let starts = view.hunks(self.state.width, &self.theme);
+                let starts = view.hunks(width, &self.theme);
                 if let Some(previous) = starts.into_iter().rev().find(|row| *row < view.scroll) {
                     view.scroll = previous;
                 }
             }
             ("n" | "p", false) if count > 0 => {
-                let current = view.current(self.state.width, &self.theme);
+                let current = view.current(width, &self.theme);
                 let step = if stroke.key == "n" { 1 } else { count - 1 };
                 view.selected = (current + step) % count;
                 view.scroll = if view.single {
                     0
                 } else {
-                    view.starts(self.state.width, &self.theme)[view.selected]
+                    view.starts(width, &self.theme)[view.selected]
                 };
             }
             ("b", false) => view.tree = !view.tree,
+            ("f", false) => view.fullscreen = !view.fullscreen,
             ("s", false) => {
-                view.selected = view.current(self.state.width, &self.theme);
+                view.selected = view.current(width, &self.theme);
                 view.single = !view.single;
                 view.scroll = if view.single {
                     0
                 } else {
-                    view.starts(self.state.width, &self.theme)
+                    view.starts(width, &self.theme)
                         .get(view.selected)
                         .copied()
                         .unwrap_or(0)
@@ -94,7 +99,7 @@ impl App {
             }
             ("?", _) => self.diff_help(),
             ("m", false) => {
-                let selected = view.current(self.state.width, &self.theme);
+                let selected = view.current(width, &self.theme);
                 if let Some(Ok(files)) = view.files.as_mut()
                     && let Some(file) = files.get_mut(selected)
                 {
@@ -219,7 +224,21 @@ impl App {
 
     /// A right click on a file tree row opens its menu; a left click on the menu toggles the mark.
     pub(super) fn diff_click(&mut self, right: bool, at: (u16, u16)) -> bool {
-        let width = self.state.width;
+        let width = crate::view::diff_width(&self.state);
+        let left = if crate::view::diff_docked(&self.state) {
+            crate::view::pane_width(&self.state)
+        } else {
+            0
+        };
+        let top = if left > 0 {
+            u16::from(!self.state.tabs.is_empty())
+        } else {
+            0
+        };
+        if at.0 < left {
+            return false;
+        }
+        let at = (at.0 - left, at.1.saturating_sub(top));
         let Some(view) = self.state.diff.as_mut() else {
             return false;
         };

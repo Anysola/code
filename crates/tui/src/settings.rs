@@ -42,6 +42,11 @@ impl Tui {
         path.iter().try_fold(&self.value, |v, k| v.get(k))
     }
 
+    /// `diffs.fullscreen`: `/diff` never docks beside the session.
+    pub fn diff_fullscreen(&self) -> bool {
+        self.get(&["diffs", "fullscreen"]).and_then(Value::as_bool) == Some(true)
+    }
+
     /// `tabs.scope = "global"`: one tab list for every directory instead of one per cwd.
     pub fn global_tabs(&self) -> bool {
         self.str(&["tabs", "scope"]) == Some("global")
