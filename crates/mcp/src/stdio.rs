@@ -217,6 +217,19 @@ fn signal_group(pid: Option<u32>, signal: i32) {
     }
 }
 
+#[cfg(windows)]
+fn kill_tree(pid: u32) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let _ = std::process::Command::new("taskkill")
+        .args(["/pid", &pid.to_string(), "/T", "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
 impl Transport for Stdio {
     fn send(&self, message: Value) -> BoxFuture<'_, Result<(), Error>> {
         let sent = self
@@ -267,6 +280,11 @@ impl Transport for Stdio {
                     return;
                 }
                 signal_group(self.pid, libc::SIGKILL);
+            }
+            // `npx` and other launchers leave the server as a grandchild; end the whole tree.
+            #[cfg(windows)]
+            if let Some(pid) = child.id() {
+                kill_tree(pid);
             }
             let _ = child.kill().await;
         }
