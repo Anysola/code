@@ -643,6 +643,11 @@ impl App {
         match mouse.kind {
             MouseEventKind::ScrollUp => self.scroll(3),
             MouseEventKind::ScrollDown => self.scroll(-3),
+            MouseEventKind::Down(button @ (MouseButton::Left | MouseButton::Right))
+                if self.state.diff.is_some() && self.state.dialogs.is_empty() =>
+            {
+                self.diff_click(button == MouseButton::Right, at);
+            }
             MouseEventKind::Down(MouseButton::Left) => {
                 // A click while text is selected only clears the selection.
                 if self.selection.is_some_and(|(a, b)| a != b) {

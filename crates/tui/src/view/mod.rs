@@ -17,7 +17,7 @@ mod prompt;
 mod prompts;
 mod session;
 
-pub use diffview::patch_options;
+pub use diffview::{patch_options, tree_width as diff_tree_width};
 pub use home::WORDMARK;
 pub use prompt::{max_rows, textarea_width};
 pub use session::{pane_width, terminal_size, terminal_width};

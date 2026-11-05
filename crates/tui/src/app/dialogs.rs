@@ -761,6 +761,8 @@ impl App {
                 let before = (!value.is_empty()).then_some(value.as_str());
                 self.fork(before);
             }
+            Kind::DiffSource => self.diff_source_chosen(&value),
+            Kind::DiffBase => self.diff_base_chosen(value),
             Kind::Skills => {
                 self.state.dialogs.pop();
                 self.state

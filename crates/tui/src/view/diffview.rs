@@ -9,7 +9,7 @@ use crate::text::width;
 use crate::transcript::diff;
 
 /// The file tree's width: none when hidden or narrower than 88 columns.
-fn tree_width(view: &Diff, screen: u16) -> u16 {
+pub fn tree_width(view: &Diff, screen: u16) -> u16 {
     if view.tree && screen >= 88 {
         (screen / 4).clamp(30, 40)
     } else {
@@ -46,7 +46,7 @@ pub fn draw(c: &mut Canvas, view: &Diff) {
             40,
         );
     }
-    let help = "esc close  n/p files  ]/[ hunks  m reviewed  d source  b tree";
+    let help = "? shortcuts  esc close";
     if area.width as usize > width(help) + 30 {
         c.put(
             area.width - 2 - width(help) as u16,
@@ -71,13 +71,14 @@ pub fn draw(c: &mut Canvas, view: &Diff) {
         return;
     }
     let tree_w = tree_width(view, area.width);
+    let current = view.current(area.width, c.theme);
     for (i, file) in files.iter().enumerate().take(body.height as usize) {
         if tree_w == 0 {
             break;
         }
         let (del, add) = diff::counts(&file.patch);
         let mark = if file.reviewed { "✓ " } else { "  " };
-        let style = if i == view.selected {
+        let style = if i == current {
             bold
         } else {
             c.style("text.base")
@@ -105,16 +106,29 @@ pub fn draw(c: &mut Canvas, view: &Diff) {
     let Some(file) = files.get(view.selected) else {
         return;
     };
-    let options = patch_options(view, area.width, &file.path);
-    let pw = options.width;
-    c.put(px, body.y, &file.path, bold, pw);
-    let lines = diff::render(&file.patch, &options, c.theme);
+    let pw = patch_options(view, area.width, &file.path).width;
+    let mut top = body.y;
+    if view.single {
+        c.put(px, body.y, &file.path, bold, pw);
+        top += 2;
+    }
+    let lines = view.rendered(area.width, c.theme);
     for (i, line) in lines
         .iter()
         .skip(view.scroll)
-        .take(body.height.saturating_sub(2) as usize)
+        .take((area.height.saturating_sub(top)) as usize)
         .enumerate()
     {
-        c.spans(px, body.y + 2 + i as u16, line, pw);
+        c.spans(px, top + i as u16, line, pw);
+    }
+    if let Some((x, y, index)) = view.menu {
+        let label = if files.get(index).is_some_and(|f| f.reviewed) {
+            " Mark incomplete"
+        } else {
+            " Mark complete"
+        };
+        let bg = c.theme.fg("background.raised.high");
+        c.fill(Rect::new(x, y, 19.min(area.width), 1), bg);
+        c.put(x, y, label, c.style("text.base").bg(bg), 19);
     }
 }
