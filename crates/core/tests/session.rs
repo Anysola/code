@@ -13,6 +13,7 @@ fn prompt(text: &str) -> Prompt {
     Prompt {
         text: text.into(),
         files: vec![],
+        skills: Vec::new(),
     }
 }
 
@@ -282,6 +283,7 @@ fn prompt_images_are_normalized() {
     let prompt = Prompt {
         text: "see".into(),
         files: vec![("image/png".into(), data, "noise.png".into())],
+        skills: Vec::new(),
     };
     runtime
         .block_on(core.prompt(&session.id, prompt, TurnOptions::default()))

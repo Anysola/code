@@ -17,6 +17,7 @@ fn prompt(text: &str) -> Prompt {
     Prompt {
         text: text.into(),
         files: vec![],
+        skills: Vec::new(),
     }
 }
 
