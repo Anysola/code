@@ -54,7 +54,16 @@ pub fn by_script(home: &Path) -> bool {
 /// The command that installs the latest release the way this copy was installed.
 pub fn update_command(platform: Platform, script: bool) -> Vec<String> {
     let parts: &[&str] = match (script, platform) {
-        (false, _) => &["npm", "i", "-g", "@anysola/code@latest"],
+        // Right after a release npm may still hold the old package list, and newer npm skips the
+        // postinstall that puts the platform binary in place unless the package is allowed.
+        (false, _) => &[
+            "npm",
+            "i",
+            "-g",
+            "@anysola/code@latest",
+            "--prefer-online",
+            "--allow-scripts=@anysola/code",
+        ],
         (true, Platform::Windows) => &[
             "powershell",
             "-NoProfile",
@@ -94,10 +103,13 @@ mod tests {
     #[test]
     fn commands_per_method_and_platform() {
         let show = |platform, script| display(&update_command(platform, script));
-        assert_eq!(show(Platform::Unix, false), "npm i -g @anysola/code@latest");
+        assert_eq!(
+            show(Platform::Unix, false),
+            "npm i -g @anysola/code@latest --prefer-online --allow-scripts=@anysola/code"
+        );
         assert_eq!(
             show(Platform::Windows, false),
-            "npm i -g @anysola/code@latest"
+            "npm i -g @anysola/code@latest --prefer-online --allow-scripts=@anysola/code"
         );
         assert_eq!(
             show(Platform::Unix, true),

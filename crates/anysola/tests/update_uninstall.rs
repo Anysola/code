@@ -101,7 +101,10 @@ fn update_print_with_notes_for_npm_and_script_installs() {
     };
     let out = home.run(BIN, &["update", "--print"], None, None);
     assert_eq!(out.code, 0, "{}", out.stderr);
-    assert_eq!(out.stdout, expected("npm i -g @anysola/code@latest"));
+    assert_eq!(
+        out.stdout,
+        expected("npm i -g @anysola/code@latest --prefer-online --allow-scripts=@anysola/code")
+    );
 
     let copy = script_install(&script_dir(&home));
     let out = home.run(copy.to_str().unwrap(), &["upgrade", "--print"], None, None);
@@ -122,7 +125,11 @@ fn install_dir_override_selects_the_script() {
     // The default location is not the script install any more.
     let other = script_install(&script_dir(&home));
     let out = home.run(other.to_str().unwrap(), &["update", "--print"], None, None);
-    assert!(out.stdout.contains("npm i -g @anysola/code@latest"));
+    assert!(
+        out.stdout.contains(
+            "npm i -g @anysola/code@latest --prefer-online --allow-scripts=@anysola/code"
+        )
+    );
 }
 
 #[test]
@@ -152,13 +159,16 @@ fn already_up_to_date_unless_forced() {
             "│",
             &format!("●  Installed {VERSION}, latest 0.5.1"),
             "│",
-            "◇  npm i -g @anysola/code@latest",
+            "◇  npm i -g @anysola/code@latest --prefer-online --allow-scripts=@anysola/code",
             "│",
             "└  Updated. Restart Anysola Code to use the new version.",
             "",
         ])
     );
-    assert_eq!(calls(&home), "npm i -g @anysola/code@latest\n");
+    assert_eq!(
+        calls(&home),
+        "npm i -g @anysola/code@latest --prefer-online --allow-scripts=@anysola/code\n"
+    );
 }
 
 #[test]
@@ -189,15 +199,18 @@ fn a_failed_install_and_an_unreachable_gateway() {
         frame(&[
             "┌  Update Anysola Code",
             "│",
-            "◇  npm i -g @anysola/code@latest",
+            "◇  npm i -g @anysola/code@latest --prefer-online --allow-scripts=@anysola/code",
             "│",
             "■  npm failed with exit code 3",
             "│",
-            "●  Run it yourself: npm i -g @anysola/code@latest",
+            "●  Run it yourself: npm i -g @anysola/code@latest --prefer-online --allow-scripts=@anysola/code",
         ])
     );
     assert!(gateway.requests().is_empty());
-    assert_eq!(calls(&home), "npm i -g @anysola/code@latest\n");
+    assert_eq!(
+        calls(&home),
+        "npm i -g @anysola/code@latest --prefer-online --allow-scripts=@anysola/code\n"
+    );
 }
 
 #[test]
