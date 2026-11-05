@@ -8,6 +8,7 @@
 //! preferences). Managed policies outrank all others although their settings load last.
 
 pub mod jsonc;
+mod mcp;
 mod normalize;
 mod substitute;
 
@@ -81,6 +82,8 @@ pub struct Config {
     pub warnings: Vec<String>,
     /// Every local source in load order (the gateway document is not one).
     pub sources: Vec<Source>,
+    /// `mcp` of every document.
+    mcp: mcp::Merged,
     /// Policy statements of ordinary documents, earliest-loaded last.
     policies: Vec<Policy>,
     /// Policy statements of managed documents, earliest-loaded last.
@@ -141,6 +144,11 @@ impl Config {
 
     pub fn models(&self) -> Option<&Map<String, Value>> {
         self.provider.get("models").and_then(Value::as_object)
+    }
+
+    /// The MCP servers to run, in config order (see [`mcp`]).
+    pub fn mcp_servers(&self) -> Vec<(String, Value)> {
+        self.mcp.resolve(&self.policies())
     }
 
     /// Every policy statement; the last one matching decides.
@@ -226,6 +234,8 @@ impl Config {
                 "Plugins are not supported since Anysola Code 1.0; ignoring \"plugins\".".into(),
             );
         }
+        self.mcp.apply(&data);
+        data.remove("mcp");
         if let Some(formatter) = data.remove("formatter") {
             merge_formatter(&mut self.values, formatter);
         }
