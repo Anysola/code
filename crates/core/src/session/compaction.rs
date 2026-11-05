@@ -735,7 +735,7 @@ pub(crate) struct Prefix<'a> {
 /// plus the summary prompt while that fits; otherwise the history goes as a shortened text
 /// transcript.
 pub(crate) async fn compact(
-    shared: &Shared,
+    shared: &std::sync::Arc<Shared>,
     session: &SessionRow,
     selection: &Selection,
     prefix: Prefix<'_>,
@@ -763,6 +763,12 @@ pub(crate) async fn compact(
         .and_then(ModelRef::parse)
         .and_then(|r| crate::model::resolve(&sources.models, &r).ok());
     let model = configured.unwrap_or_else(|| selection.model.clone());
+    super::warming::context(
+        shared,
+        session,
+        &sources.config,
+        super::warming::Request::Compaction,
+    );
     let same_model = model.id == selection.model.id;
     let cap = ceiling(model.context, settings.buffer.as_ref())
         .or_else(|| ceiling(Some(UNKNOWN_WINDOW), settings.buffer.as_ref()))

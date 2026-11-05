@@ -209,7 +209,9 @@ pub(crate) async fn drive(
             }
         }
         let capped = selection.agent.steps == Some(number);
-        match step(shared, session, selection, capped, cancel).await {
+        let end = step(shared, session, selection, capped, cancel).await;
+        shared.warming.settled(&session.id);
+        match end {
             StepEnd::Compacted => {
                 number -= 1;
                 continue;
@@ -316,6 +318,86 @@ async fn triggered(
     .await
 }
 
+/// A one-shot request from the session's current context with `prompt` as the last user
+/// message; nothing is recorded but instruction updates and credits. Retries only failures that
+/// never reached the model.
+pub(crate) async fn generate(
+    shared: &Arc<Shared>,
+    session: &SessionRow,
+    prompt: &str,
+) -> Result<String, SessionError> {
+    let selection = super::select(shared, session)?;
+    super::warming::context(
+        shared,
+        session,
+        &selection.sources.config,
+        super::warming::Request::KeepAlive,
+    );
+    let ctx = context(shared, session, &selection)?;
+    let history = compaction::history(shared, &session.id).messages;
+    let target = Target {
+        provider: &selection.reference.provider,
+        id: &selection.model.id,
+        input: &selection.model.input,
+    };
+    let estimate = compaction::estimate_prompt(&history, &target, &ctx.system, &ctx.definitions);
+    let mut messages = lower(&history, &target);
+    messages.push(Entry::Turn(
+        json!({"role": "user", "content": [{"type": "text", "text": prompt}]}),
+    ));
+    let variant = selection
+        .reference
+        .variant
+        .as_deref()
+        .and_then(|v| selection.model.variant(v));
+    let (body, mut headers) = build(Request {
+        model: &selection.model,
+        variant,
+        system: ctx.system,
+        tools: ctx.definitions,
+        messages,
+        max_tokens: output_limit(
+            &selection.model,
+            estimate.measured,
+            estimate.estimated,
+            0.01,
+        ),
+        tools_disabled: false,
+    });
+    headers.extend(session_headers(shared, session));
+    let mut retry = Retry::default();
+    let mut stream = loop {
+        match shared.gateway.messages(body.clone(), &headers).await {
+            Ok(stream) => break stream,
+            Err(error) => match retry.next_one_shot(&error) {
+                Some(delay) => tokio::time::sleep(delay).await,
+                None => return Err(error.to_session_error()),
+            },
+        }
+    };
+    let mut assembly = Assembly::default();
+    while let Some(item) = stream.next().await {
+        match item.map_err(|e| e.to_session_error())? {
+            StreamItem::Credits { charged, remaining } => {
+                shared.credits.record(&session.id, charged, remaining)
+            }
+            StreamItem::Event(event) => {
+                assembly
+                    .on_event(&event)
+                    .map_err(|e| e.to_session_error())?;
+            }
+        }
+    }
+    Ok(assembly
+        .parts
+        .iter()
+        .filter_map(|p| match p {
+            Part::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect())
+}
+
 struct Running {
     session_id: String,
     message_id: String,
@@ -387,6 +469,12 @@ async fn step(
     });
     headers.extend(session_headers(shared, session));
 
+    super::warming::context(
+        shared,
+        session,
+        &selection.sources.config,
+        super::warming::Request::Step,
+    );
     let message_id = crate::ids::message();
     let start = capture(shared);
     let running = Running {

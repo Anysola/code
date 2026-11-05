@@ -451,3 +451,53 @@ fn compaction_that_cannot_shrink_fails() {
         )
     );
 }
+
+#[test]
+fn warming_pings_after_each_interval_until_the_duration_ends() {
+    const PING: &str = "This is a keep-alive request. Do not perform any work or use tools. Reply with exactly: OK";
+    let gateway = FakeGateway::start(|request, _| text(request, "OK"));
+    let env = env(&gateway.url);
+    env.home.write(
+        "proj/opencode.json",
+        r#"{"warming": {"interval": "300 millis", "duration": "1 seconds"}}"#,
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("hello"), TurnOptions::default()))
+        .unwrap();
+    let pings = || {
+        gateway
+            .messages()
+            .into_iter()
+            .filter(|r| {
+                transcript(r)
+                    .last()
+                    .is_some_and(|t| t == &format!("user: {PING}"))
+            })
+            .collect::<Vec<_>>()
+    };
+    let wait = |ms| {
+        runtime.block_on(async { tokio::time::sleep(std::time::Duration::from_millis(ms)).await })
+    };
+    wait(1600);
+    let sent = pings();
+    assert!((2..=4).contains(&sent.len()), "{} pings", sent.len());
+    // The keep-alive carries the conversation and the tools, and is not recorded.
+    let ping = transcript(&sent[0]);
+    assert_eq!(
+        ping[..2],
+        ["user: hello".to_string(), "assistant: OK".to_string()]
+    );
+    assert!(sent[0].json()["tools"].is_array());
+    let db = Db::open(&env.home.home().join(".anysola/anysola.db")).unwrap();
+    assert!(
+        db.messages(&session.id)
+            .unwrap()
+            .iter()
+            .all(|m| !m.data.to_string().contains("keep-alive"))
+    );
+    wait(500);
+    assert_eq!(pings().len(), sent.len(), "no pings after the duration");
+}

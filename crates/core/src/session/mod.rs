@@ -14,8 +14,10 @@ mod step;
 mod stream;
 pub mod subagent;
 mod title;
+mod warming;
 
 pub(crate) use step::session_headers as step_headers;
+pub(crate) use warming::Warming;
 
 use std::sync::Arc;
 

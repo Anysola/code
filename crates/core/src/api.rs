@@ -162,6 +162,7 @@ pub(crate) struct Shared {
     /// `<pid>:<nonce>` for busy markers.
     pub owner: String,
     pub turns: Mutex<std::collections::HashMap<String, CancellationToken>>,
+    pub warming: crate::session::Warming,
 }
 
 impl Shared {
@@ -279,6 +280,7 @@ impl Core {
             snapshots,
             owner: format!("{}:{}", std::process::id(), crate::ids::part()),
             turns: Mutex::default(),
+            warming: Default::default(),
         };
         Ok(Core {
             shared: Arc::new(shared),
