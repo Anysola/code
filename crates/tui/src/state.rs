@@ -141,6 +141,8 @@ pub struct Session {
     /// A revert is staged (`/redo` is available).
     pub reverted: bool,
     pub layout: LayoutCache,
+    /// The session's directory is gone (deleted worktree, moved checkout); the app checks it.
+    pub missing: bool,
     /// Exploration groups whose open state the user flipped, by group ID.
     pub toggled: std::collections::HashSet<String>,
 }
@@ -163,6 +165,10 @@ impl PartialEq for LayoutCache {
 }
 
 impl Session {
+    pub fn location_missing(&self) -> bool {
+        self.missing
+    }
+
     /// Tokens of the latest assistant step with usage.
     pub fn context_tokens(&self) -> Option<u64> {
         self.items.iter().rev().find_map(|item| match item {

@@ -131,14 +131,7 @@ fn now() -> u64 {
     anysola_core::time::now_ms()
 }
 
-/// The path with the home directory shown as `~`.
-fn abbreviate(directory: &Path, home: &Path) -> String {
-    match directory.strip_prefix(home) {
-        Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
-        Ok(rest) => format!("~/{}", rest.display()),
-        Err(_) => directory.display().to_string(),
-    }
-}
+use crate::text::abbreviate;
 
 /// `~/my-app:master`: the directory with home abbreviated and the git branch.
 fn location(directory: &Path, home: &Path) -> String {
@@ -427,6 +420,10 @@ impl App {
         }
         self.sync_pane();
         self.state.live = self.live();
+        if let Some(session) = self.state.session_mut() {
+            session.missing = !session.directory.is_empty()
+                && !std::path::Path::new(&session.directory).is_dir();
+        }
         self.tab_store.save(&self.state.tabs);
         self.report_status();
         let title = if self.state.settings.title {

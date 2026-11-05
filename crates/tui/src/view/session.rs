@@ -68,6 +68,10 @@ pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u1
         let h = prompts::question_height(question, w);
         prompts::question(c, question, x, bottom.saturating_sub(h), w);
         (h, None)
+    } else if session.location_missing() {
+        let h = prompts::LOCATION_HEIGHT;
+        prompts::location_missing(c, state, &session.directory, x, bottom.saturating_sub(h), w);
+        (h, None)
     } else if let Some(dock) = &state.dock {
         let h = super::dock::height(dock);
         let y = bottom.saturating_sub(h + 1);

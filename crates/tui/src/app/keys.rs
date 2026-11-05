@@ -159,6 +159,14 @@ impl App {
         if self.state.session().is_some_and(|s| s.question.is_some()) {
             return self.question_key(&stroke);
         }
+        if self.state.session().is_some_and(|s| s.location_missing()) {
+            if stroke.key == "return" {
+                self.run_command("session.move", None);
+            } else if let Some(id) = self.keymap.find(std::slice::from_ref(&stroke), GLOBAL) {
+                self.run_command(id, None);
+            }
+            return;
+        }
         if self.state.dock.is_some() && self.dock_key(&stroke) {
             return;
         }
