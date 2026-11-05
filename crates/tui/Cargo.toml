@@ -16,12 +16,14 @@ libc.workspace = true
 nucleo-matcher = "0.3"
 portable-pty = "0.9"
 pulldown-cmark = { version = "0.13", default-features = false }
+rusqlite.workspace = true
 ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29"] }
 serde.workspace = true
 serde_json.workspace = true
 syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "parsing", "regex-fancy"] }
 two-face = { version = "0.4", default-features = false, features = ["syntect-fancy"] }
 tokio.workspace = true
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
 unicode-segmentation = "1.13"
 unicode-width = "0.2"
 vt100 = "0.16"

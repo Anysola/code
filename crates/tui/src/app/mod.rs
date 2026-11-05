@@ -96,6 +96,9 @@ pub struct App {
     shown: Option<usize>,
     /// Whether the terminal window has focus, once it reported it.
     focused: Option<bool>,
+    /// The editor's file and selection, and whether it went out with a prompt already.
+    editor: Option<crate::editor::Selection>,
+    editor_sent: bool,
 }
 
 fn now() -> u64 {
@@ -206,6 +209,8 @@ pub async fn run(core: Core, options: Options) -> Result<(), String> {
         terminals: Vec::new(),
         shown: None,
         focused: None,
+        editor: None,
+        editor_sent: false,
     };
     app.init(&paths, &options);
     if let Some((title, message)) = failure {
@@ -281,6 +286,7 @@ impl App {
         self.refresh_recent();
         self.fetch_account();
         self.check_update(false);
+        self.watch_editor(&paths.home);
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let mut ticks = 0u64;
@@ -453,6 +459,59 @@ impl App {
             };
             let _ = tx.send(Msg::Account(account));
         });
+    }
+
+    /// Follows the IDE (lock file or port) or Zed for editor context.
+    fn watch_editor(&self, home: &Path) {
+        let directory = self.core.directory().to_path_buf();
+        let tx = self.tx.clone();
+        let updates = move |update: crate::editor::Update| {
+            let _ = tx.send(Msg::Apply(Box::new(move |app: &mut App| {
+                app.editor_update(update)
+            })));
+        };
+        if let Some((port, token)) = crate::editor::connection(home, &directory) {
+            tokio::spawn(crate::editor::watch_ide(port, token, updates));
+        } else if crate::editor::in_zed()
+            && let Some(db) = crate::editor::zed_db(home)
+        {
+            tokio::spawn(async move {
+                let mut last = None;
+                loop {
+                    let (db2, dir2) = (db.clone(), directory.clone());
+                    let current = tokio::task::spawn_blocking(move || {
+                        crate::editor::zed_selection(&db2, &dir2)
+                    })
+                    .await
+                    .ok()
+                    .flatten();
+                    if current != last {
+                        if let Some(selection) = current.clone() {
+                            updates(crate::editor::Update::Selection(selection));
+                        }
+                        last = current;
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            });
+        }
+    }
+
+    fn editor_update(&mut self, update: crate::editor::Update) {
+        match update {
+            crate::editor::Update::Selection(selection) => {
+                if self.editor.as_ref() != Some(&selection) {
+                    self.editor = Some(selection);
+                    self.editor_sent = false;
+                }
+            }
+            crate::editor::Update::Mention(mention) => {
+                self.state
+                    .composer
+                    .insert_atom(&mention, crate::composer::AtomKind::File);
+                self.state.composer.insert(" ");
+            }
+        }
     }
 
     /// `/me` again 1.5 s after the last credits event.

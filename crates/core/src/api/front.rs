@@ -57,6 +57,20 @@ impl Core {
         Ok(self.shared.credits.set_default_budget(budget)?)
     }
 
+    /// Admits a hidden note (editor context) that goes before the next prompt; it does not
+    /// start a turn by itself.
+    pub fn admit_note(&self, session_id: &str, text: &str) -> Result<(), CoreError> {
+        crate::session::inbox::enqueue_synthetic(
+            &self.shared.db,
+            session_id,
+            text,
+            None,
+            None,
+            crate::session::inbox::Delivery::Steer,
+        )?;
+        Ok(())
+    }
+
     /// The project's other checkouts.
     pub fn worktrees(&self) -> Vec<crate::worktree::Worktree> {
         crate::worktree::list(&self.shared.db, &self.shared.project.id)

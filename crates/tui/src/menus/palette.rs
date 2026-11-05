@@ -18,6 +18,7 @@ pub struct Context {
     pub tabs: bool,
     pub terminal_open: bool,
     pub queued: bool,
+    pub editor_context: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -31,6 +32,7 @@ enum When {
     Tabs,
     Terminal,
     Queued,
+    EditorContext,
 }
 
 /// (id, title, group, when) for commands without a `/name`; `/name` commands take their title
@@ -123,6 +125,12 @@ const ENTRIES: &[(&str, &str, &str, When)] = &[
     ("session.move", "", "", When::Always),
     ("prompt.queue", "Queue prompt", "Prompt", When::Always),
     ("prompt.skills", "", "", When::Always),
+    (
+        "prompt.editor_context.clear",
+        "Remove editor context",
+        "Prompt",
+        When::EditorContext,
+    ),
     ("prompt.stash", "Stash prompt", "Prompt", When::PromptText),
     ("prompt.stash.pop", "Stash pop", "Prompt", When::Stash),
     ("prompt.stash.list", "Stash list", "Prompt", When::Stash),
@@ -147,6 +155,7 @@ fn reachable(when: When, cx: &Context) -> bool {
         When::Tabs => cx.tabs,
         When::Terminal => cx.terminal_open,
         When::Queued => cx.queued,
+        When::EditorContext => cx.editor_context,
     }
 }
 

@@ -197,6 +197,7 @@ impl App {
                 self.stash.push(self.state.composer.expanded());
                 self.state.composer.clear();
             }
+            ("prompt.editor_context.clear", _) => self.editor = None,
             ("prompt.stash.pop", _) => {
                 if let Some(text) = self.stash.pop() {
                     self.state.composer.set(&text);
@@ -485,6 +486,19 @@ impl App {
             return;
         }
         self.commit_choice(&id);
+        if let Some(selection) = self.editor.as_ref().filter(|_| !self.editor_sent)
+            && self.tui.editor_context()
+        {
+            let note = crate::editor::reminder(selection);
+            if let Err(error) = self.core.admit_note(&id, &note) {
+                return self.toast(
+                    Some("Failed to send editor context".into()),
+                    error.to_string(),
+                    Variant::Error,
+                );
+            }
+            self.editor_sent = true;
+        }
         let loaded = self.core.loaded();
         let skills = self
             .state

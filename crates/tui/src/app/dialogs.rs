@@ -213,6 +213,7 @@ impl App {
             tabs: true,
             terminal_open: false,
             queued: session.is_some_and(|s| !s.queued.is_empty()),
+            editor_context: self.editor.is_some(),
         }
     }
 

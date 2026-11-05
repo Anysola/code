@@ -66,6 +66,10 @@ impl Tui {
         self.get(&["mouse"]).and_then(Value::as_bool) != Some(false)
     }
 
+    pub fn editor_context(&self) -> bool {
+        self.get(&["prompt", "editor"]).and_then(Value::as_bool) != Some(false)
+    }
+
     pub fn notifications(&self) -> bool {
         self.get(&["attention", "notifications"])
             .and_then(Value::as_bool)

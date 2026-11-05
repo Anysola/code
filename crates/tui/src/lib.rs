@@ -5,6 +5,7 @@ pub mod attention;
 pub mod complete;
 pub mod composer;
 pub mod dialog;
+pub mod editor;
 pub mod keymap;
 pub mod menus;
 pub mod settings;
