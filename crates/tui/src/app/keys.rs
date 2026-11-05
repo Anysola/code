@@ -956,17 +956,16 @@ impl App {
                 let Some(session) = self.state.session_mut() else {
                     return;
                 };
-                let key = if let Some(p) = session.permission.as_mut() {
+                // Straight to the prompt: a focused terminal pane would take the key otherwise.
+                if let Some(p) = session.permission.as_mut() {
                     p.selected = index;
-                    "enter"
+                    self.permission_key(&Stroke::parse("enter").expect("enter"));
                 } else if let Some(q) = session.question.as_mut() {
                     q.selected = index;
                     let multiple = q.questions.get(q.tab).and_then(|a| a.multiple) == Some(true);
-                    if multiple { "space" } else { "enter" }
-                } else {
-                    return;
-                };
-                self.key(Stroke::parse(key).expect("key"));
+                    let key = if multiple { "space" } else { "enter" };
+                    self.question_key(&Stroke::parse(key).expect("key"));
+                }
             }
             Hit::DockTab(index) => {
                 if let Some(dock) = self.state.dock.as_mut()
