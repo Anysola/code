@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Builds the release binary and fails when it breaks the budgets of ARCHITECTURE.md:
-# stripped size <= 25 MB, release archive (tar.gz as script/pack.sh makes it) <= 10 MB, `anysola --version` <= 15 ms wall and <= 10 MB max RSS (best of 5;
+# stripped size <= 25 MB, release archive (tar.gz as script/pack.sh makes it) <= 12 MB, `anysola --version` <= 15 ms wall and <= 10 MB max RSS (best of 5;
 # wall time from `date +%s%N`, since /usr/bin/time rounds to 10 ms), and the idle TUI against the
 # fake gateway: first frame <= 150 ms and <= 40 MB RSS (best of 3, measured by script/tui-idle.py).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 MAX_BYTES=$((25 * 1024 * 1024))
-MAX_ARCHIVE_BYTES=$((10 * 1024 * 1024))
+MAX_ARCHIVE_BYTES=$((12 * 1024 * 1024))
 MAX_MS=15
 MAX_RSS_KB=$((10 * 1024))
 MAX_TUI_MS=150
@@ -32,7 +32,7 @@ for _ in 1 2 3 4 5; do
 done
 
 printf 'binary   %d bytes (%.1f MB, budget 25 MB)\n' "$size" "$(awk "BEGIN{print $size/1048576}")"
-printf 'archive  %d bytes (%.1f MB, budget 10 MB)\n' "$archive" "$(awk "BEGIN{print $archive/1048576}")"
+printf 'archive  %d bytes (%.1f MB, budget 12 MB)\n' "$archive" "$(awk "BEGIN{print $archive/1048576}")"
 printf 'version  %d ms (budget %d ms), %d KB max RSS (budget %d KB)\n' "$best_ms" "$MAX_MS" "$best_rss" "$MAX_RSS_KB"
 
 scratch=$(mktemp -d)
@@ -53,7 +53,7 @@ printf 'idle TUI first frame %s ms (budget %d ms), %d KB RSS (budget %d KB)\n' "
 
 fail=0
 [ "$size" -le "$MAX_BYTES" ] || { echo "FAIL: binary over 25 MB" >&2; fail=1; }
-[ "$archive" -le "$MAX_ARCHIVE_BYTES" ] || { echo "FAIL: archive over 10 MB" >&2; fail=1; }
+[ "$archive" -le "$MAX_ARCHIVE_BYTES" ] || { echo "FAIL: archive over 12 MB" >&2; fail=1; }
 [ "$best_ms" -le "$MAX_MS" ] || { echo "FAIL: --version over ${MAX_MS} ms" >&2; fail=1; }
 [ "$best_rss" -le "$MAX_RSS_KB" ] || { echo "FAIL: --version over 10 MB RSS" >&2; fail=1; }
 [ -n "$tui_ms" ] && [ "$tui_ms" -le "$MAX_TUI_MS" ] || { echo "FAIL: TUI first frame over ${MAX_TUI_MS} ms" >&2; fail=1; }

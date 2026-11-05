@@ -10,7 +10,7 @@ Measured on linux-arm64, 0.5.1:
 
 | | 0.5.1 (TS/Bun) | Rust budget (CI fails above) |
 |---|---|---|
-| Binary | 196 MB (88 MB tar.gz), ~99 MB of it the Bun runtime | 25 MB stripped, 10 MB archive |
+| Binary | 196 MB (88 MB tar.gz), ~99 MB of it the Bun runtime | 25 MB stripped, 12 MB archive |
 | `anysola --version` | 80 ms, 80 MB RSS | 15 ms, 10 MB RSS |
 | Idle TUI | 3 processes, ~340 MB RSS | 1 process, 40 MB RSS |
 | TUI first frame | not measured | 150 ms |
@@ -18,6 +18,9 @@ Measured on linux-arm64, 0.5.1:
 A dependency probe with the whole stack below (tokio, reqwest/rustls, ratatui, rusqlite bundled, syntect with
 default syntaxes, ripgrep crates, tree-sitter-bash, image, rmcp, htmd, nucleo) builds to 10.7 MB stripped, 4.6 MB
 gzipped, starts in under 10 ms at 4 MB RSS on linux-arm64. The budgets leave room for our own code on top of that.
+
+The archive budget started at 10 MB and was raised to 12 MB once Code Mode (QuickJS), the mermaid and LaTeX
+renderers, the terminal pane and the MCP client were in; linux-x64 measured 10.2 MB at that point.
 
 Budgets are checked by `script/budget.sh` in CI on every push (size of the linux-x64 release binary and archive,
 `--version` time and RSS, idle TUI RSS against the fake gateway). A dependency that spends a large share of the

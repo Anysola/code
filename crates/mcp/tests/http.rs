@@ -381,6 +381,7 @@ fn oauth_sign_in_storage_and_refresh() {
 
 /// A server for the 2026-07-28 revision answers `server/discover` and takes no initialize; a
 /// 2025 server answers it with "method not found".
+#[cfg(not(windows))]
 fn era(request: &Recorded, modern: bool) -> Reply {
     let message = request.json();
     let id = message["id"].clone();
