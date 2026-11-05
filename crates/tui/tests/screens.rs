@@ -1431,3 +1431,77 @@ fn empty_search_texts() {
     state.dialogs.push(Dialog::Select(skills));
     assert!(render(&state).contains("No skills found"));
 }
+
+/// `routes/session/index.tsx` `Execute`: nested calls and the runtime error preview.
+#[test]
+fn execute_rows() {
+    let mut call = tool("execute", json!({"code": "x"}), Status::Completed);
+    call.metadata = json!({
+        "error": true,
+        "toolCalls": [
+            {"tool": "opencode.models", "status": "completed", "input": {"query": "x"}},
+            {"tool": "opencode.worktree_list", "status": "error"},
+        ],
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    call.output = "\x1b[31mTypeError: boom\x1b[0m\nat line 1".into();
+    let assistant = Assistant {
+        id: "msg_a".into(),
+        agent: "build".into(),
+        model: "Claude Sonnet 5.5".into(),
+        created: now(),
+        turn_start: now(),
+        parts: vec![Part::Tool(call)],
+        ..Assistant::default()
+    };
+    let screen = render(&session(120, 36, vec![Item::Assistant(assistant)]));
+    for text in [
+        "✗ execute",
+        "› opencode.models [query=x]",
+        "✗ opencode.worktree_list",
+        "↳ TypeError: boom",
+        "  at line 1",
+    ] {
+        assert!(screen.contains(text), "{text}\n{screen}");
+    }
+}
+
+/// `dialog-execute.tsx`: title, status and the copy actions of the Execute dialog.
+#[test]
+fn execute_dialog_frame() {
+    use anysola_tui::dialog::{Action, Body, BodyKind, Size, Tone};
+    let mut state = base(120, 30);
+    let lines = vec![
+        vec![("Code".into(), Tone::Bold)],
+        vec![(" 1 ".into(), Tone::Muted), ("return 1".into(), Tone::Base)],
+        vec![("Output".into(), Tone::Bold)],
+        vec![("No output".into(), Tone::Muted)],
+    ];
+    let mut body = Body::new(
+        BodyKind::Execute {
+            code: "return 1".into(),
+            output: String::new(),
+        },
+        "execute",
+        lines,
+    );
+    body.title.push(("  Completed".into(), Tone::Muted));
+    body.size = Size::Large;
+    body.actions = vec![
+        Action::left("copy code", "c"),
+        Action::left("copy output", "o"),
+    ];
+    state.dialogs.push(Dialog::Body(body));
+    let screen = render(&state);
+    for text in [
+        "execute",
+        "Completed",
+        "return 1",
+        "copy code c",
+        "copy output o",
+    ] {
+        assert!(screen.contains(text), "{text}");
+    }
+}

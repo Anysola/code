@@ -247,6 +247,36 @@ pub fn ago(ms: u64, now: u64) -> String {
     }
 }
 
+/// `text` without ANSI escape sequences (CSI and OSC).
+pub fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
+                for next in chars.by_ref() {
+                    if ('\u{40}'..='\u{7e}').contains(&next) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                while let Some(next) = chars.next() {
+                    if next == '\x07' || (next == '\x1b' && chars.next_if_eq(&'\\').is_some()) {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Locale short time in the viewer's timezone (`3:04 PM`; the 0.5.1 default locale is en-US).
 pub fn time(ms: u64) -> String {
     local(ms).format("%-I:%M %p").to_string()
@@ -322,6 +352,7 @@ mod tests {
         let now = parse_iso("2026-11-05T00:00:00Z").unwrap();
         assert_eq!(short_date(renews, now), "23 Nov");
         assert_eq!(ago(now - 90_000, now), "1m ago");
+        assert_eq!(strip_ansi("\x1b[31mred\x1b[0m \x1b]8;;u\x07x"), "red x");
         let stamp = datetime(now);
         let (clock, date) = stamp.split_once(" · ").unwrap();
         assert!(clock.ends_with("AM") || clock.ends_with("PM"));

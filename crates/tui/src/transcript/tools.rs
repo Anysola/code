@@ -172,6 +172,21 @@ pub fn render(tool: &Tool, ctx: &Ctx) -> Vec<Vec<Row>> {
             };
             inline(icon, format!("{agent} Subagent — {description}"), tool, ctx)
         }
+        "execute" => {
+            let icon = if execute_failed(tool) {
+                "✗"
+            } else if tool.status == Status::Completed {
+                "✓"
+            } else {
+                "│"
+            };
+            let mut rows = inline(icon, "execute".into(), tool, ctx);
+            for row in &mut rows {
+                row.group = Some(format!("execute:{}", tool.call_id));
+            }
+            rows.extend(execute_calls(tool, ctx));
+            rows
+        }
         _ => {
             let icon = if tool.status == Status::Failed {
                 "✗"
@@ -232,6 +247,54 @@ fn header(label: &str, value: &str, ctx: &Ctx) -> Line {
         format!("{label} {}", crate::text::path(value, room)),
         base,
     )]
+}
+
+/// The program failed (a runtime error, not a failing nested call).
+fn execute_failed(tool: &Tool) -> bool {
+    tool.metadata.get("error") == Some(&Value::Bool(true)) || tool.status == Status::Failed
+}
+
+/// The nested calls an `execute` program made (`› tool [k=v]`) and its runtime error preview.
+fn execute_calls(tool: &Tool, ctx: &Ctx) -> Vec<Row> {
+    let mut rows = Vec::new();
+    let calls = tool.metadata.get("toolCalls").and_then(Value::as_array);
+    for call in calls.into_iter().flatten() {
+        let (Some(name), Some(status)) = (
+            call.get("tool").and_then(Value::as_str),
+            call.get("status").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        let failed = status == "error";
+        let input = call.get("input").cloned().unwrap_or(Value::Null);
+        let color = if failed {
+            ctx.theme.fg("text.feedback.error.base")
+        } else {
+            ctx.theme.fg("text.muted")
+        };
+        let summary = format!("{name}{}", arguments(&input));
+        let text = crate::text::clip(&summary, ctx.width.saturating_sub(5));
+        rows.push(Row::text(
+            3,
+            vec![Span::styled(
+                format!("{:<2}{text}", if failed { "✗" } else { "›" }),
+                Style::new().fg(color),
+            )],
+        ));
+    }
+    let output = crate::text::strip_ansi(tool.output.trim());
+    if execute_failed(tool) && !output.is_empty() {
+        let style = Style::new().fg(ctx.theme.fg("text.feedback.error.base"));
+        for (i, line) in output.lines().take(4).enumerate() {
+            let text = crate::text::clip(line, ctx.width.saturating_sub(9));
+            let lead = if i == 0 { "↳ " } else { "  " };
+            rows.push(Row::text(
+                6,
+                vec![Span::styled(format!("{lead}{text}"), style)],
+            ));
+        }
+    }
+    rows
 }
 
 fn edit(tool: &Tool, path: &str, ctx: &Ctx) -> Vec<Row> {

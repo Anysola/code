@@ -881,6 +881,11 @@ impl App {
         let Some(id) = hit else {
             return false;
         };
+        if let Some(call_id) = id.strip_prefix("execute:") {
+            let call_id = call_id.to_string();
+            self.open_execute(&call_id);
+            return true;
+        }
         if id == "revert" {
             self.run_command("session.redo", None);
             return true;
