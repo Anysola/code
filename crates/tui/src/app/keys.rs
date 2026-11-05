@@ -668,6 +668,22 @@ impl App {
                 .iter()
                 .map(|s| (s.name.clone(), s.description.clone().unwrap_or_default()))
                 .collect();
+            let references: Vec<(String, String)> = self
+                .core
+                .references()
+                .into_iter()
+                .filter(|r| !r.hidden)
+                .map(|r| {
+                    let place = match &r.source {
+                        anysola_core::reference::Source::Git { repository, .. } => {
+                            repository.clone()
+                        }
+                        anysola_core::reference::Source::Local(path) => path.display().to_string(),
+                    };
+                    let description = r.description.unwrap_or_default();
+                    (r.name, format!("{description} {place}"))
+                })
+                .collect();
             let agents: Vec<(String, String)> = loaded
                 .agents
                 .list
@@ -681,7 +697,7 @@ impl App {
                 files.clone()
             };
             (
-                crate::complete::mention_rows(&query, &skills, &agents, &files),
+                crate::complete::mention_rows(&query, &skills, &references, &agents, &files),
                 0,
             )
         };

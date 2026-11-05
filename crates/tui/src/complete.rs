@@ -136,9 +136,12 @@ pub fn walk(root: &Path, limit: usize) -> Vec<String> {
 }
 
 /// `@` rows: skills, subagents, then the files matching `query` (at most 20).
+/// `@` rows: skills, references (`(name, description)`), agents, then files. A query that
+/// starts with a reference name and `/` lists only that reference.
 pub fn mention_rows(
     query: &str,
     skills: &[(String, String)],
+    references: &[(String, String)],
     agents: &[(String, String)],
     files: &[String],
 ) -> Vec<PopupRow> {
@@ -153,7 +156,12 @@ pub fn mention_rows(
             })
             .collect()
     };
+    let alias = query.split_once('/').map(|(head, _)| head);
+    if let Some(reference) = references.iter().find(|(name, _)| Some(name.as_str()) == alias) {
+        return named(std::slice::from_ref(reference), "reference", AtomKind::File);
+    }
     let mut rows = named(skills, "skill", AtomKind::Skill);
+    rows.extend(named(references, "reference", AtomKind::File));
     rows.extend(named(agents, "agent", AtomKind::Agent));
     let (path, range) = match query.split_once('#') {
         Some((path, range)) => (path, Some(range)),
@@ -252,9 +260,19 @@ mod tests {
     }
 
     #[test]
+    fn reference_alias_lists_only_that_reference() {
+        let references = vec![("docs".to_string(), " /srv/docs".to_string())];
+        let rows = mention_rows("docs/guide", &[], &references, &[], &["a.rs".into()]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "reference");
+        let all = mention_rows("", &[], &references, &[], &[]);
+        assert_eq!(all[0].display, "@docs");
+    }
+
+    #[test]
     fn mentions_list_files_with_ranges() {
         let files = vec!["src/".to_string(), "src/main.rs".to_string()];
-        let rows = mention_rows("main#12-20", &[], &[], &files);
+        let rows = mention_rows("main#12-20", &[], &[], &[], &files);
         assert_eq!(
             rows[0].action,
             PopupAction::Mention(AtomKind::File, "@src/main.rs#12-20".into())
