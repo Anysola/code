@@ -327,7 +327,12 @@ pub fn question(c: &mut Canvas, q: &Question, x: u16, y: u16, w: u16) {
         .iter()
         .map(|o| (o.label.clone(), o.description.clone()))
         .collect();
-    labels.push(("Type your own answer".to_string(), String::new()));
+    let custom = if current.options.is_empty() {
+        "Type your answer"
+    } else {
+        "Type your own answer"
+    };
+    labels.push((custom.to_string(), String::new()));
     for (i, (label, description)) in labels.iter().enumerate() {
         let selected = i == q.selected;
         let picked = chosen.contains(label);
