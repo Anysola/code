@@ -177,6 +177,19 @@ fn theme_dirs(paths: &Paths, directory: &Path) -> Vec<PathBuf> {
     dirs
 }
 
+#[cfg(unix)]
+async fn recv_signal(signal: &mut Option<tokio::signal::unix::Signal>) -> Option<()> {
+    match signal {
+        Some(signal) => signal.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+#[cfg(not(unix))]
+async fn recv_signal(_: &mut Option<()>) -> Option<()> {
+    std::future::pending().await
+}
+
 /// Runs the UI; a panic shows the crash screen, whose Restart starts the UI again.
 pub async fn run(core: Core, mut options: Options) -> Result<(), String> {
     use futures_util::FutureExt;
@@ -276,6 +289,11 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
         app.toast(Some(title), message, Variant::Error);
     }
     let mut input = EventStream::new();
+    #[cfg(unix)]
+    let mut reload_signal =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined2()).ok();
+    #[cfg(not(unix))]
+    let mut reload_signal: Option<()> = None;
     loop {
         app.draw(&mut terminal);
         if app.quit {
@@ -293,6 +311,7 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
                 Err(broadcast::error::RecvError::Closed) => {}
             },
             Some(message) = rx.recv() => app.message(message),
+            Some(()) = recv_signal(&mut reload_signal) => app.reload_themes(&paths),
             _ = tokio::time::sleep(Duration::from_millis(80)), if tick => {}
         }
         if let Some(receiver) = app.resubscribe.take() {
@@ -317,6 +336,22 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
 }
 
 impl App {
+    /// `SIGUSR2`: rescans the theme directories and reloads the current theme, keeping the
+    /// current one when the scan or the load fails.
+    fn reload_themes(&mut self, paths: &Paths) {
+        let mut catalog = Catalog::bundled();
+        let result = catalog
+            .discover(&theme_dirs(paths, self.core.directory()))
+            .and_then(|()| catalog.load(&self.theme.name, self.theme.mode));
+        match result {
+            Ok(theme) => {
+                self.catalog = catalog;
+                self.theme = theme;
+            }
+            Err(error) => self.toast(Some("Failed to reload themes".into()), error, Variant::Error),
+        }
+    }
+
     fn init(&mut self, paths: &Paths, options: &Options) {
         let directory = self.core.directory().to_path_buf();
         self.state.location = location(&directory, &paths.home);
