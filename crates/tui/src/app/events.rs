@@ -4,6 +4,7 @@ use anysola_core::events::Event;
 use anysola_core::session::gate::Reply;
 
 use super::{App, now};
+use crate::sound::Sound;
 use crate::state::{Permission, Question, Variant};
 use crate::transcript::model;
 
@@ -33,8 +34,18 @@ impl App {
 
     /// A desktop notification for a session that needs attention, when enabled and the
     /// terminal reported losing focus.
-    fn alert(&self, session_id: &str, message: &str) {
-        if !self.tui.notifications() || self.focused != Some(false) {
+    fn alert(&self, session_id: &str, message: &str, sound: Sound) {
+        if self.tui.sound() {
+            let custom = self.tui.sound_file(sound.name());
+            crate::sound::play(sound, custom.as_deref(), &self.sounds, self.tui.volume());
+        }
+        let child = self
+            .core
+            .session(session_id)
+            .ok()
+            .flatten()
+            .is_some_and(|row| row.parent_id.is_some());
+        if child || !self.tui.notifications() || self.focused != Some(false) {
             return;
         }
         let title = self
@@ -65,7 +76,7 @@ impl App {
         });
         let id = session.id.clone();
         self.attention(&id, true);
-        self.alert(&id, "Input needs response");
+        self.alert(&id, "Input needs response", Sound::Question);
     }
 
     /// Toasts when a server starts needing sign-in or fails (once per change).
@@ -152,7 +163,7 @@ impl App {
                     fullscreen: false,
                 });
                 self.attention(&target, true);
-                self.alert(&target, "Permission needs input");
+                self.alert(&target, "Permission needs input", Sound::Permission);
             }
             Event::PermissionReplied { request_id, .. } => {
                 for session in self.state.sessions.values_mut() {
@@ -195,7 +206,7 @@ impl App {
                     form: None,
                 });
                 self.attention(&target, true);
-                self.alert(&target, "Input needs response");
+                self.alert(&target, "Input needs response", Sound::Question);
             }
             Event::Credits(snapshot) => {
                 if let Some(session) = self.state.sessions.get_mut(&id) {
@@ -227,9 +238,22 @@ impl App {
                             error.message.clone(),
                             Variant::Error,
                         );
-                        self.alert(&id, &error.message);
+                        self.alert(&id, &error.message, Sound::Error);
                     }
-                    Event::Succeeded { .. } => self.alert(&id, "Session done"),
+                    Event::Succeeded { .. } => {
+                        let child = self
+                            .core
+                            .session(&id)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|row| row.parent_id.is_some());
+                        let sound = if child {
+                            Sound::SubagentDone
+                        } else {
+                            Sound::Done
+                        };
+                        self.alert(&id, "Session done", sound);
+                    }
                     _ => {}
                 }
                 self.reload(&id);

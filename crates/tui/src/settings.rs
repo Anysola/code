@@ -76,6 +76,22 @@ impl Tui {
             == Some(true)
     }
 
+    pub fn sound(&self) -> bool {
+        self.get(&["attention", "sound"]).and_then(Value::as_bool) == Some(true)
+    }
+
+    pub fn volume(&self) -> f64 {
+        self.get(&["attention", "volume"])
+            .and_then(Value::as_f64)
+            .unwrap_or(0.4)
+    }
+
+    /// `attention.sounds.<name>`: a file played instead of the built-in sound.
+    pub fn sound_file(&self, name: &str) -> Option<std::path::PathBuf> {
+        self.str(&["attention", "sounds", name])
+            .map(std::path::PathBuf::from)
+    }
+
     pub fn auto_accept(&self) -> bool {
         self.str(&["session", "permissions"]) == Some("autoaccept")
     }
