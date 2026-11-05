@@ -152,6 +152,8 @@ pub struct Revert {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Session {
     pub id: String,
+    /// Background shells of this session's transcript, by shell ID.
+    pub shells: HashMap<String, crate::transcript::rows::BackgroundView>,
     pub title: String,
     pub directory: String,
     pub items: Vec<Item>,

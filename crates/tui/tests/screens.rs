@@ -1533,3 +1533,45 @@ fn sidebar_overlay_below_121_columns() {
     anysola_tui::view::draw(&state, &theme, &mut buffer);
     assert_ne!(buffer[(5, 10)].bg, theme.fg("background.base"));
 }
+
+/// `routes/session/index.tsx:2967-3137`: a backgrounded shell shows its command with a spinner
+/// while it runs and the ` Background ` badge; its output appears only once the row is expanded.
+#[test]
+fn background_shell_row() {
+    let mut shell = tool(
+        "shell",
+        json!({"command": "npm run dev"}),
+        Status::Completed,
+    );
+    shell.metadata = json!({"status": "running", "shellID": "sh_1"})
+        .as_object()
+        .unwrap()
+        .clone();
+    let assistant = Assistant {
+        parts: vec![Part::Tool(shell)],
+        ..Assistant::default()
+    };
+    let mut state = session(100, 30, vec![Item::Assistant(assistant)]);
+    state.settings.animations = false;
+    let s = state.sessions.get_mut("ses_b").unwrap();
+    s.shells.insert(
+        "sh_1".into(),
+        anysola_tui::transcript::rows::BackgroundView {
+            running: true,
+            output: "ready on :3000\n".into(),
+            ..Default::default()
+        },
+    );
+    let collapsed = render(&state);
+    assert!(collapsed.contains("⋯ npm run dev"));
+    assert!(collapsed.contains(" Background "));
+    assert!(!collapsed.contains("ready on :3000"));
+    let s = state.sessions.get_mut("ses_b").unwrap();
+    s.toggled.insert("shell:call_shell".into());
+    assert!(render(&state).contains("ready on :3000"));
+    let s = state.sessions.get_mut("ses_b").unwrap();
+    s.shells.get_mut("sh_1").unwrap().running = false;
+    s.shells.get_mut("sh_1").unwrap().truncated = true;
+    let done = render(&state);
+    assert!(done.contains("$ npm run dev") && done.contains("[earlier output omitted]"));
+}

@@ -396,6 +396,13 @@ pub enum BodyKind {
     Btw {
         answer: String,
     },
+    /// A background shell's output, re-read every second while open.
+    ShellOutput {
+        id: String,
+        command: String,
+        file: std::path::PathBuf,
+        polled: u64,
+    },
     /// An `execute` call's program and output.
     Execute {
         code: String,

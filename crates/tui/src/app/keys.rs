@@ -908,6 +908,9 @@ impl App {
             self.run_command("session.redo", None);
             return true;
         }
+        if id.starts_with("shell:") {
+            self.shells_polled = 0;
+        }
         if !session.toggled.remove(&id) {
             session.toggled.insert(id);
         }

@@ -85,6 +85,8 @@ pub struct App {
     /// Strokes of a pending leader sequence and when it expires.
     pending: Vec<Stroke>,
     pending_until: u64,
+    /// When background shell rows were last polled.
+    shells_polled: u64,
     /// The `@` file list, walked on first use.
     files: Option<Vec<String>>,
     /// A drag selection in screen cells: anchor and current end.
@@ -277,6 +279,7 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
         tx,
         pending: Vec::new(),
         pending_until: 0,
+        shells_polled: 0,
         files: None,
         selection: None,
         last: Buffer::empty(ratatui::layout::Rect::default()),
@@ -542,6 +545,8 @@ impl App {
             self.state.height = size.height;
         }
         self.sync_pane();
+        self.poll_shell_output();
+        self.poll_shells();
         let docked = crate::view::diff_docked(&self.state);
         if let Some(view) = self.state.diff.as_mut() {
             view.docked = docked;

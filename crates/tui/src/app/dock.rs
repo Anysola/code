@@ -206,7 +206,7 @@ impl App {
         }
     }
 
-    /// The shell output dialog: the command and the tail of what it wrote.
+    /// The shell output dialog (`component/dialog-shell-output.tsx`).
     fn shell_output(&mut self, row: &DockRow) {
         let Some(session) = self.state.session().map(|s| s.id.clone()) else {
             return;
@@ -219,17 +219,111 @@ impl App {
         else {
             return self.toast(None, "The command has ended".into(), Variant::Info);
         };
-        let text = std::fs::read_to_string(&shell.file).unwrap_or_default();
-        let mut lines = vec![
-            line(format!("$ {}", shell.command), Tone::Muted),
+        let mut body = Body::new(
+            BodyKind::ShellOutput {
+                id: shell.id,
+                command: shell.command,
+                file: shell.file,
+                polled: 0,
+            },
+            "Shell output",
             Vec::new(),
+        );
+        body.size = crate::dialog::Size::XLarge;
+        body.centered = true;
+        body.actions = vec![
+            crate::dialog::Action::right("scroll", "↑/↓"),
+            crate::dialog::Action::right("follow", "end"),
         ];
-        let tail: Vec<&str> = text.lines().collect();
-        let skip = tail.len().saturating_sub(200);
-        lines.extend(tail[skip..].iter().map(|l| line(*l, Tone::Base)));
-        let mut body = Body::new(BodyKind::Status, "Shell output", lines);
-        body.size = crate::dialog::Size::Large;
         self.push(Dialog::Body(body));
+        self.poll_shell_output();
+    }
+
+    /// Once a second: which of the session's background shells still run, and the output of
+    /// those whose rows are expanded (the last 1 MiB, `routes/session/index.tsx:3016-3076`).
+    pub(super) fn poll_shells(&mut self) {
+        use crate::transcript::model::{Item, Part};
+        let now = super::now();
+        if now < self.shells_polled + 1000 {
+            return;
+        }
+        self.shells_polled = now;
+        let Some(session) = self.state.session() else {
+            return;
+        };
+        let live = self.core.background_shells(&session.id);
+        let calls: Vec<(String, String)> = session
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Assistant(a) => Some(&a.parts),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|p| match p {
+                Part::Tool(t) => {
+                    crate::transcript::shell_id(t).map(|id| (id.to_string(), t.call_id.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        let Some(session) = self.state.session_mut() else {
+            return;
+        };
+        for (id, call) in calls {
+            let shell = live.iter().find(|s| s.id == id);
+            let view = session.shells.entry(id).or_default();
+            view.running = shell.is_some();
+            if let Some(shell) = shell {
+                view.file = Some(shell.file.clone());
+            }
+            if !session.toggled.contains(&format!("shell:{call}")) {
+                continue;
+            }
+            if let Some(bytes) = view.file.as_ref().and_then(|f| std::fs::read(f).ok()) {
+                const LIMIT: usize = 1024 * 1024;
+                view.truncated = bytes.len() > LIMIT;
+                view.output = String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(LIMIT)..])
+                    .into_owned();
+            }
+        }
+    }
+
+    /// Re-reads the open Shell output dialog's file once a second, keeping the view at the end
+    /// while it was there.
+    pub(super) fn poll_shell_output(&mut self) {
+        let height = self.state.height;
+        let now = super::now();
+        let Some(Dialog::Body(b)) = self.state.dialogs.last_mut() else {
+            return;
+        };
+        let BodyKind::ShellOutput {
+            id,
+            command,
+            file,
+            polled,
+        } = &mut b.kind
+        else {
+            return;
+        };
+        if now < *polled + 1000 {
+            return;
+        }
+        *polled = now;
+        let end = self.core.shell_end(id);
+        let bytes = std::fs::read(file.as_path());
+        let room = crate::dialog::Size::XLarge.width().saturating_sub(6) as usize;
+        let (status, lines) = shell_output_lines(command, end, bytes, room);
+        let rows = (height.saturating_sub(10) as usize).min(lines.len());
+        let following = b.scroll + rows >= b.lines.len();
+        b.title = vec![
+            ("Shell output".into(), Tone::Bold),
+            (format!("  {status}"), Tone::Muted),
+        ];
+        b.lines = lines;
+        if following {
+            b.scroll = b.lines.len().saturating_sub(rows);
+        }
     }
 
     /// `session.parent`: from a child session to its parent.
@@ -300,5 +394,103 @@ impl App {
             .map(|(n, word)| plural(n, word))
             .collect();
         (!parts.is_empty()).then(|| parts.join(" · "))
+    }
+}
+
+const PAGE_BYTES: usize = 64 * 1024;
+
+/// The Shell output dialog's status word and body: the command (at most 3 rows), the omitted
+/// notice, then the last 64 KiB of output or the loading/empty/missing text.
+pub fn shell_output_lines(
+    command: &str,
+    end: Option<anysola_core::tool::shell::ShellEnd>,
+    output: std::io::Result<Vec<u8>>,
+    room: usize,
+) -> (String, Vec<crate::dialog::Line>) {
+    use anysola_core::tool::shell::ShellEnd;
+    let status = match end {
+        None => "Running".to_string(),
+        Some(ShellEnd::TimedOut) => "Timed out".into(),
+        Some(ShellEnd::Killed) => "Killed".into(),
+        Some(ShellEnd::Exited(None)) => "Exited".into(),
+        Some(ShellEnd::Exited(Some(code))) => format!("Exited · code {code}"),
+    };
+    let mut lines: Vec<crate::dialog::Line> = crate::text::wrap(command, room)
+        .into_iter()
+        .take(3)
+        .map(|l| line(l, Tone::Muted))
+        .collect();
+    lines.push(Vec::new());
+    match output {
+        Ok(bytes) => {
+            let omitted = bytes.len() > PAGE_BYTES;
+            let tail = String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(PAGE_BYTES)..]);
+            let text = crate::text::strip_ansi(&tail)
+                .replace("\r\n", "\n")
+                .replace('\r', "\n");
+            if omitted {
+                lines.push(line(
+                    "Earlier output omitted · showing recent output",
+                    Tone::Muted,
+                ));
+                lines.push(Vec::new());
+            }
+            if text.is_empty() {
+                lines.push(line(
+                    "No captured output. Output redirected to files is not shown here.",
+                    Tone::Base,
+                ));
+                return (status, lines);
+            }
+            for row in text.trim_end_matches('\n').split('\n') {
+                lines.extend(
+                    crate::text::wrap(row, room)
+                        .into_iter()
+                        .map(|l| line(l, Tone::Base)),
+                );
+            }
+        }
+        Err(_) => lines.push(line("Shell output is no longer available.", Tone::Error)),
+    }
+    (status, lines)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anysola_core::tool::shell::ShellEnd;
+
+    fn text(lines: &[crate::dialog::Line]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|l| l.iter().map(|(t, _)| t.as_str()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn shell_output_texts() {
+        let (status, lines) = shell_output_lines("make", None, Ok(b"a\r\nb\n".to_vec()), 40);
+        assert_eq!(status, "Running");
+        assert_eq!(text(&lines), ["make", "", "a", "b"]);
+        let (status, lines) =
+            shell_output_lines("x", Some(ShellEnd::Exited(Some(2))), Ok(Vec::new()), 40);
+        assert_eq!(status, "Exited · code 2");
+        assert_eq!(
+            text(&lines)[2],
+            "No captured output. Output redirected to files is not shown here."
+        );
+        let big = vec![b'z'; PAGE_BYTES + 10];
+        let (status, lines) = shell_output_lines("x", Some(ShellEnd::Killed), Ok(big), 200);
+        assert_eq!(status, "Killed");
+        assert_eq!(
+            text(&lines)[2],
+            "Earlier output omitted · showing recent output"
+        );
+        let missing = Err(std::io::Error::other("gone"));
+        let (status, lines) = shell_output_lines("x", Some(ShellEnd::TimedOut), missing, 40);
+        assert_eq!(
+            (status.as_str(), text(&lines)[2].as_str()),
+            ("Timed out", "Shell output is no longer available.")
+        );
     }
 }

@@ -214,8 +214,18 @@ pub fn render(tool: &Tool, ctx: &Ctx) -> Vec<Vec<Row>> {
     groups
 }
 
+/// The shell ID of a command moved to the background (`metadata.status = running`).
+pub fn shell_id(tool: &Tool) -> Option<&str> {
+    (tool.name == "shell"
+        && tool.status == Status::Completed
+        && tool.metadata.get("status").and_then(Value::as_str) == Some("running"))
+    .then(|| tool.metadata.get("shellID").and_then(Value::as_str))
+    .flatten()
+}
+
 fn shell(tool: &Tool, ctx: &Ctx) -> Vec<Row> {
     let base = Style::new().fg(ctx.theme.fg("text.base"));
+    let muted = Style::new().fg(ctx.theme.fg("text.muted"));
     let Some(command) = tool.str("command") else {
         let text = format!("{} Writing command…", ctx.spinner());
         return ctx.block(vec![vec![Span::styled(text, base)]], tool.awaiting);
@@ -224,12 +234,49 @@ fn shell(tool: &Tool, ctx: &Ctx) -> Vec<Row> {
         Some(dir) => format!("cd {dir} && {command}"),
         None => command.to_string(),
     };
-    if tool.status == Status::Running {
-        let text = format!("{} {command}", ctx.spinner());
-        return ctx.block(vec![vec![Span::styled(text, base)]], tool.awaiting);
+    let background = shell_id(tool).map(|id| ctx.shells.get(id).cloned().unwrap_or_default());
+    let hit = format!("shell:{}", tool.call_id);
+    let expanded = ctx.toggled.contains(&hit);
+    let running = tool.status == Status::Running || background.as_ref().is_some_and(|b| b.running);
+    let mut lines = if running {
+        vec![vec![Span::styled(
+            format!("{} {command}", ctx.spinner()),
+            base,
+        )]]
+    } else {
+        vec![vec![Span::styled(format!("$ {command}"), base)]]
+    };
+    let output = match &background {
+        Some(_) if !expanded => String::new(),
+        Some(view) if view.truncated => {
+            format!(
+                "[earlier output omitted]\n{}",
+                crate::text::strip_ansi(view.output.trim())
+            )
+        }
+        Some(view) => crate::text::strip_ansi(view.output.trim()),
+        None if tool.status == Status::Running => String::new(),
+        None => tool.output.clone(),
+    };
+    let collapsed = collapsed_output(&output, ctx);
+    let overflow = collapsed.get(1).is_some_and(|l| {
+        l.first().is_some_and(|s| {
+            s.content.ends_with("earlier lines)") || s.content.ends_with("earlier line)")
+        })
+    });
+    if expanded && !output.trim_end().is_empty() {
+        let room = ctx.width.saturating_sub(7).max(20);
+        lines.push(Vec::new());
+        lines.extend(super::markdown::wrap_spans(
+            &[Span::styled(
+                output.trim_end_matches('\n').to_string(),
+                muted,
+            )],
+            room,
+        ));
+    } else {
+        lines.extend(collapsed);
     }
-    let mut lines = vec![vec![Span::styled(format!("$ {command}"), base)]];
-    lines.extend(collapsed_output(&tool.output, ctx));
     if tool.status == Status::Failed
         && let Some(error) = &tool.error
     {
@@ -237,7 +284,19 @@ fn shell(tool: &Tool, ctx: &Ctx) -> Vec<Row> {
         let style = Style::new().fg(ctx.theme.fg("text.feedback.error.base"));
         lines.push(vec![Span::styled(error.clone(), style)]);
     }
-    ctx.block(lines, tool.awaiting)
+    if background.is_some() {
+        let raised = ctx.theme.get("background.raised.base");
+        let badge = muted.bg(ctx.theme.term(ctx.theme.decrease(raised, 1)));
+        lines.push(Vec::new());
+        lines.push(vec![Span::styled(" Background ", badge)]);
+    }
+    let mut rows = ctx.block(lines, tool.awaiting);
+    if background.is_some() || overflow || expanded {
+        for row in &mut rows {
+            row.group = Some(hit.clone());
+        }
+    }
+    rows
 }
 
 fn header(label: &str, value: &str, ctx: &Ctx) -> Line {

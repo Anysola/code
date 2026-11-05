@@ -1048,6 +1048,12 @@ impl App {
                 self.state.dialogs.pop();
                 self.open_usage(days);
             }
+            (BodyKind::ShellOutput { .. }, "end") => {
+                let rows = self.state.height.saturating_sub(10) as usize;
+                if let Some(Dialog::Body(b)) = self.state.dialogs.last_mut() {
+                    b.scroll = b.lines.len().saturating_sub(rows.min(b.lines.len()));
+                }
+            }
             (BodyKind::Execute { code, .. }, "c") => {
                 if !code.is_empty() {
                     term::copy(&code);

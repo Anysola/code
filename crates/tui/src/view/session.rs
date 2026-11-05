@@ -81,6 +81,7 @@ pub fn transcript(
         diff_wrap: state.settings.diff_wrap,
         verbosity: state.settings.verbosity,
         toggled: &session.toggled,
+        shells: &session.shells,
     };
     let mut rows = rows::layout(&session.items, &ctx, Some(&session.layout.0));
     rows.extend(rows::tail(

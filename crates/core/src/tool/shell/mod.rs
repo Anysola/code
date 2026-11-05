@@ -111,6 +111,27 @@ pub fn background_shells(session_id: &str) -> Vec<BackgroundShell> {
         .collect()
 }
 
+/// How a background shell ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellEnd {
+    Exited(Option<i32>),
+    Killed,
+    TimedOut,
+}
+
+static ENDED: Mutex<Vec<(String, ShellEnd)>> = Mutex::new(Vec::new());
+
+/// How the background shell with this ID ended; `None` while it runs or when unknown.
+pub fn background_end(id: &str) -> Option<ShellEnd> {
+    ENDED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .rev()
+        .find(|(shell, _)| shell == id)
+        .map(|(_, end)| *end)
+}
+
 /// Ends a background shell by its shell ID; false when none runs.
 pub fn kill_background(id: &str) -> bool {
     let found = background().iter().find(|shell| shell.id == id).cloned();
@@ -401,13 +422,14 @@ fn notify_when_done(started: Started, command: String, ctx: &ToolContext) {
     let session_id = ctx.session_id.clone();
     let limits = ctx.limits;
     let entry = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let stop = started.running.stopper();
     background().push(BackgroundShell {
         entry,
         session_id: session_id.clone(),
         id: started.id.clone(),
         command: command.clone(),
         file: started.file.clone(),
-        stop: started.running.stopper(),
+        stop: stop.clone(),
     });
     tokio::spawn(async move {
         let Started {
@@ -417,6 +439,15 @@ fn notify_when_done(started: Started, command: String, ctx: &ToolContext) {
             mut running,
         } = started;
         let ended = running.wait().await;
+        let end = match ended.outcome {
+            exec::Outcome::TimedOut => ShellEnd::TimedOut,
+            _ if stop.is_cancelled() => ShellEnd::Killed,
+            exec::Outcome::Exited { code, .. } => ShellEnd::Exited(code),
+        };
+        ENDED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((id.clone(), end));
         background().retain(|shell| shell.entry != entry);
         let (state, text) = match Finished::read(&file, ended, limits, timeout) {
             Ok(finished) => ("completed", finished.content().join("\n\n")),
@@ -796,6 +827,7 @@ mod tests {
                 "<shell id=\"{id}\" state=\"completed\" command=\"{command}\">\nstarted\nfinished\n\n\nExited with code 4\n</shell>"
             )
         );
+        assert_eq!(background_end(&id), Some(ShellEnd::Exited(Some(4))));
 
         // Background commands outlive the turn and have no timeout; the process exit kills them.
         test.ctx.cancel.cancel();

@@ -62,6 +62,18 @@ pub struct Ctx<'a> {
     pub verbosity: Verbosity,
     /// Groups the user opened (or closed, when they start open).
     pub toggled: &'a std::collections::HashSet<String>,
+    /// Background shells by shell ID, as last polled.
+    pub shells: &'a std::collections::HashMap<String, BackgroundView>,
+}
+
+/// What the transcript knows of a background shell: whether it still runs, and its output
+/// (the last 1 MiB, read while its row is expanded).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BackgroundView {
+    pub running: bool,
+    pub output: String,
+    pub truncated: bool,
+    pub file: Option<std::path::PathBuf>,
 }
 
 impl Ctx<'_> {
@@ -148,7 +160,10 @@ fn settled(item: &Item) -> bool {
         Item::Assistant(a) => {
             a.completed.is_some()
                 && a.parts.iter().all(|p| match p {
-                    Part::Tool(t) => !matches!(t.status, Status::Running | Status::Streaming),
+                    Part::Tool(t) => {
+                        !matches!(t.status, Status::Running | Status::Streaming)
+                            && super::tools::shell_id(t).is_none()
+                    }
                     Part::Reasoning { end, .. } => end.is_some(),
                     Part::Text { done, .. } => *done,
                 })
@@ -707,6 +722,7 @@ mod tests {
             .unwrap();
         let color = |_: &str| Color::Reset;
         let toggled = std::collections::HashSet::new();
+        let shells = std::collections::HashMap::new();
         let ctx = |width| Ctx {
             theme: &theme,
             width,
@@ -723,6 +739,7 @@ mod tests {
             diff_wrap: true,
             verbosity: Verbosity::Medium,
             toggled: &toggled,
+            shells: &shells,
         };
         let items = vec![
             Item::User {
