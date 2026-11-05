@@ -46,6 +46,7 @@ tokio-util = "0.7"
 url = "2.5"
 yaml-rust2 = { version = "0.10", default-features = false }
 
+anysola-acp = { path = "crates/acp" }
 anysola-core = { path = "crates/core" }
 anysola-mcp = { path = "crates/mcp" }
 anysola-migrate = { path = "crates/migrate" }

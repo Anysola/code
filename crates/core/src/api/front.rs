@@ -112,22 +112,6 @@ impl Core {
 const GRANTED: &str = "opencode.acp.additionalDirectories";
 
 impl Core {
-    /// Root sessions, most recently updated first, optionally of one directory, after the
-    /// `(time_updated, id)` position where a previous page ended.
-    pub fn list_sessions(
-        &self,
-        directory: Option<&str>,
-        after: Option<(u64, &str)>,
-        limit: u64,
-    ) -> Result<Vec<crate::storage::SessionRow>, CoreError> {
-        Ok(self.shared.db.list_sessions(directory, after, limit)?)
-    }
-
-    /// Deletes the session and its descendants; false when it does not exist.
-    pub fn delete_session(&self, session_id: &str) -> Result<bool, CoreError> {
-        Ok(self.shared.db.delete_session(session_id)?)
-    }
-
     /// The directories granted with [`Core::grant_directories`].
     pub fn granted_directories(&self, session_id: &str) -> Result<Vec<String>, CoreError> {
         let metadata = self.shared.db.session_metadata(session_id)?;
