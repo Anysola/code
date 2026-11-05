@@ -83,7 +83,7 @@ jobs:
           anysola --version
 
   npm:
-    # npm i -g on every OS/arch; windows-11-arm also with x64 Node (postinstall picks the arm64 binary).
+    # npm i -g on every OS/arch, with and without install scripts; windows-11-arm also with x64 Node (postinstall fetches the arm64 binary).
     strategy:
       fail-fast: false
       matrix:
@@ -112,9 +112,12 @@ jobs:
           set -euo pipefail
           npm install -g "@anysola/code@$VERSION"
           anysola --version | tr -d '\r' | grep -E '^Anysola Code [0-9]'
+          # Newer npm skips install scripts unless allowed; the Node launcher must work without them.
+          npm install -g --ignore-scripts "@anysola/code@$VERSION"
+          anysola --version | tr -d '\r' | grep -E '^Anysola Code [0-9]'
 
   npm-alpine:
-    # musl: postinstall must pick the -musl package.
+    # musl: the launcher must pick the -musl package.
     runs-on: ubuntu-24.04
     container: node:24-alpine
     steps:

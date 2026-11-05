@@ -37,13 +37,17 @@ impl Method {
     }
 }
 
-/// The npm-style package whose `bin` is this executable (`<package>/bin/anysola.exe`).
+/// The npm-style package whose `bin` is this executable (`<package>/bin/anysola.exe`), or that
+/// installed the platform package (`@anysola/code-<platform>`) the npm launcher runs it from.
 fn installed_package(exe: &Path) -> Option<String> {
     let directory = exe.parent()?.parent()?;
     let manifest: Value =
         serde_json::from_str(&std::fs::read_to_string(directory.join("package.json")).ok()?)
             .ok()?;
     let name = manifest.get("name")?.as_str()?;
+    if name.starts_with("@anysola/code-") && manifest.get("bin").is_none() {
+        return Some("@anysola/code".to_string());
+    }
     let owns = manifest
         .get("bin")?
         .as_object()?

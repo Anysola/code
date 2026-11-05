@@ -1,0 +1,41 @@
+#!/usr/bin/env node
+// The `anysola` command of the npm package: runs the platform binary. Needs no install script; where
+// the postinstall did run on Linux and macOS, the binary itself replaced this file.
+
+const childProcess = require("node:child_process")
+const resolve = require("../resolve.cjs")
+
+function run(binary) {
+  // The binary handles Ctrl+C itself; the launcher only waits for it.
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => {})
+  return childProcess.spawnSync(binary, process.argv.slice(2), { stdio: "inherit", windowsHide: false })
+}
+
+let binary = resolve.remembered()
+let result = binary && run(binary)
+if (!binary || (result.error && result.error.code !== undefined)) {
+  resolve.forget()
+  try {
+    binary = resolve.find()
+  } catch (error) {
+    console.error(`Anysola Code: ${error.message}`)
+    process.exit(1)
+  }
+  if (!binary) {
+    const names = resolve.packageNames().map((name) => `${name}@${resolve.dependencies[name]}`)
+    console.error(`Anysola Code: no binary for ${resolve.platform}-${resolve.arch} is installed.`)
+    console.error(`Reinstall with: npm i -g @anysola/code --prefer-online (or install ${names[0]})`)
+    process.exit(1)
+  }
+  resolve.remember(binary)
+  result = run(binary)
+}
+if (result.error) {
+  console.error(`Anysola Code: ${result.error.message}`)
+  process.exit(1)
+}
+if (result.signal) {
+  process.removeAllListeners(result.signal)
+  process.kill(process.pid, result.signal)
+}
+process.exit(result.status ?? 1)

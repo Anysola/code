@@ -101,17 +101,13 @@ EOF
   pack_dir "$dir"
 done
 
-# Main package @anysola/code: placeholder bin until postinstall links the platform binary over it.
+# Main package @anysola/code: a Node launcher runs the platform binary; the optional postinstall
+# puts the binary in the launcher's place on Linux and macOS.
 dir="$out/pkg/code"
 mkdir -p "$dir/bin"
-cp "$root/script/npm/postinstall.mjs" "$root/LICENSE" "$root/NOTICE" "$dir/"
-cat > "$dir/bin/anysola.exe" <<'EOF'
-echo "Error: @anysola/code's postinstall script was not run." >&2
-echo "" >&2
-echo "This occurs when installation scripts are disabled." >&2
-echo "Run the package postinstall script or reinstall with scripts enabled." >&2
-exit 1
-EOF
+cp "$root/script/npm/postinstall.mjs" "$root/script/npm/resolve.cjs" "$root/LICENSE" "$root/NOTICE" "$dir/"
+cp "$root/script/npm/anysola" "$dir/bin/anysola"
+chmod 755 "$dir/bin/anysola"
 deps=""
 for target in $targets; do
   deps="$deps${deps:+,
@@ -121,7 +117,7 @@ cat > "$dir/package.json" <<EOF
 {
   "name": "@anysola/code",
   "bin": {
-    "anysola": "./bin/anysola.exe"
+    "anysola": "./bin/anysola"
   },
   "scripts": {
     "postinstall": "node ./postinstall.mjs"

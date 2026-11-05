@@ -372,6 +372,31 @@ fn npm_installs_are_detected_and_removed() {
 }
 
 #[test]
+fn the_platform_package_the_npm_launcher_runs_belongs_to_the_main_package() {
+    let gateway = gateway();
+    let home = home(&gateway);
+    home.write(
+        "npm/lib/node_modules/@anysola/code/package.json",
+        r#"{"name": "@anysola/code", "bin": {"anysola": "bin/anysola"}}"#,
+    );
+    home.write(
+        "npm/lib/node_modules/@anysola/code-linux-x64/package.json",
+        r#"{"name": "@anysola/code-linux-x64", "os": ["linux"]}"#,
+    );
+    let exe = home
+        .home()
+        .join("npm/lib/node_modules/@anysola/code-linux-x64/bin/anysola.exe");
+    place(&exe);
+    let out = home.run(exe.to_str().unwrap(), &["uninstall", "-f"], None, None);
+    assert_eq!(out.code, 0, "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("Package: npm uninstall --global @anysola/code\n")
+    );
+    assert!(calls(&home).contains("npm uninstall --global @anysola/code\n"));
+}
+
+#[test]
 fn a_failed_package_removal() {
     let gateway = gateway();
     let mut home = home(&gateway);
