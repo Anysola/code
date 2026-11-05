@@ -231,6 +231,35 @@ fn tabs(c: &mut Canvas, state: &State) {
     }
 }
 
+fn affordance(toast: &crate::state::Toast) -> String {
+    toast
+        .action
+        .as_ref()
+        .map_or("x".to_string(), |(label, _)| format!("› {label}"))
+}
+
+/// Where the toast sits: top right, as wide as its longest line allows.
+pub fn toast_rect(state: &State) -> Option<Rect> {
+    let toast = state.toast.as_ref()?;
+    let max = 60.min(state.width as usize);
+    let room = max.saturating_sub(9);
+    let rows = toast.title.as_ref().map_or(0, |_| 2)
+        + crate::text::wrap(&toast.message, room).len()
+        + if state.toast_queue.is_empty() { 0 } else { 2 };
+    let longest = toast
+        .message
+        .lines()
+        .chain(toast.title.as_deref())
+        .map(width)
+        .max()
+        .unwrap_or(0);
+    // A toast whose text wraps takes the full width.
+    let extra = width(&affordance(toast)).saturating_sub(1);
+    let w = (longest + 9 + extra).min(max) as u16;
+    let x = state.width.saturating_sub(w + 2);
+    Some(Rect::new(x, 1, w, rows as u16 + 2))
+}
+
 /// The toast at the top right: coloured side borders, text, and the `x` close mark.
 fn toast(c: &mut Canvas, state: &State, toast: &crate::state::Toast) {
     let color = match toast.variant {
@@ -248,26 +277,22 @@ fn toast(c: &mut Canvas, state: &State, toast: &crate::state::Toast) {
             c.style("text.base").add_modifier(Modifier::BOLD),
         ));
     }
+    if !lines.is_empty() {
+        lines.push((String::new(), c.style("text.base")));
+    }
     for line in crate::text::wrap(&toast.message, room) {
         lines.push((line, c.style("text.base")));
     }
-    let longest = toast
-        .message
-        .lines()
-        .chain(toast.title.as_deref())
-        .map(width)
-        .max()
-        .unwrap_or(0);
-    // A toast whose text wraps takes the full width.
-    let affordance = toast
-        .action
-        .as_ref()
-        .map_or("x".to_string(), |(label, _)| format!("› {label}"));
-    let extra = width(&affordance).saturating_sub(1);
-    let w = (longest + 9 + extra).min(max) as u16;
-    let h = lines.len() as u16 + 2;
-    let x = state.width.saturating_sub(w + 2);
-    let rect = Rect::new(x, 1, w, h);
+    if !state.toast_queue.is_empty() {
+        lines.push((String::new(), c.style("text.muted")));
+        let more = format!("+{} more", state.toast_queue.len());
+        lines.push((more, c.style("text.muted")));
+    }
+    let affordance = affordance(toast);
+    let Some(rect) = toast_rect(state) else {
+        return;
+    };
+    let x = rect.x;
     c.fill(rect, c.theme.fg("background.raised.high"));
     let border = c.style(color);
     for y in rect.top()..rect.bottom() {

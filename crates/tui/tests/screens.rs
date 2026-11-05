@@ -1197,12 +1197,17 @@ fn toast_action_affordance() {
         until: u64::MAX,
         action: Some(("Open MCP servers".into(), "mcp.list".into())),
     });
+    state.toast_queue.push(state.toast.clone().unwrap());
     let screen = render(&state);
-    let row = screen.lines().nth(2).unwrap();
+    let rows: Vec<&str> = screen.lines().collect();
     assert!(
-        row.contains("MCP server failed: docs") && row.contains("› Open MCP servers"),
-        "{row}"
+        rows[2].contains("MCP server failed: docs") && rows[2].contains("› Open MCP servers"),
+        "{}",
+        rows[2]
     );
+    // `toast.tsx`: a blank row under the title, `+N more` under the message.
+    assert!(!rows[3].contains("Run /mcps") && rows[4].contains("Run /mcps to view details."));
+    assert!(rows[6].contains("+1 more"), "{}", rows[6]);
 }
 
 /// `feature-plugins/sidebar/mcp.tsx`: one row per server; more than two can collapse.

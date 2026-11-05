@@ -433,6 +433,10 @@ pub struct State {
     pub popup_confirm: bool,
     /// A worktree chosen on home, created on the first submit (`(new worktree)` in the footer).
     pub new_worktree: Option<String>,
+    /// Toasts waiting while the visible one is hovered or others wait (`+N more`).
+    pub toast_queue: Vec<Toast>,
+    /// The pointer rests on the toast: its time stands still, `left` ms remaining.
+    pub toast_hover: Option<u64>,
     /// The IDE selection's file label and whether it still waits to be sent (accent colour).
     pub editor_label: Option<(String, bool)>,
     /// `Creating worktree` while that happens.
@@ -486,6 +490,8 @@ impl State {
             mcp_closed: false,
             popup_confirm: false,
             new_worktree: None,
+            toast_queue: Vec::new(),
+            toast_hover: None,
             editor_label: None,
             worktree_progress: None,
             mcp: (0, 0, 0),

@@ -101,25 +101,21 @@ impl App {
         if previous.as_ref() == Some(&server.status) {
             return;
         }
+        let action = Some(("Open MCP servers".to_string(), "mcp.list".to_string()));
         match &server.status {
-            Status::NeedsAuth { .. } => self.toast(
+            Status::NeedsAuth { .. } => self.toast_with(
                 Some("MCP server needs authentication".into()),
                 format!("Connect \"{}\" to use its tools.", server.name),
                 Variant::Warning,
+                action,
             ),
-            Status::Failed { .. } => self.toast(
+            Status::Failed { .. } => self.toast_with(
                 Some(format!("MCP server failed: {}", server.name)),
                 "Run /mcps to view details.".into(),
                 Variant::Error,
+                action,
             ),
             _ => {}
-        }
-        if matches!(
-            server.status,
-            Status::NeedsAuth { .. } | Status::Failed { .. }
-        ) && let Some(toast) = self.state.toast.as_mut()
-        {
-            toast.action = Some(("Open MCP servers".into(), "mcp.list".into()));
         }
         let rows = self.mcp_rows();
         self.count_mcp(&rows);

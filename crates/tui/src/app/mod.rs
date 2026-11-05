@@ -425,13 +425,17 @@ impl App {
 
     fn draw(&mut self, terminal: &mut Terminal<Backend>) {
         self.state.now = now();
-        if self
+        let expired = self
             .state
             .toast
             .as_ref()
-            .is_some_and(|t| t.until <= self.state.now)
-        {
-            self.state.toast = None;
+            .is_some_and(|t| t.until <= self.state.now);
+        if expired && self.state.toast_hover.is_none() {
+            self.state.toast = (!self.state.toast_queue.is_empty()).then(|| {
+                let mut next = self.state.toast_queue.remove(0);
+                next.until = self.state.now + TOAST_MS;
+                next
+            });
         }
         if self
             .state
@@ -505,13 +509,46 @@ impl App {
     }
 
     fn toast(&mut self, title: Option<String>, message: String, variant: Variant) {
-        self.state.toast = Some(Toast {
+        self.toast_with(title, message, variant, None);
+    }
+
+    /// Shows a toast, or queues it while the visible one is hovered or others wait.
+    fn toast_with(
+        &mut self,
+        title: Option<String>,
+        message: String,
+        variant: Variant,
+        action: Option<(String, String)>,
+    ) {
+        let toast = Toast {
             title,
             message,
             variant,
             until: now() + TOAST_MS,
-            action: None,
-        });
+            action,
+        };
+        let busy = self.state.toast_hover.is_some() || !self.state.toast_queue.is_empty();
+        if self.state.toast.is_some() && busy {
+            self.state.toast_queue.push(toast);
+        } else {
+            self.state.toast = Some(toast);
+        }
+    }
+
+    /// Hovering the toast pauses its clock; leaving resumes it with the time it had left.
+    fn hover_toast(&mut self, over: bool) {
+        let now = now();
+        match (over, self.state.toast_hover, self.state.toast.as_mut()) {
+            (true, None, Some(toast)) => {
+                self.state.toast_hover = Some(toast.until.saturating_sub(now));
+            }
+            (false, Some(left), Some(toast)) => {
+                toast.until = now + left;
+                self.state.toast_hover = None;
+            }
+            (false, Some(_), None) => self.state.toast_hover = None,
+            _ => {}
+        }
     }
 
     fn message(&mut self, message: Msg) {

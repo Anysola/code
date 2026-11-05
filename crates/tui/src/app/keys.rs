@@ -725,6 +725,9 @@ impl App {
                 }
             }
             MouseEventKind::Moved => {
+                let over = crate::view::toast_rect(&self.state)
+                    .is_some_and(|r| r.contains(ratatui::layout::Position::new(at.0, at.1)));
+                self.hover_toast(over);
                 self.state.status_hover = false;
                 self.state.status_hover = self.over_status(at);
             }
