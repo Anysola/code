@@ -94,6 +94,8 @@ impl App {
                 }
             }
             Event::Mouse(mouse) => self.mouse(mouse),
+            Event::FocusGained => self.focused = Some(true),
+            Event::FocusLost => self.focused = Some(false),
             _ => {}
         }
     }

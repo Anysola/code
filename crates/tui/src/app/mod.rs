@@ -94,6 +94,8 @@ pub struct App {
     /// Terminals of the pane; `shown` is the one on screen.
     terminals: Vec<crate::terminal::Terminal>,
     shown: Option<usize>,
+    /// Whether the terminal window has focus, once it reported it.
+    focused: Option<bool>,
 }
 
 fn now() -> u64 {
@@ -203,6 +205,7 @@ pub async fn run(core: Core, options: Options) -> Result<(), String> {
         account_generation: 0,
         terminals: Vec::new(),
         shown: None,
+        focused: None,
     };
     app.init(&paths, &options);
     if let Some((title, message)) = failure {

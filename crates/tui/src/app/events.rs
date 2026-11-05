@@ -31,6 +31,21 @@ impl App {
         }
     }
 
+    /// A desktop notification for a session that needs attention, when enabled and the
+    /// terminal reported losing focus.
+    fn alert(&self, session_id: &str, message: &str) {
+        if !self.tui.notifications() || self.focused != Some(false) {
+            return;
+        }
+        let title = self
+            .state
+            .sessions
+            .get(session_id)
+            .map(|s| s.title.as_str())
+            .unwrap_or_default();
+        crate::attention::notify(title, message);
+    }
+
     pub(super) fn event(&mut self, event: Event) {
         let id = event.session_id().to_string();
         match &event {
@@ -71,6 +86,7 @@ impl App {
                     fullscreen: false,
                 });
                 self.attention(&target, true);
+                self.alert(&target, "Permission needs input");
             }
             Event::PermissionReplied { request_id, .. } => {
                 for session in self.state.sessions.values_mut() {
@@ -112,6 +128,7 @@ impl App {
                     custom: None,
                 });
                 self.attention(&target, true);
+                self.alert(&target, "Input needs response");
             }
             Event::Credits(snapshot) => {
                 if let Some(session) = self.state.sessions.get_mut(&id) {
@@ -134,8 +151,17 @@ impl App {
                     session.question = None;
                 }
                 self.attention(&id, false);
-                if matches!(event, Event::Failed { .. }) {
-                    self.toast(None, "Session failed".into(), Variant::Error);
+                match &event {
+                    Event::Failed { error, .. } => {
+                        self.toast(
+                            Some("Session failed".into()),
+                            error.message.clone(),
+                            Variant::Error,
+                        );
+                        self.alert(&id, &error.message);
+                    }
+                    Event::Succeeded { .. } => self.alert(&id, "Session done"),
+                    _ => {}
                 }
                 self.reload(&id);
                 self.refresh_recent();

@@ -4,8 +4,9 @@
 use std::io::{self, Stdout, Write};
 
 use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -25,6 +26,7 @@ pub fn restore() {
         out,
         PopKeyboardEnhancementFlags,
         DisableBracketedPaste,
+        DisableFocusChange,
         DisableMouseCapture,
         SetTitle(""),
         LeaveAlternateScreen,
@@ -47,7 +49,12 @@ pub fn enter(mouse: bool) -> io::Result<Terminal<Backend>> {
 pub fn resume(mouse: bool) -> io::Result<()> {
     enable_raw_mode()?;
     let mut out = io::stdout();
-    execute!(out, EnterAlternateScreen, EnableBracketedPaste)?;
+    execute!(
+        out,
+        EnterAlternateScreen,
+        EnableBracketedPaste,
+        EnableFocusChange
+    )?;
     if mouse {
         execute!(out, EnableMouseCapture)?;
     }

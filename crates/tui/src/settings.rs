@@ -66,6 +66,12 @@ impl Tui {
         self.get(&["mouse"]).and_then(Value::as_bool) != Some(false)
     }
 
+    pub fn notifications(&self) -> bool {
+        self.get(&["attention", "notifications"])
+            .and_then(Value::as_bool)
+            == Some(true)
+    }
+
     pub fn auto_accept(&self) -> bool {
         self.str(&["session", "permissions"]) == Some("autoaccept")
     }
