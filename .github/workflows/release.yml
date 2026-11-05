@@ -166,11 +166,31 @@ jobs:
           set -euo pipefail
           tag=latest
           case "$VERSION" in *-*) tag=next ;; esac
-          # Platform packages first: the main package's postinstall installs one of them by exact version.
+          # Platform packages first: the main package depends on them by exact version.
           for file in ./npm/anysola-code-*-"$VERSION".tgz; do
             npm publish "$file" --access public --tag "$tag"
           done
           npm publish "./npm/anysola-code-$VERSION.tgz" --access public --tag "$tag"
+      - name: Wait until the registry serves the release
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag=latest
+          case "$VERSION" in *-*) tag=next ;; esac
+          # The registry shows a new version a few minutes after publishing; installs before that
+          # still get the previous one, so the release is done only once both are served.
+          for _ in $(seq 1 40); do
+            served=$(curl -fsS "https://registry.npmjs.org/@anysola%2fcode?t=$(date +%s%N)" \
+              | jq -r --arg tag "$tag" '.["dist-tags"][$tag]' || true)
+            platform=$(curl -s -o /dev/null -w '%{http_code}' \
+              "https://registry.npmjs.org/@anysola%2fcode-windows-x64/$VERSION" || true)
+            echo "$tag=$served windows-x64=$platform"
+            [ "$served" = "$VERSION" ] && [ "$platform" = 200 ] && exit 0
+            sleep 15
+          done
+          echo "The registry does not serve $VERSION after 10 minutes" >&2
+          exit 1
 
   github-release:
     # After npm, so `anysola update` from either install finds the same version.
