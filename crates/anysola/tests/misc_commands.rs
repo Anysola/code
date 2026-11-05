@@ -48,16 +48,30 @@ fn models_lists_the_gateway_models_and_survives_offline() {
 fn debug_paths_point_into_the_data_dir() {
     let home = TestHome::new("http://127.0.0.1:9");
     let h = home.home().display().to_string();
+    let data = |rest: &str| {
+        home.home()
+            .join(".anysola")
+            .join(rest)
+            .display()
+            .to_string()
+    };
+    let d = home.home().join(".anysola").display().to_string();
     let tmp = std::env::temp_dir().join("opencode").display().to_string();
     let out = anysola(&home, &home.project(), &["debug", "paths"]);
     let expected = format!(
-        "home       {h}\ndata       {h}/.anysola\ncache      {h}/.anysola/cache\nconfig     {h}/.anysola\n\
-         state      {h}/.anysola/state\ntmp        {tmp}\nbin        {h}/.anysola/bin\nlog        {h}/.anysola/log\n\
-         repos      {h}/.anysola/repos\ndb         {h}/.anysola/anysola.db\n"
+        "home       {h}\ndata       {d}\ncache      {}\nconfig     {d}\n\
+         state      {}\ntmp        {tmp}\nbin        {}\nlog        {}\n\
+         repos      {}\ndb         {}\n",
+        data("cache"),
+        data("state"),
+        data("bin"),
+        data("log"),
+        data("repos"),
+        data("anysola.db"),
     );
     assert_eq!((out.stdout.as_str(), out.code), (expected.as_str(), 0));
     let out = anysola(&home, &home.project(), &["debug", "paths", "db"]);
-    assert_eq!(out.stdout, format!("{h}/.anysola/anysola.db\n"));
+    assert_eq!(out.stdout, format!("{}\n", data("anysola.db")));
 }
 
 #[test]
@@ -75,11 +89,16 @@ fn debug_config_lists_sources_with_secrets_hidden() {
     );
     let out = anysola(&home, &home.project(), &["debug", "config"]);
     assert_eq!(out.code, 0, "{}", out.stderr);
-    let h = home.home().display().to_string();
+    let path = |rest: &str| {
+        rest.split('/')
+            .fold(home.home(), |dir, part| dir.join(part))
+            .display()
+            .to_string()
+    };
     let expected = json!([
-        {"type": "directory", "path": format!("{h}/.config/opencode")},
-        {"type": "directory", "path": format!("{h}/.anysola")},
-        {"type": "document", "path": format!("{h}/proj/opencode.jsonc"), "info": {
+        {"type": "directory", "path": path(".config/opencode")},
+        {"type": "directory", "path": path(".anysola")},
+        {"type": "document", "path": path("proj/opencode.jsonc"), "info": {
             "theme": "dark",
             "mcp": {"servers": {
                 "x": {"type": "remote", "url": "***", "headers": {"A": "***"}},

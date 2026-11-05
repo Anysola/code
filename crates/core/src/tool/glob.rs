@@ -158,13 +158,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fixture::project(dir.path());
         let d = dir.path().display();
+        let s = std::path::MAIN_SEPARATOR;
         assert_eq!(
             text(dir.path(), json!({"pattern": "**/*.ts"})).await,
-            format!("{d}/src/x.ts")
+            format!("{d}{s}src{s}x.ts")
         );
         assert_eq!(
             text(dir.path(), json!({"pattern": "**/*.ts", "hidden": true})).await,
-            format!("{d}/.hid/h.ts\n{d}/src/x.ts")
+            format!("{d}{s}.hid{s}h.ts\n{d}{s}src{s}x.ts")
         );
         assert_eq!(
             text(dir.path(), json!({"pattern": "*.none"})).await,
@@ -173,7 +174,7 @@ mod tests {
         assert_eq!(
             text(dir.path(), json!({"pattern": "**/*", "limit": 1})).await,
             format!(
-                "{d}/a.txt\n\n(Results are truncated: showing first 1 results. Consider using a more specific path or pattern.)"
+                "{d}{s}a.txt\n\n(Results are truncated: showing first 1 results. Consider using a more specific path or pattern.)"
             )
         );
     }
@@ -183,9 +184,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fixture::project(dir.path());
         let d = dir.path().display();
+        let s = std::path::MAIN_SEPARATOR;
         assert_eq!(
             text(dir.path(), json!({"pattern": "**/*"})).await,
-            format!("{d}/a.txt\n{d}/ign/i.ts\n{d}/src/x.ts")
+            format!("{d}{s}a.txt\n{d}{s}ign{s}i.ts\n{d}{s}src{s}x.ts")
         );
         // Hidden entries stay out unless asked for, even when the glob names them.
         assert_eq!(
@@ -198,7 +200,9 @@ mod tests {
                 json!({"pattern": "**/*", "hidden": true, "path": "undefined"})
             )
             .await,
-            format!("{d}/.gitignore\n{d}/.hid/h.ts\n{d}/a.txt\n{d}/ign/i.ts\n{d}/src/x.ts")
+            format!(
+                "{d}{s}.gitignore\n{d}{s}.hid{s}h.ts\n{d}{s}a.txt\n{d}{s}ign{s}i.ts\n{d}{s}src{s}x.ts"
+            )
         );
     }
 

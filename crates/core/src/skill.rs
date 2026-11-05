@@ -635,6 +635,7 @@ mod tests {
         let found: Vec<String> = scan(root)
             .iter()
             .map(|p| p.strip_prefix(root).unwrap().display().to_string())
+            .map(|p| p.replace('\\', "/"))
             .collect();
         assert_eq!(
             found,
@@ -675,7 +676,7 @@ mod tests {
     #[test]
     fn content_matches_capture() {
         let dir = tempfile::tempdir().unwrap();
-        let base = dir.path().join("proj/.claude/skills/demo");
+        let base = dir.path().join("proj/.claude/skills").join("demo");
         write(
             &base.join("SKILL.md"),
             "---\nname: demo\ndescription: Demo skill\n---\nDo the demo thing.\n",
@@ -683,11 +684,12 @@ mod tests {
         write(&base.join("notes.txt"), "n");
         let mut skills = Vec::new();
         load_directory(&dir.path().join("proj/.claude/skills"), &mut skills);
-        let base = base.display();
+        let notes = base.join("notes.txt");
+        let (base, notes) = (base.display(), notes.display());
         assert_eq!(
             content(&skills[0]),
             format!(
-                "<skill_content name=\"demo\">\n# Skill: demo\n\nDo the demo thing.\n\nBase directory for this skill: {base}\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n<file>{base}/notes.txt</file>\n</skill_files>\n</skill_content>"
+                "<skill_content name=\"demo\">\n# Skill: demo\n\nDo the demo thing.\n\nBase directory for this skill: {base}\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n<file>{notes}</file>\n</skill_files>\n</skill_content>"
             )
         );
     }
