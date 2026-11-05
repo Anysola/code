@@ -752,7 +752,7 @@ impl App {
             MouseEventKind::Down(MouseButton::Left)
                 if crate::view::sidebar_overlay(&self.state)
                     && self.state.dialogs.is_empty()
-                    && at.0 + crate::view::SIDEBAR_WIDTH < self.state.width => {}
+                    && at.0 < self.state.width.saturating_sub(crate::view::SIDEBAR_WIDTH) => {}
             MouseEventKind::Down(MouseButton::Left) => {
                 // A click while text is selected only clears the selection.
                 if self.selection.is_some_and(|(a, b)| a != b) {
@@ -868,6 +868,12 @@ impl App {
                             .filter(|_| plain && self.state.dialogs.is_empty());
                         if let Some(url) = link {
                             term::open_url(&url);
+                        } else if let Some(index) = self
+                            .hit(at.1)
+                            .and_then(|id| id.strip_prefix("user:")?.parse().ok())
+                            .filter(|_| self.state.dialogs.is_empty())
+                        {
+                            self.click_user(index);
                         }
                     } else if self.state.settings.copy_on_select {
                         self.copy_selection(anchor, end);
@@ -893,11 +899,10 @@ impl App {
     }
 
     /// A click on an exploration group's row opens or closes it.
-    fn toggle_group(&mut self, row: u16) -> bool {
-        let Some(session) = self.state.session_mut() else {
-            return false;
-        };
-        let hit = session
+    /// The click target on a transcript row of the last frame.
+    fn hit(&self, row: u16) -> Option<String> {
+        self.state
+            .session()?
             .layout
             .0
             .lock()
@@ -905,14 +910,17 @@ impl App {
             .hits
             .iter()
             .find(|(y, _)| *y == row)
-            .map(|(_, id)| id.clone());
-        let Some(id) = hit else {
+            .map(|(_, id)| id.clone())
+    }
+
+    fn toggle_group(&mut self, row: u16) -> bool {
+        // User messages open their actions on release, so a drag inside one still selects.
+        let Some(id) = self.hit(row).filter(|id| !id.starts_with("user:")) else {
             return false;
         };
-        if let Some(index) = id.strip_prefix("user:").and_then(|i| i.parse().ok()) {
-            self.click_user(index);
-            return true;
-        }
+        let Some(session) = self.state.session_mut() else {
+            return false;
+        };
         if let Some(call_id) = id.strip_prefix("execute:") {
             let call_id = call_id.to_string();
             self.open_execute(&call_id);

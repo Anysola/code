@@ -1556,6 +1556,9 @@ fn sidebar_overlay_below_121_columns() {
     let mut buffer = Buffer::empty(Rect::new(0, 0, 100, 40));
     anysola_tui::view::draw(&state, &theme, &mut buffer);
     assert_ne!(buffer[(5, 10)].bg, theme.fg("background.base"));
+    let mut tiny = session(30, 20, turn(true, true));
+    tiny.sidebar_open = true;
+    assert!(render(&tiny).contains("Fix typo"));
 }
 
 /// `routes/session/index.tsx:2967-3137`: a backgrounded shell shows its command with a spinner
