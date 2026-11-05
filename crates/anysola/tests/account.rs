@@ -23,6 +23,11 @@ fn setup() -> (FakeGateway, TestHome) {
     (gateway, home)
 }
 
+/// Windows ignores `TZ`, so the UTC captures hold there only when the machine's zone is UTC.
+fn clock_is_utc() -> bool {
+    cfg!(unix) || chrono::Local::now().offset().local_minus_utc() == 0
+}
+
 fn db(home: &TestHome) -> Db {
     Db::open(&home.home().join(".anysola/anysola.db")).unwrap()
 }
@@ -364,6 +369,9 @@ fn logout_outcomes() {
 
 #[test]
 fn status_shows_the_real_me_shape() {
+    if !clock_is_utc() {
+        return;
+    }
     let (gateway, home) = setup();
     let out = anysola(&home, &["status"]);
     assert_eq!(
@@ -432,6 +440,9 @@ fn env_token_wins_with_a_stored_login() {
 
 #[test]
 fn usage_tables_and_json() {
+    if !clock_is_utc() {
+        return;
+    }
     let (gateway, home) = setup();
     store_login(&home);
     let out = anysola(&home, &["usage"]);
@@ -454,6 +465,9 @@ fn usage_tables_and_json() {
 
 #[test]
 fn devices_and_revoke() {
+    if !clock_is_utc() {
+        return;
+    }
     let (gateway, home) = setup();
     store_login(&home);
     let out = anysola(&home, &["devices"]);

@@ -44,6 +44,10 @@ async fn captured_results() {
     let mut mismatches = Vec::new();
     for case in &cases {
         let code = case["code"].as_str().unwrap();
+        // These captures name Unix absolute paths, which Windows resolves on the current drive.
+        if cfg!(windows) && code.contains("{directory: '/") {
+            continue;
+        }
         let output = run(&t, code).await;
         if text(&output) != case["expected"].as_str().unwrap() {
             mismatches.push(format!("{code}\n  got: {}", text(&output)));

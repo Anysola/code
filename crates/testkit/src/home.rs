@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 pub struct TestHome {
-    dir: tempfile::TempDir,
+    _dir: tempfile::TempDir,
+    root: PathBuf,
     env: Vec<(String, String)>,
 }
 
@@ -16,12 +17,41 @@ pub struct Output {
     pub code: i32,
 }
 
+/// Variables a child keeps from the test's environment. Windows cannot open sockets without
+/// `SystemRoot`, and resolves programs and temp files through the others.
+const INHERITED: &[&str] = if cfg!(windows) {
+    &[
+        "PATH",
+        "PATHEXT",
+        "SystemRoot",
+        "SystemDrive",
+        "windir",
+        "ComSpec",
+        "TEMP",
+        "TMP",
+    ]
+} else {
+    &["PATH"]
+};
+
+/// The real path of the temp dir, so it matches what a child sees as its working directory
+/// (macOS temp dirs live under the `/var` -> `/private/var` symlink). Windows keeps the
+/// path as is: canonical paths there carry a `\\?\` prefix nothing else uses.
+fn canonical(path: &Path) -> PathBuf {
+    if cfg!(windows) {
+        path.to_path_buf()
+    } else {
+        path.canonicalize().expect("canonical temp dir")
+    }
+}
+
 impl TestHome {
     /// A home with a `proj` directory, pointed at the gateway with a test token.
     pub fn new(gateway_url: &str) -> TestHome {
         let dir = tempfile::tempdir().expect("temp dir");
-        std::fs::create_dir_all(dir.path().join("home/proj")).expect("project dir");
-        let home = dir.path().join("home");
+        let root = canonical(dir.path());
+        std::fs::create_dir_all(root.join("home/proj")).expect("project dir");
+        let home = root.join("home");
         let env = vec![
             ("HOME".into(), home.display().to_string()),
             ("USERPROFILE".into(), home.display().to_string()),
@@ -45,11 +75,15 @@ impl TestHome {
             ("ANYSOLA_TOKEN".into(), format!("asc_{}", "T".repeat(40))),
             ("SHELL".into(), "/bin/bash".into()),
         ];
-        TestHome { dir, env }
+        TestHome {
+            _dir: dir,
+            root,
+            env,
+        }
     }
 
     pub fn home(&self) -> PathBuf {
-        self.dir.path().join("home")
+        self.root.join("home")
     }
 
     pub fn project(&self) -> PathBuf {
@@ -77,6 +111,19 @@ impl TestHome {
         path
     }
 
+    /// `binary` in the project with only this home's environment.
+    pub fn command(&self, binary: &str) -> Command {
+        let mut command = Command::new(binary);
+        command.current_dir(self.project()).env_clear();
+        for name in INHERITED {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        command.envs(self.env.iter().map(|(k, v)| (k, v)));
+        command
+    }
+
     /// Runs `binary args…` in `cwd` (default: the project) with `stdin` (default: `/dev/null`).
     pub fn run(
         &self,
@@ -85,15 +132,10 @@ impl TestHome {
         cwd: Option<&Path>,
         stdin: Option<&str>,
     ) -> Output {
-        let mut command = Command::new(binary);
+        let mut command = self.command(binary);
         command
             .args(args)
             .current_dir(cwd.map(Path::to_path_buf).unwrap_or_else(|| self.project()));
-        command.env_clear();
-        if let Ok(path) = std::env::var("PATH") {
-            command.env("PATH", path);
-        }
-        command.envs(self.env.iter().map(|(k, v)| (k, v)));
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
         command.stdin(if stdin.is_some() {
             Stdio::piped()

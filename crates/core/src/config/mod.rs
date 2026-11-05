@@ -452,7 +452,7 @@ fn system_dir() -> PathBuf {
 
 /// A path with symlinks resolved as far as it exists, so a symlinked global root is recognized.
 fn resolve(path: &Path) -> PathBuf {
-    if let Ok(real) = path.canonicalize() {
+    if let Ok(real) = crate::paths::canonicalize(path) {
         return real;
     }
     match (path.parent(), path.file_name()) {

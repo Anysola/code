@@ -68,6 +68,8 @@ fn status(mcp: &Runtime, name: &str) -> Status {
         .status
 }
 
+// Windows client sockets are IPv6-only by default, so the IPv4-mapped address below never connects.
+#[cfg(not(windows))]
 #[test]
 fn codemode_retry_transient_errors_and_session_expiry() {
     let gateway = FakeGateway::start(|request, _| text(request, "unused"));

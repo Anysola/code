@@ -81,6 +81,14 @@ impl Target {
         }
     }
 
+    fn canonical(&self) -> Option<Target> {
+        let real = crate::paths::canonicalize(self.root()).ok()?;
+        (real != self.root()).then(|| match self {
+            Target::Tree(_) => Target::Tree(real),
+            Target::Entries(_, names) => Target::Entries(real, names.clone()),
+        })
+    }
+
     fn covers(&self, path: &Path) -> bool {
         match self {
             Target::Tree(dir) => path.starts_with(dir),
@@ -193,7 +201,10 @@ impl Watch {
             .into_iter()
             .filter(|t| !ignored(&ignore, t.root()) && t.root().is_dir())
             .collect();
-        let rules = targets.clone();
+        // Some backends (FSEvents) report real paths, so a target reached through a symlink
+        // (macOS `/var` -> `/private/var`) also matches under its canonical root.
+        let mut rules = targets.clone();
+        rules.extend(targets.iter().filter_map(Target::canonical));
         let handler = move |event: notify::Result<notify::Event>| {
             let Ok(event) = event else { return };
             if matches!(event.kind, EventKind::Access(_)) {

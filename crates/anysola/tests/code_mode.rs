@@ -55,12 +55,12 @@ fn programs_run_through_execute() {
         .rfind(|r| !r.is_title())
         .unwrap();
     let results = tool_results(&last);
-    let project = std::fs::canonicalize(home.project()).unwrap();
+    let project = home.project();
     assert_eq!(
         results[0]["content"],
         format!(
-            "{{\n  \"worktrees\": [\n    {{\n      \"directory\": \"{}\"\n    }}\n  ]\n}}\n\nLogs:\nhey",
-            project.display()
+            "{{\n  \"worktrees\": [\n    {{\n      \"directory\": {}\n    }}\n  ]\n}}\n\nLogs:\nhey",
+            serde_json::Value::from(project.display().to_string())
         )
     );
     assert_eq!(

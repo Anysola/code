@@ -41,7 +41,9 @@ fn markdown_command_with_arguments_and_shell() {
         .unwrap();
     assert_eq!(init, Outcome::Succeeded);
     let texts = user_texts(&gateway);
-    assert_eq!(texts[0], "user: Say hi there to world\n");
+    // PowerShell ends `echo` output with CRLF.
+    let newline = if cfg!(windows) { "\r\n" } else { "\n" };
+    assert_eq!(texts[0], format!("user: Say hi there to world{newline}"));
     let project = env.home.project().display().to_string();
     assert!(texts[1].starts_with("user: Create or update `AGENTS.md` for this repository."));
     assert!(texts[1].contains(&project), "{}", texts[1]);

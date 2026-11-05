@@ -201,7 +201,7 @@ fn tool_error_replayed_with_thinking() {
     let ours = anysola_testkit::Recorded {
         body: main[1]
             .body
-            .replace("<PROJECT>", &dir.display().to_string()),
+            .replace("<PROJECT>", json_inner(&dir.display().to_string()).as_str()),
         ..main[1].clone()
     };
     assert_request("tool error", &ours, &capture, &our_places(&home, &dir));
@@ -336,8 +336,14 @@ fn background_subagent_returns_at_once() {
         .filter(|r| !r.is_title() && r.header("x-opencode-parent-session-id").is_none())
         .collect();
     let body = parent[1].json();
-    let result = body["messages"].as_array().unwrap().last().unwrap()["content"][0]["content"]
-        .as_str()
+    // The subagent can finish before this request, adding its report after the tool result.
+    let result = body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|m| m["content"].as_array().into_iter().flatten())
+        .find(|part| part["type"] == "tool_result")
+        .and_then(|part| part["content"].as_str())
         .unwrap()
         .to_string();
     assert!(result.starts_with("The subagent is working in the background (sessionID: ses_"));
@@ -436,4 +442,10 @@ fn instruction_update_wrapped_for_auto() {
     );
     let capture = read_json("session/requests/instruction-update-wrapped-auto.json");
     assert_request("wrapped update", &request, &capture, &places);
+}
+
+/// `text` as it appears inside a JSON string (Windows paths carry backslashes).
+fn json_inner(text: &str) -> String {
+    let quoted = serde_json::Value::from(text).to_string();
+    quoted[1..quoted.len() - 1].to_string()
 }

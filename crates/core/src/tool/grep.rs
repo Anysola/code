@@ -282,11 +282,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fixture::project(dir.path());
         let d = dir.path().display();
+        let s = std::path::MAIN_SEPARATOR;
         let out = grep(dir.path(), json!({"pattern": "foo"})).await.unwrap();
         assert_eq!(
             text(&out),
             format!(
-                "Found 3 matches\n{d}/.hid/h.ts:\n  Line 1: foo\n\n\n{d}/src/x.ts:\n  Line 1: foo one\n\n  Line 3: foo two\n"
+                "Found 3 matches\n{d}{s}.hid{s}h.ts:\n  Line 1: foo\n\n\n{d}{s}src{s}x.ts:\n  Line 1: foo one\n\n  Line 3: foo two\n"
             )
         );
         assert_eq!(
@@ -300,6 +301,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fixture::project(dir.path());
         let d = dir.path().display();
+        let s = std::path::MAIN_SEPARATOR;
         let none = grep(dir.path(), json!({"pattern": "zzz"})).await.unwrap();
         assert_eq!(text(&none), "No matches found");
         let one = grep(dir.path(), json!({"pattern": "foo", "limit": 1}))
@@ -308,7 +310,7 @@ mod tests {
         assert_eq!(
             text(&one),
             format!(
-                "Found 1 matches\n{d}/.hid/h.ts:\n  Line 1: foo\n\n\n(Results are truncated: showing first 1 results. Consider using a more specific path or pattern.)"
+                "Found 1 matches\n{d}{s}.hid{s}h.ts:\n  Line 1: foo\n\n\n(Results are truncated: showing first 1 results. Consider using a more specific path or pattern.)"
             )
         );
         assert_eq!(
@@ -342,6 +344,7 @@ mod tests {
         fixture::project(dir.path());
         std::fs::write(dir.path().join("src/y.js"), "FOO.bar\nfooxbar").unwrap();
         let d = dir.path().display();
+        let s = std::path::MAIN_SEPARATOR;
         let out = grep(
             dir.path(),
             json!({"pattern": "foo.bar", "literal": true, "caseSensitive": false, "include": "*.js"}),
@@ -350,7 +353,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             text(&out),
-            format!("Found 1 matches\n{d}/src/y.js:\n  Line 1: FOO.bar\n")
+            format!("Found 1 matches\n{d}{s}src{s}y.js:\n  Line 1: FOO.bar\n")
         );
         // The last line has no terminator, so no blank line follows it.
         let out = grep(dir.path(), json!({"pattern": "x.ar", "path": "src/y.js"}))
@@ -358,7 +361,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             text(&out),
-            format!("Found 1 matches\n{d}/src/y.js:\n  Line 2: fooxbar")
+            format!("Found 1 matches\n{d}{s}src{s}y.js:\n  Line 2: fooxbar")
         );
         // An include glob that matches the ignored directory re-includes it.
         let out = grep(dir.path(), json!({"pattern": "foo", "include": "i*"}))
@@ -366,7 +369,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             text(&out),
-            format!("Found 1 matches\n{d}/ign/i.ts:\n  Line 1: foo\n")
+            format!("Found 1 matches\n{d}{s}ign{s}i.ts:\n  Line 1: foo\n")
         );
     }
 
@@ -404,7 +407,11 @@ mod tests {
             .unwrap();
         let asked = test.gate.asked.lock().unwrap();
         assert_eq!(asked[0].action, "external_directory");
-        assert_eq!(asked[0].resources, [format!("{path}/*")]);
+        // Rule resources always use `/`.
+        assert_eq!(
+            asked[0].resources,
+            [format!("{}/*", path.replace('\\', "/"))]
+        );
         assert_eq!(asked[1].action, "grep");
         assert_eq!(asked[1].resources, ["x"]);
         assert_eq!(asked[1].save, ["*"]);

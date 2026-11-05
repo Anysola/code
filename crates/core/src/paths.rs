@@ -118,6 +118,22 @@ fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
+/// [`std::fs::canonicalize`] without the Windows verbatim prefix (`\\?\C:\…`), which git,
+/// shells and users do not expect; a path that needs the prefix (UNC, over-long) keeps it.
+pub fn canonicalize(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
+    let real = std::fs::canonicalize(path)?;
+    if cfg!(windows) {
+        let text = real.to_string_lossy();
+        if let Some(rest) = text.strip_prefix(r"\\?\")
+            && rest.as_bytes().get(1) == Some(&b':')
+            && rest.len() < 260
+        {
+            return Ok(PathBuf::from(rest));
+        }
+    }
+    Ok(real)
+}
+
 /// Lexically normalizes `.` and `..` without touching the filesystem.
 pub fn normalize(path: &Path) -> PathBuf {
     use std::path::Component;

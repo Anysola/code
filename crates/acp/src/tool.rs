@@ -356,7 +356,7 @@ mod tests {
         assert_eq!(kind("websearch"), "other");
         assert_eq!(
             locations("read", &json!({"path": "src/a.rs"}), "/p"),
-            json!([{"path": "/p/src/a.rs"}])
+            json!([{"path": Path::new("/p").join("src/a.rs")}])
         );
         assert_eq!(
             raw_input("shell", &json!({"command": "ls"}), "/p"),

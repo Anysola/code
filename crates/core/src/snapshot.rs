@@ -43,14 +43,14 @@ impl Store {
     /// The store for the git project whose worktree holds `directory`; `None` outside git.
     pub fn open(data: &Path, project_id: &str, directory: &Path) -> Option<Store> {
         let top = git_output(directory, &["rev-parse", "--show-toplevel"])?;
-        let work_tree = std::fs::canonicalize(&top).ok()?;
-        let source = std::fs::canonicalize(
+        let work_tree = crate::paths::canonicalize(&top).ok()?;
+        let source = crate::paths::canonicalize(
             directory.join(git_output(directory, &["rev-parse", "--git-common-dir"])?),
         )
         .ok()?;
         let digest = hex(&Sha1::digest(work_tree.display().to_string().as_bytes()));
         let git_dir = data.join("snapshot").join(project_id).join(digest);
-        let directory = std::fs::canonicalize(directory).ok()?;
+        let directory = crate::paths::canonicalize(directory).ok()?;
         let store = Store::at(git_dir, work_tree, &directory)?;
         if !store.git_dir.join("HEAD").exists() {
             store.create(&source)?;

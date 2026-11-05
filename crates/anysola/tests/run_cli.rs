@@ -130,16 +130,8 @@ fn stdin_rules() {
 fn idle_pipe_with_a_message_is_ignored_after_three_seconds() {
     let gateway = FakeGateway::start(answer("ok"));
     let home = TestHome::new(&gateway.url);
-    let mut command = Command::new(BIN);
-    command
-        .args(["run", "hi"])
-        .current_dir(home.project())
-        .env_clear()
-        .env("PATH", std::env::var("PATH").unwrap());
-    command
-        .env("HOME", home.home())
-        .env("ANYSOLA_API_URL", &gateway.url)
-        .env("ANYSOLA_TOKEN", "asc_x");
+    let mut command = home.command(BIN);
+    command.args(["run", "hi"]);
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -162,16 +154,8 @@ fn idle_pipe_with_a_message_is_ignored_after_three_seconds() {
 fn slow_pipe_without_a_message_is_awaited() {
     let gateway = FakeGateway::start(answer("ok"));
     let home = TestHome::new(&gateway.url);
-    let mut command = Command::new(BIN);
-    command
-        .args(["run"])
-        .current_dir(home.project())
-        .env_clear()
-        .env("PATH", std::env::var("PATH").unwrap());
-    command
-        .env("HOME", home.home())
-        .env("ANYSOLA_API_URL", &gateway.url)
-        .env("ANYSOLA_TOKEN", "asc_x");
+    let mut command = home.command(BIN);
+    command.args(["run"]);
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -466,14 +450,8 @@ fn busy_session_in_another_process() {
         }
     });
     let home = TestHome::new(&gateway.url);
-    let mut first = Command::new(BIN);
-    first
-        .args(["run", "-s", "ses_shared", "--auto", "go"])
-        .current_dir(home.project());
-    first
-        .env("HOME", home.home())
-        .env("ANYSOLA_API_URL", &gateway.url)
-        .env("ANYSOLA_TOKEN", "asc_x");
+    let mut first = home.command(BIN);
+    first.args(["run", "-s", "ses_shared", "--auto", "go"]);
     let mut first = first
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -693,6 +671,8 @@ fn sigterm_tears_down_with_exit_1() {
     assert_eq!(out.status.signal(), Some(libc::SIGHUP));
 }
 
+// Bash scanner cases and `/tmp`; Windows runs commands in PowerShell, where they do not apply.
+#[cfg(unix)]
 #[test]
 fn shell_permissions_policies_and_scanner() {
     let gateway = FakeGateway::start(|request: &Recorded, _| {

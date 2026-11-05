@@ -344,6 +344,8 @@ mod tests {
         assert_eq!(append("x $ARGUMENTS y", " a "), "x a y");
     }
 
+    // `pwd` through a POSIX shell; Windows runs commands in PowerShell, which prints a table.
+    #[cfg(unix)]
     #[tokio::test]
     async fn shell_interpolation() {
         let dir = tempfile::tempdir().unwrap();

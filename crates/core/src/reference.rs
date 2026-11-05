@@ -622,7 +622,12 @@ mod tests {
         let value = guidance(&list).unwrap();
         assert_eq!(
             render_guidance(&value).unwrap(),
-            "Project references provide additional directories that can be accessed when relevant.\n<available_references>\n  <reference>\n    <name>api</name>\n    <path>/home/u/api</path>\n    <description>API</description>\n  </reference>\n  <reference>\n    <name>lib</name>\n    <path>/home/u/.anysola/repos/github.com/owner/lib@dev</path>\n    <description>The library</description>\n  </reference>\n</available_references>"
+            // The paths as joined on this OS; their parts are checked above.
+            format!(
+                "Project references provide additional directories that can be accessed when relevant.\n<available_references>\n  <reference>\n    <name>api</name>\n    <path>{}</path>\n    <description>API</description>\n  </reference>\n  <reference>\n    <name>lib</name>\n    <path>{}</path>\n    <description>The library</description>\n  </reference>\n</available_references>",
+                list[2].path.display(),
+                list[1].path.display()
+            )
         );
         let next = json!([{"name": "api", "path": "/x", "description": "API"}, {"name": "new", "path": "/n", "description": "N"}]);
         assert_eq!(

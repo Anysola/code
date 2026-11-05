@@ -1,5 +1,7 @@
 //! Importing the rich 0.5.x fixture (and variants of it) in-process. The process takes on the
 //! test home's environment, so the tests run one at a time.
+// The legacy fixture is a Linux 0.5.1 capture whose home path is spliced into JSON text as is.
+#![cfg(unix)]
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

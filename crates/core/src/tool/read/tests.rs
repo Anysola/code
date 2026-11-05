@@ -338,17 +338,20 @@ async fn not_found_messages() {
         "File not found: ./x/../alpha.txt\n\nDid you mean one of these?\na.txt"
     );
     let absolute = root.display();
+    let missing = root.join("missing");
+    let missing = missing.display();
     assert_eq!(
         error(root, json!({"path": "missing/dir/x.txt"})).await.0,
         format!(
-            "File not found: missing/dir/x.txt\n\nThe folder {absolute}/missing does not exist. The nearest folder that does is {absolute}."
+            "File not found: missing/dir/x.txt\n\nThe folder {missing} does not exist. The nearest folder that does is {absolute}."
         )
     );
     std::fs::create_dir(root.join("missing-not")).unwrap();
     assert_eq!(
         error(root, json!({"path": "missing/x.txt"})).await.0,
         format!(
-            "File not found: missing/x.txt\n\nThe folder {absolute}/missing does not exist. The nearest folder that does is {absolute}.\n\nDid you mean one of these?\n{absolute}/missing-not"
+            "File not found: missing/x.txt\n\nThe folder {missing} does not exist. The nearest folder that does is {absolute}.\n\nDid you mean one of these?\n{}",
+            root.join("missing-not").display()
         )
     );
     // A file where a folder should be: no listing, so no suggestions.

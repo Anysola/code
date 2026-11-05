@@ -1,0 +1,2 @@
+# Fixtures are compared byte for byte and some are embedded in the binary; never convert line endings.
+* -text

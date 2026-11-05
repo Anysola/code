@@ -564,7 +564,8 @@ mod tests {
         )
         .unwrap();
         let bin = sub
-            .join("node_modules/.bin/prettier")
+            .join("node_modules/.bin")
+            .join("prettier")
             .to_string_lossy()
             .into_owned();
         assert_eq!(

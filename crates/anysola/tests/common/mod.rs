@@ -270,8 +270,19 @@ pub fn normalize_body(body: &Value, places: &Places, capture: bool) -> Value {
     let temp = Regex::new(r"Prefer \S+ over generic system temporary").unwrap();
     // The shell tool names the host's OS and shell.
     let shell = Regex::new(r"Commands run on [^.]+\.").unwrap();
+    // Windows joins below a place with `\`; the captures were made on Linux.
+    let windows_tail = Regex::new(r#"(<HOME>|<PROJECT>)((?:\\[^\\\s"'<>:|*?]+)+)"#).unwrap();
     let f = |s: &str| {
         let mut s = places.apply(s);
+        if cfg!(windows) && !capture {
+            // Windows programs (PowerShell's `echo`) end lines with CRLF.
+            s = s.replace("\r\n", "\n");
+            s = windows_tail
+                .replace_all(&s, |c: &regex::Captures| {
+                    format!("{}{}", &c[1], c[2].replace('\\', "/"))
+                })
+                .into_owned();
+        }
         s = platform.replace_all(&s, "  Platform: <OS>").into_owned();
         s = temp
             .replace_all(&s, "Prefer <TEMP> over generic system temporary")

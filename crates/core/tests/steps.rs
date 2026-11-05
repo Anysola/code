@@ -51,6 +51,8 @@ fn config_changes_apply_at_the_next_step() {
             )
             .unwrap();
             std::fs::write(dir.join("AGENTS.md"), "Reloaded rules.\n").unwrap();
+            // Stands in for model time: FSEvents can take a few hundred ms to report the writes.
+            std::thread::sleep(std::time::Duration::from_secs(1));
             return sse(
                 request,
                 Stream::new().tool("toolu_1", "glob", json!({"pattern": "*.md"})),
@@ -296,7 +298,7 @@ fn plan_mode_reminder_survives_compaction_and_guards_edits() {
     runtime
         .block_on(core.prompt(&session.id, prompt("PLANSECOND"), TurnOptions::default()))
         .unwrap();
-    let plan_dir = env.home.home().join(".opencode/plan");
+    let plan_dir = env.home.home().join(".opencode").join("plan");
     let enter = format!(
         "user: <system-reminder>\nYou are in Plan mode. Discuss the plan with the user directly in the conversation. Do not create or update plan files unless the user explicitly asks you to; when they do, write them only in:\n{}\n",
         plan_dir.display()

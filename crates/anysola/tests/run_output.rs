@@ -117,6 +117,8 @@ fn text_thinking() {
     );
 }
 
+// The capture ran `ls` in bash; Windows runs it in PowerShell.
+#[cfg(unix)]
 #[test]
 fn text_shell_and_auto() {
     for auto in [false, true] {
@@ -293,6 +295,10 @@ fn json_matches_captures() {
             Some(r#"{"permission":{"bash":"deny"}}"#),
         ),
     ] {
+        // The capture ran `ls` in bash; Windows runs it in PowerShell.
+        if cfg!(windows) && name == "json-shell" {
+            continue;
+        }
         let (_g, mut home) = setup();
         if let Some(config) = config {
             home.set_env("OPENCODE_CONFIG_CONTENT", config);
