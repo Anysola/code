@@ -56,7 +56,15 @@ pub fn find(language: &str) -> Option<&'static SyntaxReference> {
 }
 
 fn syn(theme: &Theme, path: &str) -> SynColor {
-    let (r, g, b) = theme.get(path).bytes();
+    // Translucent colours (some themes' comments) are flattened over the background.
+    let Color::Rgb(r, g, b) = theme.fg(path) else {
+        return SynColor {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0,
+        };
+    };
     SynColor { r, g, b, a: 255 }
 }
 
@@ -333,5 +341,39 @@ mod tests {
             .filter(|l| find(l).is_none())
             .collect();
         assert!(missing.is_empty(), "missing {missing:?}");
+    }
+
+    /// Comments, strings, numbers and control keywords take the theme's own `syntax.*` colours
+    /// in every bundled theme and mode.
+    #[test]
+    fn token_mapping_per_theme() {
+        let catalog = crate::theme::Catalog::bundled();
+        let code = "// note\nfunction f() { return \"x\" + 42 }\n";
+        for name in catalog.names() {
+            for mode in [crate::theme::Mode::Dark, crate::theme::Mode::Light] {
+                let Ok(theme) = catalog.load(&name, mode) else {
+                    continue;
+                };
+                let lines = highlight(code, "javascript", &theme);
+                let colour = |line: usize, text: &str| {
+                    lines[line]
+                        .iter()
+                        .find(|s| s.content.contains(text))
+                        .and_then(|s| s.style.fg)
+                };
+                for (line, text, token) in [
+                    (0, "note", "syntax.comment"),
+                    (1, "return", "syntax.keyword"),
+                    (1, "x", "syntax.string"),
+                    (1, "42", "syntax.number"),
+                ] {
+                    assert_eq!(
+                        colour(line, text),
+                        Some(theme.fg(token)),
+                        "{name} {mode:?} {text}"
+                    );
+                }
+            }
+        }
     }
 }
