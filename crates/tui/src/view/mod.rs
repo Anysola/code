@@ -17,6 +17,7 @@ mod session;
 
 pub use home::WORDMARK;
 pub use prompt::{max_rows, textarea_width};
+pub use session::terminal_size;
 
 /// Width of the session pane's content box.
 pub fn session_content_width(state: &State) -> usize {
@@ -118,7 +119,10 @@ pub fn draw(state: &State, theme: &Theme, buf: &mut Buffer) -> Drawn {
     let cursor = match &state.route {
         Route::Home => home::draw(&mut c, state),
         Route::Session(id) => match state.sessions.get(id) {
-            Some(session) => session::draw(&mut c, state, session),
+            Some(session) => {
+                let cursor = session::draw(&mut c, state, session);
+                session::terminal_cursor(state).or(cursor)
+            }
             None => None,
         },
     };

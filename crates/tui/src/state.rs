@@ -242,6 +242,13 @@ impl Default for Settings {
     }
 }
 
+/// The terminal pane: the screen of the shown terminal and whether keys go to it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pane {
+    pub screen: crate::terminal::Screen,
+    pub focused: bool,
+}
+
 /// Footer and hint keys as the keymap displays them.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Hints {
@@ -300,6 +307,8 @@ pub struct State {
     pub hints: Hints,
     /// `/update to install v<version>` on the home screen.
     pub update: Option<String>,
+    /// The terminal pane beside the session, while shown.
+    pub pane: Option<Pane>,
     /// The local time zone dates are shown in.
     pub zone: chrono::FixedOffset,
 }
@@ -334,6 +343,7 @@ impl State {
             settings: Settings::default(),
             hints: Hints::default(),
             update: None,
+            pane: None,
             zone: *chrono::Local::now().offset(),
         }
     }

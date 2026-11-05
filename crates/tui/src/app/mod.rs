@@ -29,6 +29,7 @@ mod dialogs;
 mod events;
 mod keys;
 mod models;
+mod pane;
 
 /// How bare `anysola` was started.
 #[derive(Debug, Default, Clone)]
@@ -90,6 +91,9 @@ pub struct App {
     restart: bool,
     /// Debounces `/me` after credits events.
     account_generation: u64,
+    /// Terminals of the pane; `shown` is the one on screen.
+    terminals: Vec<crate::terminal::Terminal>,
+    shown: Option<usize>,
 }
 
 fn now() -> u64 {
@@ -197,6 +201,8 @@ pub async fn run(core: Core, options: Options) -> Result<(), String> {
         installed: None,
         restart: false,
         account_generation: 0,
+        terminals: Vec::new(),
+        shown: None,
     };
     app.init(&paths, &options);
     if let Some((title, message)) = failure {
@@ -350,6 +356,7 @@ impl App {
             self.state.width = size.width;
             self.state.height = size.height;
         }
+        self.sync_pane();
         let title = if self.state.settings.title {
             term::title(self.state.session().map(|s| s.title.as_str()))
         } else {

@@ -203,7 +203,7 @@ impl App {
                 }
             }
             ("prompt.stash.list", _) if !self.stash.is_empty() => self.open_stash(),
-            (id, _) if self.toggle(id) => {}
+            (id, _) if self.toggle(id) || self.pane_command(id) => {}
             (id, session) => {
                 if !self.open_dialog(id, session) && !self.account_command(id, arguments) {
                     self.toast(

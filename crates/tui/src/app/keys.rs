@@ -47,6 +47,10 @@ const GLOBAL: &[&str] = &[
     "session.last",
     "terminal.suspend",
     "terminal.toggle",
+    "terminal.select",
+    "terminal.close",
+    "pane.focus.left",
+    "pane.focus.right",
 ];
 
 /// Composer editing commands (the textarea layer).
@@ -84,7 +88,11 @@ impl App {
                     self.key(stroke);
                 }
             }
-            Event::Paste(text) => self.paste(&text),
+            Event::Paste(text) => {
+                if !self.pane_paste(&text) {
+                    self.paste(&text)
+                }
+            }
             Event::Mouse(mouse) => self.mouse(mouse),
             _ => {}
         }
@@ -119,6 +127,9 @@ impl App {
             if let Some(id) = self.keymap.find(&strokes, &ids) {
                 self.run_command(id, None);
             }
+            return;
+        }
+        if self.pane_key(&stroke) {
             return;
         }
         if self.state.session().is_some_and(|s| s.permission.is_some()) {

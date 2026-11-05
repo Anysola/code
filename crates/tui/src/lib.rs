@@ -9,6 +9,7 @@ pub mod menus;
 pub mod settings;
 pub mod state;
 pub mod term;
+pub mod terminal;
 pub mod text;
 pub mod theme;
 pub mod transcript;

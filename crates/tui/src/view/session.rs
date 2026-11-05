@@ -14,7 +14,9 @@ pub const SIDEBAR_WIDTH: u16 = 42;
 
 /// Columns of the session pane (the sidebar takes 42 on wide terminals).
 pub fn pane_width(state: &State) -> u16 {
-    if state.settings.sidebar && state.width > 120 {
+    if state.pane.is_some() {
+        state.width - terminal_width(state)
+    } else if state.settings.sidebar && state.width > 120 {
         state.width - SIDEBAR_WIDTH
     } else {
         state.width
@@ -91,10 +93,91 @@ pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u1
             label.len(),
         );
     }
-    if pane < state.width {
-        sidebar(c, state, session, pane, top);
+    match &state.pane {
+        Some(terminal) => self::terminal(c, terminal, pane, top, state.height),
+        None if pane < state.width => sidebar(c, state, session, pane, top),
+        None => {}
     }
     cursor
+}
+
+/// The right pane's width: half the screen, at least 24 columns.
+pub fn terminal_width(state: &State) -> u16 {
+    (state.width / 2).max(24.min(state.width))
+}
+
+/// The terminal grid inside the right pane: `(rows, columns)`.
+pub fn terminal_size(state: &State) -> (u16, u16) {
+    let top = u16::from(!state.tabs.is_empty());
+    (
+        state.height.saturating_sub(top).max(1),
+        terminal_width(state).saturating_sub(2).max(1),
+    )
+}
+
+fn vt_color(color: vt100::Color) -> Option<ratatui::style::Color> {
+    use ratatui::style::Color;
+    match color {
+        vt100::Color::Default => None,
+        vt100::Color::Idx(i) => Some(Color::Indexed(i)),
+        vt100::Color::Rgb(r, g, b) => Some(Color::Rgb(r, g, b)),
+    }
+}
+
+fn terminal(c: &mut Canvas, pane: &crate::state::Pane, x: u16, top: u16, height: u16) {
+    let border = if pane.focused {
+        c.style("border.focused")
+    } else {
+        c.style("border.base")
+    };
+    for y in top..height {
+        c.put(x, y, "│", border, 1);
+    }
+    let parser = pane.screen.0.lock().unwrap_or_else(|e| e.into_inner());
+    let screen = parser.screen();
+    let (rows, cols) = screen.size();
+    let base = c.style("text.base");
+    for row in 0..rows.min(height.saturating_sub(top)) {
+        for col in 0..cols {
+            let Some(cell) = screen.cell(row, col) else {
+                continue;
+            };
+            if cell.is_wide_continuation() {
+                continue;
+            }
+            let mut style = base;
+            if let Some(fg) = vt_color(cell.fgcolor()) {
+                style = style.fg(fg);
+            }
+            if let Some(bg) = vt_color(cell.bgcolor()) {
+                style = style.bg(bg);
+            }
+            if cell.bold() {
+                style = style.add_modifier(ratatui::style::Modifier::BOLD);
+            }
+            if cell.inverse() {
+                style = style.add_modifier(ratatui::style::Modifier::REVERSED);
+            }
+            let text = if cell.has_contents() {
+                cell.contents()
+            } else {
+                " "
+            };
+            c.put(x + 2 + col, top + row, text, style, 2);
+        }
+    }
+}
+
+/// Where the terminal's cursor is on screen, when the pane has the keys.
+pub fn terminal_cursor(state: &State) -> Option<(u16, u16)> {
+    let pane = state.pane.as_ref().filter(|p| p.focused)?;
+    let parser = pane.screen.0.lock().unwrap_or_else(|e| e.into_inner());
+    if parser.screen().hide_cursor() {
+        return None;
+    }
+    let (row, col) = parser.screen().cursor_position();
+    let top = u16::from(!state.tabs.is_empty());
+    Some((pane_width(state) + 2 + col, top + row))
 }
 
 pub fn draw_row(c: &mut Canvas, row: &Row, x: u16, y: u16, w: u16) {
