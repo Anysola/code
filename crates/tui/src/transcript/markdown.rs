@@ -296,6 +296,16 @@ impl Builder<'_> {
             TagEnd::CodeBlock => {
                 if let Some((language, code)) = self.code.take() {
                     let room = self.width.saturating_sub(self.indent()).max(1);
+                    let math = matches!(language.as_str(), "latex" | "math" | "tex");
+                    if let Some(rows) = math.then(|| super::latex::render(&code).ok()).flatten() {
+                        let style = Style::new().fg(self.theme.fg("text.base"));
+                        let lines = rows
+                            .into_iter()
+                            .map(|row| vec![Span::styled(row, style)])
+                            .collect();
+                        self.emit(lines);
+                        return;
+                    }
                     let lines =
                         highlight::highlight(code.trim_end_matches('\n'), &language, self.theme)
                             .into_iter()
@@ -495,6 +505,13 @@ mod tests {
             .iter()
             .map(plain)
             .collect()
+    }
+
+    #[test]
+    fn math_blocks_render_or_stay_source() {
+        assert_eq!(lines("```latex\nE = mc^2\n```", 40), vec!["E = mc²"]);
+        let source = lines("```math\n\\begin{x}\n```", 40);
+        assert!(source.iter().any(|l| l.contains("\\begin{x}")));
     }
 
     #[test]
