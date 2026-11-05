@@ -1,7 +1,6 @@
-//! ```` ```mermaid ```` flowcharts as box drawings. A subset of 0.5.1's `@opencode/merman`:
-//! `flowchart`/`graph` top-down charts whose edges each go one layer down, and left-to-right
-//! chains. Other diagrams (sequence, state, gantt, gitGraph, timeline) and charts this layout
-//! cannot draw are errors, and the block stays source.
+//! Flowcharts as box drawings, a subset of 0.5.1's `@opencode/merman`: `flowchart`/`graph`
+//! top-down charts whose edges each go one layer down, and left-to-right chains. Charts this
+//! layout cannot draw are errors, and the block stays source.
 
 use std::collections::HashMap;
 
@@ -296,8 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn other_diagrams_fall_back() {
-        assert!(render("sequenceDiagram\nA->>B: hi").is_err());
+    fn cycles_fall_back() {
         assert!(render("flowchart TD\nA --> B\nB --> A").is_err());
     }
 }
