@@ -169,6 +169,8 @@ impl App {
         if self.state.session().is_some_and(|s| s.location_missing()) {
             if stroke.key == "return" {
                 self.run_command("session.move", None);
+            } else if self.is("app.exit", &stroke) {
+                self.quit = true;
             } else if let Some(id) = self.keymap.find(std::slice::from_ref(&stroke), GLOBAL) {
                 self.run_command(id, None);
             }
