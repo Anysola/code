@@ -111,6 +111,19 @@ impl TestHome {
         path
     }
 
+    /// `binary` in the project with only this home's environment.
+    pub fn command(&self, binary: &str) -> Command {
+        let mut command = Command::new(binary);
+        command.current_dir(self.project()).env_clear();
+        for name in INHERITED {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        command.envs(self.env.iter().map(|(k, v)| (k, v)));
+        command
+    }
+
     /// Runs `binary args…` in `cwd` (default: the project) with `stdin` (default: `/dev/null`).
     pub fn run(
         &self,
@@ -119,17 +132,10 @@ impl TestHome {
         cwd: Option<&Path>,
         stdin: Option<&str>,
     ) -> Output {
-        let mut command = Command::new(binary);
+        let mut command = self.command(binary);
         command
             .args(args)
             .current_dir(cwd.map(Path::to_path_buf).unwrap_or_else(|| self.project()));
-        command.env_clear();
-        for name in INHERITED {
-            if let Some(value) = std::env::var_os(name) {
-                command.env(name, value);
-            }
-        }
-        command.envs(self.env.iter().map(|(k, v)| (k, v)));
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
         command.stdin(if stdin.is_some() {
             Stdio::piped()

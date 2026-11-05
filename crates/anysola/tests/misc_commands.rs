@@ -188,7 +188,9 @@ fn mcp_add_writes_the_bytes_0_5_1_wrote() {
         let mut argv = vec!["mcp", "add"];
         argv.extend_from_slice(args);
         let out = anysola(&home, &home.project(), &argv);
-        let path = home.project().join(file);
+        let path = file
+            .split('/')
+            .fold(home.project(), |dir, part| dir.join(part));
         assert_eq!(
             (out.stdout, out.code),
             (

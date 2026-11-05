@@ -51,6 +51,8 @@ fn config_changes_apply_at_the_next_step() {
             )
             .unwrap();
             std::fs::write(dir.join("AGENTS.md"), "Reloaded rules.\n").unwrap();
+            // Stands in for model time: FSEvents can take a few hundred ms to report the writes.
+            std::thread::sleep(std::time::Duration::from_secs(1));
             return sse(
                 request,
                 Stream::new().tool("toolu_1", "glob", json!({"pattern": "*.md"})),
