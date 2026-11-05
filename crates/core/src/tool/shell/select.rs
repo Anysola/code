@@ -74,7 +74,7 @@ fn executable(file: &str) -> Option<String> {
     if Path::new(&shell).is_absolute() {
         return Path::new(&shell).is_file().then_some(shell);
     }
-    which(&shell).map(display)
+    crate::which::which(&shell).map(display)
 }
 
 /// On Windows: drive-path rewriting, Git Bash for POSIX-style bash paths, PATH lookup of bare
@@ -94,7 +94,7 @@ fn full(file: &str) -> String {
         }
         return shell;
     }
-    let found = || which(&shell).map(display);
+    let found = || crate::which::which(&shell).map(display);
     if is_bash {
         return git_bash().or_else(found).unwrap_or(shell);
     }
@@ -105,7 +105,7 @@ fn unix_fallback() -> String {
     if cfg!(target_os = "macos") {
         return "/bin/zsh".into();
     }
-    which("bash").map_or_else(|| "/bin/sh".into(), display)
+    crate::which::which("bash").map_or_else(|| "/bin/sh".into(), display)
 }
 
 fn windows_fallback() -> String {
@@ -113,8 +113,8 @@ fn windows_fallback() -> String {
         .ok()
         .filter(|c| !c.is_empty())
         .unwrap_or_else(|| "cmd.exe".into());
-    which("pwsh")
-        .or_else(|| which("powershell"))
+    crate::which::which("pwsh")
+        .or_else(|| crate::which::which("powershell"))
         .map(display)
         .or_else(git_bash)
         .map_or_else(|| full(&comspec), |shell| full(&shell))
@@ -136,7 +136,7 @@ fn git_bash() -> Option<String> {
         return None;
     }
     git_bash_option().or_else(|| {
-        let git = which("git")?;
+        let git = crate::which::which("git")?;
         let bash = git.parent()?.parent()?.join("bin").join("bash.exe");
         let size = std::fs::metadata(&bash).ok()?.len();
         (size > 0).then(|| display(bash))
@@ -145,41 +145,6 @@ fn git_bash() -> Option<String> {
 
 fn display(path: PathBuf) -> String {
     path.to_string_lossy().into_owned()
-}
-
-/// PATH lookup of a bare command name (with PATHEXT on Windows).
-fn which(command: &str) -> Option<PathBuf> {
-    let path = env::var_os("PATH").or_else(|| env::var_os("Path"))?;
-    let extensions: Vec<String> = if cfg!(windows) {
-        let pathext = env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".into());
-        std::iter::once(String::new())
-            .chain(pathext.split(';').map(str::to_string))
-            .collect()
-    } else {
-        vec![String::new()]
-    };
-    env::split_paths(&path)
-        .flat_map(|dir| {
-            extensions
-                .iter()
-                .map(move |ext| dir.join(format!("{command}{ext}")))
-        })
-        .find(|candidate| is_executable(candidate))
-}
-
-fn is_executable(path: &Path) -> bool {
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return false;
-    };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        metadata.is_file()
-    }
 }
 
 #[cfg(test)]

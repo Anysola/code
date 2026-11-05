@@ -159,8 +159,7 @@ pub async fn run(args: RunArgs) -> i32 {
             ui::NORMAL
         ));
     }
-    core.close_permissions();
-    anysola_core::tool::shell::kill_background_shells();
+    core.shutdown();
     code
 }
 
@@ -270,50 +269,64 @@ async fn consume(
 }
 
 /// SIGINT interrupts the turn (exit 130; a second SIGINT exits at once). SIGTERM (and SIGHUP on a
-/// terminal) interrupts it too and gives the teardown 10 s.
+/// terminal) interrupts it too (exit 1); a second SIGTERM exits at once. Either way the teardown
+/// gets 10 s before the process reports what is still pending and exits 1.
 async fn signals(
     core: Core,
     session_id: String,
     user_interrupt: Arc<AtomicBool>,
     exit: Arc<AtomicI32>,
 ) {
-    let interrupt = |code: i32| {
-        if exit.swap(code, Ordering::Relaxed) == 130 && code == 130 {
-            std::process::exit(130);
-        }
-        user_interrupt.store(true, Ordering::Relaxed);
-        core.interrupt(&session_id);
-    };
     #[cfg(unix)]
     {
         use std::io::IsTerminal;
         use tokio::signal::unix::{SignalKind, signal};
-        let (Ok(mut int), Ok(mut term), Ok(mut hup)) = (
+        let (Ok(mut int), Ok(mut term)) = (
             signal(SignalKind::interrupt()),
             signal(SignalKind::terminate()),
-            signal(SignalKind::hangup()),
         ) else {
             return;
         };
-        let tty = std::io::stdin().is_terminal();
+        // Listening for SIGHUP replaces its default action (and nohup's ignore), so only a
+        // terminal gets the listener.
+        let tty = std::io::stdin().is_terminal() || std::io::stdout().is_terminal();
+        let mut hup = tty.then(|| signal(SignalKind::hangup()).ok()).flatten();
+        let mut deadline = None;
         loop {
-            tokio::select! {
-                _ = int.recv() => interrupt(130),
-                _ = term.recv() => break,
-                _ = hup.recv(), if tty => break,
+            let code = tokio::select! {
+                _ = int.recv() => 130,
+                _ = term.recv() => 1,
+                Some(_) = async { hup.as_mut()?.recv().await } => 1,
+                () = async { deadline.as_mut().expect("guarded").await }, if deadline.is_some() => {
+                    exit_pending(&format!("shutdown did not finish within {}s", SHUTDOWN_DEADLINE.as_secs()));
+                }
+            };
+            if deadline.is_some() {
+                if code == 130 {
+                    std::process::exit(130);
+                }
+                exit_pending("received SIGTERM again during shutdown");
             }
+            exit.store(code, Ordering::Relaxed);
+            user_interrupt.store(true, Ordering::Relaxed);
+            core.interrupt(&session_id);
+            deadline = Some(Box::pin(tokio::time::sleep(SHUTDOWN_DEADLINE)));
         }
-        interrupt(1);
-        tokio::time::sleep(SHUTDOWN_DEADLINE).await;
-        ui::println(&format!(
-            "shutdown did not finish within 10s; exiting. Still pending:\n  session {session_id}"
-        ));
-        std::process::exit(1);
     }
     #[cfg(not(unix))]
     {
         while tokio::signal::ctrl_c().await.is_ok() {
-            interrupt(130);
+            if exit.swap(130, Ordering::Relaxed) == 130 {
+                std::process::exit(130);
+            }
+            user_interrupt.store(true, Ordering::Relaxed);
+            core.interrupt(&session_id);
         }
     }
+}
+
+fn exit_pending(reason: &str) -> ! {
+    let pending = anysola_core::teardown::pending();
+    eprint!("{}", anysola_core::teardown::report(reason, &pending));
+    std::process::exit(1);
 }

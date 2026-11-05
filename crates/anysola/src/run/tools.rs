@@ -225,6 +225,13 @@ pub fn inline_info(
                 ),
             )
         }
+        "todowrite" => Inline {
+            icon: "#",
+            title: "Todos".into(),
+            description: None,
+            body: Some(todo_lines(input.get("todos"))),
+            block: true,
+        },
         "subagent" => {
             let agent = text(input, "agent");
             let kind = titlecase(if agent.is_empty() { "unknown" } else { &agent });
@@ -243,6 +250,27 @@ pub fn inline_info(
         }
         _ => fallback(name, input),
     }
+}
+
+/// One `[✓] content` line per well-formed todo (unknown statuses read as pending).
+fn todo_lines(todos: Option<&Value>) -> String {
+    let Some(Value::Array(todos)) = todos else {
+        return String::new();
+    };
+    todos
+        .iter()
+        .filter_map(|todo| {
+            let content = todo.get("content")?.as_str().filter(|c| !c.is_empty())?;
+            let marker = match todo.get("status").and_then(Value::as_str) {
+                Some("completed") => "[✓]",
+                Some("in_progress") => "[•]",
+                Some("cancelled") => "[-]",
+                _ => "[ ]",
+            };
+            Some(format!("{marker} {content}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Upper-cases the first word character after each word boundary (`/\b\w/g`).
@@ -329,6 +357,54 @@ mod tests {
             (subagent.title.as_str(), subagent.description.as_deref()),
             ("bg task", Some("Code-Reviewer Agent"))
         );
+        let todos = inline_info(
+            "todowrite",
+            &map(json!({"todos": [
+                {"content": "a", "status": "completed"},
+                {"content": "b", "status": "in_progress"},
+                {"content": "c", "status": "cancelled"},
+                {"content": "d", "status": "weird"},
+                {"content": "", "status": "pending"},
+                {"status": "pending"}
+            ]})),
+            &Map::new(),
+            None,
+            dir,
+        );
+        assert_eq!(
+            (todos.icon, todos.title.as_str(), todos.block),
+            ("#", "Todos", true)
+        );
+        assert_eq!(todos.body.as_deref(), Some("[✓] a\n[•] b\n[-] c\n[ ] d"));
+        let line = |name: &str, input: Value, metadata: Value| {
+            let info = inline_info(name, &map(input), &map(metadata), Some(" out \n"), dir);
+            (info.icon, info.title, info.block, info.body)
+        };
+        assert_eq!(
+            line("shell", json!({"command": "ls"}), json!({})),
+            ("$", "ls".into(), true, Some("out".into()))
+        );
+        assert_eq!(
+            line("webfetch", json!({"url": "https://x.y"}), json!({})).1,
+            "WebFetch https://x.y"
+        );
+        assert_eq!(
+            line("websearch", json!({"query": "q"}), json!({})).1,
+            "Web Search via Anysola \"q\""
+        );
+        assert_eq!(
+            line("skill", json!({"id": "a"}), json!({"name": "demo"})).1,
+            "Skill \"demo\""
+        );
+        assert_eq!(
+            line("question", json!({"questions": [{}, {}]}), json!({})).1,
+            "Asked 2 questions"
+        );
+        assert_eq!(
+            line("execute", json!({"code": "1"}), json!({})),
+            ("⚙", "execute {\"code\":\"1\"}".into(), false, None)
+        );
+        assert_eq!(line("other", json!({}), json!({})).1, "other Unknown");
         let subagent = inline_info("subagent", &Map::new(), &Map::new(), None, dir);
         assert_eq!(subagent.title, "Unknown Subagent");
     }

@@ -49,7 +49,7 @@ pub struct RecordingNotifier {
 }
 
 impl SessionNotifier for RecordingNotifier {
-    fn synthetic(&self, session_id: &str, text: String) {
+    fn synthetic(&self, session_id: &str, text: String, _description: Option<String>) {
         self.messages
             .lock()
             .unwrap()

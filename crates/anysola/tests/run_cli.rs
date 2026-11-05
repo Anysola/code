@@ -595,9 +595,9 @@ fn code_action_review_and_issue_modes() {
     );
 }
 
+/// Starts `run --auto --format json go` whose turn runs `sleep 20` in the shell tool.
 #[cfg(unix)]
-#[test]
-fn sigint_interrupts_with_exit_130() {
+fn sleeping_run() -> (FakeGateway, TestHome, std::process::Child) {
     let gateway = FakeGateway::start(|request: &Recorded, _| {
         let model = request.json()["model"]
             .as_str()
@@ -631,7 +631,23 @@ fn sigint_interrupts_with_exit_130() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    std::thread::sleep(Duration::from_millis(1500));
+    // The signal handlers are installed once the main request is out; the shell starts after it.
+    let started = Instant::now();
+    while !gateway.messages().iter().any(|r| !r.is_title()) {
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "no main request"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    (gateway, home, child)
+}
+
+#[cfg(unix)]
+#[test]
+fn sigint_interrupts_with_exit_130() {
+    let (_gateway, _home, child) = sleeping_run();
     unsafe { libc::kill(child.id() as i32, libc::SIGINT) };
     let started = Instant::now();
     let out = child.wait_with_output().unwrap();
@@ -647,6 +663,26 @@ fn sigint_interrupts_with_exit_130() {
         lines.iter().all(|l| l["type"] != "error"),
         "a user interrupt reports no error"
     );
+}
+
+/// SIGTERM tears the run down like an interrupt, exits 1, and a teardown that finishes in time
+/// reports nothing pending. SIGHUP without a terminal keeps its default action.
+#[cfg(unix)]
+#[test]
+fn sigterm_tears_down_with_exit_1() {
+    let (_gateway, _home, child) = sleeping_run();
+    unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
+    let started = Instant::now();
+    let out = child.wait_with_output().unwrap();
+    assert!(started.elapsed() < Duration::from_secs(10));
+    assert_eq!(out.status.code(), Some(1));
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("Still pending"));
+
+    let (_gateway, _home, child) = sleeping_run();
+    unsafe { libc::kill(child.id() as i32, libc::SIGHUP) };
+    let out = child.wait_with_output().unwrap();
+    use std::os::unix::process::ExitStatusExt;
+    assert_eq!(out.status.signal(), Some(libc::SIGHUP));
 }
 
 #[test]

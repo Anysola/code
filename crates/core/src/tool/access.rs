@@ -35,9 +35,14 @@ pub struct Target {
 
 /// Rewrites MSYS/Cygwin/WSL drive paths (`/c/x`, `/cygdrive/c/x`, `/mnt/c/x`) to `C:/x` on Windows.
 pub fn windows_path(input: &str) -> String {
-    if !cfg!(windows) {
-        return input.to_string();
+    if cfg!(windows) {
+        drive_path(input)
+    } else {
+        input.to_string()
     }
+}
+
+fn drive_path(input: &str) -> String {
     for prefix in ["/cygdrive/", "/mnt/", "/"] {
         let Some(rest) = input.strip_prefix(prefix) else {
             continue;
@@ -183,4 +188,83 @@ pub async fn authorize_read(ctx: &ToolContext, input: &str) -> Result<Target, To
     })
     .await?;
     Ok(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tool::test_support::context;
+
+    #[test]
+    fn drive_paths() {
+        for (input, expected) in [
+            ("/c/x/y", "C:/x/y"),
+            ("/c:/x", "C:/x"),
+            ("/cygdrive/d/x", "D:/x"),
+            ("/mnt/c/x\\y", "C:/x\\y"),
+            ("/c", "C:/"),
+            ("/cd/x", "/cd/x"),
+            ("/mnt/data/x", "/mnt/data/x"),
+            ("relative/c", "relative/c"),
+        ] {
+            assert_eq!(drive_path(input), expected, "{input}");
+        }
+    }
+
+    #[test]
+    fn internal_and_external_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("proj");
+        let sub = project.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        let test = context(&sub);
+        let mut ctx = test.ctx.clone();
+        ctx.worktree = project.clone();
+
+        let home = resolve(&ctx, "~/notes.txt", None);
+        assert_eq!(home.absolute, sub.join(".home/notes.txt"));
+        assert_eq!(home.resource, ".home/notes.txt");
+        assert_eq!(resolve(&ctx, ".", None).resource, ".");
+        assert_eq!(resolve(&ctx, "a/../b.txt", None).resource, "b.txt");
+        // Inside the worktree but outside the session directory: still internal, relative.
+        let sibling = resolve(&ctx, "../other/x.txt", None);
+        assert_eq!(
+            (sibling.resource.as_str(), sibling.external),
+            ("../other/x.txt", None)
+        );
+
+        let outside = dir.path().join("elsewhere");
+        let repo = outside.join("repo");
+        std::fs::create_dir_all(repo.join("deep")).unwrap();
+        std::fs::create_dir(repo.join(".git")).unwrap();
+        let file = resolve(&ctx, &slash(&repo.join("deep/f.txt")), None);
+        let external = file.external.unwrap();
+        assert_eq!(file.resource, slash(&repo.join("deep/f.txt")));
+        assert_eq!(external.resource, slash(&repo.join("deep/*")));
+        assert_eq!(external.save, slash(&repo.join("*")));
+        let folder = resolve(&ctx, &slash(&outside), Some(Kind::Directory));
+        let external = folder.external.unwrap();
+        assert_eq!(
+            (external.resource, external.save),
+            (slash(&outside.join("*")), slash(&outside.join("*")))
+        );
+    }
+
+    #[tokio::test]
+    async fn external_directories_are_asked_once_per_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let test = context(&dir.path().join("p"));
+        let outside = dir.path().join("o");
+        let a = resolve(&test.ctx, &slash(&outside.join("a")), Some(Kind::File));
+        let b = resolve(&test.ctx, &slash(&outside.join("b")), Some(Kind::File));
+        let inside = resolve(&test.ctx, "c", None);
+        authorize_external(&test.ctx, &[&a, &inside, &b])
+            .await
+            .unwrap();
+        let asked = test.gate.asked.lock().unwrap();
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].action, "external_directory");
+        assert_eq!(asked[0].resources, vec![slash(&outside.join("*"))]);
+        assert_eq!(asked[0].save, vec![slash(&outside.join("*"))]);
+    }
 }

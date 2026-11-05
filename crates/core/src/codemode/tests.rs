@@ -297,6 +297,7 @@ fn denied_execute_exposes_direct_tools() {
             "shell",
             "skill",
             "subagent",
+            "todowrite",
             "webfetch",
             "websearch",
             "write",

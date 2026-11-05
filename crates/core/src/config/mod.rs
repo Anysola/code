@@ -149,6 +149,19 @@ impl Config {
         )
     }
 
+    /// A config of plain documents, lowest precedence first.
+    #[cfg(test)]
+    pub fn from_documents(documents: &[Value]) -> Config {
+        let mut config = Config::default();
+        for data in documents {
+            config.apply(Document {
+                data: data.as_object().cloned().unwrap_or_default(),
+                managed: false,
+            });
+        }
+        config
+    }
+
     fn apply(&mut self, document: Document) {
         let mut data = document.data;
         let statements = policy_statements(&mut data);
@@ -200,8 +213,45 @@ impl Config {
                 "Plugins are not supported since Anysola Code 1.0; ignoring \"plugins\".".into(),
             );
         }
+        if let Some(formatter) = data.remove("formatter") {
+            merge_formatter(&mut self.values, formatter);
+        }
         for (key, value) in data {
             self.values.insert(key, value);
+        }
+    }
+}
+
+/// `formatter`: a boolean replaces everything before it; an object merges each named entry's
+/// fields (and its `environment`) over the same name from earlier objects.
+fn merge_formatter(values: &mut Map<String, Value>, next: Value) {
+    let Value::Object(entries) = next else {
+        values.insert("formatter".into(), next);
+        return;
+    };
+    if !matches!(values.get("formatter"), Some(Value::Object(_))) {
+        values.insert("formatter".into(), Value::Object(Map::new()));
+    }
+    let Some(Value::Object(merged)) = values.get_mut("formatter") else {
+        return;
+    };
+    for (name, entry) in entries {
+        let Value::Object(entry) = entry else {
+            continue;
+        };
+        let current = merged
+            .entry(name)
+            .or_insert_with(|| Value::Object(Map::new()));
+        let Value::Object(current) = current else {
+            continue;
+        };
+        for (key, value) in entry {
+            match (key.as_str(), current.get_mut(&key), value) {
+                ("environment", Some(Value::Object(env)), Value::Object(more)) => env.extend(more),
+                (_, _, value) => {
+                    current.insert(key, value);
+                }
+            }
         }
     }
 }

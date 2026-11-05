@@ -172,6 +172,7 @@ fn move_session(input: Value, ctx: &ToolContext) -> Result<Called, ToolError> {
     ctx.notifier.synthetic(
         &id,
         format!("The working directory has been changed to {directory}."),
+        None,
     );
     Ok(
         Called::output(json!({"sessionID": id, "directory": requested}))

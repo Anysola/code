@@ -53,6 +53,7 @@ pub struct Registry {
 }
 
 impl Registry {
+    /// The built-in tools; `todowrite` only with config `experimental.todo`.
     pub fn builtin() -> Self {
         let tools: Vec<Arc<dyn Tool>> = vec![
             Arc::new(super::edit::EditTool),
@@ -66,6 +67,7 @@ impl Registry {
             Arc::new(super::webfetch::WebfetchTool),
             Arc::new(super::websearch::WebsearchTool),
             Arc::new(super::write::WriteTool),
+            Arc::new(super::todowrite::TodowriteTool),
         ];
         Registry {
             tools,

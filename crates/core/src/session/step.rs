@@ -124,6 +124,9 @@ fn context(
     if !sources.config.websearch_enabled() {
         tools.retain(|t| t.name() != "websearch");
     }
+    if !crate::tool::todowrite::enabled(&sources.config) {
+        tools.retain(|t| t.name() != "todowrite");
+    }
     let env = DefinitionEnv {
         shell_name: crate::tool::shell::shell_name(sources.config.shell()),
         year: process_year(),

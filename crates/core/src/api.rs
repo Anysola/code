@@ -127,6 +127,8 @@ pub(crate) struct Shared {
     pub warming: crate::session::Warming,
     /// Background summaries held until automatic compaction takes them.
     pub precomputed: Mutex<std::collections::HashMap<String, crate::session::compaction::Held>>,
+    /// Set once the front end shuts down: background completions no longer wake sessions.
+    pub closing: std::sync::atomic::AtomicBool,
 }
 
 impl crate::codemode::Host for Shared {
@@ -141,6 +143,10 @@ impl crate::codemode::Host for Shared {
     fn config(&self) -> Arc<Config> {
         self.loaded().config.clone()
     }
+
+    fn formatters(&self) -> Option<Arc<crate::formatter::Formatters>> {
+        self.loaded().formatters.clone()
+    }
 }
 
 #[derive(Clone)]
@@ -148,17 +154,40 @@ pub struct Core {
     pub(crate) shared: Arc<Shared>,
 }
 
-/// Background shells post their completion here; with no running turn it is stored for the next.
+/// Background jobs post into the session's inbox: a running turn takes the message at its next
+/// step, an idle session starts a turn for it.
 struct StoreNotifier {
-    db: std::sync::Weak<Db>,
+    shared: std::sync::Weak<Shared>,
 }
 
 impl SessionNotifier for StoreNotifier {
-    fn synthetic(&self, session_id: &str, text: String) {
-        if let Some(db) = self.db.upgrade() {
-            let data =
-                serde_json::json!({"time": {"created": crate::time::now_ms()}, "text": text});
-            let _ = db.append_message(session_id, &crate::ids::message(), "synthetic", &data);
+    fn synthetic(&self, session_id: &str, text: String, description: Option<String>) {
+        let Some(shared) = self.shared.upgrade() else {
+            return;
+        };
+        let admitted = crate::session::inbox::enqueue_synthetic(
+            &shared.db,
+            session_id,
+            &text,
+            description.as_deref(),
+            Delivery::Steer,
+        );
+        let idle = !shared
+            .turns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(session_id);
+        if admitted.is_ok() && idle && !shared.closing.load(std::sync::atomic::Ordering::Relaxed) {
+            let session_id = session_id.to_string();
+            tokio::spawn(async move {
+                let _ = drain_session(
+                    &shared,
+                    &session_id,
+                    TurnOptions::default(),
+                    CancellationToken::new(),
+                )
+                .await;
+            });
         }
     }
 }
@@ -185,11 +214,11 @@ impl Core {
         let env = std::env::vars_os()
             .filter(|(k, _)| k != "OPENCODE_PASSWORD" && k != "OPENCODE_SERVER_PASSWORD")
             .collect();
-        let notifier = Arc::new(StoreNotifier {
-            db: Arc::downgrade(&db),
-        });
         let asks = Arc::new(Asks::new(db.clone(), events.clone()));
-        let shared = Shared {
+        let shared = Arc::new_cyclic(|weak| Shared {
+            notifier: Arc::new(StoreNotifier {
+                shared: weak.clone(),
+            }),
             paths,
             db,
             gateway,
@@ -207,7 +236,6 @@ impl Core {
             jobs: Jobs::default(),
             locks: Arc::default(),
             env: Arc::new(env),
-            notifier,
             directory: directory.to_path_buf(),
             project,
             snapshots,
@@ -215,9 +243,9 @@ impl Core {
             turns: Mutex::default(),
             warming: Default::default(),
             precomputed: Mutex::default(),
-        };
+            closing: Default::default(),
+        });
         shared.arm_watch(&shared.loaded());
-        let shared = Arc::new(shared);
         if shared.gateway.token().is_some() {
             tokio::spawn(state::poll_remote(Arc::downgrade(&shared)));
         }
@@ -549,11 +577,73 @@ impl Core {
         self.shared.questions.reply(request_id, reply)
     }
 
-    /// Rejects every pending permission ask and every later one, for shutdown.
-    pub fn close_permissions(&self) {
+    /// Moves the session's running foreground shell commands to the background (ctrl+b) and tells
+    /// the model; false when nothing was running.
+    pub fn background(&self, session_id: &str) -> bool {
+        let moved = crate::tool::shell::background_all(session_id);
+        if moved.is_empty() {
+            return false;
+        }
+        let mut lines = vec![
+            "User requested that active blocking work be moved to the background.".to_string(),
+            String::new(),
+            "Backgrounded work:".to_string(),
+        ];
+        lines.extend(moved.iter().map(|command| format!("- shell: {command}")));
+        lines.push(String::new());
+        lines.push(BACKGROUNDED.to_string());
+        self.shared
+            .notifier
+            .synthetic(session_id, lines.join("\n"), None);
+        true
+    }
+
+    /// The session's todo list: the input of its latest completed `todowrite` call before a
+    /// staged revert.
+    pub fn todos(&self, session_id: &str) -> Result<Vec<crate::tool::todowrite::Todo>, CoreError> {
+        use crate::session::message::{Message, Part, ToolState};
+        let boundary = self.shared.db.revert(session_id)?;
+        let boundary = boundary
+            .as_ref()
+            .and_then(|r| r.get("messageID"))
+            .and_then(Value::as_str);
+        let latest = self
+            .shared
+            .db
+            .messages(session_id)?
+            .into_iter()
+            .take_while(|row| Some(row.id.as_str()) != boundary)
+            .filter_map(|row| match Message::decode(&row.kind, &row.data) {
+                Message::Assistant(data) => Some(data.content),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|part| match part {
+                Part::Tool {
+                    name,
+                    state: ToolState::Completed { input, .. },
+                    ..
+                } if name == "todowrite" => Some(input),
+                _ => None,
+            })
+            .last();
+        Ok(latest
+            .and_then(|input| serde_json::from_value(input["todos"].clone()).ok())
+            .unwrap_or_default())
+    }
+
+    /// For process exit: rejects every pending permission ask and every later one, stops background
+    /// completions from waking sessions and kills the background shell commands.
+    pub fn shutdown(&self) {
+        self.shared
+            .closing
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         self.shared.asks.close();
+        crate::tool::shell::kill_background_shells();
     }
 }
+
+const BACKGROUNDED: &str = "The backgrounded work is still unfinished. Move on to other work if you can. If there is nothing else useful to do, finish your response. Do not wait, sleep, poll, or report the backgrounded work as complete until a later completion notification is added to the conversation.";
 
 /// Attached images as the model should get them.
 fn normalize(shared: &Shared, mut prompt: Prompt) -> Result<Prompt, CoreError> {
@@ -606,6 +696,7 @@ async fn drain_session(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .insert(session_id.to_string(), cancel.clone());
+    let _tracked = crate::teardown::track(format!("session {session_id} running"));
     let heartbeat = {
         let db = shared.db.clone();
         let (id, owner) = (session_id.to_string(), shared.owner.clone());

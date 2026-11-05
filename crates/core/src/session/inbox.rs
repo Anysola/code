@@ -74,11 +74,14 @@ pub fn enqueue_synthetic(
     db: &Db,
     session_id: &str,
     text: &str,
-    description: &str,
+    description: Option<&str>,
     delivery: Delivery,
 ) -> Result<String> {
     let id = crate::ids::message();
-    let payload = json!({"time": {"created": now_ms()}, "text": text, "description": description});
+    let mut payload = json!({"time": {"created": now_ms()}, "text": text});
+    if let Some(description) = description {
+        payload["description"] = json!(description);
+    }
     db.inbox_push(session_id, &id, "synthetic", &payload, delivery.as_str())?;
     Ok(id)
 }

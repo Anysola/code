@@ -26,6 +26,8 @@ pub struct Loaded {
     pub skills: Vec<Skill>,
     /// The configured `instructions` URLs, fetched when the config loaded.
     pub remote_instructions: Vec<InstructionFile>,
+    /// The formatters edits and writes run, when config `formatter` enables them.
+    pub formatters: Option<Arc<crate::formatter::Formatters>>,
 }
 
 impl Loaded {
@@ -63,7 +65,10 @@ impl Loaded {
         } else {
             Arc::from([])
         };
+        let formatters = crate::formatter::Formatters::from_config(&config, paths.data.join("bin"))
+            .map(Arc::new);
         Loaded {
+            formatters,
             config: Arc::new(config),
             agents,
             commands,

@@ -16,6 +16,7 @@ pub mod read;
 pub mod shell;
 pub mod skill;
 pub mod subagent;
+pub mod todowrite;
 pub mod webfetch;
 pub mod websearch;
 pub mod write;
@@ -205,9 +206,10 @@ impl Default for OutputLimits {
     }
 }
 
-/// Receives text that a background job (a background shell) posts back into its session.
+/// Receives text that a background job (a background shell) posts back into its session; the
+/// message wakes an idle session.
 pub trait SessionNotifier: Send + Sync {
-    fn synthetic(&self, session_id: &str, text: String);
+    fn synthetic(&self, session_id: &str, text: String, description: Option<String>);
 }
 
 /// Session services behind the agent-facing tools: asking the user, skills, child sessions.
