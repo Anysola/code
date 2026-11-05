@@ -382,3 +382,72 @@ fn session_entries_close_block_two() {
         "{second:?}"
     );
 }
+
+fn summarize(request: &anysola_testkit::Recorded) -> bool {
+    request.body.contains("You MUST summarize")
+}
+
+#[test]
+fn compaction_uses_the_compaction_agent_model_and_records_usage() {
+    let gateway = FakeGateway::start(|request, _| {
+        if summarize(request) {
+            return text(request, "## Objective\n- x");
+        }
+        text(request, "ok")
+    });
+    let env = env(&gateway.url);
+    env.home.write(
+        "proj/opencode.json",
+        r#"{"agents": {"compaction": {"model": "anysola/claude-haiku-5-5"}}}"#,
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    core.select_model(
+        &session.id,
+        &anysola_core::model::ModelRef::parse("anysola/claude-sonnet-5-5").unwrap(),
+    )
+    .unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("first"), TurnOptions::default()))
+        .unwrap();
+    let before = core.credits(&session.id).total;
+    assert_eq!(
+        runtime.block_on(core.compact(&session.id)).unwrap(),
+        Outcome::Succeeded
+    );
+    let compaction = gateway.messages().into_iter().find(summarize).unwrap();
+    assert_eq!(compaction.json()["model"], "claude-haiku-5-5");
+    assert_eq!(core.credits(&session.id).total, before + 1);
+}
+
+#[test]
+fn compaction_that_cannot_shrink_fails() {
+    let gateway = FakeGateway::start(|request, _| {
+        if summarize(request) {
+            return anysola_testkit::Reply::Json {
+                status: 400,
+                body: json!({"type": "error", "error": {"type": "invalid_request_error", "message": "prompt is too long: 1000001 tokens > 1000000 maximum"}}),
+                headers: Vec::new(),
+            };
+        }
+        text(request, "ok")
+    });
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("first"), TurnOptions::default()))
+        .unwrap();
+    let Outcome::Failed(error) = runtime.block_on(core.compact(&session.id)).unwrap() else {
+        panic!("compaction succeeded")
+    };
+    assert_eq!(
+        (error.kind.as_str(), error.message.as_str()),
+        (
+            "compaction.failed",
+            "The compaction request cannot be reduced further without losing the latest exchange or checkpoint"
+        )
+    );
+}
