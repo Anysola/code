@@ -57,6 +57,29 @@ impl Diff {
         }
     }
 
+    /// The selected patch as the viewer lays it out on a screen this wide.
+    fn rendered(
+        &self,
+        screen: u16,
+        theme: &crate::theme::Theme,
+    ) -> Vec<crate::transcript::markdown::Line> {
+        let Some(file) = self.list().get(self.selected) else {
+            return Vec::new();
+        };
+        let options = crate::view::patch_options(self, screen, &file.path);
+        crate::transcript::diff::render(&file.patch, &options, theme)
+    }
+
+    /// Rows where the selected patch's hunks start (`]`/`[`).
+    pub fn hunks(&self, screen: u16, theme: &crate::theme::Theme) -> Vec<usize> {
+        crate::transcript::diff::hunk_rows(&self.rendered(screen, theme))
+    }
+
+    /// The selected patch's last row (`G`).
+    pub fn length(&self, screen: u16, theme: &crate::theme::Theme) -> usize {
+        self.rendered(screen, theme).len().saturating_sub(1)
+    }
+
     pub fn list(&self) -> &[File] {
         match &self.files {
             Some(Ok(files)) => files,

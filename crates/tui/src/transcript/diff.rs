@@ -202,6 +202,18 @@ fn side(
 }
 
 /// The patch as rows exactly `options.width` wide.
+/// The rows where each hunk starts in `render`'s output: the first at 0, the others at their
+/// `@@` separators.
+pub fn hunk_rows(lines: &[Line]) -> Vec<usize> {
+    let mut rows = vec![0];
+    rows.extend(lines.iter().enumerate().skip(1).filter_map(|(i, line)| {
+        line.first()
+            .is_some_and(|span| span.content.starts_with(" @@"))
+            .then_some(i)
+    }));
+    rows
+}
+
 pub fn render(patch: &str, options: &Options, theme: &Theme) -> Vec<Line> {
     let hunks = parse(patch);
     let c = colors(theme);
@@ -321,6 +333,18 @@ mod tests {
             .iter()
             .map(|l| plain(l).trim_end().to_string())
             .collect()
+    }
+
+    #[test]
+    fn hunk_rows_follow_separators() {
+        let theme = Catalog::bundled().load("anysola", Mode::Dark).unwrap();
+        let patch = "--- a\n+++ a\n@@ -1,1 +1,1 @@\n-a\n+b\n@@ -9,1 +9,1 @@\n-c\n+d\n";
+        let options = Options {
+            width: 40,
+            split: false,
+            filetype: "",
+        };
+        assert_eq!(hunk_rows(&render(patch, &options, &theme)), [0, 2]);
     }
 
     #[test]

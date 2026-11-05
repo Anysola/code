@@ -33,6 +33,14 @@ impl App {
         let count = view.list().len();
         match (stroke.key.as_str(), stroke.ctrl) {
             ("escape" | "q", false) | ("c", true) => self.state.diff = None,
+            ("down", false) if stroke.alt && count > 0 => {
+                view.selected = (view.selected + 1) % count;
+                view.scroll = 0;
+            }
+            ("up", false) if stroke.alt && count > 0 => {
+                view.selected = (view.selected + count - 1) % count;
+                view.scroll = 0;
+            }
             ("j" | "down", false) => view.scroll += 1,
             ("k" | "up", false) => view.scroll = view.scroll.saturating_sub(1),
             ("pagedown", _) | ("f", true) => view.scroll += page,
@@ -40,6 +48,19 @@ impl App {
             ("d", true) => view.scroll += page / 2,
             ("u", true) => view.scroll = view.scroll.saturating_sub(page / 2),
             ("home" | "g", false) => view.scroll = 0,
+            ("end" | "G", _) => view.scroll = view.length(self.state.width, &self.theme),
+            ("]", false) => {
+                let starts = view.hunks(self.state.width, &self.theme);
+                if let Some(next) = starts.into_iter().find(|row| *row > view.scroll) {
+                    view.scroll = next;
+                }
+            }
+            ("[", false) => {
+                let starts = view.hunks(self.state.width, &self.theme);
+                if let Some(previous) = starts.into_iter().rev().find(|row| *row < view.scroll) {
+                    view.scroll = previous;
+                }
+            }
             ("n", false) if count > 0 => {
                 view.selected = (view.selected + 1) % count;
                 view.scroll = 0;

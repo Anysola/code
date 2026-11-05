@@ -8,6 +8,27 @@ use crate::diffview::Diff;
 use crate::text::width;
 use crate::transcript::diff;
 
+/// The file tree's width: none when hidden or narrower than 88 columns.
+fn tree_width(view: &Diff, screen: u16) -> u16 {
+    if view.tree && screen >= 88 {
+        (screen / 4).clamp(30, 40)
+    } else {
+        0
+    }
+}
+
+/// How the selected file's patch is laid out on a screen this wide.
+pub fn patch_options<'a>(view: &Diff, screen: u16, path: &'a str) -> diff::Options<'a> {
+    let tree = tree_width(view, screen);
+    let x = tree + u16::from(tree > 0);
+    let width = screen.saturating_sub(x + 1) as usize;
+    diff::Options {
+        width,
+        split: width >= 100,
+        filetype: crate::transcript::highlight::filetype(path),
+    }
+}
+
 pub fn draw(c: &mut Canvas, view: &Diff) {
     let area = c.buf.area;
     c.fill(area, c.theme.fg("background.base"));
@@ -25,7 +46,7 @@ pub fn draw(c: &mut Canvas, view: &Diff) {
             40,
         );
     }
-    let help = "esc close  n/p files  m reviewed  d source  b tree";
+    let help = "esc close  n/p files  ]/[ hunks  m reviewed  d source  b tree";
     if area.width as usize > width(help) + 30 {
         c.put(
             area.width - 2 - width(help) as u16,
@@ -49,12 +70,7 @@ pub fn draw(c: &mut Canvas, view: &Diff) {
         c.put(2, body.y, &text, style, area.width as usize - 4);
         return;
     }
-    let compact = area.width < 88;
-    let tree_w = if view.tree && !compact {
-        (area.width / 4).clamp(30, 40)
-    } else {
-        0
-    };
+    let tree_w = tree_width(view, area.width);
     for (i, file) in files.iter().enumerate().take(body.height as usize) {
         if tree_w == 0 {
             break;
@@ -86,16 +102,12 @@ pub fn draw(c: &mut Canvas, view: &Diff) {
         );
     }
     let px = tree_w + if tree_w > 0 { 1 } else { 0 };
-    let pw = area.width.saturating_sub(px + 1) as usize;
     let Some(file) = files.get(view.selected) else {
         return;
     };
+    let options = patch_options(view, area.width, &file.path);
+    let pw = options.width;
     c.put(px, body.y, &file.path, bold, pw);
-    let options = diff::Options {
-        width: pw,
-        split: pw >= 100,
-        filetype: crate::transcript::highlight::filetype(&file.path),
-    };
     let lines = diff::render(&file.patch, &options, c.theme);
     for (i, line) in lines
         .iter()
