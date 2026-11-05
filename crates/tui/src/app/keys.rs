@@ -51,6 +51,22 @@ const GLOBAL: &[&str] = &[
     "terminal.close",
     "pane.focus.left",
     "pane.focus.right",
+    "session.tab.close",
+    "session.tab.reopen",
+    "session.tab.next",
+    "session.tab.previous",
+    "session.tab.next_unread",
+    "session.tab.previous_unread",
+    "session.tab.select.1",
+    "session.tab.select.2",
+    "session.tab.select.3",
+    "session.tab.select.4",
+    "session.tab.select.5",
+    "session.tab.select.6",
+    "session.tab.select.7",
+    "session.tab.select.8",
+    "session.tab.select.9",
+    "session.tab.select.10",
 ];
 
 /// Composer editing commands (the textarea layer).

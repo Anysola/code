@@ -209,6 +209,15 @@ impl App {
                 self.state.route = Route::Home;
                 self.refresh_recent();
             }
+            ("session.tab.next", _) => self.cycle_tab(1, false),
+            ("session.tab.previous", _) => self.cycle_tab(-1, false),
+            ("session.tab.next_unread", _) => self.cycle_tab(1, true),
+            ("session.tab.previous_unread", _) => self.cycle_tab(-1, true),
+            (select, _) if select.starts_with("session.tab.select.") => {
+                if let Ok(number) = select["session.tab.select.".len()..].parse() {
+                    self.select_tab(number);
+                }
+            }
             ("session.tab.reopen", _) => {
                 if let Some(id) = self.closed.pop() {
                     self.open_session(&id);

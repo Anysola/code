@@ -29,6 +29,19 @@ impl App {
             .find(|t| t.session_id == session_id)
         {
             tab.attention = on;
+            tab.question = false;
+        }
+    }
+
+    fn question_waiting(&mut self, session_id: &str) {
+        self.attention(session_id, true);
+        if let Some(tab) = self
+            .state
+            .tabs
+            .iter_mut()
+            .find(|t| t.session_id == session_id)
+        {
+            tab.question = true;
         }
     }
 
@@ -75,7 +88,7 @@ impl App {
             form: Some(fields),
         });
         let id = session.id.clone();
-        self.attention(&id, true);
+        self.question_waiting(&id);
         self.alert(&id, "Input needs response", Sound::Question);
     }
 
@@ -217,7 +230,7 @@ impl App {
                     custom: None,
                     form: None,
                 });
-                self.attention(&target, true);
+                self.question_waiting(&target);
                 self.alert(&target, "Input needs response", Sound::Question);
             }
             Event::Credits(snapshot) => {
@@ -243,6 +256,10 @@ impl App {
                     session.question = None;
                 }
                 self.attention(&id, false);
+                let shown = self.state.session().is_some_and(|s| s.id == id);
+                if let Some(tab) = self.state.tabs.iter_mut().find(|t| t.session_id == id) {
+                    tab.unread = !shown;
+                }
                 match &event {
                     Event::Failed { error, .. } => {
                         self.toast(

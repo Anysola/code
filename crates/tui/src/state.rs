@@ -16,12 +16,16 @@ pub enum Route {
     Session(String),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Tab {
     pub session_id: String,
     pub title: String,
     /// A permission or question waits in this session (`!` marker).
     pub attention: bool,
+    /// The waiting input is a question (`?` marker).
+    pub question: bool,
+    /// The session finished a turn while another one was shown (`•` marker).
+    pub unread: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

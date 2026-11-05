@@ -109,7 +109,7 @@ fn tabs(state: &mut State) {
         state.tabs.push(Tab {
             session_id: id.into(),
             title: "Fix typo in hello.txt".into(),
-            attention: false,
+            ..Tab::default()
         });
     }
 }
@@ -1121,4 +1121,16 @@ fn cd_recent_asks_before_removal() {
     let screen = render(&state);
     assert!(screen.contains("Press ctrl+d to confirm"));
     assert!(!screen.contains("~/old"));
+}
+
+/// `component/session-tabs.tsx` `TabIndicator`: `?` for a question, `•` for unread.
+#[test]
+fn tab_markers() {
+    let mut state = session(120, 36, Vec::new());
+    state.tabs[0].attention = true;
+    state.tabs[0].question = true;
+    state.tabs[1].unread = true;
+    let strip = render(&state).lines().next().unwrap().to_string();
+    assert!(strip.starts_with(" ? "), "{strip}");
+    assert!(strip.contains(" • "), "{strip}");
 }

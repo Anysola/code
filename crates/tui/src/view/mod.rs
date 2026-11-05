@@ -184,14 +184,20 @@ fn tabs(c: &mut Canvas, state: &State) {
                 } else {
                     muted
                 };
-                if tab.attention {
-                    c.put(
-                        x as u16 + 1,
-                        0,
-                        "!",
-                        c.style("text.feedback.warning.base"),
-                        1,
-                    );
+                let busy = state.sessions.get(&tab.session_id).is_some_and(|s| s.busy);
+                let marker = match (tab.attention, tab.question) {
+                    (true, true) => Some(("?", "text.feedback.warning.base")),
+                    (true, false) => Some(("!", "text.feedback.warning.base")),
+                    _ if busy && state.settings.animations => Some((
+                        crate::transcript::rows::spinner_frame(state.now),
+                        "text.muted",
+                    )),
+                    _ if busy => Some(("⋯", "text.muted")),
+                    _ if tab.unread => Some(("•", "text.action.primary.base")),
+                    _ => None,
+                };
+                if let Some((mark, color)) = marker {
+                    c.put(x as u16 + 1, 0, mark, c.style(color), 1);
                 }
                 c.put(x as u16 + 3, 0, &tab.title, style, w.saturating_sub(3));
             }

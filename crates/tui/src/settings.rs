@@ -42,6 +42,11 @@ impl Tui {
         path.iter().try_fold(&self.value, |v, k| v.get(k))
     }
 
+    /// `tabs.scope = "global"`: one tab list for every directory instead of one per cwd.
+    pub fn global_tabs(&self) -> bool {
+        self.str(&["tabs", "scope"]) == Some("global")
+    }
+
     fn str(&self, path: &[&str]) -> Option<&str> {
         self.get(path).and_then(Value::as_str)
     }

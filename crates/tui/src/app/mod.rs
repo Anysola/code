@@ -33,6 +33,7 @@ mod keys;
 mod models;
 mod pane;
 mod relocate;
+mod tabs;
 mod worktrees;
 
 pub use relocate::{Restart, resolve as resolve_directory};
@@ -117,6 +118,7 @@ pub struct App {
     /// The terminal pane's edge is being dragged.
     pane_drag: bool,
     recents: relocate::Recents,
+    tab_store: tabs::TabStore,
     /// A directory move waiting for running turns.
     relocating: Option<relocate::Pending>,
     /// The new core's events, taken by the loop after a swap.
@@ -203,6 +205,7 @@ pub async fn run(core: Core, options: Options) -> Result<(), String> {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut events = core.subscribe();
     let mut terminal = term::enter(tui.mouse()).map_err(|e| e.to_string())?;
+    let tab_store = tabs::TabStore::new(&paths.data, core.directory(), tui.global_tabs());
     let mut app = App {
         state: State::new(anysola_core::version::VERSION),
         core,
@@ -239,6 +242,7 @@ pub async fn run(core: Core, options: Options) -> Result<(), String> {
         sounds: paths.data.join("cache").join("sounds"),
         pane_drag: false,
         recents: relocate::Recents::new(&paths.data),
+        tab_store,
         relocating: None,
         resubscribe: None,
     };
@@ -309,6 +313,7 @@ impl App {
         let rows = self.mcp_rows();
         self.count_mcp(&rows);
         self.tick_account();
+        self.restore_tabs();
         self.open_target(options);
     }
 
@@ -416,6 +421,7 @@ impl App {
         }
         self.sync_pane();
         self.state.live = self.live();
+        self.tab_store.save(&self.state.tabs);
         let title = if self.state.settings.title {
             term::title(self.state.session().map(|s| s.title.as_str()))
         } else {
@@ -611,11 +617,14 @@ impl App {
             self.state.sessions.insert(id.to_string(), session);
             self.reload(id);
         }
+        if let Some(tab) = self.state.tabs.iter_mut().find(|t| t.session_id == id) {
+            tab.unread = false;
+        }
         if !self.state.tabs.iter().any(|t| t.session_id == id) {
             self.state.tabs.push(crate::state::Tab {
                 session_id: id.to_string(),
                 title: row.title,
-                attention: false,
+                ..crate::state::Tab::default()
             });
         }
         let child = row.parent_id.is_some();
