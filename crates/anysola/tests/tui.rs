@@ -1,6 +1,6 @@
 //! The interactive UI under a real pseudo-terminal (`script`), against the fake gateway: home
-//! draws, a prompt runs a shell tool behind a permission prompt, the answer streams in, `exit`
-//! leaves.
+//! draws, a prompt runs a shell tool behind a permission prompt, the answer streams in,
+//! `/credits`, `/usage`, `/budget 5` and `/undo` work, `exit` leaves with the exit summary.
 #![cfg(target_os = "linux")]
 
 mod common;
@@ -129,6 +129,24 @@ fn prompt_permission_answer_exit() {
     wait_for("$ git push");
     stdin.write_all(b"\r").unwrap();
     wait_for("All done here.");
+    let mut command = |text: &str| {
+        std::thread::sleep(Duration::from_millis(300));
+        stdin.write_all(text.as_bytes()).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        stdin.write_all(b"\r").unwrap();
+    };
+    command("/credits");
+    wait_for("Upgrade or top up");
+    command("\x1b");
+    command("/usage");
+    wait_for("Usage · last 7 days");
+    command("\x1b");
+    command("/budget 5");
+    wait_for("Session budget");
+    command("/undo");
+    wait_for("run the smoke check");
+    std::thread::sleep(Duration::from_millis(300));
+    stdin.write_all(b"\x03").unwrap();
     std::thread::sleep(Duration::from_millis(300));
     stdin.write_all(b"exit").unwrap();
     std::thread::sleep(Duration::from_millis(200));
@@ -142,6 +160,7 @@ fn prompt_permission_answer_exit() {
         std::thread::sleep(Duration::from_millis(100));
     };
     assert!(status.success());
+    wait_for("anysola -s ses_");
     let main: Vec<_> = gateway
         .messages()
         .into_iter()
