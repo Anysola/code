@@ -163,6 +163,27 @@ version = "1.0.0-dev"
 [[package]]
 name = "anysola-mcp"
 version = "1.0.0-dev"
+dependencies = [
+ "anysola-core",
+ "anysola-testkit",
+ "base64 0.22.1",
+ "bytes",
+ "futures-util",
+ "hex",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "libc",
+ "rand 0.8.8",
+ "reqwest",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "url",
+]
 
 [[package]]
 name = "anysola-migrate"

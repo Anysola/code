@@ -47,6 +47,7 @@ url = "2.5"
 yaml-rust2 = { version = "0.10", default-features = false }
 
 anysola-core = { path = "crates/core" }
+anysola-mcp = { path = "crates/mcp" }
 anysola-migrate = { path = "crates/migrate" }
 anysola-testkit = { path = "crates/testkit" }
 

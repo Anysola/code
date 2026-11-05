@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>{{HEADLINE}} · Anysola Code</title>
+    <style>
+  :root { color-scheme: light dark;
+    --oc-bg: #f8f8f8;
+    --oc-card: #fcfcfc;
+    --oc-text-strong: #171717;
+    --oc-text-base: #6f6f6f;
+    --oc-text-weak: #8f8f8f;
+    --oc-border-weak: #e5e5e5;
+    --oc-icon-strong: #171717;
+    --oc-icon-base: #8f8f8f;
+    --oc-icon-weak: #dbdbdb;
+    --oc-success: #2dba26;
+    --oc-error: #ed4831;
+    --oc-detail-bg: #fff8f6;
+    --oc-detail-border: #fdc3b7;
+    --oc-shadow: 0 16px 48px -6px rgba(0,0,0,.10), 0 6px 12px -2px rgba(0,0,0,.05), 0 1px 2px rgba(0,0,0,.06);
+    --oc-font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --oc-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --oc-bg: #101010;
+    --oc-card: #161616;
+    --oc-text-strong: rgba(255,255,255,.936);
+    --oc-text-base: rgba(255,255,255,.618);
+    --oc-text-weak: rgba(255,255,255,.422);
+    --oc-border-weak: #282828;
+    --oc-icon-strong: #ededed;
+    --oc-icon-base: #7e7e7e;
+    --oc-icon-weak: #343434;
+    --oc-success: #12c905;
+    --oc-error: #fc533a;
+    --oc-detail-bg: #28110c;
+    --oc-detail-border: #6a1206;
+    --oc-shadow: 0 16px 48px -6px rgba(0,0,0,.55), 0 6px 12px -2px rgba(0,0,0,.35), 0 1px 2px rgba(0,0,0,.4); } }
+  :root[data-theme="dark"] {
+    --oc-bg: #101010;
+    --oc-card: #161616;
+    --oc-text-strong: rgba(255,255,255,.936);
+    --oc-text-base: rgba(255,255,255,.618);
+    --oc-text-weak: rgba(255,255,255,.422);
+    --oc-border-weak: #282828;
+    --oc-icon-strong: #ededed;
+    --oc-icon-base: #7e7e7e;
+    --oc-icon-weak: #343434;
+    --oc-success: #12c905;
+    --oc-error: #fc533a;
+    --oc-detail-bg: #28110c;
+    --oc-detail-border: #6a1206;
+    --oc-shadow: 0 16px 48px -6px rgba(0,0,0,.55), 0 6px 12px -2px rgba(0,0,0,.35), 0 1px 2px rgba(0,0,0,.4); }
+  :root[data-theme="light"] {
+    --oc-bg: #f8f8f8;
+    --oc-card: #fcfcfc;
+    --oc-text-strong: #171717;
+    --oc-text-base: #6f6f6f;
+    --oc-text-weak: #8f8f8f;
+    --oc-border-weak: #e5e5e5;
+    --oc-icon-strong: #171717;
+    --oc-icon-base: #8f8f8f;
+    --oc-icon-weak: #dbdbdb;
+    --oc-success: #2dba26;
+    --oc-error: #ed4831;
+    --oc-detail-bg: #fff8f6;
+    --oc-detail-border: #fdc3b7;
+    --oc-shadow: 0 16px 48px -6px rgba(0,0,0,.10), 0 6px 12px -2px rgba(0,0,0,.05), 0 1px 2px rgba(0,0,0,.06); }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: var(--oc-bg);
+    color: var(--oc-text-base);
+    font-family: var(--oc-font-sans);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  .card {
+    width: min(100%, 28rem);
+    padding: 2.25rem 2rem 1.75rem;
+    background: var(--oc-card);
+    border-radius: 14px;
+    text-align: center;
+  }
+  .brand { display: flex; justify-content: center; margin-bottom: 1.75rem; }
+  .brand svg { height: 14px; width: auto; }
+  .status { display: flex; justify-content: center; margin-bottom: 1.125rem; }
+  .icon { display: none; line-height: 0; }
+  .icon svg { display: block; }
+  .card[data-status="pending"] .icon-pending,
+  .card[data-status="success"] .icon-success,
+  .card[data-status="error"] .icon-error { display: block; }
+  .icon-success { color: var(--oc-success); }
+  .icon-error { color: var(--oc-error); }
+  .icon-pending { color: var(--oc-text-weak); }
+  .headline { margin: 0; font-size: 1.1875rem; font-weight: 500; line-height: 1.3; letter-spacing: -0.012em; color: var(--oc-text-strong); }
+  .message { margin: 0.5rem 0 0; font-size: 0.9375rem; color: var(--oc-text-base); }
+  .detail {
+    margin: 1.25rem 0 0;
+    padding: 0.75rem 0.875rem;
+    text-align: left;
+    font-family: var(--oc-font-mono);
+    font-size: 0.8125rem;
+    line-height: 1.55;
+    color: var(--oc-text-strong);
+    background: var(--oc-detail-bg);
+    border: 1px solid var(--oc-detail-border);
+    border-radius: 8px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 9.5rem;
+    overflow: auto;
+  }
+  .detail[hidden] { display: none; }
+  .footnote { margin: 1.5rem 0 0; font-size: 0.8125rem; color: var(--oc-text-weak); }
+  .spinner { animation: oc-spin 0.8s linear infinite; transform-origin: center; }
+  @keyframes oc-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+</style>
+  </head>
+  <body>
+    <main class="card" id="oc-card" data-status="{{STATUS}}" role="status" aria-live="polite">
+      <div class="brand"><svg class="wordmark" xmlns="http://www.w3.org/2000/svg" viewBox="7.2 0 2722.3 280.9" aria-label="Anysola" role="img"><path d="M152.6 0.0 L215.7 0.0 L229.9 22.3 L80.9 280.9 L24.5 280.9 L7.2 250.1ZM242.3 40.5 L372.4 249.8 L354.8 280.9 L295.3 280.9 L196.5 119.5ZM435.2 280.9 L435.2 -0.6 L505.7 -0.6 L657.4 138.2 L688.9 169.8 L692.5 169.8 L691.5 132.2 L691.5 -0.6 L765.5 -0.6 L765.5 280.9 L696.1 280.9 L546.6 143.3 L533.9 131.1 L511.8 108.8 L508.6 108.8 L509.3 147.4 L509.3 280.9ZM967.1 280.9 L967.1 168.2 L828.3 -0.6 L920.8 -0.6 L1006.1 107.8 L1009.7 107.8 L1095.6 -0.6 L1183.9 -0.6 L1045.1 168.2 L1045.1 280.9ZM1393.8 285.8 L1380.5 285.7 L1361.1 284.8 L1342.6 283.2 L1330.7 281.8 L1319.3 279.9 L1308.4 277.5 L1298.1 274.7 L1283.8 269.5 L1275.0 265.4 L1267.0 260.7 L1259.7 255.3 L1253.2 249.3 L1247.4 242.6 L1242.5 235.3 L1240.4 231.3 L1236.9 222.8 L1234.4 213.5 L1232.9 203.4 L1232.4 192.5 L1232.9 187.9 L1309.4 187.9 L1308.8 191.9 L1308.8 198.1 L1310.3 204.8 L1313.6 210.6 L1318.6 215.5 L1322.9 218.3 L1327.8 220.8 L1336.5 223.8 L1346.7 226.1 L1362.1 228.0 L1379.5 229.0 L1399.2 229.0 L1418.1 227.8 L1434.0 225.4 L1446.2 222.1 L1450.7 220.2 L1454.8 218.0 L1458.2 215.6 L1461.1 212.8 L1463.1 209.7 L1464.1 207.5 L1464.7 203.8 L1464.4 199.0 L1463.3 195.7 L1461.4 192.7 L1458.7 190.1 L1455.3 187.8 L1446.7 183.8 L1432.9 179.7 L1416.2 176.4 L1369.0 169.8 L1343.5 165.7 L1326.7 162.2 L1310.5 157.8 L1295.0 152.5 L1284.3 147.7 L1277.5 144.1 L1271.1 140.1 L1265.2 135.8 L1259.8 131.0 L1255.0 125.8 L1248.7 117.0 L1245.3 110.6 L1242.6 103.7 L1240.1 92.2 L1239.2 79.5 L1239.7 71.0 L1241.9 59.3 L1244.5 52.0 L1248.0 45.1 L1252.3 38.7 L1260.2 29.9 L1266.3 24.6 L1273.2 19.8 L1280.8 15.4 L1289.1 11.4 L1302.6 6.2 L1317.6 1.9 L1333.9 -1.3 L1357.3 -4.2 L1376.1 -5.3 L1402.4 -5.3 L1421.3 -4.2 L1438.9 -2.1 L1455.3 0.9 L1470.3 4.9 L1483.8 9.8 L1495.9 15.6 L1506.5 22.4 L1515.4 30.1 L1522.7 38.6 L1528.4 48.2 L1531.2 55.0 L1533.2 62.2 L1534.4 69.9 L1534.8 83.8 L1459.1 83.8 L1458.8 76.6 L1457.1 71.8 L1454.0 67.3 L1451.1 64.6 L1447.6 62.0 L1441.4 58.5 L1431.2 54.7 L1418.9 51.8 L1408.5 50.5 L1397.1 49.9 L1378.5 50.1 L1365.7 51.0 L1351.2 53.0 L1339.6 56.0 L1332.7 58.6 L1328.9 60.7 L1325.8 62.8 L1323.4 65.1 L1321.5 67.5 L1320.3 70.0 L1319.6 73.9 L1320.0 77.2 L1322.0 81.6 L1325.7 85.4 L1329.1 87.5 L1335.3 90.4 L1340.2 92.1 L1351.5 95.0 L1364.7 97.3 L1419.6 105.1 L1449.4 110.2 L1465.9 114.0 L1477.9 117.3 L1485.6 119.9 L1496.6 124.4 L1506.9 129.6 L1513.3 133.5 L1519.2 137.8 L1524.6 142.5 L1531.7 150.3 L1535.7 156.0 L1539.1 162.2 L1541.8 168.9 L1544.3 180.1 L1545.2 192.4 L1544.4 205.3 L1542.1 217.2 L1538.2 228.0 L1532.7 237.8 L1525.8 246.6 L1517.4 254.4 L1507.9 261.3 L1497.1 267.3 L1485.3 272.3 L1478.9 274.5 L1465.2 278.3 L1443.2 282.5 L1427.6 284.3 L1411.1 285.4ZM1780.3 285.6 L1758.9 284.3 L1738.8 281.5 L1719.8 277.4 L1702.1 271.8 L1693.7 268.6 L1677.9 261.1 L1663.7 252.3 L1651.0 242.4 L1639.8 231.2 L1630.1 218.8 L1625.8 212.1 L1622.0 205.2 L1618.7 198.0 L1615.8 190.6 L1613.3 182.9 L1609.8 166.6 L1608.0 149.3 L1608.0 131.1 L1608.7 122.2 L1611.3 105.4 L1613.3 97.3 L1615.8 89.6 L1618.7 82.1 L1622.0 74.9 L1625.8 68.0 L1630.1 61.3 L1639.8 49.0 L1651.0 37.8 L1663.7 27.9 L1677.9 19.1 L1693.7 11.7 L1710.8 5.5 L1729.2 0.7 L1748.7 -2.7 L1769.4 -4.8 L1780.3 -5.3 L1802.7 -5.3 L1824.2 -3.9 L1844.5 -1.2 L1863.5 2.9 L1881.2 8.4 L1889.6 11.7 L1905.3 19.1 L1919.5 27.9 L1932.2 37.8 L1938.0 43.2 L1948.4 55.0 L1953.1 61.3 L1957.3 68.0 L1961.1 74.9 L1964.4 82.1 L1967.3 89.6 L1969.8 97.3 L1971.8 105.4 L1973.4 113.7 L1975.2 131.1 L1975.2 149.3 L1973.4 166.6 L1971.8 174.9 L1969.8 182.9 L1967.3 190.6 L1964.4 198.0 L1961.1 205.2 L1957.3 212.1 L1953.1 218.8 L1943.4 231.2 L1932.2 242.4 L1919.5 252.3 L1905.3 261.1 L1897.7 265.0 L1881.2 271.8 L1872.5 274.8 L1854.2 279.6 L1844.5 281.5 L1824.2 284.3 L1813.6 285.1 L1802.7 285.6ZM1796.1 226.5 L1809.3 225.6 L1821.7 223.8 L1833.4 221.0 L1844.4 217.3 L1854.4 212.7 L1863.4 207.1 L1871.6 200.7 L1878.5 193.4 L1884.4 185.2 L1889.1 176.2 L1891.5 169.7 L1894.0 159.4 L1895.2 148.4 L1895.2 131.1 L1894.0 120.2 L1892.5 113.3 L1890.4 106.7 L1886.1 97.5 L1880.6 89.1 L1876.3 84.0 L1871.6 79.3 L1863.4 72.9 L1854.4 67.4 L1844.4 62.8 L1833.4 59.2 L1821.7 56.4 L1809.3 54.7 L1800.6 54.0 L1787.0 53.9 L1773.9 54.7 L1761.4 56.4 L1753.5 58.2 L1742.3 61.5 L1735.3 64.3 L1728.8 67.4 L1719.7 72.9 L1711.6 79.3 L1706.8 84.0 L1702.6 89.1 L1697.1 97.5 L1692.9 106.7 L1690.8 113.3 L1689.3 120.2 L1688.4 127.4 L1688.1 135.0 L1688.4 152.1 L1689.3 159.4 L1690.8 166.4 L1692.9 173.0 L1695.6 179.3 L1698.8 185.2 L1702.6 190.8 L1706.8 195.9 L1711.6 200.7 L1716.9 205.1 L1725.6 210.9 L1732.0 214.3 L1742.3 218.6 L1749.7 221.0 L1757.4 223.0 L1773.9 225.6 L1782.6 226.3ZM2054.8 280.9 L2054.8 -0.6 L2132.7 -0.6 L2132.7 216.9 L2312.9 216.9 L2312.9 280.9ZM2509.8 0.0 L2572.9 0.0 L2587.0 22.3 L2438.1 280.9 L2381.6 280.9 L2364.3 250.1ZM2599.4 40.5 L2729.5 249.8 L2711.9 280.9 L2652.4 280.9 L2553.7 119.5Z" fill="var(--oc-icon-base)" /></svg></div>
+      <div class="status" aria-hidden="true">
+        <span class="icon icon-pending"><svg class="spinner" viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9" opacity="0.2" /><path d="M21 12a9 9 0 0 0-9-9" /></svg></span>
+        <span class="icon icon-success"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="m8.5 12.5 2.4 2.4 4.6-5.4" /></svg></span>
+        <span class="icon icon-error"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="m9 9 6 6m0-6-6 6" /></svg></span>
+      </div>
+      <h1 class="headline" id="oc-headline">{{HEADLINE}}</h1>
+      <p class="message" id="oc-message">{{MESSAGE}}</p>
+      <pre class="detail" id="oc-detail"{{DETAIL}}</pre>
+      <p class="footnote" id="oc-footnote">{{FOOTNOTE}}</p>
+    </main>
+{{SCRIPT}}  </body>
+</html>
