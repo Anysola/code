@@ -134,6 +134,10 @@ pub struct Cache {
     entries: std::collections::HashMap<usize, (Item, String, Vec<Vec<Row>>)>,
     /// Header rows drawn in the last frame: `(screen row, group ID)`.
     pub hits: Vec<(u16, String)>,
+    /// Where each message starts in the last layout: `(row, is a user message)`.
+    pub messages: Vec<(usize, bool)>,
+    /// The last frame's `(row count, visible height)`.
+    pub viewport: (usize, usize),
 }
 
 /// An item that no longer changes with time (no spinner, no running duration).
@@ -182,7 +186,11 @@ pub fn layout(items: &[Item], ctx: &Ctx, cache: Option<&std::sync::Mutex<Cache>>
         ctx.toggled,
     );
     let mut groups: Vec<Vec<Row>> = Vec::new();
+    let mut firsts: Vec<(usize, bool)> = Vec::new();
     for (index, item) in items.iter().enumerate() {
+        if matches!(item, Item::User { .. } | Item::Assistant(_)) {
+            firsts.push((groups.len(), matches!(item, Item::User { .. })));
+        }
         let signature = exploration.signature(index);
         if let Some(cache) = cache.as_ref()
             && let Some((cached, sig, rows)) = cache.entries.get(&index)
@@ -204,9 +212,17 @@ pub fn layout(items: &[Item], ctx: &Ctx, cache: Option<&std::sync::Mutex<Cache>>
         }
     }
     let mut rows = Vec::new();
+    let mut starts = Vec::new();
     for group in groups {
+        starts.push(rows.len() + 1);
         rows.push(Row::default());
         rows.extend(group);
+    }
+    if let Some(cache) = cache.as_mut() {
+        cache.messages = firsts
+            .into_iter()
+            .filter_map(|(group, user)| starts.get(group).map(|row| (*row, user)))
+            .collect();
     }
     rows
 }
@@ -622,5 +638,6 @@ mod tests {
         assert_eq!(layout(&items, &ctx(80), Some(&cache)), fresh);
         layout(&items, &ctx(60), Some(&cache));
         assert_eq!(cache.lock().unwrap().context.split('|').next(), Some("60"));
+        assert_eq!(cache.lock().unwrap().messages, [(1, true)]);
     }
 }

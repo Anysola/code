@@ -152,6 +152,14 @@ impl App {
                     .set(&["session", "sidebar"], Value::String(value.into()));
             }
             (
+                "session.message.next"
+                | "session.message.previous"
+                | "session.message.user.next"
+                | "session.message.user.previous"
+                | "session.messages_last_user",
+                Some(_),
+            ) => self.jump_to_message(id),
+            (
                 "session.page.up"
                 | "session.page.down"
                 | "session.half.page.up"
@@ -717,5 +725,33 @@ impl App {
             ),
         }
         let _ = std::fs::remove_file(&file);
+    }
+
+    /// Message navigation: puts the next or previous (user) message, or the last user message,
+    /// at the top of the transcript.
+    fn jump_to_message(&mut self, id: &str) {
+        let Some(session) = self.state.session_mut() else {
+            return;
+        };
+        let (messages, (total, height)) = {
+            let cache = session.layout.0.lock().unwrap_or_else(|e| e.into_inner());
+            (cache.messages.clone(), cache.viewport)
+        };
+        let top = total.saturating_sub(session.scroll + height);
+        let users = id.contains("user");
+        let mut candidates = messages
+            .iter()
+            .filter(|(_, user)| !users || *user)
+            .map(|(row, _)| *row);
+        let target = match id {
+            "session.message.next" | "session.message.user.next" => {
+                candidates.find(|row| *row > top)
+            }
+            "session.messages_last_user" => candidates.next_back(),
+            _ => candidates.rev().find(|row| *row < top),
+        };
+        if let Some(row) = target {
+            session.scroll = total.saturating_sub(row + height);
+        }
     }
 }

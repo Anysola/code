@@ -457,7 +457,7 @@ screens: `V/tui/screens/*.txt`.
 
 ### M4.2 Session transcript
 - [ ] Sticky-bottom transcript, optional scrollbar, wheel speed/acceleration, tail-first mounting with older-history paging, `Jump to latest ↓`, `Loading session history…`, per-tab scroll anchor — spec/tui.md §Transcript mechanics
-- [ ] Scroll and message-navigation keys (page/half/line, first/last, last user, next/previous) — spec/tui.md §Transcript mechanics, V/tui/slash-commands.md
+- [x] Scroll and message-navigation keys (page/half/line, first/last, last user, next/previous) — spec/tui.md §Transcript mechanics, V/tui/slash-commands.md (message jumps put the target message at the top, from the message starts the layout records)
 - [x] Streaming markdown with an unstable trailing block; rows appear on text/reasoning/tool-input events — spec/tui.md §Transcript mechanics
 - [x] Grouping (`session.grouping`), exploration rows `Exploring:`/`Explored:` counts, verbosity low/medium/high with activity rows, instruction groups `◈ Instructions: N file(s)`, permission-blocked tools visible, per-tab expansion state — spec/tui.md §Grouping and verbosity (`transcript/grouping.rs`; instruction groups have no source in 1.0: nested `AGENTS.md` loads are session instruction entries (M1.8 read line), not synthetic transcript messages, so no `◈ Instructions` row can occur)
 - [ ] Thinking hide/show modes, `Thought` rows with title/steps/duration, expanded markdown in muted colours, `[REDACTED]` removal, palette toggle — spec/tui.md §Thinking / reasoning

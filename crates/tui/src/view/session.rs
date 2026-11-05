@@ -117,12 +117,10 @@ pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u1
             hits.push((top + i as u16, id.clone()));
         }
     }
-    session
-        .layout
-        .0
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .hits = hits;
+    let mut cache = session.layout.0.lock().unwrap_or_else(|e| e.into_inner());
+    cache.hits = hits;
+    cache.viewport = (rows.len(), height);
+    drop(cache);
     if session.scroll > 0 {
         let label = "Jump to latest ↓";
         let lx = x + w - width(label) as u16;
