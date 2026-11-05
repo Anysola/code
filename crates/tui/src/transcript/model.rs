@@ -43,6 +43,8 @@ pub struct Assistant {
     pub error: Option<String>,
     pub interrupted: bool,
     pub output_tokens: u64,
+    /// Every token of the step (input, output, reasoning, cache): the context it used.
+    pub usage: u64,
     /// When the user input of this turn was created (start of the footer's duration).
     pub turn_start: u64,
 }
@@ -165,6 +167,10 @@ fn part(stored: StoredPart) -> Option<Part> {
     })
 }
 
+fn total(t: &anysola_core::session::message::Tokens) -> u64 {
+    t.input + t.output + t.reasoning + t.cache.read + t.cache.write
+}
+
 /// Model display names by id, for footers.
 pub type Names<'a> = &'a dyn Fn(&str) -> String;
 
@@ -215,6 +221,7 @@ pub fn from_messages(
                     error: data.error.filter(|_| !interrupted).map(|e| e.message),
                     interrupted,
                     output_tokens: data.tokens.map_or(0, |t| t.output),
+                    usage: data.tokens.map_or(0, |t| total(&t)),
                     turn_start,
                 }));
             }
@@ -460,6 +467,7 @@ pub fn apply(items: &mut Vec<Item>, event: &Event, now: u64, name: Names) {
                 a.completed = Some(now);
                 a.terminal = *last || finish != "tool-calls";
                 a.output_tokens = tokens.output;
+                a.usage = total(tokens);
             }
         }
         Event::StepFailed {

@@ -236,7 +236,7 @@ pub fn render(patch: &str, options: &Options, theme: &Theme) -> Vec<Line> {
             }
             continue;
         }
-        let left_width = (options.width / 2).saturating_sub(1);
+        let left_width = (options.width / 2 + 1).min(options.width);
         let right_width = options.width - left_width;
         let mut rows = hunk.rows.iter().peekable();
         while let Some(row) = rows.next() {
@@ -328,6 +328,6 @@ mod tests {
         assert_eq!(text(false, 40), [" 1 - Helo wrold", " 1 + Hello world"]);
         let split = text(true, 116);
         assert_eq!(split.len(), 1);
-        assert_eq!(split[0].find("1 +"), Some(58));
+        assert_eq!(split[0].find("1 +"), Some(60));
     }
 }
