@@ -629,6 +629,7 @@ impl App {
             let account = match &reply {
                 Ok(r) if r.ok() => Account::from_me(r.body.clone()),
                 other => Account {
+                    signed_out: matches!(other, Ok(r) if r.status == 401),
                     error: Some(crate::menus::anysola::error_text(other)),
                     ..Account::default()
                 },

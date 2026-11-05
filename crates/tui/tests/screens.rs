@@ -1269,3 +1269,30 @@ fn no_matching_directories() {
     let area = state.popup.as_ref().unwrap().area.get();
     assert_eq!(area.height, 1);
 }
+
+/// `feature-plugins/sidebar/footer.tsx`: the `Getting started` card shows only when signed out
+/// and the terminal is at least 22 rows tall.
+#[test]
+fn getting_started_card() {
+    let mut state = session(170, 40, Vec::new());
+    state.account.signed_out = true;
+    let screen = render(&state);
+    for text in ["Getting started", "Sign in with your Anysola", "/connect"] {
+        assert!(screen.contains(text), "{text}");
+    }
+    state.onboarding_dismissed = true;
+    assert!(!render(&state).contains("Getting started"));
+    state.onboarding_dismissed = false;
+    state.account.signed_out = false;
+    assert!(!render(&state).contains("Getting started"));
+}
+
+/// `component/title-shimmer.tsx`: a pending title keeps its text while it shimmers.
+#[test]
+fn pending_title_shimmers() {
+    let mut state = session(170, 40, Vec::new());
+    let session = state.sessions.get_mut("ses_b").unwrap();
+    session.title.clear();
+    session.busy = true;
+    assert!(render(&state).contains("New session"));
+}

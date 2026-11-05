@@ -756,6 +756,21 @@ impl App {
                     self.selection = None;
                     return self.run_command("mcp.list", None);
                 }
+                if self.state.session().is_some()
+                    && crate::view::onboarding_shown(&self.state)
+                    && at.0 >= crate::view::pane_width(&self.state)
+                {
+                    if over_text(&self.last, at, "✕") {
+                        self.selection = None;
+                        self.state.onboarding_dismissed = true;
+                        return;
+                    }
+                    if over_text(&self.last, at, "Sign in") || over_text(&self.last, at, "/connect")
+                    {
+                        self.selection = None;
+                        return self.run_command("provider.connect", None);
+                    }
+                }
                 if self.state.mcp_list.len() > 2
                     && at.0 >= crate::view::pane_width(&self.state)
                     && (over_text(&self.last, at, "▼ MCP") || over_text(&self.last, at, "▶ MCP"))

@@ -276,8 +276,16 @@ fn sidebar(c: &mut Canvas, state: &State, session: &Session, x: u16, top: u16) {
     } else {
         &session.title
     };
+    // The core reports no pending auto-title, so a busy session still without one stands for it.
+    let pending = session.title.is_empty() && session.busy;
     for line in text::wrap(title, room) {
-        c.put(tx, y, &line, bold, room);
+        if pending && state.settings.animations {
+            shimmer(c, tx, y, &line, state.now, base, muted);
+        } else if pending {
+            c.put(tx, y, &line, muted.add_modifier(Modifier::DIM), room);
+        } else {
+            c.put(tx, y, &line, bold, room);
+        }
         y += 1;
     }
     if let Some(tokens) = session.context_tokens() {
@@ -351,6 +359,55 @@ fn sidebar(c: &mut Canvas, state: &State, session: &Session, x: u16, top: u16) {
     }
     let location = text::path(&state.location, 38);
     c.put(tx, state.height.saturating_sub(2), &location, muted, room);
+    if onboarding_shown(state) {
+        let card_h = 8;
+        let card_y = state.height.saturating_sub(3 + card_h);
+        let raised = c.theme.fg("background.raised.high");
+        c.fill(Rect::new(tx, card_y, room as u16, card_h), raised);
+        let base = base.bg(raised);
+        let muted = muted.bg(raised);
+        c.put(tx + 2, card_y + 1, "⬖", base, 1);
+        c.put(
+            tx + 4,
+            card_y + 1,
+            "Getting started",
+            base.add_modifier(Modifier::BOLD),
+            15,
+        );
+        c.put(tx + room as u16 - 3, card_y + 1, "✕", muted, 1);
+        let inner = room.saturating_sub(6);
+        for (i, line) in text::wrap("Sign in with your Anysola account to start.", inner)
+            .iter()
+            .take(2)
+            .enumerate()
+        {
+            c.put(tx + 4, card_y + 3 + i as u16, line, muted, inner);
+        }
+        c.put(tx + 4, card_y + 6, "Sign in", base, 7);
+        c.put(tx + room as u16 - 2 - 8, card_y + 6, "/connect", muted, 8);
+    }
+}
+
+/// The title while an auto-title is pending: a bright band sweeps across over 1200 ms.
+fn shimmer(c: &mut Canvas, x: u16, y: u16, line: &str, now: u64, bright: Style, dim: Style) {
+    let len = line.chars().count() as u64;
+    let band = (now % 1200) * (len + 6) / 1200;
+    let mut at = x;
+    for (i, ch) in line.chars().enumerate() {
+        let near = (i as u64 + 3).abs_diff(band) <= 2;
+        let style = if near {
+            bright.add_modifier(Modifier::BOLD)
+        } else {
+            dim
+        };
+        let mut buf = [0u8; 4];
+        at = c.put(at, y, ch.encode_utf8(&mut buf), style, 1);
+    }
+}
+
+/// The `Getting started` card: signed out, tall enough, not dismissed.
+pub fn onboarding_shown(state: &State) -> bool {
+    state.height >= 22 && state.account.signed_out && !state.onboarding_dismissed
 }
 
 fn latest_todos(session: &Session) -> Vec<(String, String)> {

@@ -41,6 +41,8 @@ pub struct Account {
     pub me: Option<Value>,
     /// Why `/me` failed.
     pub error: Option<String>,
+    /// `/me` refused the token, so no provider is connected.
+    pub signed_out: bool,
 }
 
 impl Account {
@@ -72,6 +74,7 @@ impl Account {
                 .and_then(Value::as_f64),
             free,
             low: me.get("lowBalance") == Some(&Value::Bool(true)),
+            signed_out: false,
             error: None,
             me: Some(me),
         }
@@ -397,6 +400,8 @@ pub struct State {
     /// Open dialogs; the last one is on top.
     pub dialogs: Vec<crate::dialog::Dialog>,
     pub account: Account,
+    /// The sidebar's `Getting started` card was dismissed with `✕`.
+    pub onboarding_dismissed: bool,
     /// `~/my-app:master`.
     pub location: String,
     pub directory: String,
@@ -466,6 +471,7 @@ impl State {
             toast: None,
             dialogs: Vec::new(),
             account: Account::default(),
+            onboarding_dismissed: false,
             location: String::new(),
             directory: String::new(),
             home: String::new(),
