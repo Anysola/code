@@ -2,12 +2,13 @@
 # Starts the TUI under a pseudo-terminal, reports the time to its first frame (the home prompt
 # drawn) and its resident memory after it settles, then exits it with ctrl+c.
 #   tui-idle.py BIN  (environment: HOME, ANYSOLA_API_URL, ANYSOLA_TOKEN as for the binary)
-import os, pty, select, sys, time
+import fcntl, os, pty, select, struct, sys, termios, time
 
 pid, fd = pty.fork()
 if pid == 0:
     os.environ["TERM"] = "xterm-256color"
     os.execv(sys.argv[1], [sys.argv[1]])
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 36, 120, 0, 0))
 start = time.monotonic()
 seen, first = b"", None
 deadline = start + 10
