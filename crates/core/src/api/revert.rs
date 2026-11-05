@@ -36,7 +36,7 @@ impl Core {
             let Some(start) = snapshot.start else {
                 continue;
             };
-            for file in snapshot.files {
+            for file in snapshot.files.into_iter().flatten() {
                 if !plan.iter().any(|(f, _)| *f == file) {
                     plan.push((file, start.clone()));
                 }

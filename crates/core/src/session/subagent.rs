@@ -232,6 +232,7 @@ fn notify_parent(
             },
             text: completion_notice(&child, &description, &result),
             description: Some(description),
+            extra: Default::default(),
         });
         let _ = shared
             .db

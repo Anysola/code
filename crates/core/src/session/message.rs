@@ -7,6 +7,15 @@ use serde_json::{Map, Value};
 use crate::gateway::error::SessionError;
 use crate::tool::ToolContent;
 
+/// A number as `JSON.stringify` writes it: whole values without a fraction.
+fn js_number<S: serde::Serializer>(value: &Option<f64>, serializer: S) -> Result<S::Ok, S::Error> {
+    match value {
+        Some(v) if v.fract() == 0.0 && v.abs() < 9.0e15 => serializer.serialize_i64(*v as i64),
+        Some(v) => serializer.serialize_f64(*v),
+        None => serializer.serialize_none(),
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Created {
     pub created: u64,
@@ -20,14 +29,20 @@ pub struct FileAttachment {
     pub source: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Fields this version does not read (`metadata`, `native`, `retry`, …), kept as stored.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UserData {
     pub time: Created,
     pub text: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub files: Vec<FileAttachment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<FileAttachment>>,
+    /// Fields this version does not read (`metadata`, `native`, `retry`, …), kept as stored.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -36,6 +51,9 @@ pub struct SyntheticData {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Fields this version does not read (`metadata`, `native`, `retry`, …), kept as stored.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -77,8 +95,8 @@ pub struct StepSnapshot {
     pub start: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -93,12 +111,19 @@ pub struct AssistantData {
     pub finish: Option<String>,
     #[serde(default, rename = "rawFinish", skip_serializing_if = "Option::is_none")]
     pub raw_finish: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "js_number"
+    )]
     pub cost: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<Tokens>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<SessionError>,
+    /// Fields this version does not read (`metadata`, `native`, `retry`, …), kept as stored.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -173,6 +198,9 @@ pub struct ModelSwitchedData {
     pub model: StoredModel,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous: Option<StoredModel>,
+    /// Fields this version does not read (`metadata`, `native`, `retry`, …), kept as stored.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// `agent-switched`.
@@ -182,6 +210,9 @@ pub struct AgentSwitchedData {
     pub agent: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous: Option<String>,
+    /// Fields this version does not read (`metadata`, `native`, `retry`, …), kept as stored.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -194,6 +225,9 @@ pub struct Location {
 pub struct LocationSwitchedData {
     pub time: Created,
     pub location: Location,
+    /// Fields this version does not read (`metadata`, `native`, `retry`, …), kept as stored.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// `skill`: a skill the user activated, with its rendered text.
@@ -203,6 +237,9 @@ pub struct SkillData {
     pub skill: String,
     pub name: String,
     pub text: String,
+    /// Fields this version does not read (`metadata`, `native`, `retry`, …), kept as stored.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -214,12 +251,15 @@ pub struct ShellOutput {
 /// `shell`: a command the user ran (`!cmd` in the TUI).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShellData {
-    pub time: Created,
+    pub time: AssistantTime,
     pub command: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<ShellOutput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
+    /// Fields this version does not read (`metadata`, `native`, `retry`, …), kept as stored.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 impl ShellData {
@@ -246,7 +286,11 @@ pub struct CompactionData {
     pub native: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<SessionError>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "js_number"
+    )]
     pub cost: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<Tokens>,
@@ -307,4 +351,61 @@ impl Message {
 
 pub fn encode<T: Serialize>(data: &T) -> Value {
     serde_json::to_value(data).unwrap_or(Value::Null)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rows() -> Vec<(String, Value)> {
+        let observed: Value = serde_json::from_str(include_str!(
+            "../../../../spec/verbatim/storage/example-rows.observed.json"
+        ))
+        .unwrap();
+        let derived: Value = serde_json::from_str(include_str!(
+            "../../../../spec/verbatim/storage/example-rows.schema-derived.json"
+        ))
+        .unwrap();
+        observed["session_message"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(derived["session_message"].as_array().unwrap())
+            .map(|row| {
+                (
+                    row["type"].as_str().unwrap().to_string(),
+                    row["data"].clone(),
+                )
+            })
+            .collect()
+    }
+
+    fn reencode(message: &Message) -> Option<Value> {
+        Some(match message {
+            Message::User(d) => encode(d),
+            Message::Synthetic(d) | Message::System(d) => encode(d),
+            Message::Assistant(d) => encode(d),
+            Message::ModelSwitched(d) => encode(d),
+            Message::AgentSwitched(d) => encode(d),
+            Message::LocationSwitched(d) => encode(d),
+            Message::Skill(d) => encode(d),
+            Message::Shell(d) => encode(d),
+            Message::Compaction(d) => encode(d),
+            Message::Other => return None,
+        })
+    }
+
+    #[test]
+    fn stored_rows_round_trip() {
+        let mut bad = Vec::new();
+        for (kind, data) in rows() {
+            let message = Message::decode(&kind, &data);
+            match reencode(&message) {
+                Some(again) if again != data => bad.push(format!("{kind}: {again}\n  vs {data}")),
+                None if kind != "idle" => bad.push(format!("{kind} did not decode: {data}")),
+                _ => {}
+            }
+        }
+        assert!(bad.is_empty(), "{}", bad.join("\n"));
+    }
 }

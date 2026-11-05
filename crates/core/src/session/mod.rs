@@ -102,6 +102,7 @@ fn synthetic(shared: &Shared, session_id: &str, text: String) {
         time: Created { created: now_ms() },
         text,
         description: None,
+        extra: Default::default(),
     });
     let _ = shared
         .db

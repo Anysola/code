@@ -401,6 +401,7 @@ async fn step(
             cost: None,
             tokens: None,
             error: None,
+            extra: Default::default(),
         },
     };
     let _ = shared.db.append_message(
@@ -499,7 +500,7 @@ fn end_snapshot(shared: &Shared, running: &mut Running) -> Option<String> {
     let snapshot = running.data.snapshot.as_mut()?;
     let end = store.capture()?;
     if let Some(start) = &snapshot.start {
-        snapshot.files = store.files(start, &end);
+        snapshot.files = Some(store.files(start, &end));
     }
     snapshot.end = Some(end.clone());
     Some(end)

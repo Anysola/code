@@ -33,7 +33,7 @@ pub fn message_to_text(message: &Message) -> String {
     match message {
         Message::User(data) => {
             let mut lines = vec![format!("[User]: {}", data.text)];
-            for file in &data.files {
+            for file in data.files.iter().flatten() {
                 let name = file.name.clone().unwrap_or_else(|| {
                     file.source
                         .get("uri")
