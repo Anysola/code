@@ -238,7 +238,7 @@ fn testsrv() -> Arc<Namespace> {
 
 #[test]
 fn catalog_with_another_namespace_matches_capture() {
-    let registry = Registry::builtin();
+    let registry = Registry::builtin(&crate::config::Config::default());
     registry.set_namespace(testsrv());
     let inventory = registry.code_mode(&[]).unwrap();
     let captured =
@@ -267,7 +267,7 @@ async fn other_namespaces_are_callable() {
 
 #[test]
 fn denied_execute_exposes_direct_tools() {
-    let registry = Registry::builtin();
+    let registry = Registry::builtin(&crate::config::Config::default());
     let rules = vec![Rule::new("execute", "*", Effect::Deny)];
     let env = DefinitionEnv {
         shell_name: "bash".into(),

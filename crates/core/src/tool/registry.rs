@@ -53,8 +53,9 @@ pub struct Registry {
 }
 
 impl Registry {
-    pub fn builtin() -> Self {
-        let tools: Vec<Arc<dyn Tool>> = vec![
+    /// The built-in tools; `todowrite` only with config `experimental.todo`.
+    pub fn builtin(config: &crate::config::Config) -> Self {
+        let mut tools: Vec<Arc<dyn Tool>> = vec![
             Arc::new(super::edit::EditTool),
             Arc::new(super::glob::GlobTool),
             Arc::new(super::grep::GrepTool),
@@ -67,6 +68,9 @@ impl Registry {
             Arc::new(super::websearch::WebsearchTool),
             Arc::new(super::write::WriteTool),
         ];
+        if super::todowrite::enabled(config) {
+            tools.push(Arc::new(super::todowrite::TodowriteTool));
+        }
         Registry {
             tools,
             namespaces: RwLock::new(vec![opencode::namespace()]),

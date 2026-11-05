@@ -227,6 +227,7 @@ impl Core {
             .filter(|(k, _)| k != "OPENCODE_PASSWORD" && k != "OPENCODE_SERVER_PASSWORD")
             .collect();
         let asks = Arc::new(Asks::new(db.clone(), events.clone()));
+        let registry = Registry::builtin(&config);
         let shared = Arc::new_cyclic(|weak| Shared {
             notifier: Arc::new(StoreNotifier {
                 shared: weak.clone(),
@@ -240,7 +241,7 @@ impl Core {
             commands,
             agents,
             models,
-            registry: Registry::builtin(),
+            registry,
             skills,
             asks,
             questions: Questions::default(),
@@ -554,6 +555,40 @@ impl Core {
             .notifier
             .synthetic(session_id, lines.join("\n"), None);
         true
+    }
+
+    /// The session's todo list: the input of its latest completed `todowrite` call before a
+    /// staged revert.
+    pub fn todos(&self, session_id: &str) -> Result<Vec<crate::tool::todowrite::Todo>, CoreError> {
+        use crate::session::message::{Message, Part, ToolState};
+        let boundary = self.shared.db.revert(session_id)?;
+        let boundary = boundary
+            .as_ref()
+            .and_then(|r| r.get("messageID"))
+            .and_then(Value::as_str);
+        let latest = self
+            .shared
+            .db
+            .messages(session_id)?
+            .into_iter()
+            .take_while(|row| Some(row.id.as_str()) != boundary)
+            .filter_map(|row| match Message::decode(&row.kind, &row.data) {
+                Message::Assistant(data) => Some(data.content),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|part| match part {
+                Part::Tool {
+                    name,
+                    state: ToolState::Completed { input, .. },
+                    ..
+                } if name == "todowrite" => Some(input),
+                _ => None,
+            })
+            .last();
+        Ok(latest
+            .and_then(|input| serde_json::from_value(input["todos"].clone()).ok())
+            .unwrap_or_default())
     }
 
     /// For process exit: rejects every pending permission ask and every later one, stops background

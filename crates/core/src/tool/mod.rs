@@ -16,6 +16,7 @@ pub mod read;
 pub mod shell;
 pub mod skill;
 pub mod subagent;
+pub mod todowrite;
 pub mod webfetch;
 pub mod websearch;
 pub mod write;
