@@ -122,7 +122,7 @@ impl Client {
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
         let mut child = command.spawn().expect("spawn anysola acp");
         let stdout = child.stdout.take().unwrap();
         let (sender, lines) = mpsc::channel();
@@ -380,4 +380,143 @@ fn session_transcript() {
 #[test]
 fn permission_transcript() {
     replay("acp-transcript-permission.log");
+}
+
+fn request(id: u64, method: &str, params: Value) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+}
+
+fn response(messages: &[Value]) -> Value {
+    messages
+        .iter()
+        .find(|m| m.get("method").is_none())
+        .cloned()
+        .unwrap()
+}
+
+#[test]
+fn scripted_client() {
+    let gateway = gateway();
+    let home = TestHome::new(&gateway.url);
+    let cwd = common::my_app(&home);
+    let path = cwd.display().to_string();
+    let mut client = Client::start(&home, &cwd);
+    let mut none = Vec::new();
+    client.call(
+        &request(1, "initialize", json!({"protocolVersion": 1})),
+        &mut none,
+    );
+    let errors = [
+        (
+            request(2, "session/new", json!({"cwd": "rel"})),
+            json!({"code": -32602, "message": "Invalid params: cwd must be an absolute path: rel", "data": {"field": "cwd"}}),
+        ),
+        (
+            request(
+                3,
+                "session/new",
+                json!({"cwd": path, "mcpServers": [{"type": "sse", "name": "s", "url": "http://x", "headers": []}]}),
+            ),
+            json!({"code": -32602, "message": "Invalid params: Only stdio and HTTP MCP servers are supported", "data": {"field": "mcpServers"}}),
+        ),
+        (
+            request(
+                4,
+                "session/new",
+                json!({"cwd": path, "additionalDirectories": ["/a/*"]}),
+            ),
+            json!({"code": -32602, "message": "Invalid params: additional directory must be an absolute path without glob characters: /a/*", "data": {"additionalDirectory": "/a/*"}}),
+        ),
+        (
+            request(
+                5,
+                "session/prompt",
+                json!({"sessionId": "ses_x", "prompt": []}),
+            ),
+            json!({"code": -32602, "message": "Invalid params: session not found: ses_x", "data": {"sessionId": "ses_x"}}),
+        ),
+        (
+            request(6, "nope", json!({})),
+            json!({"code": -32601, "message": "\"Method not found\": nope", "data": {"method": "nope"}}),
+        ),
+    ];
+    for (sent, error) in errors {
+        assert_eq!(response(&client.call(&sent, &mut none))["error"], error);
+    }
+    let created = client.call(
+        &request(
+            7,
+            "session/new",
+            json!({"cwd": path, "additionalDirectories": ["/opt/extra"]}),
+        ),
+        &mut none,
+    );
+    let session = response(&created)["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let changed = response(&client.call(
+        &request(
+            8,
+            "session/set_config_option",
+            json!({"sessionId": session, "configId": "model", "value": "anysola/claude-haiku-5-5"}),
+        ),
+        &mut none,
+    ));
+    assert_eq!(
+        changed["result"]["configOptions"][0]["currentValue"],
+        "anysola/claude-haiku-5-5"
+    );
+    // Haiku has no effort levels.
+    assert_eq!(changed["result"]["configOptions"][1]["id"], "mode");
+    let mode = client.call(
+        &request(
+            9,
+            "session/set_mode",
+            json!({"sessionId": session, "modeId": "plan"}),
+        ),
+        &mut none,
+    );
+    assert_eq!(response(&mode)["result"], json!({}));
+    let listed = response(&client.call(
+        &request(10, "session/list", json!({"cwd": path})),
+        &mut none,
+    ));
+    assert_eq!(
+        listed["result"]["sessions"][0]["additionalDirectories"],
+        json!(["/opt/extra"])
+    );
+    let turn = client.call(
+        &request(
+            11,
+            "session/prompt",
+            json!({"sessionId": session, "prompt": [{"type": "text", "text": "hello acp"}]}),
+        ),
+        &mut none,
+    );
+    assert_eq!(response(&turn)["result"]["stopReason"], "end_turn");
+    let model = gateway
+        .messages()
+        .into_iter()
+        .rfind(|r| !r.is_title())
+        .unwrap();
+    assert_eq!(model.header("x-opencode-client"), Some("acp"));
+    assert!(model.header("user-agent").unwrap().ends_with("/acp"));
+    assert_eq!(model.json()["model"], "claude-haiku-5-5");
+    let deleted = client.call(
+        &request(12, "session/delete", json!({"sessionId": session})),
+        &mut none,
+    );
+    assert_eq!(response(&deleted)["result"], json!({}));
+    let mut huge = vec![b'x'; 32 * 1024 * 1024 + 1];
+    huge.push(b'\n');
+    let mut stdin = client.stdin.take().unwrap();
+    let _ = stdin.write_all(&huge);
+    drop(stdin);
+    let output = client.child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "anysola acp: incoming message exceeded the 32 MiB limit\n"
+    );
 }
