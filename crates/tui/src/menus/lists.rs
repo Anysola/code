@@ -138,6 +138,61 @@ pub struct SessionItem {
     pub marker: Option<char>,
 }
 
+/// A session row of `Open`: footer `<project> · <ago>`.
+pub struct OpenSession {
+    pub id: String,
+    pub title: String,
+    pub project: String,
+    pub ago: String,
+}
+
+/// A project row of `Open`.
+pub struct OpenProject {
+    pub name: String,
+    pub directory: String,
+    /// The directory with home shown as `~`.
+    pub shown: String,
+    pub git: bool,
+    pub current: bool,
+}
+
+/// `Open`: recent sessions (not already in a tab), then every known project; `●` marks the
+/// current one, ` →` a git project. Paths are cut to the large dialog's content width.
+pub fn open(sessions: &[OpenSession], projects: &[OpenProject], screen: usize) -> Select {
+    let content = (Size::Large.width() as usize)
+        .min(screen.saturating_sub(2))
+        .saturating_sub(12);
+    let mut options: Vec<Opt> = sessions
+        .iter()
+        .map(|s| {
+            Opt::new(&s.title, format!("session:{}", s.id))
+                .category("Sessions")
+                .footer(format!(
+                    "{} · {}",
+                    crate::text::truncate(&s.project, 30),
+                    s.ago
+                ))
+        })
+        .collect();
+    options.extend(projects.iter().map(|p| {
+        let room = content.saturating_sub(width(&p.name) + if p.git { 2 } else { 0 });
+        let arrow = if p.git { " →" } else { "" };
+        Opt::new(&p.name, format!("project:{}", p.directory))
+            .category("Projects")
+            .footer(format!(
+                "{}{arrow}",
+                crate::text::truncate_file_path(&p.shown, room)
+            ))
+            .current(p.current)
+    }));
+    let mut select = Select::new(Kind::Open, "Open", options);
+    select.selected = 0;
+    select.size = Size::Large;
+    select.placeholder = "Search sessions and projects…".into();
+    select.empty = "No recent sessions or projects";
+    select
+}
+
 /// `Sessions[ for <project>]`, grouped by day.
 pub fn sessions(
     items: &[SessionItem],

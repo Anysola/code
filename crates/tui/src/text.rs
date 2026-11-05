@@ -147,6 +147,74 @@ const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
+/// The first graphemes of `text` that fit in `max` cells.
+fn take_start(text: &str, max: usize) -> String {
+    let mut out = String::new();
+    for grapheme in text.graphemes(true) {
+        if width(&out) + width(grapheme) > max {
+            break;
+        }
+        out.push_str(grapheme);
+    }
+    out
+}
+
+/// A path cut to `max` cells keeping the root and the basename: `/…/dir…/parent/name`.
+pub fn truncate_file_path(value: &str, max: usize) -> String {
+    if width(value) <= max {
+        return value.to_string();
+    }
+    let root = if value.starts_with('/') { "/" } else { "" };
+    let segments: Vec<&str> = value[root.len()..]
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    let basename = segments.last().copied().unwrap_or(value);
+    let basename_fit = |room: usize| -> String {
+        if width(basename) <= room {
+            return basename.to_string();
+        }
+        let (stem, extension) = match basename.rfind('.') {
+            Some(dot) if dot > 0 => basename.split_at(dot),
+            _ => (basename, ""),
+        };
+        if width(extension) + 1 >= room {
+            return take_start("…", room);
+        }
+        format!(
+            "{}…{extension}",
+            take_start(stem, room - width(extension) - 1)
+        )
+    };
+    if segments.len() < 2 {
+        return format!("{root}{}", basename_fit(max.saturating_sub(width(root))));
+    }
+    let prefix = format!("{root}…/");
+    let room = max.saturating_sub(width(&prefix));
+    if room == 0 {
+        return take_start(&prefix, max);
+    }
+    let compact = basename_fit(room);
+    if compact != basename {
+        return prefix + &compact;
+    }
+    let mut selected = vec![basename.to_string()];
+    let mut used = width(&prefix) + width(basename);
+    for segment in segments[..segments.len() - 1].iter().rev() {
+        let next = width(segment) + 1;
+        if used + next > max {
+            let available = max.saturating_sub(used + 1);
+            if available > 1 {
+                selected.insert(0, format!("{}…", take_start(segment, available - 1)));
+            }
+            break;
+        }
+        selected.insert(0, segment.to_string());
+        used += next;
+    }
+    prefix + &selected.join("/")
+}
+
 /// `18 Nov`, with the year when it is not the current one.
 pub fn short_date(ms: u64, now: u64) -> String {
     let (y, m, d) = civil(ms);
@@ -233,5 +301,24 @@ mod tests {
         assert_eq!(truncate_middle("abcdefghij", 5), "ab…ij");
         assert_eq!(truncate("Fix typo in hello.txt", 16), "Fix typo in hel…");
         assert_eq!(wrap("a bb ccc", 4), vec!["a bb", "ccc"]);
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::truncate_file_path;
+
+    #[test]
+    fn keeps_root_and_basename() {
+        let long = "/tmp/claude-1001/-home-ubuntu/baa4cc54-bc0a-55b0-9ae5-1c58ec01d2f3/scratchpad/shots2/home-0.5.1/my-app";
+        assert_eq!(
+            truncate_file_path(long, 70),
+            "/…/baa4cc54-bc0a-55b0-9ae5-1c58ec…/scratchpad/shots2/home-0.5.1/my-app"
+        );
+        assert_eq!(truncate_file_path("~/my-app", 70), "~/my-app");
+        assert_eq!(
+            truncate_file_path("/a/averyverylongname.txt", 12),
+            "/…/aver….txt"
+        );
     }
 }

@@ -844,22 +844,56 @@ fn first_slash(name: &str) -> String {
         .unwrap()
 }
 
+fn home_scope_server() -> Vec<(String, String)> {
+    vec![
+        (
+            "goal".into(),
+            "keep working until an objective is met [pause|resume|clear]".into(),
+        ),
+        ("init".into(), "guided AGENTS.md setup".into()),
+        (
+            "review".into(),
+            "review changes [commit|branch|pr], defaults to uncommitted".into(),
+        ),
+    ]
+}
+
 #[test]
-fn slash_popup_scroll_series() {
+fn slash_list_home_context() {
+    let server = home_scope_server();
     let scope = anysola_tui::complete::Scope {
         in_session: false,
         revert_staged: false,
-        server: &[
-            (
-                "goal".into(),
-                "keep working until an objective is met [pause|resume|clear]".into(),
-            ),
-            ("init".into(), "guided AGENTS.md setup".into()),
-            (
-                "review".into(),
-                "review changes [commit|branch|pr], defaults to uncommitted".into(),
-            ),
-        ],
+        server: &server,
+    };
+    let (rows, pad) = anysola_tui::complete::slash_rows(&scope);
+    let ours: Vec<String> = rows
+        .iter()
+        .map(|r| {
+            format!("┃ {:width$}{}", r.display, r.description, width = pad + 1)
+                .trim_end()
+                .to_string()
+        })
+        .collect();
+    // `/plugins` is not carried over (decision 5); the capture cuts descriptions at the popup.
+    let want: Vec<String> = capture("slash-list-home-context")
+        .lines()
+        .map(|l| l.trim_end().to_string())
+        .filter(|l| l.starts_with("┃ /") && !l.starts_with("┃ /plugins"))
+        .collect();
+    assert_eq!(ours.len(), want.len());
+    for (ours, want) in ours.iter().zip(&want) {
+        assert!(ours.starts_with(want.as_str()), "{ours} vs {want}");
+    }
+}
+
+#[test]
+fn slash_popup_scroll_series() {
+    let server = home_scope_server();
+    let scope = anysola_tui::complete::Scope {
+        in_session: false,
+        revert_staged: false,
+        server: &server,
     };
     let (mut rows, pad) = anysola_tui::complete::slash_rows(&scope);
     // `/plugins` is not carried over (decision 5) but sits in the 0.5.1 captures.
@@ -934,4 +968,45 @@ fn command_palette_scroll_series() {
             screen_diff(&dialog(state, select(list)), &name).join("\n")
         );
     }
+}
+
+#[test]
+fn open() {
+    let titles = [
+        "Latest Bun version",
+        "Latest Bun version",
+        "Explain this project",
+        "Add a --json flag",
+        "Fix date parser tests",
+    ];
+    let sessions: Vec<lists::OpenSession> = titles
+        .iter()
+        .enumerate()
+        .map(|(i, title)| lists::OpenSession {
+            id: format!("ses_{i}"),
+            title: title.to_string(),
+            project: "my-app".into(),
+            ago: "5h".into(),
+        })
+        .collect();
+    let elsewhere = "/tmp/claude-1001/-home-ubuntu/baa4cc54-bc0a-55b0-9ae5-1c58ec01d2f3/scratchpad/shots2/home-0.5.1/my-app";
+    let projects = vec![
+        lists::OpenProject {
+            name: "my-app".into(),
+            directory: "/home/user/my-app".into(),
+            shown: "~/my-app".into(),
+            git: true,
+            current: true,
+        },
+        lists::OpenProject {
+            name: "my-app".into(),
+            directory: elsewhere.into(),
+            shown: elsewhere.into(),
+            git: false,
+            current: false,
+        },
+    ];
+    let state = under(1);
+    let list = lists::open(&sessions, &projects, state.width as usize);
+    assert_screen(&dialog(state, select(list)), "open");
 }

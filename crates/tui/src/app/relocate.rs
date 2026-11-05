@@ -18,6 +18,8 @@ pub type Restart = Arc<dyn Fn(PathBuf) -> BoxFuture<'static, Result<Core, String
 pub(super) struct Pending {
     pub directory: PathBuf,
     pub session: Option<String>,
+    /// The session moves into the new directory (`/cd`) instead of being opened where it is.
+    pub adopt: bool,
 }
 
 /// `/cd` argument → an existing directory (`~`, `~/…`, relative to the current one).
@@ -110,11 +112,27 @@ impl App {
             Route::Session(id) => Some(id.clone()),
             Route::Home => None,
         };
-        self.relocate(directory, session);
+        self.relocate(directory, session, true);
+    }
+
+    /// Opens a session, first moving the app to its directory when it lives elsewhere.
+    pub(super) fn open_elsewhere(&mut self, id: &str) {
+        let directory = self
+            .core
+            .session(id)
+            .ok()
+            .flatten()
+            .map(|row| row.directory);
+        match directory {
+            Some(directory) if Path::new(&directory) != self.core.directory() => {
+                self.relocate(directory.into(), Some(id.to_string()), false)
+            }
+            _ => self.open_session(id),
+        }
     }
 
     /// Restarts the core for `directory`, once no turn is running.
-    pub(super) fn relocate(&mut self, directory: PathBuf, session: Option<String>) {
+    pub(super) fn relocate(&mut self, directory: PathBuf, session: Option<String>, adopt: bool) {
         if self.restarter.is_none() {
             return self.toast(
                 Some("Failed to change directory".into()),
@@ -122,7 +140,11 @@ impl App {
                 Variant::Error,
             );
         }
-        self.relocating = Some(Pending { directory, session });
+        self.relocating = Some(Pending {
+            directory,
+            session,
+            adopt,
+        });
         if !self.state.sessions.values().any(|s| s.busy) {
             self.resume_relocate();
         }
@@ -141,7 +163,7 @@ impl App {
         tokio::spawn(async move {
             let started = restart(pending.directory.clone()).await;
             let apply = move |app: &mut App| match started {
-                Ok(core) => app.swap_core(core, pending.session),
+                Ok(core) => app.swap_core(core, pending.session, pending.adopt),
                 Err(error) => app.toast(
                     Some("Failed to change directory".into()),
                     error,
@@ -152,7 +174,7 @@ impl App {
         });
     }
 
-    fn swap_core(&mut self, core: Core, session: Option<String>) {
+    fn swap_core(&mut self, core: Core, session: Option<String>, adopt: bool) {
         if core.directory() != self.core.directory() {
             self.recents
                 .touch(self.core.project_id(), core.directory(), super::now());
@@ -172,7 +194,7 @@ impl App {
         self.fetch_account();
         match session {
             Some(id) => {
-                if let Err(error) = self.core.adopt_session(&id) {
+                if adopt && let Err(error) = self.core.adopt_session(&id) {
                     self.toast(
                         Some("Failed to move session".into()),
                         error.to_string(),

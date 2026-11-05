@@ -306,38 +306,48 @@ impl App {
         lists::sessions(&items, project, self.state.now.max(now()), self.state.zone)
     }
 
-    /// `Open`: recent sessions not in a tab, then this project.
+    /// `Open`: recent sessions of every project not in a tab, then every known project.
     fn open_menu(&mut self) {
-        let rows = self.core.sessions(false, "", 20).unwrap_or_default();
-        let project = std::path::Path::new(&self.state.directory)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let home = std::path::PathBuf::from(&self.state.home);
+        let projects: Vec<(String, String)> = self.core.projects(50).unwrap_or_default();
+        let name_of = |directory: &str| {
+            std::path::Path::new(directory)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| directory.to_string())
+        };
         let now = now();
-        let mut options: Vec<crate::dialog::Opt> = rows
+        let sessions: Vec<lists::OpenSession> = self
+            .core
+            .sessions(true, "", 50)
+            .unwrap_or_default()
             .into_iter()
             .filter(|s| !self.state.tabs.iter().any(|t| t.session_id == s.id))
             .take(8)
-            .map(|s| {
-                let ago = short_ago(s.time_updated, now);
-                crate::dialog::Opt::new(&s.title, format!("session:{}", s.id))
-                    .category("Sessions")
-                    .footer(format!("{project} · {ago}"))
+            .map(|s| lists::OpenSession {
+                project: name_of(&s.directory),
+                ago: short_ago(s.time_updated, now),
+                id: s.id,
+                title: s.title,
             })
             .collect();
-        let home = std::path::Path::new(&self.state.home);
-        let path = super::abbreviate(std::path::Path::new(&self.state.directory), home);
-        options.push(
-            crate::dialog::Opt::new(&project, "project")
-                .category("Projects")
-                .footer(path)
-                .current(true),
-        );
-        let mut select = Select::new(Kind::Open, "Open", options);
-        select.selected = 0;
-        select.size = crate::dialog::Size::Large;
-        select.placeholder = "Search sessions and projects…".into();
-        select.empty = "No recent sessions or projects";
+        let current = self.core.directory().to_path_buf();
+        let mut seen = std::collections::HashSet::new();
+        let projects: Vec<lists::OpenProject> = projects
+            .into_iter()
+            .filter(|(_, worktree)| worktree != "/" && seen.insert(worktree.clone()))
+            .map(|(_, worktree)| {
+                let path = std::path::Path::new(&worktree);
+                lists::OpenProject {
+                    name: name_of(&worktree),
+                    shown: super::abbreviate(path, &home),
+                    git: path.join(".git").exists(),
+                    current: current.starts_with(path),
+                    directory: worktree,
+                }
+            })
+            .collect();
+        let select = lists::open(&sessions, &projects, self.state.width as usize);
         self.push(Dialog::Select(select));
     }
 
@@ -758,17 +768,17 @@ impl App {
             Kind::Open => {
                 self.state.dialogs.clear();
                 if let Some(id) = value.strip_prefix("session:") {
-                    self.open_session(id);
+                    self.open_elsewhere(id);
+                } else if let Some(directory) = value.strip_prefix("project:")
+                    && !opt.current
+                {
+                    self.relocate(directory.into(), None, false);
                 }
             }
             Kind::Worktrees => {
                 self.state.dialogs.pop();
                 if !opt.current {
-                    self.toast(
-                        None,
-                        format!("Run anysola in {value} to work there"),
-                        Variant::Info,
-                    );
+                    self.relocate(value.into(), None, false);
                 }
             }
             Kind::Connect => {
@@ -1333,7 +1343,7 @@ impl App {
                         // the new sign-in without leaving the app.
                         let directory = std::path::PathBuf::from(&app.state.directory);
                         let session = app.state.session().map(|s| s.id.clone());
-                        app.relocate(directory, session);
+                        app.relocate(directory, session, false);
                     }
                     Err(error) => app.toast(None, error, Variant::Error),
                 }
