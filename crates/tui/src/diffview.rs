@@ -9,6 +9,8 @@ pub enum Source {
     All,
     Committed,
     Uncommitted,
+    /// What the session's latest turn changed (only in a session).
+    Turn,
 }
 
 impl Source {
@@ -17,6 +19,7 @@ impl Source {
             Source::All => "All",
             Source::Committed => "Committed",
             Source::Uncommitted => "Uncommitted",
+            Source::Turn => "Last turn",
         }
     }
 
@@ -25,6 +28,7 @@ impl Source {
             Source::All => "Branch + local changes",
             Source::Committed => "Branch commits only",
             Source::Uncommitted => "Local changes only",
+            Source::Turn => "Latest session turn",
         }
     }
 
@@ -32,7 +36,7 @@ impl Source {
         match self {
             Source::All => Source::Committed,
             Source::Committed => Source::Uncommitted,
-            Source::Uncommitted => Source::All,
+            Source::Uncommitted | Source::Turn => Source::All,
         }
     }
 }
@@ -243,7 +247,7 @@ pub fn load(directory: &Path, source: Source, chosen: Option<&str>) -> Result<Ve
         None => base(directory),
     };
     let output = match (source, base) {
-        (Source::Uncommitted, _) => git(directory, &["diff", "HEAD"])?,
+        (Source::Uncommitted | Source::Turn, _) => git(directory, &["diff", "HEAD"])?,
         (Source::Committed, Some(base)) => git(directory, &["diff", &base, "HEAD"])?,
         (Source::All, Some(base)) => git(directory, &["diff", &base])?,
         (_, None) => git(directory, &["diff", "HEAD"])?,

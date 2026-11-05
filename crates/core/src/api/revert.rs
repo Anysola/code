@@ -121,6 +121,38 @@ fn staged_files(staged: Option<&Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+impl Core {
+    /// What the latest turn changed: from the tree before its first step to the files now.
+    pub fn last_turn_patch(&self, session_id: &str) -> Result<String, CoreError> {
+        let store = self
+            .shared
+            .snapshots
+            .as_deref()
+            .ok_or(CoreError::Snapshot("Snapshots are disabled".into()))?;
+        let rows = self.shared.db.messages(session_id)?;
+        let turn = rows
+            .iter()
+            .rposition(|row| matches!(Message::decode(&row.kind, &row.data), Message::User(_)))
+            .unwrap_or(0);
+        let start =
+            rows[turn..]
+                .iter()
+                .find_map(|row| match Message::decode(&row.kind, &row.data) {
+                    Message::Assistant(data) => data.snapshot.and_then(|s| s.start),
+                    _ => None,
+                });
+        let Some(start) = start else {
+            return Ok(String::new());
+        };
+        let now = store.capture().ok_or(CoreError::Snapshot(
+            "Could not read the working tree".into(),
+        ))?;
+        store
+            .patch(&start, &now)
+            .ok_or(CoreError::Snapshot("Could not compare the turn".into()))
+    }
+}
+
 fn file_diff(store: &crate::snapshot::Store, from: &str, to: &str, file: &str) -> Option<Value> {
     let before = store.read(from, file);
     let after = store.read(to, file);

@@ -20,8 +20,16 @@ impl App {
         self.state.diff = Some(view);
         let directory = self.core.directory().to_path_buf();
         let tx = self.tx.clone();
+        let core = self.core.clone();
+        let session = self.state.session().map(|s| s.id.clone());
         tokio::task::spawn_blocking(move || {
-            let files = load(&directory, source, base.as_deref());
+            let files = match (source, session) {
+                (Source::Turn, Some(session)) => core
+                    .last_turn_patch(&session)
+                    .map(|patch| crate::diffview::split(&patch))
+                    .map_err(|e| e.to_string()),
+                _ => load(&directory, source, base.as_deref()),
+            };
             let _ = tx.send(Msg::Apply(Box::new(move |app: &mut App| {
                 if let Some(view) = app.state.diff.as_mut()
                     && view.source == source
@@ -116,7 +124,11 @@ impl App {
         let Some(view) = self.state.diff.as_ref() else {
             return;
         };
-        let mut options: Vec<Opt> = [Source::All, Source::Committed, Source::Uncommitted]
+        let mut sources = vec![Source::All, Source::Committed, Source::Uncommitted];
+        if self.state.session().is_some() {
+            sources.push(Source::Turn);
+        }
+        let mut options: Vec<Opt> = sources
             .into_iter()
             .map(|source| {
                 let mut opt = Opt::new(format!("{:<11}", source.title()), source.title())
@@ -140,6 +152,7 @@ impl App {
             "All" => Source::All,
             "Committed" => Source::Committed,
             "Uncommitted" => Source::Uncommitted,
+            "Last turn" => Source::Turn,
             _ => return self.diff_bases(),
         };
         self.open_diff(source);
