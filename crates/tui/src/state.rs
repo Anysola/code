@@ -208,6 +208,8 @@ pub struct Popup {
     pub offset: usize,
     /// Display column the descriptions start at (`/` rows pad names to the longest + 2).
     pub pad: usize,
+    /// Where the last frame drew the rows, for mouse hover and clicks.
+    pub area: std::cell::Cell<ratatui::layout::Rect>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

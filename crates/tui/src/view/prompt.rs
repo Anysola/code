@@ -428,6 +428,7 @@ pub fn popup(c: &mut Canvas, state: &State, x: u16, w: u16, box_y: u16, top: u16
         return;
     }
     let y = box_y - h;
+    popup.area.set(Rect::new(x, y, w, h));
     let bg = c.theme.fg("background.raised.high");
     c.fill(Rect::new(x, y, w, h), bg);
     let border = c.style("border.base").bg(bg);
@@ -439,6 +440,8 @@ pub fn popup(c: &mut Canvas, state: &State, x: u16, w: u16, box_y: u16, top: u16
     if popup.rows.is_empty() {
         let text = if popup.trigger == '/' {
             "No matching commands"
+        } else if popup.trigger == 'd' {
+            "No matching directories"
         } else {
             "No matching files, agents, or references"
         };

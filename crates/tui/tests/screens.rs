@@ -203,6 +203,7 @@ fn slash_popup() {
         selected: 0,
         offset: 0,
         pad: 12,
+        area: Default::default(),
     });
     assert_screen(&state, "slash-popup");
 }
@@ -268,6 +269,7 @@ fn at_mention_popup() {
         selected: 0,
         offset: 0,
         pad: 0,
+        area: Default::default(),
     });
     assert_screen(&state, "at-mention-popup");
 }
@@ -923,6 +925,7 @@ fn slash_popup_scroll_series() {
             selected: offset,
             offset,
             pad,
+            area: Default::default(),
         });
         assert_screen(&state, &name);
     }
@@ -1118,6 +1121,7 @@ fn cd_recent_asks_before_removal() {
         selected: 0,
         offset: 0,
         pad: 0,
+        area: Default::default(),
     });
     state.popup_confirm = true;
     let screen = render(&state);
@@ -1246,4 +1250,22 @@ fn footer_goal_status() {
         updated_at: 0,
     });
     assert!(render(&state).contains("↓ 2 subagents · ◎ goal paused"));
+}
+
+/// `component/prompt/autocomplete.tsx`: an empty `/cd` argument popup says so.
+#[test]
+fn no_matching_directories() {
+    let mut state = session(120, 36, Vec::new());
+    state.popup = Some(Popup {
+        trigger: 'd',
+        start: 4,
+        rows: Vec::new(),
+        selected: 0,
+        offset: 0,
+        pad: 0,
+        area: Default::default(),
+    });
+    assert!(render(&state).contains("No matching directories"));
+    let area = state.popup.as_ref().unwrap().area.get();
+    assert_eq!(area.height, 1);
 }

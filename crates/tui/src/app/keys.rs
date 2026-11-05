@@ -548,6 +548,23 @@ impl App {
         true
     }
 
+    /// The popup row under the pointer.
+    fn popup_row(&self, at: (u16, u16)) -> Option<usize> {
+        let popup = self.state.popup.as_ref()?;
+        let area = popup.area.get();
+        let inside = area.contains(ratatui::layout::Position::new(at.0, at.1));
+        let row = popup.offset + usize::from(at.1.wrapping_sub(area.y));
+        (inside && row < popup.rows.len()).then_some(row)
+    }
+
+    fn hover_popup(&mut self, at: (u16, u16)) {
+        if let Some(row) = self.popup_row(at)
+            && let Some(popup) = self.state.popup.as_mut()
+        {
+            popup.selected = row;
+        }
+    }
+
     fn choose(&mut self, complete: bool) {
         let Some(popup) = self.state.popup.take() else {
             return;
@@ -678,6 +695,13 @@ impl App {
                 if self.state.diff.is_some()
                     && self.state.dialogs.is_empty()
                     && self.diff_click(button == MouseButton::Right, at) => {}
+            MouseEventKind::Down(MouseButton::Left) if self.popup_row(at).is_some() => {
+                self.hover_popup(at);
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.popup_row(at).is_some() => {
+                self.hover_popup(at);
+                self.choose(false);
+            }
             MouseEventKind::Down(MouseButton::Left) => {
                 // A click while text is selected only clears the selection.
                 if self.selection.is_some_and(|(a, b)| a != b) {
@@ -749,6 +773,7 @@ impl App {
                 }
             }
             MouseEventKind::Moved => {
+                self.hover_popup(at);
                 let over = crate::view::toast_rect(&self.state)
                     .is_some_and(|r| r.contains(ratatui::layout::Position::new(at.0, at.1)));
                 self.hover_toast(over);
@@ -884,13 +909,14 @@ impl App {
                 .collect();
             let rows =
                 crate::complete::directory_rows(&query, self.core.directory(), &home, &recents);
-            self.state.popup = (!rows.is_empty()).then_some(crate::state::Popup {
-                trigger: '/',
+            self.state.popup = Some(crate::state::Popup {
+                trigger: 'd',
                 start,
                 rows,
                 selected: 0,
                 offset: 0,
                 pad: 0,
+                area: Default::default(),
             });
             return;
         }
@@ -968,6 +994,7 @@ impl App {
             selected: 0,
             offset: 0,
             pad,
+            area: Default::default(),
         });
     }
 }
