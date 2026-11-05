@@ -55,6 +55,8 @@ pub enum Hit {
     Tab(usize),
     /// `+ New session` or `+` in the horizontal strip.
     NewTab,
+    /// The `✕` of the hovered tab.
+    CloseTab(usize),
     /// Acts as if the key (`esc`, `enter`, `ctrl+d`) were pressed.
     Key(String),
     /// Runs a command by id.
@@ -281,7 +283,17 @@ fn vertical_tabs(c: &mut Canvas, state: &State) {
         } else {
             &tab.title
         };
-        c.put(title_x, y, title, style.bg(row_bg), room);
+        let hovered = state.tab_hover == Some(index);
+        c.put(
+            title_x,
+            y,
+            title,
+            style.bg(row_bg),
+            room.saturating_sub(usize::from(hovered) * 2),
+        );
+        if hovered {
+            c.put(w - 2, y, "✕", c.style("text.base").bg(row_bg), 1);
+        }
         if y + 1 < state.height {
             let directory = state
                 .sessions
@@ -440,8 +452,16 @@ fn tabs(c: &mut Canvas, state: &State) {
                 if let Some((mark, color)) = marker {
                     c.put(x as u16 + 1, 0, mark, c.style(color), 1);
                 }
-                c.put(x as u16 + 3, 0, &tab.title, style, w.saturating_sub(3));
+                let hovered = state.tab_hover == Some(index);
+                // The hovered tab gives its last title column to the close mark.
+                let room = w.saturating_sub(if hovered { 5 } else { 3 });
+                c.put(x as u16 + 3, 0, &tab.title, style, room);
                 c.hit(Rect::new(x as u16, 0, w as u16, 1), Hit::Tab(index));
+                if hovered && w >= 6 {
+                    let close = (x + w - 2) as u16;
+                    c.put(close, 0, "✕", base, 1);
+                    c.hit(Rect::new(close, 0, 1, 1), Hit::CloseTab(index));
+                }
             }
             None => {
                 c.put(x as u16 + 1, 0, "+ New session", muted, w.saturating_sub(1));

@@ -120,6 +120,7 @@ impl App {
 
     /// Closes the tab at `index` (a middle click); the session stays in Recently closed.
     pub(super) fn close_tab(&mut self, index: usize) {
+        self.state.tab_hover = None;
         let id = self.state.tabs.remove(index).session_id;
         if matches!(&self.state.route, crate::state::Route::Session(s) if *s == id) {
             self.state.route = crate::state::Route::Home;
@@ -184,8 +185,21 @@ impl App {
                 self.tabs_drag = true;
                 true
             }
+            MouseEventKind::Moved => {
+                self.state.tab_hover =
+                    crate::view::vertical_tab_at(&self.state, mouse.row).flatten();
+                true
+            }
             MouseEventKind::Down(MouseButton::Left) => {
                 match crate::view::vertical_tab_at(&self.state, mouse.row) {
+                    // The close mark sits in the second-to-last column of a wide column's hovered tab.
+                    Some(Some(index))
+                        if left >= 12
+                            && mouse.column + 2 == left
+                            && self.state.tab_hover == Some(index) =>
+                    {
+                        self.close_tab(index)
+                    }
                     Some(Some(index)) => self.select_tab(index + 1),
                     Some(None) => self.run_command("session.new", None),
                     None => {}

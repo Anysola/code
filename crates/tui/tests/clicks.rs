@@ -108,6 +108,20 @@ fn horizontal_tabs_and_new_session() {
 }
 
 #[test]
+fn hovered_tab_shows_its_close_mark() {
+    let mut state = session(120, 30, Vec::new());
+    let (buffer, _) = draw(&state);
+    assert!(!(0..120).any(|x| buffer[(x, 0)].symbol() == "✕"));
+    state.tab_hover = Some(0);
+    let (buffer, drawn) = draw(&state);
+    let x = (0..120)
+        .find(|&x| buffer[(x, 0)].symbol() == "✕")
+        .expect("close mark");
+    assert_eq!(hit_at(&drawn.hits, (x, 0)), Some(&Hit::CloseTab(0)));
+    assert_eq!(hit_at(&drawn.hits, (x - 2, 0)), Some(&Hit::Tab(0)));
+}
+
+#[test]
 fn list_dialog_options_close_and_backdrop() {
     let mut state = base(120, 36);
     let keymap = anysola_tui::keymap::Keymap::defaults();

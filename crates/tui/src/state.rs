@@ -496,6 +496,8 @@ pub struct State {
     pub mcp_list: Vec<(String, &'static str, &'static str)>,
     /// The sidebar's MCP section is collapsed (only offered with more than two servers).
     pub mcp_closed: bool,
+    /// The tab under the pointer; it shows its `✕` close mark.
+    pub tab_hover: Option<usize>,
     pub todo_closed: bool,
     /// `/btw` side questions waiting for their answer.
     pub asides: usize,
@@ -565,6 +567,7 @@ impl State {
             live: None,
             mcp_list: Vec::new(),
             mcp_closed: false,
+            tab_hover: None,
             todo_closed: false,
             popup_confirm: false,
             new_worktree: None,

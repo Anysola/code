@@ -901,6 +901,12 @@ impl App {
     fn hit_mouse(&mut self, kind: MouseEventKind, at: (u16, u16)) -> bool {
         let dialog = !self.state.dialogs.is_empty();
         let hit = crate::view::hit_at(&self.hits, at).cloned();
+        if kind == MouseEventKind::Moved {
+            self.state.tab_hover = match hit {
+                Some(Hit::Tab(index) | Hit::CloseTab(index)) => Some(index),
+                _ => None,
+            };
+        }
         match kind {
             MouseEventKind::Down(MouseButton::Left) => match hit {
                 Some(hit) => {
@@ -942,6 +948,10 @@ impl App {
         match hit {
             Hit::Tab(index) => self.select_tab(index + 1),
             Hit::NewTab => self.run_command("session.new", None),
+            Hit::CloseTab(index) => {
+                self.state.tab_hover = None;
+                self.close_tab(index);
+            }
             Hit::Key(key) => {
                 if let Some(stroke) = Stroke::parse(&key) {
                     self.key(stroke);
