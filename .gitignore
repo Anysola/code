@@ -2,3 +2,5 @@
 /testing/bin/
 /testing/home-*/
 /testing/runs/
+/spec/verbatim/protocol/gateway/
+/spec/verbatim/protocol/contracts/
