@@ -1111,6 +1111,24 @@ fn handle(
                 ordinal,
             },
         ),
+        Action::TextDelta { ordinal, text } => send(
+            shared,
+            Event::TextDelta {
+                session_id,
+                message_id,
+                ordinal,
+                text,
+            },
+        ),
+        Action::ReasoningDelta { ordinal, text } => send(
+            shared,
+            Event::ReasoningDelta {
+                session_id,
+                message_id,
+                ordinal,
+                text,
+            },
+        ),
         Action::TextEnded { ordinal, text } => send(
             shared,
             Event::TextEnded {

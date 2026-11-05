@@ -14,12 +14,21 @@ pub enum Action {
     TextStarted {
         ordinal: usize,
     },
+    /// Text streamed into the block `ordinal`.
+    TextDelta {
+        ordinal: usize,
+        text: String,
+    },
     TextEnded {
         ordinal: usize,
         text: String,
     },
     ReasoningStarted {
         ordinal: usize,
+    },
+    ReasoningDelta {
+        ordinal: usize,
+        text: String,
     },
     ReasoningEnded {
         ordinal: usize,
@@ -112,10 +121,7 @@ impl Assembly {
             "content_block_start" => {
                 self.start(index, data.get("content_block").unwrap_or(&Value::Null))
             }
-            "content_block_delta" => {
-                self.delta(index, data.get("delta").unwrap_or(&Value::Null));
-                Vec::new()
-            }
+            "content_block_delta" => self.delta(index, data.get("delta").unwrap_or(&Value::Null)),
             "content_block_stop" => self.stop(index),
             "message_delta" => {
                 if let Some(reason) = data
@@ -263,21 +269,29 @@ impl Assembly {
         }
     }
 
-    fn delta(&mut self, index: u64, delta: &Value) {
+    fn delta(&mut self, index: u64, delta: &Value) -> Vec<Action> {
         let text = |key: &str| delta.get(key).and_then(Value::as_str).unwrap_or_default();
         match (
             self.blocks.get_mut(&index),
             delta.get("type").and_then(Value::as_str),
         ) {
-            (Some(Block::Text { part, .. }), Some("text_delta")) => {
+            (Some(Block::Text { part, ordinal }), Some("text_delta")) => {
                 if let Some(Part::Text { text: current, .. }) = self.parts.get_mut(*part) {
                     current.push_str(text("text"));
                 }
+                return vec![Action::TextDelta {
+                    ordinal: *ordinal,
+                    text: text("text").to_string(),
+                }];
             }
-            (Some(Block::Reasoning { part, .. }), Some("thinking_delta")) => {
+            (Some(Block::Reasoning { part, ordinal, .. }), Some("thinking_delta")) => {
                 if let Some(Part::Reasoning { text: current, .. }) = self.parts.get_mut(*part) {
                     current.push_str(text("thinking"));
                 }
+                return vec![Action::ReasoningDelta {
+                    ordinal: *ordinal,
+                    text: text("thinking").to_string(),
+                }];
             }
             (Some(Block::Reasoning { signature, .. }), Some("signature_delta")) => {
                 signature.push_str(text("signature"))
@@ -290,6 +304,7 @@ impl Assembly {
             }
             _ => {}
         }
+        Vec::new()
     }
 
     fn stop(&mut self, index: u64) -> Vec<Action> {

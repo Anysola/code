@@ -1,5 +1,5 @@
-//! The bare `anysola [<directory>]` command. Until the interactive UI exists (milestone M4 replaces
-//! the placeholder at the end), it runs everything that precedes the UI.
+//! The bare `anysola [<directory>]` command: the checks that precede the interactive UI, then
+//! the UI itself.
 
 use std::io::IsTerminal;
 
@@ -43,5 +43,22 @@ pub async fn root(args: RootArgs) -> i32 {
         }
         Err(error) => return crate::fail(&error.to_string()),
     }
-    crate::fail("The interactive UI is not in this build yet. Use `anysola run`.")
+    let directory = match std::env::current_dir() {
+        Ok(directory) => directory,
+        Err(error) => return crate::fail(&error.to_string()),
+    };
+    let core = match anysola_core::api::Core::start(&directory).await {
+        Ok(core) => core,
+        Err(error) => return crate::fail(&error.to_string()),
+    };
+    let options = anysola_tui::app::Options {
+        session: args.session,
+        continue_last: args.continue_last,
+        prompt: args.prompt,
+        auto: args.auto || args.yolo || args.dangerously_skip_permissions,
+    };
+    match anysola_tui::app::run(core, options).await {
+        Ok(()) => 0,
+        Err(error) => crate::fail(&error),
+    }
 }

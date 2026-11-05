@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 # Builds the release binary and fails when it breaks the budgets of ARCHITECTURE.md:
 # stripped size <= 25 MB, `anysola --version` <= 15 ms wall and <= 10 MB max RSS (best of 5;
-# wall time from `date +%s%N`, since /usr/bin/time rounds to 10 ms).
+# wall time from `date +%s%N`, since /usr/bin/time rounds to 10 ms), and the idle TUI against the
+# fake gateway: first frame <= 150 ms and <= 40 MB RSS (best of 3, measured by script/tui-idle.py).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 MAX_BYTES=$((25 * 1024 * 1024))
 MAX_MS=15
 MAX_RSS_KB=$((10 * 1024))
+MAX_TUI_MS=150
+MAX_TUI_RSS_KB=$((40 * 1024))
 
 cargo build --release --locked -p anysola
+cargo build --release --locked -p anysola-testkit --example gateway
 BIN=target/release/anysola
 [ -x "$BIN" ] || { echo "missing $BIN" >&2; exit 1; }
 
@@ -28,8 +32,26 @@ done
 printf 'binary   %d bytes (%.1f MB, budget 25 MB)\n' "$size" "$(awk "BEGIN{print $size/1048576}")"
 printf 'version  %d ms (budget %d ms), %d KB max RSS (budget %d KB)\n' "$best_ms" "$MAX_MS" "$best_rss" "$MAX_RSS_KB"
 
+scratch=$(mktemp -d)
+target/release/examples/gateway > "$scratch/url" &
+gateway=$!
+trap 'kill $gateway 2>/dev/null; rm -rf "$scratch"' EXIT
+for _ in $(seq 50); do [ -s "$scratch/url" ] && break; sleep 0.1; done
+mkdir -p "$scratch/home/proj"
+tui_ms=""
+tui_rss=""
+for _ in 1 2 3; do
+  read -r ms rss < <(cd "$scratch/home/proj" && HOME="$scratch/home" ANYSOLA_API_URL="$(cat "$scratch/url")" \
+    ANYSOLA_TOKEN="asc_$(printf 'T%.0s' $(seq 40))" python3 "$OLDPWD/script/tui-idle.py" "$OLDPWD/$BIN")
+  if [ "$ms" -ge 0 ] && { [ -z "$tui_ms" ] || [ "$ms" -lt "$tui_ms" ]; }; then tui_ms=$ms; fi
+  if [ -z "$tui_rss" ] || [ "$rss" -lt "$tui_rss" ]; then tui_rss=$rss; fi
+done
+printf 'idle TUI first frame %s ms (budget %d ms), %d KB RSS (budget %d KB)\n' "${tui_ms:-none}" "$MAX_TUI_MS" "$tui_rss" "$MAX_TUI_RSS_KB"
+
 fail=0
 [ "$size" -le "$MAX_BYTES" ] || { echo "FAIL: binary over 25 MB" >&2; fail=1; }
 [ "$best_ms" -le "$MAX_MS" ] || { echo "FAIL: --version over ${MAX_MS} ms" >&2; fail=1; }
 [ "$best_rss" -le "$MAX_RSS_KB" ] || { echo "FAIL: --version over 10 MB RSS" >&2; fail=1; }
+[ -n "$tui_ms" ] && [ "$tui_ms" -le "$MAX_TUI_MS" ] || { echo "FAIL: TUI first frame over ${MAX_TUI_MS} ms" >&2; fail=1; }
+[ "$tui_rss" -gt 0 ] && [ "$tui_rss" -le "$MAX_TUI_RSS_KB" ] || { echo "FAIL: idle TUI over 40 MB RSS" >&2; fail=1; }
 exit "$fail"

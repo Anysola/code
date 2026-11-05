@@ -1,0 +1,109 @@
+//! What the interactive UI reads besides prompting: the directory and project, recent sessions,
+//! a session's decoded messages, account routes, and `!` shell commands.
+
+use std::path::Path;
+use std::time::Duration;
+
+use serde_json::{Map, Value, json};
+
+use super::{Core, CoreError};
+use crate::gateway::account::{Method, Reply};
+use crate::session::message::{AssistantTime, Message, ShellData, ShellOutput};
+use crate::storage::SessionSummary;
+use crate::time::now_ms;
+
+/// A hung `!` command must not hold the composer forever.
+const SHELL_TIMEOUT: Duration = Duration::from_secs(120);
+
+impl Core {
+    pub fn directory(&self) -> &Path {
+        &self.shared.directory
+    }
+
+    /// The latest root sessions of this project, newest first.
+    pub fn recent_sessions(&self, limit: u64) -> Result<Vec<SessionSummary>, CoreError> {
+        Ok(self
+            .shared
+            .db
+            .root_sessions(&self.shared.project.id, limit)?)
+    }
+
+    /// The session's stored messages, decoded, oldest first.
+    pub fn messages(&self, session_id: &str) -> Result<Vec<(String, Message)>, CoreError> {
+        Ok(self
+            .shared
+            .db
+            .messages(session_id)?
+            .into_iter()
+            .map(|row| {
+                let message = Message::decode(&row.kind, &row.data);
+                (row.id, message)
+            })
+            .collect())
+    }
+
+    /// The staged revert boundary (`messageID`), if any.
+    pub fn revert_boundary(&self, session_id: &str) -> Result<Option<String>, CoreError> {
+        Ok(self.shared.db.revert(session_id)?.and_then(|r| {
+            r.get("messageID")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        }))
+    }
+
+    pub fn signed_in(&self) -> bool {
+        self.shared.gateway.token().is_some()
+    }
+
+    /// An account route (`/me`, `/usage?days=7`, …); `Err` is the transport failure text.
+    pub async fn account(&self, method: Method, route: &str) -> Result<Reply, String> {
+        self.shared.gateway.account_call(method, route, None).await
+    }
+
+    /// Runs a `!` command in the session directory and stores it as a `shell` message: its
+    /// combined output, and `exit` (or `timedOut`) in the metadata.
+    pub async fn run_shell(&self, session_id: &str, command: &str) -> Result<(), CoreError> {
+        let session = self
+            .session(session_id)?
+            .ok_or(CoreError::SessionNotFound)?;
+        let configured = self
+            .loaded()
+            .config
+            .get("shell")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let (program, args) = crate::tool::shell::invocation(configured.as_deref(), command);
+        let created = now_ms();
+        let child = tokio::process::Command::new(program)
+            .args(args)
+            .current_dir(&session.directory)
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output();
+        let (output, metadata) = match tokio::time::timeout(SHELL_TIMEOUT, child).await {
+            Ok(Ok(out)) => {
+                let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+                text.push_str(&String::from_utf8_lossy(&out.stderr));
+                (text, json!({ "exit": out.status.code() }))
+            }
+            Ok(Err(error)) => (error.to_string(), json!({ "exit": 1 })),
+            Err(_) => (String::new(), json!({ "timedOut": true })),
+        };
+        let data = ShellData {
+            time: AssistantTime {
+                created,
+                streamed: None,
+                completed: Some(now_ms()),
+            },
+            command: command.to_string(),
+            output: Some(ShellOutput { output }),
+            metadata: Some(metadata),
+            extra: Map::new(),
+        };
+        let value = serde_json::to_value(&data).unwrap_or(Value::Null);
+        self.shared
+            .db
+            .append_message(session_id, &crate::ids::message(), "shell", &value)?;
+        Ok(())
+    }
+}

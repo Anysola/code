@@ -31,6 +31,7 @@ use crate::tool::registry::Registry;
 use crate::tool::{PathLocks, SessionNotifier};
 
 mod commands;
+mod front;
 mod revert;
 mod state;
 
