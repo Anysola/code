@@ -154,6 +154,31 @@ pub struct Cache {
     pub viewport: (usize, usize),
 }
 
+/// The opened tool rows of an item (`shell:<call>`, `call:<call>:<n>`), which change its layout.
+fn tool_toggles(item: &Item, toggled: &std::collections::HashSet<String>) -> String {
+    let Item::Assistant(a) = item else {
+        return String::new();
+    };
+    let mut keys: Vec<&str> = toggled
+        .iter()
+        .filter(|key| {
+            a.parts.iter().any(|p| match p {
+                Part::Tool(t) => {
+                    key.strip_prefix("shell:") == Some(t.call_id.as_str())
+                        || key
+                            .strip_prefix("call:")
+                            .and_then(|k| k.strip_prefix(t.call_id.as_str()))
+                            .is_some_and(|k| k.starts_with(':'))
+                }
+                _ => false,
+            })
+        })
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    keys.join(",")
+}
+
 /// An item that no longer changes with time (no spinner, no running duration).
 fn settled(item: &Item) -> bool {
     match item {
@@ -208,7 +233,7 @@ pub fn layout(items: &[Item], ctx: &Ctx, cache: Option<&std::sync::Mutex<Cache>>
         if matches!(item, Item::User { .. } | Item::Assistant(_)) {
             firsts.push((groups.len(), matches!(item, Item::User { .. })));
         }
-        let signature = exploration.signature(index);
+        let signature = exploration.signature(index) + &tool_toggles(item, ctx.toggled);
         if let Some(cache) = cache.as_ref()
             && let Some((cached, sig, rows)) = cache.entries.get(&index)
             && cached == item

@@ -1456,7 +1456,7 @@ fn execute_rows() {
         parts: vec![Part::Tool(call)],
         ..Assistant::default()
     };
-    let screen = render(&session(120, 36, vec![Item::Assistant(assistant)]));
+    let screen = render(&session(120, 36, vec![Item::Assistant(assistant.clone())]));
     for text in [
         "✗ execute",
         "› opencode.models [query=x]",
@@ -1466,6 +1466,17 @@ fn execute_rows() {
     ] {
         assert!(screen.contains(text), "{text}\n{screen}");
     }
+    // `ExecuteCallView`: a click on a call with input lists its arguments under a `│` border.
+    let mut state = session(120, 36, vec![Item::Assistant(assistant)]);
+    state
+        .sessions
+        .get_mut("ses_b")
+        .unwrap()
+        .toggled
+        .insert("call:call_execute:0".into());
+    let screen = render(&state);
+    assert!(screen.contains("› opencode.models  "), "{screen}");
+    assert!(screen.contains("│ query: x"), "{screen}");
 }
 
 /// `dialog-execute.tsx`: title, status and the copy actions of the Execute dialog.

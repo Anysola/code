@@ -317,7 +317,7 @@ fn execute_failed(tool: &Tool) -> bool {
 fn execute_calls(tool: &Tool, ctx: &Ctx) -> Vec<Row> {
     let mut rows = Vec::new();
     let calls = tool.metadata.get("toolCalls").and_then(Value::as_array);
-    for call in calls.into_iter().flatten() {
+    for (index, call) in calls.into_iter().flatten().enumerate() {
         let (Some(name), Some(status)) = (
             call.get("tool").and_then(Value::as_str),
             call.get("status").and_then(Value::as_str),
@@ -326,20 +326,65 @@ fn execute_calls(tool: &Tool, ctx: &Ctx) -> Vec<Row> {
         };
         let failed = status == "error";
         let input = call.get("input").cloned().unwrap_or(Value::Null);
+        let fields = input.as_object().filter(|o| !o.is_empty());
+        let hit = format!("call:{}:{index}", tool.call_id);
+        let expanded = fields.is_some() && ctx.toggled.contains(&hit);
+        let expanded_color = ctx
+            .theme
+            .term(ctx.theme.decrease(ctx.theme.get("text.muted"), 1));
         let color = if failed {
             ctx.theme.fg("text.feedback.error.base")
+        } else if expanded {
+            expanded_color
         } else {
             ctx.theme.fg("text.muted")
         };
-        let summary = format!("{name}{}", arguments(&input));
+        let summary = if expanded {
+            name.to_string()
+        } else {
+            format!("{name}{}", arguments(&input))
+        };
         let text = crate::text::clip(&summary, ctx.width.saturating_sub(5));
-        rows.push(Row::text(
+        let mut row = Row::text(
             3,
             vec![Span::styled(
                 format!("{:<2}{text}", if failed { "✗" } else { "›" }),
                 Style::new().fg(color),
             )],
-        ));
+        );
+        if fields.is_some() {
+            row.group = Some(hit.clone());
+        }
+        rows.push(row);
+        let Some(fields) = fields.filter(|_| expanded) else {
+            continue;
+        };
+        let muted = Style::new().fg(ctx.theme.fg("text.muted"));
+        let base = Style::new().fg(ctx.theme.fg("text.base"));
+        let border = Span::styled("│ ", Style::new().fg(expanded_color));
+        for (key, value) in fields {
+            let label = format!("{key}: ");
+            let value = match value {
+                Value::String(text) => text.clone(),
+                other => serde_json::to_string_pretty(other).unwrap_or_default(),
+            };
+            let room = ctx.width.saturating_sub(5 + width(&label)).max(1);
+            for (i, line) in super::markdown::wrap_spans(&[Span::styled(value, base)], room)
+                .into_iter()
+                .enumerate()
+            {
+                let lead = if i == 0 {
+                    Span::styled(label.clone(), muted)
+                } else {
+                    Span::raw(" ".repeat(width(&label)))
+                };
+                let mut spans = vec![border.clone(), lead];
+                spans.extend(line);
+                let mut row = Row::text(3, spans);
+                row.group = Some(hit.clone());
+                rows.push(row);
+            }
+        }
     }
     let output = crate::text::strip_ansi(tool.output.trim());
     if execute_failed(tool) && !output.is_empty() {
