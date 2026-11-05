@@ -2,7 +2,7 @@
 //! the client (`roots/list`, `elicitation/create`, `ping`), and notifications.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -27,6 +27,7 @@ pub enum Error {
     Rpc {
         code: i64,
         message: String,
+        data: Option<Value>,
     },
     Timeout,
     /// A legacy Streamable HTTP server no longer knows this connection's session.
@@ -59,7 +60,7 @@ impl std::fmt::Display for Error {
             }
             Error::Closed(None) => f.write_str("Connection closed"),
             Error::Closed(Some(cause)) => write!(f, "Connection closed: {cause}"),
-            Error::Rpc { code, message } => write!(f, "MCP error {code}: {message}"),
+            Error::Rpc { code, message, .. } => write!(f, "MCP error {code}: {message}"),
             Error::Timeout => f.write_str("MCP error -32001: Request timed out"),
             Error::SessionExpired => f.write_str("MCP server session expired"),
         }
@@ -100,6 +101,10 @@ pub struct Peer {
     next: AtomicU64,
     /// The last transport error, which explains a close.
     last_error: Arc<Mutex<Option<String>>>,
+    /// The 2026-07-28 `_meta` envelope every outgoing message carries once that era is agreed.
+    envelope: Mutex<Option<Value>>,
+    /// Set with the envelope: that era has no server-to-client requests, so they are dropped.
+    modern: Arc<AtomicBool>,
 }
 
 impl Peer {
@@ -113,12 +118,21 @@ impl Peer {
             pending: Arc::default(),
             next: AtomicU64::new(0),
             last_error: Arc::default(),
+            envelope: Mutex::default(),
+            modern: Arc::default(),
         });
-        let (pending, last_error) = (peer.pending.clone(), peer.last_error.clone());
+        let (pending, last_error, modern) = (
+            peer.pending.clone(),
+            peer.last_error.clone(),
+            peer.modern.clone(),
+        );
         tokio::spawn(async move {
             while let Some(item) = incoming.recv().await {
                 match item {
                     Incoming::Message(message) => {
+                        if modern.load(Ordering::SeqCst) && is_request(&message) {
+                            continue;
+                        }
                         dispatch(&transport, &pending, &handler, message);
                     }
                     Incoming::Error(error) => {
@@ -146,12 +160,31 @@ impl Peer {
         self.next.load(Ordering::SeqCst)
     }
 
+    /// Switches to the 2026-07-28 era: `envelope` joins every later message's `params._meta`.
+    pub fn set_envelope(&self, envelope: Value) {
+        *self.envelope.lock().unwrap_or_else(|e| e.into_inner()) = Some(envelope);
+        self.modern.store(true, Ordering::SeqCst);
+    }
+
+    fn enveloped(&self, params: Value) -> Value {
+        let Some(envelope) = self
+            .envelope
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        else {
+            return params;
+        };
+        with_meta(params, envelope)
+    }
+
     pub async fn request(
         &self,
         method: &str,
         params: Value,
         timeout: Duration,
     ) -> Result<Value, Error> {
+        let params = self.enveloped(params);
         let id = self.next.fetch_add(1, Ordering::SeqCst);
         let (sender, receiver) = oneshot::channel();
         self.pending
@@ -203,6 +236,7 @@ impl Peer {
     }
 
     pub async fn notify(&self, method: &str, params: Value) -> Result<(), Error> {
+        let params = self.enveloped(params);
         let mut message = json!({"method": method, "jsonrpc": "2.0"});
         if !params.is_null() {
             message["params"] = params;
@@ -213,6 +247,24 @@ impl Peer {
     pub async fn close(&self) {
         self.transport.close().await;
     }
+}
+
+/// Adds `envelope`'s keys to `params._meta`; keys the caller set win.
+pub fn with_meta(params: Value, envelope: Value) -> Value {
+    let mut params = match params {
+        Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    let mut meta = envelope.as_object().cloned().unwrap_or_default();
+    if let Some(Value::Object(own)) = params.remove("_meta") {
+        meta.extend(own);
+    }
+    params.insert("_meta".into(), Value::Object(meta));
+    Value::Object(params)
+}
+
+fn is_request(message: &Value) -> bool {
+    message.get("method").is_some() && message.get("id").is_some_and(|id| !id.is_null())
 }
 
 fn dispatch(
@@ -237,6 +289,7 @@ fn dispatch(
                 Some(error) => Err(Error::Rpc {
                     code: error["code"].as_i64().unwrap_or(-32603),
                     message: error["message"].as_str().unwrap_or_default().to_string(),
+                    data: error.get("data").cloned(),
                 }),
                 None => Ok(message.get("result").cloned().unwrap_or(Value::Null)),
             };
@@ -248,7 +301,7 @@ fn dispatch(
             tokio::spawn(async move {
                 let reply = match answer.await {
                     Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
-                    Err(Error::Rpc { code, message }) => {
+                    Err(Error::Rpc { code, message, .. }) => {
                         json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
                     }
                     Err(error) => {
