@@ -278,6 +278,7 @@ pub struct Settings {
     pub copy_on_select: bool,
     pub title: bool,
     pub grouping: bool,
+    pub diff_wrap: bool,
     pub verbosity: Verbosity,
 }
 
@@ -302,6 +303,7 @@ impl Default for Settings {
             copy_on_select: !cfg!(windows),
             title: true,
             grouping: true,
+            diff_wrap: true,
             verbosity: Verbosity::Medium,
         }
     }

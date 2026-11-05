@@ -64,6 +64,7 @@ pub fn transcript(
         directory: &session.directory,
         home: &state.home,
         grouping: state.settings.grouping,
+        diff_wrap: state.settings.diff_wrap,
         verbosity: state.settings.verbosity,
         toggled: &session.toggled,
     };

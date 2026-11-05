@@ -237,7 +237,14 @@ fn header(label: &str, value: &str, ctx: &Ctx) -> Line {
 fn edit(tool: &Tool, path: &str, ctx: &Ctx) -> Vec<Row> {
     let inner = ctx.width.saturating_sub(4);
     let diff_width = inner.saturating_sub(4);
-    match patch_rows(&tool.metadata, path, diff_width, ctx.split, ctx.theme) {
+    match patch_rows(
+        &tool.metadata,
+        path,
+        diff_width,
+        ctx.split,
+        ctx.diff_wrap,
+        ctx.theme,
+    ) {
         Some(diff) => {
             let mut lines = vec![header("← Edit", path, ctx), Vec::new()];
             lines.extend(diff.into_iter().map(|mut l| {

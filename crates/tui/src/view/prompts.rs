@@ -121,7 +121,7 @@ fn body(c: &Canvas, state: &State, p: &Permission, w: u16) -> (Vec<Line>, bool) 
         let map = p.metadata.as_object().cloned().unwrap_or_default();
         let path = p.subject.clone().unwrap_or_else(|| first(p));
         let room = w.saturating_sub(5) as usize;
-        return match patch_rows(&map, &path, room, state.width > 120, c.theme) {
+        return match patch_rows(&map, &path, room, state.width > 120, true, c.theme) {
             Some(diff) => (diff, true),
             None => (text_lines(vec!["No diff provided".into()]), false),
         };

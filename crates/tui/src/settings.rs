@@ -126,6 +126,7 @@ impl Tui {
                 .map_or(!cfg!(windows), |mode| mode == "select"),
             title: flag(&["terminal", "title"], true),
             grouping: self.str(&["session", "grouping"]) != Some("none"),
+            diff_wrap: self.str(&["diffs", "wrap"]) != Some("none"),
             verbosity: match self.str(&["session", "verbosity"]) {
                 Some("low") => Verbosity::Low,
                 Some("high") => Verbosity::High,

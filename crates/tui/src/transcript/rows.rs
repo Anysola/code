@@ -57,6 +57,8 @@ pub struct Ctx<'a> {
     pub home: &'a str,
     /// `session.grouping` is not `none`.
     pub grouping: bool,
+    /// Edit diffs wrap by word (`diffs.wrap`).
+    pub diff_wrap: bool,
     pub verbosity: Verbosity,
     /// Groups the user opened (or closed, when they start open).
     pub toggled: &'a std::collections::HashSet<String>,
@@ -670,6 +672,7 @@ pub fn patch_rows(
     path: &str,
     width: usize,
     split: bool,
+    wrap: bool,
     theme: &Theme,
 ) -> Option<Vec<Line>> {
     let patch = metadata
@@ -682,6 +685,7 @@ pub fn patch_rows(
         width,
         split,
         filetype: filetype(path),
+        wrap,
     };
     Some(diff::render(patch, &options, theme))
 }
@@ -710,6 +714,7 @@ mod tests {
             directory: "/w",
             home: "/h",
             grouping: true,
+            diff_wrap: true,
             verbosity: Verbosity::Medium,
             toggled: &toggled,
         };
