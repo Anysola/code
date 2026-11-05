@@ -895,6 +895,10 @@ impl App {
         let Some(id) = hit else {
             return false;
         };
+        if let Some(index) = id.strip_prefix("user:").and_then(|i| i.parse().ok()) {
+            self.click_user(index);
+            return true;
+        }
         if let Some(call_id) = id.strip_prefix("execute:") {
             let call_id = call_id.to_string();
             self.open_execute(&call_id);

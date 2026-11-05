@@ -237,7 +237,7 @@ fn item_groups(
     groups: &mut Vec<Vec<Row>>,
 ) {
     match item {
-        Item::User { text, agent, .. } => groups.push(user(text, agent, ctx)),
+        Item::User { text, agent, .. } => groups.push(user(text, agent, index, ctx)),
         Item::Assistant(a) => assistant(a, index, exploration, ctx, groups),
         Item::Shell {
             command,
@@ -305,7 +305,8 @@ fn item_groups(
     }
 }
 
-fn user(text: &str, agent: &str, ctx: &Ctx) -> Vec<Row> {
+/// A user message box; a click on any of its rows opens its actions (`user:<item index>`).
+fn user(text: &str, agent: &str, index: usize, ctx: &Ctx) -> Vec<Row> {
     let rail = Some((ctx.agent_color)(agent));
     let bg = Some(ctx.theme.fg("background.raised.base"));
     let style = ctx.style("text.base");
@@ -331,6 +332,10 @@ fn user(text: &str, agent: &str, ctx: &Ctx) -> Vec<Row> {
         bg,
         ..Row::default()
     });
+    let hit = format!("user:{index}");
+    for row in &mut rows {
+        row.group = Some(hit.clone());
+    }
     rows
 }
 
@@ -741,5 +746,8 @@ mod tests {
         layout(&items, &ctx(60), Some(&cache));
         assert_eq!(cache.lock().unwrap().context.split('|').next(), Some("60"));
         assert_eq!(cache.lock().unwrap().messages, [(1, true)]);
+        // Every row of the user box is a click target for its actions.
+        let user_hits: Vec<_> = fresh.iter().filter_map(|r| r.group.as_deref()).collect();
+        assert_eq!(user_hits, ["user:0"; 3]);
     }
 }

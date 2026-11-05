@@ -1,6 +1,7 @@
 //! Opening dialogs for commands and acting on what is chosen in them.
 
 use anysola_core::model::ModelRef;
+use anysola_core::session::inbox::Delivery;
 use serde_json::Value;
 
 use super::{App, Msg, now};
@@ -774,6 +775,25 @@ impl App {
                 let select = lists::message_actions(&value);
                 self.push(Dialog::Select(select));
             }
+            Kind::PendingSteer {
+                session,
+                inbox,
+                item,
+            } => {
+                self.state.dialogs.clear();
+                if value == "queue" {
+                    let _ = self.core.set_delivery(&inbox, Delivery::Queue);
+                } else {
+                    let _ = self.core.cancel_pending(&inbox);
+                    if let Some(s) = self.state.sessions.get_mut(&session) {
+                        s.queued.retain(|q| *q != inbox);
+                        if matches!(s.items.get(item), Some(Item::User { id, .. }) if id.is_empty())
+                        {
+                            s.items.remove(item);
+                        }
+                    }
+                }
+            }
             Kind::MessageActions { message } => {
                 self.state.dialogs.clear();
                 self.message_action(&value, &message);
@@ -1263,6 +1283,47 @@ impl App {
             self.state.dialogs.pop();
         }
         self.push(Dialog::Body(body));
+    }
+
+    /// A click on the user message at `index`: its actions, or for a prompt still waiting to
+    /// steer the running turn, `Pending steer` (`routes/session/index.tsx:2384-2407`).
+    pub(super) fn click_user(&mut self, index: usize) {
+        let Some(session) = self.state.session() else {
+            return;
+        };
+        let pending_before = session.items[..index.min(session.items.len())]
+            .iter()
+            .filter(|i| matches!(i, Item::User { id, .. } if id.is_empty()))
+            .count();
+        let (id, session_id) = match session.items.get(index) {
+            Some(Item::User { id, .. }) => (id.clone(), session.id.clone()),
+            _ => return,
+        };
+        if !id.is_empty() {
+            let select = lists::message_actions(&id);
+            self.push(Dialog::Select(select));
+            return;
+        }
+        let rows = self.core.pending(&session_id).unwrap_or_default();
+        let Some(row) = rows.iter().filter(|r| r.kind == "user").nth(pending_before) else {
+            return;
+        };
+        if row.delivery != "steer" {
+            return;
+        }
+        let options = vec![
+            crate::dialog::Opt::new("Move to queue", "queue"),
+            crate::dialog::Opt::new("Delete", "cancel"),
+        ];
+        self.push(Dialog::Select(Select::new(
+            Kind::PendingSteer {
+                session: session_id,
+                inbox: row.id.clone(),
+                item: index,
+            },
+            "Pending steer",
+            options,
+        )));
     }
 
     /// Prompts waiting for the running turn; `ctrl+d` takes one back.
