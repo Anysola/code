@@ -398,6 +398,21 @@ fn assistant(
         }
     }
     flush(&mut thoughts, groups);
+    if let Some(retry) = &a.retry {
+        let seconds = retry.at.saturating_sub(ctx.now).div_ceil(1000);
+        let head = if seconds > 0 {
+            format!("Retrying in {seconds}s")
+        } else {
+            "Retry due".to_string()
+        };
+        groups.push(vec![Row::text(
+            3,
+            vec![Span::styled(
+                format!("⚠ {head} · attempt {} · {}", retry.attempt, retry.message),
+                ctx.style("text.feedback.warning.base"),
+            )],
+        )]);
+    }
     if !a.terminal {
         return;
     }

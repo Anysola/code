@@ -1312,3 +1312,27 @@ fn metadata_fade_in() {
     state.meta_fade = None;
     assert_eq!(state.meta_alpha(), 1.0);
 }
+
+/// `routes/session/index.tsx` `AssistantRetry`: counts down each second, then says it is due.
+#[test]
+fn retry_countdown() {
+    use anysola_tui::transcript::model::Retry;
+    let assistant = Assistant {
+        id: "msg_a".into(),
+        agent: "build".into(),
+        model: "Claude Sonnet 5.5".into(),
+        created: now(),
+        turn_start: now(),
+        retry: Some(Retry {
+            at: now() + 4500,
+            attempt: 2,
+            message: "Overloaded".into(),
+        }),
+        ..Assistant::default()
+    };
+    let mut state = session(120, 36, vec![Item::Assistant(assistant)]);
+    state.now = now();
+    assert!(render(&state).contains("⚠ Retrying in 5s · attempt 2 · Overloaded"));
+    state.now = now() + 4600;
+    assert!(render(&state).contains("⚠ Retry due · attempt 2 · Overloaded"));
+}
