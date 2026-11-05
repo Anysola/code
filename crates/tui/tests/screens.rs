@@ -1222,3 +1222,23 @@ fn sidebar_mcp_section() {
     state.mcp_closed = true;
     assert!(render(&state).contains("▶ MCP (1 active, 1 error)"));
 }
+
+/// `feature-plugins/prompt/footer.tsx`: the goal follows the live counts after ` · `.
+#[test]
+fn footer_goal_status() {
+    use anysola_core::session::goal::{Goal, Status as GoalStatus};
+    let mut state = session(120, 36, turn(true, true));
+    state.live = Some("2 subagents".into());
+    state.sessions.get_mut("ses_b").unwrap().goal = Some(Goal {
+        id: "g".into(),
+        objective: "Ship it".into(),
+        status: GoalStatus::Paused,
+        reason: None,
+        rounds: 0,
+        max_rounds: 50,
+        stalls: None,
+        boot: String::new(),
+        updated_at: 0,
+    });
+    assert!(render(&state).contains("↓ 2 subagents · ◎ goal paused"));
+}

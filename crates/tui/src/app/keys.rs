@@ -662,6 +662,12 @@ impl App {
                     self.selection = None;
                     return self.run_command("anysola.credits", None);
                 }
+                if let Some(goal) = self.state.session().and_then(|s| s.goal.as_ref())
+                    && over_text(&self.last, at, super::goal_status(goal).0)
+                {
+                    self.selection = None;
+                    return self.open_goal();
+                }
                 if let Some(live) = &self.state.live
                     && over_text(&self.last, at, live)
                 {

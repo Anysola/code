@@ -28,6 +28,8 @@ mod commands;
 mod dialogs;
 mod diff;
 mod dock;
+mod goal;
+pub use goal::status as goal_status;
 mod events;
 mod keys;
 mod models;
@@ -624,6 +626,7 @@ impl App {
                 title: row.title.clone(),
                 directory: row.directory.clone(),
                 credits: Some(self.core.credits(id)),
+                goal: self.core.goal(id),
                 ..Session::default()
             };
             self.state.sessions.insert(id.to_string(), session);

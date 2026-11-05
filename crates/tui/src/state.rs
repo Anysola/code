@@ -141,6 +141,8 @@ pub struct Session {
     /// A revert is staged (`/redo` is available).
     pub reverted: bool,
     pub layout: LayoutCache,
+    /// The session's `/goal`, if set.
+    pub goal: Option<anysola_core::session::goal::Goal>,
     /// The session's directory is gone (deleted worktree, moved checkout); the app checks it.
     pub missing: bool,
     /// Exploration groups whose open state the user flipped, by group ID.

@@ -967,6 +967,7 @@ impl App {
         let kind = b.kind.clone();
         let button = b.buttons.get(b.active).cloned();
         match (kind, stroke.key.as_str()) {
+            (BodyKind::Goal, "p" | "r" | "x") => self.goal_key(stroke),
             (BodyKind::Help, "return") => {
                 self.state.dialogs.pop();
             }

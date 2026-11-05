@@ -259,6 +259,12 @@ impl App {
                 }
                 self.account_soon();
             }
+            Event::GoalChanged { goal, .. } => {
+                if let Some(session) = self.state.sessions.get_mut(&id) {
+                    session.goal = goal.clone();
+                }
+                self.refresh_goal_dialog();
+            }
             Event::TitleChanged { title, .. } => {
                 if let Some(session) = self.state.sessions.get_mut(&id) {
                     session.title = title.clone();

@@ -374,6 +374,7 @@ pub enum BodyKind {
     Image { index: usize },
     Error { details: String },
     DiffHelp,
+    Goal,
 }
 
 /// A dialog with a title, free rows and a footer.

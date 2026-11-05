@@ -269,12 +269,22 @@ pub fn footer(c: &mut Canvas, state: &State, x: u16, y: u16, w: u16) {
         };
         right.push(vec![Span::styled("esc ", base), Span::styled(label, muted)]);
     } else {
+        // The live counts and the goal read as one run joined by ` · `.
+        let mut item = Vec::new();
         if let Some(live) = &state.live {
-            let mut item = Vec::new();
             if let Some(key) = &state.hints.child {
                 item.push(Span::styled(format!("{key} "), base));
             }
             item.push(Span::styled(live.clone(), muted));
+        }
+        if let Some(goal) = session.and_then(|s| s.goal.as_ref()) {
+            if !item.is_empty() {
+                item.push(Span::styled(" · ", muted));
+            }
+            let (text, color) = crate::app::goal_status(goal);
+            item.push(Span::styled(text, c.style(color)));
+        }
+        if !item.is_empty() {
             right.push(item);
         }
         let usage = session.and_then(|s| s.context_tokens()).map(|tokens| {
