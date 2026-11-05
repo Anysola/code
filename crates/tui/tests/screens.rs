@@ -1585,4 +1585,19 @@ fn background_shell_row() {
     s.shells.get_mut("sh_1").unwrap().truncated = true;
     let done = render(&state);
     assert!(done.contains("$ npm run dev") && done.contains("[earlier output omitted]"));
+    let mut task = tool(
+        "subagent",
+        json!({"description": "scan", "subagent_type": "explore"}),
+        Status::Completed,
+    );
+    task.metadata = json!({"status": "running"}).as_object().unwrap().clone();
+    let assistant = Assistant {
+        parts: vec![Part::Tool(task)],
+        ..Assistant::default()
+    };
+    let screen = render(&session(100, 20, vec![Item::Assistant(assistant)]));
+    assert!(
+        screen.contains("✓ Explore Subagent — scan  Background "),
+        "{screen}"
+    );
 }

@@ -170,7 +170,20 @@ pub fn render(tool: &Tool, ctx: &Ctx) -> Vec<Vec<Row>> {
             } else {
                 "│"
             };
-            inline(icon, format!("{agent} Subagent — {description}"), tool, ctx)
+            let mut rows = inline(icon, format!("{agent} Subagent — {description}"), tool, ctx);
+            let background = tool.status == Status::Completed
+                && tool.metadata.get("status").and_then(Value::as_str) == Some("running");
+            if background && let Some(row) = rows.first_mut() {
+                let bg = ctx
+                    .theme
+                    .term(ctx.theme.decrease(ctx.theme.get("background.base"), 1));
+                row.spans.push(Span::raw(" "));
+                row.spans.push(Span::styled(
+                    " Background ",
+                    Style::new().fg(ctx.theme.fg("text.muted")).bg(bg),
+                ));
+            }
+            rows
         }
         "execute" => {
             let icon = if execute_failed(tool) {
