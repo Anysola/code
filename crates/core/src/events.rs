@@ -44,6 +44,19 @@ pub enum Event {
         event_id: String,
         ordinal: usize,
     },
+    /// Text streamed into a text block; front ends render it before the block ends.
+    TextDelta {
+        session_id: String,
+        message_id: String,
+        ordinal: usize,
+        text: String,
+    },
+    ReasoningDelta {
+        session_id: String,
+        message_id: String,
+        ordinal: usize,
+        text: String,
+    },
     TextEnded {
         session_id: String,
         message_id: String,
@@ -123,6 +136,8 @@ pub enum Event {
         resources: Vec<String>,
         /// Patterns "always" would save; empty when the request offers no "always".
         save: Vec<String>,
+        /// What the tool attached for the prompt (an edit's file diffs, a search's input).
+        metadata: Value,
     },
     /// A pending ask was answered: by the user, by an "always" that now covers it, or rejected
     /// along with another ask of its session or at shutdown.
@@ -160,6 +175,8 @@ impl Event {
         match self {
             Event::StepStarted { session_id, .. }
             | Event::TextStarted { session_id, .. }
+            | Event::TextDelta { session_id, .. }
+            | Event::ReasoningDelta { session_id, .. }
             | Event::TextEnded { session_id, .. }
             | Event::ReasoningStarted { session_id, .. }
             | Event::ReasoningEnded { session_id, .. }

@@ -252,6 +252,7 @@ impl PermissionGate for RuleGate {
                 action: request.action,
                 resources: request.resources,
                 save: request.save,
+                metadata: request.metadata,
             });
             let _forget = Forget {
                 asks: &self.asks,
