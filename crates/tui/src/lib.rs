@@ -5,6 +5,7 @@ pub mod attention;
 pub mod complete;
 pub mod composer;
 pub mod dialog;
+pub mod diffview;
 pub mod editor;
 pub mod form;
 pub mod keymap;

@@ -309,6 +309,8 @@ pub struct State {
     pub hints: Hints,
     /// `/update to install v<version>` on the home screen.
     pub update: Option<String>,
+    /// The `/diff` viewer, while open (full screen).
+    pub diff: Option<crate::diffview::Diff>,
     /// MCP servers: `(configured, connected, failed)`.
     pub mcp: (usize, usize, usize),
     /// `/btw` side questions waiting for their answer.
@@ -352,6 +354,7 @@ impl State {
             pane: None,
             asides: 0,
             mcp: (0, 0, 0),
+            diff: None,
             zone: *chrono::Local::now().offset(),
         }
     }

@@ -10,6 +10,7 @@ use crate::text::{clip, width};
 use crate::theme::Theme;
 
 mod dialog;
+mod diffview;
 mod home;
 mod prompt;
 mod prompts;
@@ -125,6 +126,13 @@ pub fn draw(state: &State, theme: &Theme, buf: &mut Buffer) -> Drawn {
             }
             None => None,
         },
+    };
+    let cursor = match &state.diff {
+        Some(view) => {
+            diffview::draw(&mut c, view);
+            None
+        }
+        None => cursor,
     };
     let cursor = match state.dialogs.last() {
         Some(top) => dialog::draw(&mut c, top),

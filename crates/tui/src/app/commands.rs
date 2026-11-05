@@ -198,6 +198,8 @@ impl App {
                 self.state.composer.clear();
             }
             ("prompt.editor_context.clear", _) => self.editor = None,
+            ("diff.open", _) if self.state.diff.is_some() => self.state.diff = None,
+            ("diff.open", _) => self.open_diff(crate::diffview::Source::All),
             ("prompt.stash.pop", _) => {
                 if let Some(text) = self.stash.pop() {
                     self.state.composer.set(&text);

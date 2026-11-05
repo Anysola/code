@@ -26,6 +26,7 @@ use crate::transcript::model;
 mod anysola;
 mod commands;
 mod dialogs;
+mod diff;
 mod events;
 mod keys;
 mod models;

@@ -113,6 +113,9 @@ impl App {
         if !self.state.dialogs.is_empty() {
             return self.dialog_key(&stroke);
         }
+        if self.state.diff.is_some() {
+            return self.diff_key(&stroke);
+        }
         let mut strokes = std::mem::take(&mut self.pending);
         if now() > self.pending_until {
             strokes.clear();
