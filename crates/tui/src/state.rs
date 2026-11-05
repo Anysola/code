@@ -335,6 +335,7 @@ pub struct Hints {
     pub sessions: Option<String>,
     pub background: Option<String>,
     pub fullscreen: Option<String>,
+    pub child: Option<String>,
 }
 
 pub const HOME_EXAMPLES: [&str; 3] = [
@@ -393,6 +394,10 @@ pub struct State {
     pub mcp: (usize, usize, usize),
     /// `/btw` side questions waiting for their answer.
     pub asides: usize,
+    /// The footer's `↓ N subagents · N shells` item while the session family has live work.
+    pub live: Option<String>,
+    /// The selected popup row asks `Press ctrl+d to confirm` before it is removed.
+    pub popup_confirm: bool,
     /// The terminal pane beside the session, while shown.
     pub pane: Option<Pane>,
     pub dock: Option<Dock>,
@@ -437,6 +442,8 @@ impl State {
             dock: None,
             pane_width: None,
             asides: 0,
+            live: None,
+            popup_confirm: false,
             mcp: (0, 0, 0),
             diff: None,
             zone: *chrono::Local::now().offset(),

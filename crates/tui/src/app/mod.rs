@@ -299,6 +299,7 @@ impl App {
             sessions: self.keymap.first("session.list"),
             background: self.keymap.first("session.background"),
             fullscreen: self.keymap.first("permission.prompt.fullscreen"),
+            child: self.keymap.first("session.child.first"),
         };
         self.refresh_loaded();
         self.refresh_recent();
@@ -414,6 +415,7 @@ impl App {
             self.state.height = size.height;
         }
         self.sync_pane();
+        self.state.live = self.live();
         let title = if self.state.settings.title {
             term::title(self.state.session().map(|s| s.title.as_str()))
         } else {

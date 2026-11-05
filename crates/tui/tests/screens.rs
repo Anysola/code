@@ -97,6 +97,7 @@ fn base(width: u16, height: u16) -> State {
         sessions: Some("ctrl+x l".into()),
         background: Some("ctrl+b".into()),
         fullscreen: Some("ctrl+f".into()),
+        child: Some("↓".into()),
     };
     state.example = 1;
     state.zone = chrono::FixedOffset::east_opt(3 * 3600).unwrap();
@@ -1084,4 +1085,40 @@ fn composer_dock_replaces_the_prompt() {
     state.dock.as_mut().unwrap().rows.clear();
     state.dock.as_mut().unwrap().tab = 1;
     assert!(render(&state).contains("No shell commands"));
+}
+
+/// `feature-plugins/prompt/footer.tsx`: the live item leads the footer's right side.
+#[test]
+fn footer_live_subagents_and_shells() {
+    let mut state = session(120, 36, turn(true, true));
+    state.live = Some("2 subagents · 1 shell".into());
+    let screen = render(&state);
+    let footer = screen
+        .lines()
+        .find(|l| l.contains("subagents"))
+        .expect("footer row");
+    assert!(footer.contains("↓ 2 subagents · 1 shell"), "{footer}");
+}
+
+/// `component/prompt/autocomplete.tsx`: the first `ctrl+d` on a `recent` row asks first.
+#[test]
+fn cd_recent_asks_before_removal() {
+    let mut state = session(120, 36, Vec::new());
+    state.popup = Some(Popup {
+        trigger: '/',
+        start: 4,
+        rows: vec![PopupRow {
+            display: "~/old".into(),
+            description: "recent".into(),
+            label: String::new(),
+            action: PopupAction::Insert("~/old".into()),
+        }],
+        selected: 0,
+        offset: 0,
+        pad: 0,
+    });
+    state.popup_confirm = true;
+    let screen = render(&state);
+    assert!(screen.contains("Press ctrl+d to confirm"));
+    assert!(!screen.contains("~/old"));
 }

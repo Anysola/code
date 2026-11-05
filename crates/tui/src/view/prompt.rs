@@ -269,6 +269,14 @@ pub fn footer(c: &mut Canvas, state: &State, x: u16, y: u16, w: u16) {
         };
         right.push(vec![Span::styled("esc ", base), Span::styled(label, muted)]);
     } else {
+        if let Some(live) = &state.live {
+            let mut item = Vec::new();
+            if let Some(key) = &state.hints.child {
+                item.push(Span::styled(format!("{key} "), base));
+            }
+            item.push(Span::styled(live.clone(), muted));
+            right.push(item);
+        }
         let usage = session.and_then(|s| s.context_tokens()).map(|tokens| {
             let pct = state
                 .model
@@ -391,6 +399,14 @@ pub fn popup(c: &mut Canvas, state: &State, x: u16, w: u16, box_y: u16, top: u16
     {
         let row_y = y + (i - popup.offset) as u16;
         let selected = i == popup.selected;
+        if selected && state.popup_confirm {
+            let fg = c.theme.fg("text.action.destructive.focused");
+            let row_bg = c.theme.fg("background.action.destructive.focused");
+            c.fill(Rect::new(x + 1, row_y, w - 2, 1), row_bg);
+            let style = Style::new().fg(fg).bg(row_bg);
+            c.put(x + 2, row_y, "Press ctrl+d to confirm", style, inner);
+            continue;
+        }
         let (fg, desc_fg, row_bg) = if selected {
             let focused = c.theme.fg("text.action.primary.focused");
             (

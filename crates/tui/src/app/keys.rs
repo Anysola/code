@@ -466,6 +466,16 @@ impl App {
             self.state.popup = None;
             return false;
         }
+        let recent = self.state.popup.as_ref().is_some_and(|p| {
+            p.rows
+                .get(p.selected)
+                .is_some_and(|r| r.description == "recent")
+        });
+        if recent && stroke.ctrl && stroke.key == "d" && action.is_none() {
+            self.remove_recent();
+            return true;
+        }
+        self.state.popup_confirm = false;
         let Some(popup) = self.state.popup.as_mut() else {
             return false;
         };
@@ -623,6 +633,12 @@ impl App {
                 if self.over_account(at) {
                     self.selection = None;
                     return self.run_command("anysola.credits", None);
+                }
+                if let Some(live) = &self.state.live
+                    && over_text(&self.last, at, live)
+                {
+                    self.selection = None;
+                    return self.run_command("session.child.first", None);
                 }
                 if self.state.route == Route::Home {
                     self.click_recent(mouse.row);
