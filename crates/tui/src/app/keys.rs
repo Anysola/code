@@ -140,6 +140,16 @@ impl App {
         if self.state.diff.is_some() {
             return self.diff_key(&stroke);
         }
+        let blocked = self
+            .state
+            .session()
+            .is_some_and(|s| s.permission.is_some() || s.question.is_some());
+        if crate::view::sidebar_overlay(&self.state)
+            && !blocked
+            && (stroke.key == "escape" || (stroke.ctrl && stroke.key == "c"))
+        {
+            return self.run_command("session.sidebar.toggle", None);
+        }
         let mut strokes = std::mem::take(&mut self.pending);
         if now() > self.pending_until {
             strokes.clear();
@@ -719,7 +729,11 @@ impl App {
         }
     }
 
-    fn mouse(&mut self, mouse: crossterm::event::MouseEvent) {
+    fn mouse(&mut self, mut mouse: crossterm::event::MouseEvent) {
+        if self.tabs_mouse(mouse) {
+            return;
+        }
+        mouse.column -= self.state.left;
         let at = (mouse.column, mouse.row);
         match mouse.kind {
             MouseEventKind::ScrollUp => self.scroll(3),
@@ -735,6 +749,10 @@ impl App {
                 self.hover_popup(at);
                 self.choose(false);
             }
+            MouseEventKind::Down(MouseButton::Left)
+                if crate::view::sidebar_overlay(&self.state)
+                    && self.state.dialogs.is_empty()
+                    && at.0 < self.state.width.saturating_sub(crate::view::SIDEBAR_WIDTH) => {}
             MouseEventKind::Down(MouseButton::Left) => {
                 // A click while text is selected only clears the selection.
                 if self.selection.is_some_and(|(a, b)| a != b) {
@@ -841,6 +859,22 @@ impl App {
                 if let Some((anchor, end)) = self.selection {
                     if anchor == end {
                         self.selection = None;
+                        // A plain click on a link opens it; modified clicks are the terminal's.
+                        let plain = mouse.modifiers.is_empty();
+                        let link = self
+                            .last
+                            .cell(at)
+                            .and_then(crate::hyperlink::url)
+                            .filter(|_| plain && self.state.dialogs.is_empty());
+                        if let Some(url) = link {
+                            term::open_url(&url);
+                        } else if let Some(index) = self
+                            .hit(at.1)
+                            .and_then(|id| id.strip_prefix("user:")?.parse().ok())
+                            .filter(|_| self.state.dialogs.is_empty())
+                        {
+                            self.click_user(index);
+                        }
                     } else if self.state.settings.copy_on_select {
                         self.copy_selection(anchor, end);
                     }
@@ -865,11 +899,10 @@ impl App {
     }
 
     /// A click on an exploration group's row opens or closes it.
-    fn toggle_group(&mut self, row: u16) -> bool {
-        let Some(session) = self.state.session_mut() else {
-            return false;
-        };
-        let hit = session
+    /// The click target on a transcript row of the last frame.
+    fn hit(&self, row: u16) -> Option<String> {
+        self.state
+            .session()?
             .layout
             .0
             .lock()
@@ -877,8 +910,15 @@ impl App {
             .hits
             .iter()
             .find(|(y, _)| *y == row)
-            .map(|(_, id)| id.clone());
-        let Some(id) = hit else {
+            .map(|(_, id)| id.clone())
+    }
+
+    fn toggle_group(&mut self, row: u16) -> bool {
+        // User messages open their actions on release, so a drag inside one still selects.
+        let Some(id) = self.hit(row).filter(|id| !id.starts_with("user:")) else {
+            return false;
+        };
+        let Some(session) = self.state.session_mut() else {
             return false;
         };
         if let Some(call_id) = id.strip_prefix("execute:") {
@@ -889,6 +929,9 @@ impl App {
         if id == "revert" {
             self.run_command("session.redo", None);
             return true;
+        }
+        if id.starts_with("shell:") {
+            self.shells_polled = 0;
         }
         if !session.toggled.remove(&id) {
             session.toggled.insert(id);
@@ -946,6 +989,37 @@ impl App {
         if let Some(id) = target {
             self.selection = None;
             self.open_session(&id);
+        }
+    }
+
+    /// Mounts older items once the reader is within a screen of the top, and finishes a pending
+    /// `session.first` (the history is laid out the frame after `Loading session history…`).
+    pub(super) fn reveal_history(&mut self) {
+        let width = crate::view::session_content_width(&self.state);
+        let height = self.state.height as usize;
+        let Some(session) = self.state.session() else {
+            return;
+        };
+        if session.floor == 0 {
+            return;
+        }
+        if session.history_loading {
+            if let Some(session) = self.state.session_mut() {
+                session.floor = 0;
+                session.history_loading = false;
+            }
+            return self.scroll(isize::MAX / 4);
+        }
+        let total = crate::view::transcript_rows(&self.state, session, &self.theme, width);
+        if total.saturating_sub(session.scroll) > 2 * height {
+            return;
+        }
+        if let Some(session) = self.state.session_mut() {
+            session.floor = crate::transcript::rows::floor_before(
+                &session.items,
+                session.floor,
+                crate::transcript::rows::BACKFILL_CHUNK,
+            );
         }
     }
 

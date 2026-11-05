@@ -121,21 +121,37 @@ pub enum Kind {
     Models,
     Variants,
     Agents,
-    Sessions { all: bool },
-    Themes { original: String },
+    Sessions {
+        all: bool,
+    },
+    Themes {
+        original: String,
+    },
     Settings,
     Mcps,
     Timeline,
-    MessageActions { message: String },
+    MessageActions {
+        message: String,
+    },
     Fork,
     Skills,
     Open,
     Worktrees,
     Connect,
     Devices,
-    BudgetGate { prompt: String },
+    BudgetGate {
+        prompt: String,
+    },
     Stash,
-    Queue { session: String },
+    Queue {
+        session: String,
+    },
+    PendingSteer {
+        session: String,
+        inbox: String,
+        /// The transcript item showing the prompt.
+        item: usize,
+    },
     DiffSource,
     DiffBase,
     WorkingDirectory,
@@ -379,6 +395,13 @@ pub enum BodyKind {
     },
     Btw {
         answer: String,
+    },
+    /// A background shell's output, re-read every second while open.
+    ShellOutput {
+        id: String,
+        command: String,
+        file: std::path::PathBuf,
+        polled: u64,
     },
     /// An `execute` call's program and output.
     Execute {

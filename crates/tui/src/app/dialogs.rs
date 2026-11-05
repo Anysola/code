@@ -1,6 +1,7 @@
 //! Opening dialogs for commands and acting on what is chosen in them.
 
 use anysola_core::model::ModelRef;
+use anysola_core::session::inbox::Delivery;
 use serde_json::Value;
 
 use super::{App, Msg, now};
@@ -273,6 +274,43 @@ impl App {
         self.push(Dialog::Select(select));
     }
 
+    /// Runs the session search 150 ms after the last keystroke (limit 50, newest first).
+    pub(super) fn poll_session_search(&mut self) {
+        if self.session_search.is_none_or(|at| now() < at) {
+            return;
+        }
+        self.session_search = None;
+        let Some(Dialog::Select(s)) = self.state.dialogs.last() else {
+            return;
+        };
+        let Kind::Sessions { all } = s.kind else {
+            return;
+        };
+        let query = s.query.clone();
+        let limit = self.limit();
+        let found = self.core.sessions(all, &query, 50);
+        let fresh = found
+            .as_ref()
+            .ok()
+            .map(|rows| self.sessions_select(rows.clone(), all));
+        let Some(Dialog::Select(s)) = self.state.dialogs.last_mut() else {
+            return;
+        };
+        match fresh {
+            Some(fresh) => {
+                s.options = fresh.options;
+                s.status = None;
+                s.set_query(query, limit);
+            }
+            None => {
+                s.status = Some((
+                    "Could not search sessions. Change the search to try again.".into(),
+                    Tone::Error,
+                ))
+            }
+        }
+    }
+
     pub(super) fn open_sessions(&mut self, all: bool) {
         let rows = self.core.sessions(all, "", 50).unwrap_or_default();
         let select = self.sessions_select(rows, all);
@@ -403,6 +441,10 @@ impl App {
                             return;
                         }
                         s.set_query(query, limit);
+                        if matches!(s.kind, Kind::Sessions { .. }) {
+                            s.status = Some(("Searching sessions…".into(), Tone::Muted));
+                            self.session_search = Some(now() + 150);
+                        }
                     }
                 }
                 self.after_move();
@@ -774,6 +816,25 @@ impl App {
                 let select = lists::message_actions(&value);
                 self.push(Dialog::Select(select));
             }
+            Kind::PendingSteer {
+                session,
+                inbox,
+                item,
+            } => {
+                self.state.dialogs.clear();
+                if value == "queue" {
+                    let _ = self.core.set_delivery(&inbox, Delivery::Queue);
+                } else {
+                    let _ = self.core.cancel_pending(&inbox);
+                    if let Some(s) = self.state.sessions.get_mut(&session) {
+                        s.queued.retain(|q| *q != inbox);
+                        if matches!(s.items.get(item), Some(Item::User { id, .. }) if id.is_empty())
+                        {
+                            s.items.remove(item);
+                        }
+                    }
+                }
+            }
             Kind::MessageActions { message } => {
                 self.state.dialogs.clear();
                 self.message_action(&value, &message);
@@ -882,6 +943,9 @@ impl App {
 
     /// Scrolls the transcript so the user message is in view.
     fn jump_to(&mut self, message: &str) {
+        if let Some(s) = self.state.session_mut() {
+            s.floor = 0;
+        }
         let width = crate::view::session_content_width(&self.state);
         let Some(session) = self.state.session() else {
             return;
@@ -1027,6 +1091,12 @@ impl App {
                 let days = if days == 7 { 30 } else { 7 };
                 self.state.dialogs.pop();
                 self.open_usage(days);
+            }
+            (BodyKind::ShellOutput { .. }, "end") => {
+                let rows = self.state.height.saturating_sub(10) as usize;
+                if let Some(Dialog::Body(b)) = self.state.dialogs.last_mut() {
+                    b.scroll = b.lines.len().saturating_sub(rows.min(b.lines.len()));
+                }
             }
             (BodyKind::Execute { code, .. }, "c") => {
                 if !code.is_empty() {
@@ -1263,6 +1333,47 @@ impl App {
             self.state.dialogs.pop();
         }
         self.push(Dialog::Body(body));
+    }
+
+    /// A click on the user message at `index`: its actions, or for a prompt still waiting to
+    /// steer the running turn, `Pending steer` (`routes/session/index.tsx:2384-2407`).
+    pub(super) fn click_user(&mut self, index: usize) {
+        let Some(session) = self.state.session() else {
+            return;
+        };
+        let pending_before = session.items[..index.min(session.items.len())]
+            .iter()
+            .filter(|i| matches!(i, Item::User { id, .. } if id.is_empty()))
+            .count();
+        let (id, session_id) = match session.items.get(index) {
+            Some(Item::User { id, .. }) => (id.clone(), session.id.clone()),
+            _ => return,
+        };
+        if !id.is_empty() {
+            let select = lists::message_actions(&id);
+            self.push(Dialog::Select(select));
+            return;
+        }
+        let rows = self.core.pending(&session_id).unwrap_or_default();
+        let Some(row) = rows.iter().filter(|r| r.kind == "user").nth(pending_before) else {
+            return;
+        };
+        if row.delivery != "steer" {
+            return;
+        }
+        let options = vec![
+            crate::dialog::Opt::new("Move to queue", "queue"),
+            crate::dialog::Opt::new("Delete", "cancel"),
+        ];
+        self.push(Dialog::Select(Select::new(
+            Kind::PendingSteer {
+                session: session_id,
+                inbox: row.id.clone(),
+                item: index,
+            },
+            "Pending steer",
+            options,
+        )));
     }
 
     /// Prompts waiting for the running turn; `ctrl+d` takes one back.

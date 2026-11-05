@@ -30,10 +30,24 @@ pub fn diff_width(state: &State) -> u16 {
     }
 }
 
+/// The sidebar sits in the right pane (docked when wide, else as an overlay).
+pub fn sidebar_shown(state: &State) -> bool {
+    state.pane.is_none()
+        && !diff_docked(state)
+        && (state.sidebar_open || (state.settings.sidebar && state.width > 120))
+}
+
+/// The sidebar is up as an overlay over a narrow session (escape or ctrl+c close it).
+pub fn sidebar_overlay(state: &State) -> bool {
+    matches!(state.route, crate::state::Route::Session(_))
+        && sidebar_shown(state)
+        && state.width <= 120
+}
+
 pub fn pane_width(state: &State) -> u16 {
     if state.pane.is_some() || diff_docked(state) {
         state.width - terminal_width(state)
-    } else if state.settings.sidebar && state.width > 120 {
+    } else if sidebar_shown(state) && state.width > 120 {
         state.width - SIDEBAR_WIDTH
     } else {
         state.width
@@ -67,6 +81,9 @@ pub fn transcript(
         diff_wrap: state.settings.diff_wrap,
         verbosity: state.settings.verbosity,
         toggled: &session.toggled,
+        shells: &session.shells,
+        floor: session.floor,
+        turn_tokens: state.settings.turn_tokens,
     };
     let mut rows = rows::layout(&session.items, &ctx, Some(&session.layout.0));
     rows.extend(rows::tail(
@@ -79,7 +96,7 @@ pub fn transcript(
 }
 
 pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u16)> {
-    let top = u16::from(!state.tabs.is_empty());
+    let top = u16::from(state.strip());
     let pane = pane_width(state);
     let pad = if state.width < 44 { 1 } else { 2 };
     let x = pad;
@@ -129,7 +146,17 @@ pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u1
     cache.hits = hits;
     cache.viewport = (rows.len(), height);
     drop(cache);
-    if session.scroll > 0 {
+    if session.history_loading {
+        let label = "Loading session history…";
+        let lx = x + w - width(label) as u16;
+        c.put(
+            lx,
+            status_y,
+            label,
+            c.style("text.feedback.info.base"),
+            label.len(),
+        );
+    } else if session.scroll > 0 {
         let label = "Jump to latest ↓";
         let lx = x + w - width(label) as u16;
         c.put(
@@ -146,6 +173,22 @@ pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u1
         None => {}
     }
     cursor
+}
+
+/// Dims everything drawn so far by black at 70/255 and draws the sidebar right-aligned on top.
+pub fn overlay(c: &mut Canvas, state: &State, session: &Session) {
+    let alpha = 70.0 / 255.0;
+    let black = ratatui::style::Color::Rgb(0, 0, 0);
+    let area = c.buf.area;
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let cell = &mut c.buf[(x, y)];
+            cell.fg = super::prompt::blend(cell.fg, black, alpha);
+            cell.bg = super::prompt::blend(cell.bg, black, alpha);
+        }
+    }
+    let x = state.width.saturating_sub(SIDEBAR_WIDTH);
+    sidebar(c, state, session, x, u16::from(state.strip()));
 }
 
 /// The account banners (event, low balance) stacked right above the composer; their rows.
@@ -174,7 +217,7 @@ pub fn terminal_width(state: &State) -> u16 {
 
 /// The terminal grid inside the right pane: `(rows, columns)`.
 pub fn terminal_size(state: &State) -> (u16, u16) {
-    let top = u16::from(!state.tabs.is_empty());
+    let top = u16::from(state.strip());
     (
         state.height.saturating_sub(top).max(1),
         terminal_width(state).saturating_sub(2).max(1),
@@ -242,7 +285,7 @@ pub fn terminal_cursor(state: &State) -> Option<(u16, u16)> {
         return None;
     }
     let (row, col) = parser.screen().cursor_position();
-    let top = u16::from(!state.tabs.is_empty());
+    let top = u16::from(state.strip());
     Some((pane_width(state) + 2 + col, top + row))
 }
 

@@ -10,3 +10,5 @@ pub mod mermaid;
 pub mod model;
 pub mod rows;
 mod tools;
+
+pub use tools::shell_id;

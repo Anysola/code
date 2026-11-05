@@ -659,6 +659,19 @@ fn session_list() {
     assert_screen(&dialog(state, select(list)), "session-list");
 }
 
+/// `V/tui/dialogs.md §5`: while the debounced search runs the list gives way to its status.
+#[test]
+fn session_search_status() {
+    let mut list = lists::sessions(&session_items(), Some("my-app"), now(), under(1).zone);
+    list.query = "fix".into();
+    list.status = Some((
+        "Searching sessions…".into(),
+        anysola_tui::dialog::Tone::Muted,
+    ));
+    let screen = render(&dialog(under(1), select(list)));
+    assert!(screen.contains("Searching sessions…"), "{screen}");
+}
+
 #[test]
 fn sessions_empty() {
     let list = lists::sessions(&[], Some("my-app"), now(), under(1).zone);
@@ -1456,7 +1469,7 @@ fn execute_rows() {
         parts: vec![Part::Tool(call)],
         ..Assistant::default()
     };
-    let screen = render(&session(120, 36, vec![Item::Assistant(assistant)]));
+    let screen = render(&session(120, 36, vec![Item::Assistant(assistant.clone())]));
     for text in [
         "✗ execute",
         "› opencode.models [query=x]",
@@ -1466,6 +1479,17 @@ fn execute_rows() {
     ] {
         assert!(screen.contains(text), "{text}\n{screen}");
     }
+    // `ExecuteCallView`: a click on a call with input lists its arguments under a `│` border.
+    let mut state = session(120, 36, vec![Item::Assistant(assistant)]);
+    state
+        .sessions
+        .get_mut("ses_b")
+        .unwrap()
+        .toggled
+        .insert("call:call_execute:0".into());
+    let screen = render(&state);
+    assert!(screen.contains("› opencode.models  "), "{screen}");
+    assert!(screen.contains("│ query: x"), "{screen}");
 }
 
 /// `dialog-execute.tsx`: title, status and the copy actions of the Execute dialog.
@@ -1504,4 +1528,235 @@ fn execute_dialog_frame() {
     ] {
         assert!(screen.contains(text), "{text}");
     }
+}
+
+/// `session-frame.tsx:387-398`: at ≤ 120 columns the toggled sidebar is an overlay, right-aligned
+/// over the dimmed session, with the docked sidebar's contents.
+#[test]
+fn sidebar_overlay_below_121_columns() {
+    let mut state = session(100, 40, turn(true, true));
+    state.sessions.get_mut("ses_b").unwrap().credits = credits(0, 12, Some(50), 731);
+    let closed = render(&state);
+    assert!(!anysola_tui::view::sidebar_overlay(&state));
+    state.sidebar_open = true;
+    assert!(anysola_tui::view::sidebar_overlay(&state));
+    let wide = {
+        let mut wide = session(170, 40, turn(true, true));
+        wide.sessions.get_mut("ses_b").unwrap().credits = credits(0, 12, Some(50), 731);
+        render(&wide)
+    };
+    let open = render(&state);
+    for (row, (narrow, docked)) in open.split('\n').zip(wide.split('\n')).enumerate().skip(1) {
+        let tail: String = narrow.chars().skip(58).collect();
+        let want: String = docked.chars().skip(128).collect();
+        assert_eq!(tail, want, "row {row}");
+    }
+    assert_ne!(open, closed);
+    let theme = Catalog::bundled().load("anysola", ThemeMode::Dark).unwrap();
+    let mut buffer = Buffer::empty(Rect::new(0, 0, 100, 40));
+    anysola_tui::view::draw(&state, &theme, &mut buffer);
+    assert_ne!(buffer[(5, 10)].bg, theme.fg("background.base"));
+    let mut tiny = session(30, 20, turn(true, true));
+    tiny.sidebar_open = true;
+    assert!(render(&tiny).contains("Fix typo"));
+}
+
+/// `routes/session/index.tsx:2967-3137`: a backgrounded shell shows its command with a spinner
+/// while it runs and the ` Background ` badge; its output appears only once the row is expanded.
+#[test]
+fn background_shell_row() {
+    let mut shell = tool(
+        "shell",
+        json!({"command": "npm run dev"}),
+        Status::Completed,
+    );
+    shell.metadata = json!({"status": "running", "shellID": "sh_1"})
+        .as_object()
+        .unwrap()
+        .clone();
+    let assistant = Assistant {
+        parts: vec![Part::Tool(shell)],
+        ..Assistant::default()
+    };
+    let mut state = session(100, 30, vec![Item::Assistant(assistant)]);
+    state.settings.animations = false;
+    let s = state.sessions.get_mut("ses_b").unwrap();
+    s.shells.insert(
+        "sh_1".into(),
+        anysola_tui::transcript::rows::BackgroundView {
+            running: true,
+            output: "ready on :3000\n".into(),
+            ..Default::default()
+        },
+    );
+    let collapsed = render(&state);
+    assert!(collapsed.contains("⋯ npm run dev"));
+    assert!(collapsed.contains(" Background "));
+    assert!(!collapsed.contains("ready on :3000"));
+    let s = state.sessions.get_mut("ses_b").unwrap();
+    s.toggled.insert("shell:call_shell".into());
+    assert!(render(&state).contains("ready on :3000"));
+    let s = state.sessions.get_mut("ses_b").unwrap();
+    s.shells.get_mut("sh_1").unwrap().running = false;
+    s.shells.get_mut("sh_1").unwrap().truncated = true;
+    let done = render(&state);
+    assert!(done.contains("$ npm run dev") && done.contains("[earlier output omitted]"));
+    let mut task = tool(
+        "subagent",
+        json!({"description": "scan", "subagent_type": "explore"}),
+        Status::Completed,
+    );
+    task.metadata = json!({"status": "running"}).as_object().unwrap().clone();
+    let assistant = Assistant {
+        parts: vec![Part::Tool(task)],
+        ..Assistant::default()
+    };
+    let screen = render(&session(100, 20, vec![Item::Assistant(assistant)]));
+    assert!(
+        screen.contains("✓ Explore Subagent — scan  Background "),
+        "{screen}"
+    );
+}
+
+/// `routes/session/index.tsx:147-148`, `:1560-1563`: only the newest entries are laid out; the
+/// status row says `Loading session history…` while `session.first` lays out the rest.
+#[test]
+fn tail_first_transcript() {
+    let items: Vec<Item> = (0..100)
+        .map(|n| Item::User {
+            id: format!("m{n}"),
+            text: format!("message {n}"),
+            agent: "build".into(),
+            files: Vec::new(),
+            created: now(),
+        })
+        .collect();
+    let floor = anysola_tui::transcript::rows::floor_before(&items, items.len(), 40);
+    assert_eq!(floor, 60);
+    assert_eq!(
+        anysola_tui::transcript::rows::floor_before(&items, floor, 60),
+        0
+    );
+    let mut state = session(100, 30, items);
+    let s = state.sessions.get_mut("ses_b").unwrap();
+    s.floor = floor;
+    let full = {
+        let s = state.sessions.get("ses_b").unwrap().clone();
+        let mut whole = s.clone();
+        whole.floor = 0;
+        let theme = Catalog::bundled().load("anysola", ThemeMode::Dark).unwrap();
+        (
+            anysola_tui::view::transcript_rows(&state, &s, &theme, 96),
+            anysola_tui::view::transcript_rows(&state, &whole, &theme, 96),
+        )
+    };
+    assert!(full.0 * 2 < full.1, "{full:?}");
+    state.sessions.get_mut("ses_b").unwrap().history_loading = true;
+    assert!(render(&state).contains("Loading session history…"));
+}
+
+/// `routes/session/index.tsx:1724-1863`: with `debug.turn_tokens` each finished turn gets a
+/// token summary; a click opens the per-step table with cache-bust warnings.
+#[test]
+fn turn_token_table() {
+    use anysola_core::session::message::{Cache, Tokens};
+    use anysola_tui::transcript::model::StepUsage;
+    let step = |id: &str, read: u64, finish: &str, terminal: bool| {
+        Item::Assistant(Assistant {
+            id: id.into(),
+            agent: "build".into(),
+            model: "Claude Sonnet 5.5".into(),
+            created: now(),
+            turn_start: now(),
+            completed: Some(now() + 1000),
+            terminal,
+            step: Some(Box::new(StepUsage {
+                tokens: Tokens {
+                    input: 1000,
+                    output: 200,
+                    reasoning: 0,
+                    cache: Cache { read, write: 0 },
+                },
+                finish: finish.into(),
+                model: "Claude Sonnet 5.5".into(),
+            })),
+            parts: vec![Part::Text {
+                text: "ok".into(),
+                done: true,
+            }],
+            ..Assistant::default()
+        })
+    };
+    let items = vec![
+        step("a1", 12000, "tool-calls", false),
+        step("a2", 9000, "stop", true),
+    ];
+    let mut state = session(110, 40, items);
+    let off = render(&state);
+    assert!(!off.contains("Tokens:"));
+    state.settings.turn_tokens = anysola_tui::state::TurnTokens::On;
+    let screen = render(&state);
+    assert!(
+        screen.contains("+ Tokens: 2 steps · latest: 1,200 new · 9,000 cached · 10,200 total · ! 1 likely cache bust"),
+        "{screen}"
+    );
+    state
+        .sessions
+        .get_mut("ses_b")
+        .unwrap()
+        .toggled
+        .insert("tokens:a2".into());
+    let screen = render(&state);
+    for text in [
+        "- Tokens: 2 steps",
+        "Step         New  Cached   Total",
+        "tool-call  1,200  12,000  13,200",
+        "stop       1,200   9,000  10,200",
+        "! Likely cache bust: 3,000 fewer cached tokens than the previous step",
+    ] {
+        assert!(screen.contains(text), "{text}\n{screen}");
+    }
+}
+
+/// `component/session-tabs.tsx:542-1273`, `ui/layout.ts`: `tabs.layout = vertical` puts the tabs
+/// in a 42-column rail (number or status, title, project) with the routes beside it.
+#[test]
+fn vertical_tabs() {
+    use anysola_tui::view::{vertical_tab_at, vertical_tabs_width};
+    assert_eq!(vertical_tabs_width(170, 42), Some(42));
+    assert_eq!(vertical_tabs_width(105, 42), None);
+    assert_eq!(vertical_tabs_width(150, 90), Some(72));
+    let mut state = session(170, 30, turn(true, true));
+    state.settings.tabs_vertical = true;
+    state.settings.tab_numbers = true;
+    state.left = 42;
+    state.width = 128;
+    let screen = render_full(&state, 170);
+    let rows: Vec<&str> = screen.split('\n').collect();
+    let column = |y: usize| rows[y].chars().take(42).collect::<String>();
+    assert!(column(1).starts_with(" 1 "), "{}", column(1));
+    assert!(
+        column(4).starts_with(" 2 Fix typo in hello.txt"),
+        "{}",
+        column(4)
+    );
+    assert!(column(5).contains("my-app"), "{}", column(5));
+    assert!(column(7).starts_with(" + New session"), "{}", column(7));
+    assert_eq!(vertical_tab_at(&state, 4), Some(Some(1)));
+    assert_eq!(vertical_tab_at(&state, 6), None);
+    assert_eq!(vertical_tab_at(&state, 7), Some(None));
+}
+
+fn render_full(state: &State, width: u16) -> String {
+    let theme = Catalog::bundled().load("anysola", ThemeMode::Dark).unwrap();
+    let mut buffer = Buffer::empty(Rect::new(0, 0, width, state.height));
+    anysola_tui::view::draw(state, &theme, &mut buffer);
+    (0..state.height)
+        .map(|y| {
+            (0..width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }

@@ -27,6 +27,7 @@ pub fn patch_options<'a>(view: &Diff, screen: u16, path: &'a str) -> diff::Optio
         split: width >= 100,
         filetype: crate::transcript::highlight::filetype(path),
         wrap: true,
+        digits: 0,
     }
 }
 
@@ -113,7 +114,8 @@ pub fn draw(c: &mut Canvas, view: &Diff) {
         c.put(px, body.y, &file.path, bold, pw);
         top += 2;
     }
-    let lines = view.rendered(area.width, c.theme);
+    let rows = area.height.saturating_sub(top) as usize;
+    let lines = view.rendered_window(area.width, c.theme, view.scroll..view.scroll + rows);
     for (i, line) in lines
         .iter()
         .skip(view.scroll)

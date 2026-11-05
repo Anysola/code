@@ -20,8 +20,10 @@ mod session;
 pub use diffview::{patch_options, tree_width as diff_tree_width};
 pub use home::WORDMARK;
 pub use prompt::{max_rows, textarea_width};
+pub use session::{
+    SIDEBAR_WIDTH, pane_width, sidebar_overlay, sidebar_shown, terminal_size, terminal_width,
+};
 pub use session::{diff_docked, diff_width, onboarding_shown};
-pub use session::{pane_width, terminal_size, terminal_width};
 
 /// Width of the session pane's content box.
 pub fn session_content_width(state: &State) -> usize {
@@ -105,7 +107,154 @@ pub fn round(value: f64) -> u16 {
     (value + 0.5).floor().max(0.0) as u16
 }
 
+/// Draws the frame; with a vertical tab column the routes draw beside it, in their own
+/// coordinates (`state.width` is what is left of the terminal).
 pub fn draw(state: &State, theme: &Theme, buf: &mut Buffer) -> Drawn {
+    if state.left == 0 {
+        return draw_body(state, theme, buf);
+    }
+    let mut body = Buffer::empty(Rect::new(0, 0, state.width, state.height));
+    let drawn = draw_body(state, theme, &mut body);
+    for y in 0..state.height.min(buf.area.height) {
+        for x in 0..state.width {
+            if state.left + x < buf.area.width {
+                buf[(state.left + x, y)] = body[(x, y)].clone();
+            }
+        }
+    }
+    vertical_tabs(&mut Canvas { buf, theme }, state);
+    Drawn {
+        cursor: drawn.cursor.map(|(x, y)| (x + state.left, y)),
+    }
+}
+
+/// The vertical tab column's width on a terminal this wide, when it fits (`ui/layout.ts`).
+pub fn vertical_tabs_width(total: u16, preferred: u16) -> Option<u16> {
+    let width = preferred.min(72).min(total.saturating_sub(44)).max(5);
+    (total >= width + 64).then_some(width)
+}
+
+/// Which vertical tab a row of the column shows: `Some(index)`, or `None` for `+ New session`.
+pub fn vertical_tab_at(state: &State, row: u16) -> Option<Option<usize>> {
+    let compact = state.left < 12;
+    let stride = if compact { 2 } else { 3 };
+    let top = if compact { 2 } else { 1 };
+    let offset = row.checked_sub(top)? as usize;
+    let index = offset / stride;
+    if index < state.tabs.len() {
+        return (offset % stride < stride - 1).then_some(Some(index));
+    }
+    (offset == state.tabs.len() * stride).then_some(None)
+}
+
+/// The vertical tab column (`component/session-tabs.tsx:542-1273`): per tab a status or number
+/// column and the title, then the project (and worktree branch); `+ New session` below.
+fn vertical_tabs(c: &mut Canvas, state: &State) {
+    let w = state.left;
+    let bg = c.theme.fg("background.raised.base");
+    c.fill(Rect::new(0, 0, w, state.height), bg);
+    let selected_bg = c.theme.fg("background.action.primary.selected");
+    let active = match &state.route {
+        Route::Session(id) => Some(id.as_str()),
+        Route::Home => None,
+    };
+    let compact = w < 12;
+    let number_w = state.tabs.len().to_string().len().max(2);
+    let mut y = if compact { 2 } else { 1 };
+    for (index, tab) in state.tabs.iter().enumerate() {
+        if y >= state.height {
+            return;
+        }
+        let selected = active == Some(tab.session_id.as_str());
+        let busy = state.sessions.get(&tab.session_id).is_some_and(|s| s.busy);
+        let fg = if selected { "text.base" } else { "text.muted" };
+        let mut style = c.style(fg);
+        if selected {
+            style = style.add_modifier(Modifier::BOLD);
+        }
+        let marker = if state.settings.tab_numbers {
+            ((index + 1).to_string(), fg)
+        } else {
+            match (tab.attention, tab.question) {
+                (true, true) => ("?".into(), "text.feedback.warning.base"),
+                (true, false) => ("!".into(), "text.feedback.warning.base"),
+                _ if busy && state.settings.animations => (
+                    crate::transcript::rows::spinner_frame(state.now).into(),
+                    "text.muted",
+                ),
+                _ if busy => ("⋯".into(), "text.muted"),
+                _ if tab.unread => ("•".into(), "text.action.primary.base"),
+                _ if compact => (
+                    tab.title
+                        .trim_start()
+                        .chars()
+                        .next()
+                        .unwrap_or('U')
+                        .to_string(),
+                    fg,
+                ),
+                _ => (String::new(), fg),
+            }
+        };
+        let row_bg = match (selected, compact) {
+            (true, false) => selected_bg,
+            (true, true) => c.theme.fg("background.raised.high"),
+            _ => bg,
+        };
+        if compact {
+            c.fill(Rect::new(0, y, w, 1), row_bg);
+            let x = (w.saturating_sub(width(&marker.0) as u16)) / 2;
+            c.put(x, y, &marker.0, c.style(marker.1).bg(row_bg), w as usize);
+            y += 2;
+            continue;
+        }
+        c.fill(Rect::new(0, y, w, 2.min(state.height - y)), row_bg);
+        let mark_x = (number_w - width(&marker.0).min(number_w)) as u16;
+        c.put(mark_x, y, &marker.0, c.style(marker.1).bg(row_bg), number_w);
+        let title_x = number_w as u16 + 1;
+        let room = (w as usize).saturating_sub(title_x as usize + 1);
+        let title = if tab.title.is_empty() {
+            "Untitled session"
+        } else {
+            &tab.title
+        };
+        c.put(title_x, y, title, style.bg(row_bg), room);
+        if y + 1 < state.height {
+            let directory = state
+                .sessions
+                .get(&tab.session_id)
+                .map_or(state.directory.as_str(), |s| s.directory.as_str());
+            let project = std::path::Path::new(directory)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let detail_fg = prompt::blend(c.theme.fg("text.muted"), row_bg, 0.35);
+            c.put(
+                title_x,
+                y + 1,
+                &project,
+                Style::new().fg(detail_fg).bg(row_bg),
+                room.saturating_sub(1),
+            );
+        }
+        y += 3;
+    }
+    if y < state.height {
+        let home = active.is_none();
+        let row_bg = if home && !compact { selected_bg } else { bg };
+        c.fill(Rect::new(0, y, w, 1), row_bg);
+        let fg = if home { "text.base" } else { "text.muted" };
+        let style = c.style(fg).bg(row_bg);
+        if compact {
+            c.put(w / 2, y, "+", style, 1);
+        } else {
+            c.put(1, y, "+", style, 1);
+            c.put(3, y, "New session", style, (w as usize).saturating_sub(4));
+        }
+    }
+}
+
+fn draw_body(state: &State, theme: &Theme, buf: &mut Buffer) -> Drawn {
     let area = buf.area;
     let mut c = Canvas { buf, theme };
     let base = Style::new()
@@ -117,7 +266,7 @@ pub fn draw(state: &State, theme: &Theme, buf: &mut Buffer) -> Drawn {
             c.buf[(x, y)].set_symbol(" ");
         }
     }
-    if !state.tabs.is_empty() {
+    if state.strip() {
         tabs(&mut c, state);
     }
     let cursor = match &state.route {
@@ -133,7 +282,7 @@ pub fn draw(state: &State, theme: &Theme, buf: &mut Buffer) -> Drawn {
     let cursor = match &state.diff {
         Some(view) if session::diff_docked(state) => {
             let x = session::pane_width(state);
-            let top = u16::from(!state.tabs.is_empty());
+            let top = u16::from(state.strip());
             let area = Rect::new(0, 0, state.width - x, state.height - top);
             let mut panel = Buffer::empty(area);
             diffview::draw(
@@ -154,6 +303,13 @@ pub fn draw(state: &State, theme: &Theme, buf: &mut Buffer) -> Drawn {
             None
         }
         None => cursor,
+    };
+    let cursor = match state.session() {
+        Some(session) if session::sidebar_overlay(state) => {
+            session::overlay(&mut c, state, session);
+            None
+        }
+        _ => cursor,
     };
     let cursor = match state.dialogs.last() {
         Some(top) => dialog::draw(&mut c, top),

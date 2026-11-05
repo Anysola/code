@@ -318,6 +318,11 @@ impl Core {
         crate::tool::shell::background_shells(session_id)
     }
 
+    /// How a background shell ended; `None` while it runs.
+    pub fn shell_end(&self, id: &str) -> Option<crate::tool::shell::ShellEnd> {
+        crate::tool::shell::background_end(id)
+    }
+
     /// Ends a background shell by its shell ID.
     pub fn kill_shell(&self, id: &str) -> bool {
         crate::tool::shell::kill_background(id)

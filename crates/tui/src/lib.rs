@@ -10,6 +10,7 @@ pub mod dialog;
 pub mod diffview;
 pub mod editor;
 pub mod form;
+pub mod hyperlink;
 pub mod keymap;
 pub mod menus;
 pub mod settings;

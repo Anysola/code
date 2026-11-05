@@ -83,6 +83,65 @@ pub struct Options<'a> {
     pub filetype: &'a str,
     /// Long lines wrap by word (`diffs.wrap`); otherwise they are cut at the edge.
     pub wrap: bool,
+    /// Line-number columns; 0 sizes them from the patch.
+    pub digits: usize,
+}
+
+/// Added-only patches longer than this lay out in chunks (`patch-diff.tsx:24-25`).
+pub const VIRTUAL_MIN_LINES: usize = 3000;
+pub const VIRTUAL_CHUNK_LINES: usize = 128;
+
+/// A new file's patch cut into `size`-line chunks, each a patch of its own with the file's
+/// header; `None` unless the whole patch is one `@@ -0,0 +1,N @@` hunk of `+` lines.
+pub fn split_added(patch: &str, size: usize) -> Option<Vec<String>> {
+    let at = patch.find("@@ -0,0 +1,")?;
+    if at > 0 && !patch[..at].ends_with('\n') {
+        return None;
+    }
+    let header_end = patch[at..].find('\n')? + at;
+    let count: usize = patch[at + 11..header_end].split(' ').next()?.parse().ok()?;
+    let body = patch[header_end + 1..]
+        .strip_suffix('\n')
+        .unwrap_or(&patch[header_end + 1..]);
+    let mut lines: Vec<&str> = body.split('\n').collect();
+    let marker = lines
+        .last()
+        .filter(|l| l.starts_with("\\ No newline at end of file"))
+        .copied();
+    if marker.is_some() {
+        lines.pop();
+    }
+    if lines.len() != count || lines.iter().any(|l| !l.starts_with('+')) {
+        return None;
+    }
+    let prefix = &patch[..at];
+    Some(
+        lines
+            .chunks(size)
+            .enumerate()
+            .map(|(index, slice)| {
+                let start = index * size;
+                let tail = match marker {
+                    Some(m) if start + size >= count => format!("\n{m}"),
+                    _ => String::new(),
+                };
+                format!(
+                    "{prefix}@@ -0,0 +{},{} @@\n{}{tail}",
+                    start + 1,
+                    slice.len(),
+                    slice.join("\n")
+                )
+            })
+            .collect(),
+    )
+}
+
+/// The chunks of a patch the viewer virtualizes (added-only, more than 3000 lines).
+pub fn virtual_chunks(patch: &str) -> Option<Vec<String>> {
+    split_added(patch, VIRTUAL_CHUNK_LINES).filter(|chunks| {
+        (chunks.len() - 1) * VIRTUAL_CHUNK_LINES + counts(chunks.last().unwrap()).1
+            > VIRTUAL_MIN_LINES
+    })
 }
 
 struct Colors {
@@ -232,7 +291,8 @@ pub fn render(patch: &str, options: &Options, theme: &Theme) -> Vec<Line> {
         .max()
         .unwrap_or(1)
         .to_string()
-        .len();
+        .len()
+        .max(options.digits);
     let mut out = Vec::new();
     for (i, hunk) in hunks.iter().enumerate() {
         if i > 0 {
@@ -355,6 +415,7 @@ mod tests {
             split,
             filetype: "",
             wrap: true,
+            digits: 0,
         };
         render(PATCH, &options, &theme)
             .iter()
@@ -371,6 +432,7 @@ mod tests {
             split: false,
             filetype: "",
             wrap: true,
+            digits: 0,
         };
         assert_eq!(hunk_rows(&render(patch, &options, &theme)), [0, 2]);
     }
@@ -393,10 +455,25 @@ mod tests {
                 split: false,
                 filetype: "",
                 wrap,
+                digits: 0,
             };
             render(patch, &options, &theme).len()
         };
         assert!(rows(true) > rows(false));
         assert_eq!(rows(false), 2);
+    }
+
+    #[test]
+    fn added_patches_split_into_chunks() {
+        let patch =
+            "--- /dev/null\n+++ b/a\n@@ -0,0 +1,3 @@\n+a\n+b\n+c\n\\ No newline at end of file\n";
+        let chunks = split_added(patch, 2).unwrap();
+        assert_eq!(chunks[0], "--- /dev/null\n+++ b/a\n@@ -0,0 +1,2 @@\n+a\n+b");
+        assert_eq!(
+            chunks[1],
+            "--- /dev/null\n+++ b/a\n@@ -0,0 +3,1 @@\n+c\n\\ No newline at end of file"
+        );
+        assert!(split_added("@@ -1,2 +1,2 @@\n-a\n+b\n", 2).is_none());
+        assert!(virtual_chunks(patch).is_none());
     }
 }

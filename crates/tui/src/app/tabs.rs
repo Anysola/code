@@ -129,6 +129,74 @@ impl App {
         }
     }
 
+    /// Reads `layout.verticalTabsWidth` (default 42).
+    pub(super) fn load_layout(&mut self) {
+        let width = std::fs::read_to_string(&self.layout_path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .and_then(|v| v["verticalTabsWidth"].as_u64());
+        if let Some(width) = width {
+            self.state.tabs_width = width.clamp(5, 72) as u16;
+        }
+    }
+
+    fn save_layout(&self) {
+        let mut value = std::fs::read_to_string(&self.layout_path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .filter(Value::is_object)
+            .unwrap_or_else(|| json!({}));
+        value["verticalTabsWidth"] = json!(self.state.tabs_width);
+        if let Some(dir) = self.layout_path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&self.layout_path, value.to_string());
+    }
+
+    /// A mouse event over the vertical tab column; false when it is elsewhere.
+    pub(super) fn tabs_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> bool {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        let left = self.state.left;
+        let total = self.state.width + left;
+        match mouse.kind {
+            MouseEventKind::Drag(MouseButton::Left) if self.tabs_drag => {
+                let width = (mouse.column + 1).clamp(5, 72.min(total.saturating_sub(44)).max(5));
+                self.state.tabs_width = width;
+                true
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.tabs_drag => {
+                self.tabs_drag = false;
+                self.save_layout();
+                true
+            }
+            _ if left == 0 || mouse.column >= left => false,
+            MouseEventKind::Down(MouseButton::Left) if mouse.column + 1 == left => {
+                self.tabs_drag = true;
+                true
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                match crate::view::vertical_tab_at(&self.state, mouse.row) {
+                    Some(Some(index)) => self.select_tab(index + 1),
+                    Some(None) => self.run_command("session.new", None),
+                    None => {}
+                }
+                true
+            }
+            MouseEventKind::Down(MouseButton::Middle) => {
+                if let Some(Some(index)) = crate::view::vertical_tab_at(&self.state, mouse.row) {
+                    let id = self.state.tabs.remove(index).session_id;
+                    if matches!(&self.state.route, crate::state::Route::Session(s) if *s == id) {
+                        self.state.route = crate::state::Route::Home;
+                    }
+                    self.closed.push(id);
+                    self.refresh_recent();
+                }
+                true
+            }
+            _ => true,
+        }
+    }
+
     /// Open tabs and the viewed session that work or wait, as OSC 7501 records.
     pub(super) fn report_status(&mut self) {
         let Some(records) = self.records.as_mut() else {

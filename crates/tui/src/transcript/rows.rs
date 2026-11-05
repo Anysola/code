@@ -1,6 +1,6 @@
 //! Transcript items laid out as screen rows: user boxes, markdown, thinking, tools, footers.
 
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use serde_json::Value;
 
@@ -8,7 +8,7 @@ use super::diff;
 use super::grouping::{self, Groups, Kind};
 use super::highlight::filetype;
 use super::markdown::{self, Line, wrap_spans};
-use super::model::{Assistant, Item, Part, Status};
+use super::model::{Assistant, Item, Part, Status, Tool};
 use crate::state::Verbosity;
 use crate::text::{self, duration, title_case};
 use crate::theme::Theme;
@@ -62,6 +62,21 @@ pub struct Ctx<'a> {
     pub verbosity: Verbosity,
     /// Groups the user opened (or closed, when they start open).
     pub toggled: &'a std::collections::HashSet<String>,
+    pub turn_tokens: crate::state::TurnTokens,
+    /// Items before this one are not laid out yet (tail-first mounting).
+    pub floor: usize,
+    /// Background shells by shell ID, as last polled.
+    pub shells: &'a std::collections::HashMap<String, BackgroundView>,
+}
+
+/// What the transcript knows of a background shell: whether it still runs, and its output
+/// (the last 1 MiB, read while its row is expanded).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BackgroundView {
+    pub running: bool,
+    pub output: String,
+    pub truncated: bool,
+    pub file: Option<std::path::PathBuf>,
 }
 
 impl Ctx<'_> {
@@ -142,13 +157,61 @@ pub struct Cache {
     pub viewport: (usize, usize),
 }
 
+/// The opened tool rows of an item (`shell:<call>`, `call:<call>:<n>`), which change its layout.
+fn tool_toggles(item: &Item, toggled: &std::collections::HashSet<String>) -> String {
+    let Item::Assistant(a) = item else {
+        return String::new();
+    };
+    let mut keys: Vec<&str> = toggled
+        .iter()
+        .filter(|key| {
+            a.parts.iter().any(|p| match p {
+                Part::Tool(t) => {
+                    key.strip_prefix("shell:") == Some(t.call_id.as_str())
+                        || key
+                            .strip_prefix("call:")
+                            .and_then(|k| k.strip_prefix(t.call_id.as_str()))
+                            .is_some_and(|k| k.starts_with(':'))
+                }
+                _ => false,
+            })
+        })
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    keys.join(",")
+}
+
+/// Rendered entries newest first mount on open (`routes/session/index.tsx:147-148`).
+pub const TAIL_ROWS: usize = 40;
+/// Older entries mount in chunks this big as the reader nears the top.
+pub const BACKFILL_CHUNK: usize = 60;
+
+/// The first item to lay out so that `budget` entries from `end` back are shown; an assistant
+/// message counts one entry per part.
+pub fn floor_before(items: &[Item], end: usize, budget: usize) -> usize {
+    let mut used = 0;
+    let mut at = end.min(items.len());
+    while at > 0 && used < budget {
+        at -= 1;
+        used += match &items[at] {
+            Item::Assistant(a) => a.parts.len().max(1),
+            _ => 1,
+        };
+    }
+    at
+}
+
 /// An item that no longer changes with time (no spinner, no running duration).
 fn settled(item: &Item) -> bool {
     match item {
         Item::Assistant(a) => {
             a.completed.is_some()
                 && a.parts.iter().all(|p| match p {
-                    Part::Tool(t) => !matches!(t.status, Status::Running | Status::Streaming),
+                    Part::Tool(t) => {
+                        !matches!(t.status, Status::Running | Status::Streaming)
+                            && super::tools::shell_id(t).is_none()
+                    }
                     Part::Reasoning { end, .. } => end.is_some(),
                     Part::Text { done, .. } => *done,
                 })
@@ -189,28 +252,29 @@ pub fn layout(items: &[Item], ctx: &Ctx, cache: Option<&std::sync::Mutex<Cache>>
     );
     let mut groups: Vec<Vec<Row>> = Vec::new();
     let mut firsts: Vec<(usize, bool)> = Vec::new();
-    for (index, item) in items.iter().enumerate() {
+    let mut usage = TurnUsage::default();
+    if ctx.turn_tokens != crate::state::TurnTokens::Off {
+        for item in &items[..ctx.floor.min(items.len())] {
+            usage.add(item);
+        }
+    }
+    for (index, item) in items.iter().enumerate().skip(ctx.floor) {
         if matches!(item, Item::User { .. } | Item::Assistant(_)) {
             firsts.push((groups.len(), matches!(item, Item::User { .. })));
         }
-        let signature = exploration.signature(index);
-        if let Some(cache) = cache.as_ref()
-            && let Some((cached, sig, rows)) = cache.entries.get(&index)
-            && cached == item
-            && *sig == signature
+        layout_item(
+            item,
+            index,
+            &exploration,
+            ctx,
+            cache.as_deref_mut(),
+            &mut groups,
+        );
+        if ctx.turn_tokens != crate::state::TurnTokens::Off
+            && let Some(steps) = usage.add(item)
         {
-            groups.extend(rows.iter().cloned());
-            continue;
-        }
-        let start = groups.len();
-        item_groups(item, index, &exploration, ctx, &mut groups);
-        if let Some(cache) = cache.as_mut() {
-            if settled(item) {
-                let rows = groups[start..].to_vec();
-                cache.entries.insert(index, (item.clone(), signature, rows));
-            } else {
-                cache.entries.remove(&index);
-            }
+            groups.push(turn_tokens(&steps, usage.previous.as_ref(), ctx));
+            usage.close(&steps);
         }
     }
     let mut rows = Vec::new();
@@ -229,6 +293,293 @@ pub fn layout(items: &[Item], ctx: &Ctx, cache: Option<&std::sync::Mutex<Cache>>
     rows
 }
 
+/// One item's groups, reused from the cache while the item and its layout keys are unchanged.
+fn layout_item(
+    item: &Item,
+    index: usize,
+    exploration: &Groups,
+    ctx: &Ctx,
+    cache: Option<&mut Cache>,
+    groups: &mut Vec<Vec<Row>>,
+) {
+    let signature = exploration.signature(index) + &tool_toggles(item, ctx.toggled);
+    if let Some(cache) = cache.as_ref()
+        && let Some((cached, sig, rows)) = cache.entries.get(&index)
+        && cached == item
+        && *sig == signature
+    {
+        groups.extend(rows.iter().cloned());
+        return;
+    }
+    let start = groups.len();
+    item_groups(item, index, exploration, ctx, groups);
+    if let Some(cache) = cache {
+        if settled(item) {
+            let rows = groups[start..].to_vec();
+            cache.entries.insert(index, (item.clone(), signature, rows));
+        } else {
+            cache.entries.remove(&index);
+        }
+    }
+}
+
+/// The steps of the open turn and the cache reads its predecessor ended with
+/// (`routes/session/rows.ts:351-372`).
+#[derive(Default)]
+struct TurnUsage {
+    steps: Vec<Assistant>,
+    previous: Option<(u64, String)>,
+}
+
+impl TurnUsage {
+    /// Adds an item; returns the turn's steps with tokens once its last step finished.
+    fn add(&mut self, item: &Item) -> Option<Vec<Assistant>> {
+        let Item::Assistant(a) = item else {
+            return None;
+        };
+        self.steps.push(a.clone());
+        if !a.terminal || a.completed.is_none() {
+            return None;
+        }
+        let steps: Vec<Assistant> = std::mem::take(&mut self.steps)
+            .into_iter()
+            .filter(|s| s.step.as_ref().is_some_and(|u| token_total(&u.tokens) > 0))
+            .collect();
+        if steps.is_empty() {
+            return None;
+        }
+        Some(steps)
+    }
+
+    fn close(&mut self, steps: &[Assistant]) {
+        if let Some(usage) = steps.last().and_then(|a| a.step.as_ref()) {
+            self.previous = Some((usage.tokens.cache.read, usage.model.clone()));
+        }
+    }
+}
+
+fn token_total(t: &anysola_core::session::message::Tokens) -> u64 {
+    t.input + t.output + t.reasoning + t.cache.read + t.cache.write
+}
+
+/// Fewer cached tokens than the step before on the same model (`rows.ts:421-433`).
+fn cache_drop(previous: Option<&(u64, String)>, read: u64, model: &str) -> Option<u64> {
+    let (before, previous_model) = previous?;
+    if previous_model != model {
+        return None;
+    }
+    before.checked_sub(read).filter(|drop| *drop > 0)
+}
+
+/// `1234567` as `1,234,567`.
+fn grouped(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// The `debug.turn_tokens` summary under a turn (`routes/session/index.tsx:1724-1863`); a click
+/// opens the per-step table.
+fn turn_tokens(steps: &[Assistant], previous: Option<&(u64, String)>, ctx: &Ctx) -> Vec<Row> {
+    let id = steps.last().map(|a| a.id.clone()).unwrap_or_default();
+    struct Step<'a> {
+        finish: String,
+        new: u64,
+        cached: u64,
+        total: u64,
+        drop: Option<u64>,
+        tools: Vec<&'a Tool>,
+    }
+    let verbose = ctx.turn_tokens == crate::state::TurnTokens::Verbose;
+    let mut before = previous.cloned();
+    let steps: Vec<Step> = steps
+        .iter()
+        .map(|a| {
+            let usage = a.step.as_deref().cloned().unwrap_or_default();
+            let t = usage.tokens;
+            let total = token_total(&t);
+            let drop = cache_drop(before.as_ref(), t.cache.read, &usage.model);
+            before = Some((t.cache.read, usage.model.clone()));
+            Step {
+                finish: match usage.finish.as_str() {
+                    "tool-calls" => "tool-call".into(),
+                    f => f.to_string(),
+                },
+                new: total - t.cache.read,
+                cached: t.cache.read,
+                total,
+                drop,
+                tools: if verbose {
+                    a.parts
+                        .iter()
+                        .filter_map(|p| match p {
+                            Part::Tool(t) => Some(t),
+                            _ => None,
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+            }
+        })
+        .collect();
+    let hit = format!("tokens:{id}");
+    let muted = ctx.style("text.muted");
+    let warning = ctx.style("text.feedback.warning.base");
+    let latest = steps.last();
+    let drops = steps.iter().filter(|s| s.drop.is_some()).count();
+    let count = steps.len();
+    let mut summary = vec![
+        Span::styled(if expanded(&hit, ctx) { "- " } else { "+ " }, muted),
+        Span::styled("Tokens", muted.add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!(
+                ": {count} {} · latest: {} new · {} cached · {} total",
+                if count == 1 { "step" } else { "steps" },
+                grouped(latest.map_or(0, |s| s.new)),
+                grouped(latest.map_or(0, |s| s.cached)),
+                grouped(latest.map_or(0, |s| s.total)),
+            ),
+            muted,
+        ),
+    ];
+    if drops > 0 {
+        summary.push(Span::styled(
+            format!(
+                " · ! {drops} likely cache {}",
+                if drops == 1 { "bust" } else { "busts" }
+            ),
+            warning,
+        ));
+    }
+    let mut rows = vec![Row::text(3, summary)];
+    if expanded(&hit, ctx) {
+        let w = |f: &dyn Fn(&Step) -> usize, title: &str| {
+            steps.iter().map(f).max().unwrap_or(0).max(title.len())
+        };
+        let step_w = w(&|s| s.finish.len(), "Step");
+        let new_w = w(&|s| grouped(s.new).len(), "New");
+        let cached_w = w(&|s| grouped(s.cached).len(), "Cached");
+        let total_w = w(&|s| grouped(s.total).len(), "Total");
+        rows.push(Row::text(
+            5,
+            vec![Span::styled(
+                format!(
+                    "{:<sw$}{:>new_w$}  {:>cached_w$}  {:>total_w$}",
+                    "Step",
+                    "New",
+                    "Cached",
+                    "Total",
+                    sw = step_w + 2
+                ),
+                muted.add_modifier(Modifier::ITALIC),
+            )],
+        ));
+        for step in &steps {
+            let style = if verbose && step.finish == "tool-call" {
+                ctx.style("text.base")
+            } else {
+                muted
+            };
+            rows.push(Row::text(
+                5,
+                vec![
+                    Span::styled(format!("{:<sw$}", step.finish, sw = step_w + 2), style),
+                    Span::styled(
+                        format!("{:>new_w$}", grouped(step.new)),
+                        style.add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!(
+                            "  {:>cached_w$}  {:>total_w$}",
+                            grouped(step.cached),
+                            grouped(step.total)
+                        ),
+                        style,
+                    ),
+                ],
+            ));
+            let name_w = step.tools.iter().map(|t| t.name.len()).max().unwrap_or(0) + 2;
+            for tool in &step.tools {
+                rows.push(Row::text(
+                    7,
+                    vec![
+                        Span::styled(
+                            format!("{:<name_w$}", tool.name),
+                            muted.add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(tool_summary(&tool.input), muted.add_modifier(Modifier::DIM)),
+                    ],
+                ));
+            }
+            if let Some(drop) = step.drop {
+                rows.push(Row::text(
+                    5,
+                    vec![Span::styled(
+                        format!(
+                            "! Likely cache bust: {} fewer cached tokens than the previous step",
+                            grouped(drop)
+                        ),
+                        warning,
+                    )],
+                ));
+            }
+        }
+    }
+    for row in &mut rows {
+        row.group = Some(hit.clone());
+    }
+    rows
+}
+
+fn expanded(hit: &str, ctx: &Ctx) -> bool {
+    ctx.toggled.contains(hit)
+}
+
+/// A tool call's input in one line: its main field first, then `key: value` pairs.
+fn tool_summary(input: &Value) -> String {
+    let Some(fields) = input.as_object() else {
+        return input.as_str().unwrap_or_default().to_string();
+    };
+    let primary_key = [
+        "command",
+        "id",
+        "pattern",
+        "url",
+        "query",
+        "path",
+        "description",
+        "code",
+    ]
+    .into_iter()
+    .find(|k| fields.contains_key(*k));
+    let text = |v: &Value| match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    };
+    let mut parts: Vec<String> = primary_key
+        .and_then(|k| fields.get(k))
+        .and_then(text)
+        .into_iter()
+        .collect();
+    parts.extend(
+        fields
+            .iter()
+            .filter(|(k, _)| Some(k.as_str()) != primary_key)
+            .filter_map(|(k, v)| text(v).map(|v| format!("{k}: {v}"))),
+    );
+    parts.retain(|p| !p.is_empty());
+    parts.join("  ")
+}
+
 fn item_groups(
     item: &Item,
     index: usize,
@@ -237,7 +588,7 @@ fn item_groups(
     groups: &mut Vec<Vec<Row>>,
 ) {
     match item {
-        Item::User { text, agent, .. } => groups.push(user(text, agent, ctx)),
+        Item::User { text, agent, .. } => groups.push(user(text, agent, index, ctx)),
         Item::Assistant(a) => assistant(a, index, exploration, ctx, groups),
         Item::Shell {
             command,
@@ -305,7 +656,8 @@ fn item_groups(
     }
 }
 
-fn user(text: &str, agent: &str, ctx: &Ctx) -> Vec<Row> {
+/// A user message box; a click on any of its rows opens its actions (`user:<item index>`).
+fn user(text: &str, agent: &str, index: usize, ctx: &Ctx) -> Vec<Row> {
     let rail = Some((ctx.agent_color)(agent));
     let bg = Some(ctx.theme.fg("background.raised.base"));
     let style = ctx.style("text.base");
@@ -331,6 +683,10 @@ fn user(text: &str, agent: &str, ctx: &Ctx) -> Vec<Row> {
         bg,
         ..Row::default()
     });
+    let hit = format!("user:{index}");
+    for row in &mut rows {
+        row.group = Some(hit.clone());
+    }
     rows
 }
 
@@ -686,6 +1042,7 @@ pub fn patch_rows(
         split,
         filetype: filetype(path),
         wrap,
+        digits: 0,
     };
     Some(diff::render(patch, &options, theme))
 }
@@ -701,6 +1058,7 @@ mod tests {
             .unwrap();
         let color = |_: &str| Color::Reset;
         let toggled = std::collections::HashSet::new();
+        let shells = std::collections::HashMap::new();
         let ctx = |width| Ctx {
             theme: &theme,
             width,
@@ -717,6 +1075,9 @@ mod tests {
             diff_wrap: true,
             verbosity: Verbosity::Medium,
             toggled: &toggled,
+            shells: &shells,
+            floor: 0,
+            turn_tokens: Default::default(),
         };
         let items = vec![
             Item::User {
@@ -740,5 +1101,8 @@ mod tests {
         layout(&items, &ctx(60), Some(&cache));
         assert_eq!(cache.lock().unwrap().context.split('|').next(), Some("60"));
         assert_eq!(cache.lock().unwrap().messages, [(1, true)]);
+        // Every row of the user box is a click target for its actions.
+        let user_hits: Vec<_> = fresh.iter().filter_map(|r| r.group.as_deref()).collect();
+        assert_eq!(user_hits, ["user:0"; 3]);
     }
 }

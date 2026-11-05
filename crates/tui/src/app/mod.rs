@@ -85,6 +85,8 @@ pub struct App {
     /// Strokes of a pending leader sequence and when it expires.
     pending: Vec<Stroke>,
     pending_until: u64,
+    /// When background shell rows were last polled.
+    shells_polled: u64,
     /// The `@` file list, walked on first use.
     files: Option<Vec<String>>,
     /// A drag selection in screen cells: anchor and current end.
@@ -124,6 +126,12 @@ pub struct App {
     sounds: PathBuf,
     /// The terminal pane's edge is being dragged.
     pane_drag: bool,
+    /// When the typed session search runs.
+    session_search: Option<u64>,
+    /// The vertical tab column's edge is being dragged.
+    tabs_drag: bool,
+    /// `layout.json`: the vertical tab column's width.
+    layout_path: std::path::PathBuf,
     recents: relocate::Recents,
     tab_store: tabs::TabStore,
     /// OSC 7501 records, when the terminal answered the support query.
@@ -277,6 +285,7 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
         tx,
         pending: Vec::new(),
         pending_until: 0,
+        shells_polled: 0,
         files: None,
         selection: None,
         last: Buffer::empty(ratatui::layout::Rect::default()),
@@ -301,6 +310,9 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
         restarter: options.restart.clone(),
         sounds: paths.data.join("cache").join("sounds"),
         pane_drag: false,
+        session_search: None,
+        tabs_drag: false,
+        layout_path: paths.data.join("state").join("tui").join("layout.json"),
         recents: relocate::Recents::new(&paths.data),
         tab_store,
         records: probe.program_status.then(crate::status::Records::default),
@@ -406,6 +418,7 @@ impl App {
         self.count_mcp(&rows);
         self.tick_account();
         self.restore_tabs();
+        self.load_layout();
         self.open_target(options);
     }
 
@@ -538,10 +551,19 @@ impl App {
             self.pending.clear();
         }
         if let Ok(size) = terminal.size() {
-            self.state.width = size.width;
+            self.state.left = if self.state.settings.tabs_vertical && !self.state.tabs.is_empty() {
+                crate::view::vertical_tabs_width(size.width, self.state.tabs_width).unwrap_or(0)
+            } else {
+                0
+            };
+            self.state.width = size.width - self.state.left;
             self.state.height = size.height;
         }
         self.sync_pane();
+        self.poll_shell_output();
+        self.poll_shells();
+        self.poll_session_search();
+        self.reveal_history();
         let docked = crate::view::diff_docked(&self.state);
         if let Some(view) = self.state.diff.as_mut() {
             view.docked = docked;
@@ -568,17 +590,40 @@ impl App {
             self.title = title;
         }
         let selection = self.selection;
+        let left = self.state.left;
         let frame = terminal.draw(|frame| {
             let drawn = crate::view::draw(&self.state, &self.theme, frame.buffer_mut());
             if let Some((a, b)) = selection {
-                highlight(frame.buffer_mut(), a, b);
+                highlight(
+                    frame.buffer_mut(),
+                    (a.0 + left, a.1),
+                    (b.0 + left, b.1),
+                    left,
+                );
             }
             if let Some((x, y)) = drawn.cursor {
                 frame.set_cursor_position((x, y));
             }
         });
         if let Ok(frame) = frame {
-            self.last = frame.buffer.clone();
+            // Hit tests read the routes' own coordinates, right of a vertical tab column.
+            self.last = if left == 0 {
+                frame.buffer.clone()
+            } else {
+                let area = frame.buffer.area;
+                let mut body = Buffer::empty(ratatui::layout::Rect::new(
+                    0,
+                    0,
+                    area.width - left,
+                    area.height,
+                ));
+                for y in 0..area.height {
+                    for x in 0..area.width - left {
+                        body[(x, y)] = frame.buffer[(x + left, y)].clone();
+                    }
+                }
+                body
+            };
         }
     }
 
@@ -858,6 +903,15 @@ impl App {
         let title = self.core.session(id).ok().flatten().map(|r| r.title);
         if let Some(session) = self.state.sessions.get_mut(id) {
             let awaiting = session.permission.is_some();
+            session.floor = if session.items.is_empty() {
+                crate::transcript::rows::floor_before(
+                    &items,
+                    items.len(),
+                    crate::transcript::rows::TAIL_ROWS,
+                )
+            } else {
+                session.floor.min(items.len())
+            };
             session.items = items;
             session.reverted = reverted;
             session.revert = revert;
@@ -887,7 +941,7 @@ fn display_name(models: &[anysola_core::model::Model], id: &str) -> String {
 }
 
 /// Inverts the cells of a selection (reading order from `a` to `b`).
-fn highlight(buf: &mut Buffer, a: (u16, u16), b: (u16, u16)) {
+fn highlight(buf: &mut Buffer, a: (u16, u16), b: (u16, u16), left: u16) {
     let (start, end) = if (a.1, a.0) <= (b.1, b.0) {
         (a, b)
     } else {
@@ -895,7 +949,7 @@ fn highlight(buf: &mut Buffer, a: (u16, u16), b: (u16, u16)) {
     };
     let area = buf.area;
     for y in start.1..=end.1.min(area.bottom().saturating_sub(1)) {
-        let from = if y == start.1 { start.0 } else { 0 };
+        let from = if y == start.1 { start.0 } else { left };
         let to = if y == end.1 {
             end.0
         } else {

@@ -152,6 +152,12 @@ pub struct Revert {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Session {
     pub id: String,
+    /// The first item laid out; older ones mount as the reader scrolls near them.
+    pub floor: usize,
+    /// `session.first` waits a frame to lay out the whole history.
+    pub history_loading: bool,
+    /// Background shells of this session's transcript, by shell ID.
+    pub shells: HashMap<String, crate::transcript::rows::BackgroundView>,
     pub title: String,
     pub directory: String,
     pub items: Vec<Item>,
@@ -272,6 +278,10 @@ pub struct Settings {
     pub source_markdown: bool,
     pub diff_view: DiffView,
     pub sidebar: bool,
+    /// `tabs.layout = vertical`: a tab column on the left instead of the strip.
+    pub tabs_vertical: bool,
+    /// `tabs.indicators = numbers`.
+    pub tab_numbers: bool,
     pub paste_compact: bool,
     pub animations: bool,
     /// `terminal.copy`: `select` copies on mouse release, `manual` on right-click.
@@ -280,6 +290,16 @@ pub struct Settings {
     pub grouping: bool,
     pub diff_wrap: bool,
     pub verbosity: Verbosity,
+    pub turn_tokens: TurnTokens,
+}
+
+/// `debug.turn_tokens`: a per-turn token table, `verbose` also lists each step's tool calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TurnTokens {
+    #[default]
+    Off,
+    On,
+    Verbose,
 }
 
 /// `session.verbosity`.
@@ -298,6 +318,9 @@ impl Default for Settings {
             source_markdown: false,
             diff_view: DiffView::Auto,
             sidebar: true,
+            tabs_vertical: false,
+            tab_numbers: false,
+            turn_tokens: TurnTokens::Off,
             paste_compact: true,
             animations: true,
             copy_on_select: !cfg!(windows),
@@ -431,6 +454,12 @@ pub struct State {
     pub toast: Option<Toast>,
     /// Open dialogs; the last one is on top.
     pub dialogs: Vec<crate::dialog::Dialog>,
+    /// The sidebar was opened with its toggle; below 121 columns it shows as an overlay.
+    pub sidebar_open: bool,
+    /// Columns the vertical tab column takes this frame (0 without one); `width` excludes them.
+    pub left: u16,
+    /// The vertical tab column's chosen width (`layout.verticalTabsWidth`).
+    pub tabs_width: u16,
     pub account: Account,
     /// When the prompt's agent, model and variant labels began fading in (first draw of the
     /// app instance); `None` shows them fully.
@@ -505,6 +534,9 @@ impl State {
             popup: None,
             toast: None,
             dialogs: Vec::new(),
+            sidebar_open: false,
+            left: 0,
+            tabs_width: 42,
             account: Account::default(),
             onboarding_dismissed: false,
             meta_fade: None,
@@ -542,6 +574,11 @@ impl State {
             diff: None,
             zone: *chrono::Local::now().offset(),
         }
+    }
+
+    /// The horizontal tab strip takes the top row.
+    pub fn strip(&self) -> bool {
+        !self.tabs.is_empty() && self.left == 0
     }
 
     pub fn session(&self) -> Option<&Session> {
