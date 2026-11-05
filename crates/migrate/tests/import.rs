@@ -287,6 +287,40 @@ fn revert_of_an_imported_message_restores_through_the_old_store() {
 }
 
 #[test]
+fn untitled_sessions_import_with_a_default_title() {
+    let env = env(Some(
+        "UPDATE session_v2 SET title = NULL WHERE title = 'Rich storage test';",
+    ));
+    let old = Connection::open(&env.legacy.database).unwrap();
+    let untitled = rows(
+        &old,
+        "SELECT id, time_created FROM session_v2 WHERE title IS NULL AND parent_id IS NULL",
+    );
+    assert!(!untitled.is_empty());
+    anysola_migrate::run(&env.paths).unwrap().expect("imported");
+    let new = Connection::open(env.paths.database()).unwrap();
+    for row in untitled {
+        let id = text(&row[0]);
+        let rusqlite::types::Value::Integer(created) = row[1] else {
+            panic!("time_created");
+        };
+        let title = rows(
+            &new,
+            &format!("SELECT title FROM session WHERE id = '{id}'"),
+        );
+        assert_eq!(
+            text(&title[0][0]),
+            format!("New session - {}", anysola_core::time::iso(created as u64))
+        );
+        let messages = rows(
+            &new,
+            &format!("SELECT count(*) FROM message WHERE session_id = '{id}'"),
+        );
+        assert_ne!(messages[0][0], rusqlite::types::Value::Integer(0));
+    }
+}
+
+#[test]
 fn outdated_or_damaged_databases_import_nothing() {
     let outdated = env(Some(
         "DELETE FROM migration WHERE id = '20261030054400_job';",

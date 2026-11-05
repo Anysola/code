@@ -250,6 +250,26 @@ fn summary(row: &Row) -> Sql {
     }
 }
 
+/// 0.5.x leaves a session's title NULL until one is generated; 1.0 needs one, and a row the
+/// insert skipped would orphan its messages. It gets the title a new session starts with.
+fn title(row: &Row) -> Sql {
+    if let Some(title) = text(row, "title") {
+        return Sql::Text(title);
+    }
+    let created = match get(row, "time_created") {
+        Sql::Integer(ms) => ms.max(0) as u64,
+        _ => 0,
+    };
+    let kind = match get(row, "parent_id") {
+        Sql::Text(_) => "Child",
+        _ => "New",
+    };
+    Sql::Text(format!(
+        "{kind} session - {}",
+        anysola_core::time::iso(created)
+    ))
+}
+
 /// Imports every session and returns their ids. A session that was busy when 0.5.x stopped is
 /// recorded as interrupted.
 fn copy_sessions(conn: &Connection, tx: &Transaction) -> Result<HashSet<String>, Error> {
@@ -265,7 +285,10 @@ fn copy_sessions(conn: &Connection, tx: &Transaction) -> Result<HashSet<String>,
         } else {
             (get(&row, "time_idle"), get(&row, "idle_outcome"))
         };
-        let mut values = vec![("directory", native(get(&row, "directory")))];
+        let mut values = vec![
+            ("directory", native(get(&row, "directory"))),
+            ("title", title(&row)),
+        ];
         for column in [
             "id",
             "project_id",
@@ -274,7 +297,6 @@ fn copy_sessions(conn: &Connection, tx: &Transaction) -> Result<HashSet<String>,
             "fork_boundary",
             "slug",
             "path",
-            "title",
             "version",
             "metadata",
             "cost",
