@@ -478,7 +478,7 @@ screens: `V/tui/screens/*.txt`.
 - [x] Session-level commands `/rename` (ctrl+r, empty regenerates), `/timeline`, `/fork` (`Forked session`), `/copy` texts, `/export` (markdown/JSON, include thinking/tools, sanitize, copy or file), Copy session ID/transcript, `Session not found: <id>` toast — spec/tui.md §Copy, selection, mouse, §Session-level commands registered by the session route
 
 ### M4.3 Permission and question prompts
-- [ ] Permission prompt replacing the input: `△ Permission required`, per-action titles/bodies, `Allow once` / `Always allow` (only with save patterns) / `Reject`, "always" explanation texts, keys, fullscreen `ctrl+f`, child-session reject reason dialog, warning tint on awaiting rows, tab `!` marker — spec/tui.md §Permission prompt, spec/tools.md §TUI prompt (texts), V/tui/dialogs.md §29 (not yet: the reject-with-reason dialog for child-session requests)
+- [x] Permission prompt replacing the input: `△ Permission required`, per-action titles/bodies, `Allow once` / `Always allow` (only with save patterns) / `Reject`, "always" explanation texts, keys, fullscreen `ctrl+f`, child-session reject reason dialog, warning tint on awaiting rows, tab `!` marker — spec/tui.md §Permission prompt, spec/tools.md §TUI prompt (texts), V/tui/dialogs.md §29
 - [x] Auto-accept mode (`--auto` or Settings Permissions = auto accept), `auto` label in the metadata row — spec/tools.md §TUI prompt (texts), spec/tui.md §2 "Metadata row"
 - [x] Question/form prompt: title, fields/tabs, options, multiselect, custom answer row, keys, action labels, placeholders, review tab, answers kept across tab switches — spec/tui.md §Question / form prompt, V/tui/dialogs.md §30 (answers are kept per field while switching the form's field tabs)
 

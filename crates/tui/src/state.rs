@@ -113,6 +113,8 @@ pub struct Permission {
     pub subject: Option<String>,
     pub selected: usize,
     pub fullscreen: bool,
+    /// The reason being typed for a rejection in a child session.
+    pub reject: Option<String>,
 }
 
 impl Permission {

@@ -422,6 +422,7 @@ fn permission_shell() {
             subject: Some("cat hello.txt && ls".into()),
             selected: 0,
             fullscreen: false,
+            reject: None,
         },
     );
     assert_screen(&state, "permission-shell");
@@ -441,6 +442,7 @@ fn permission_edit_diff() {
             subject: Some("hello.txt".into()),
             selected: 0,
             fullscreen: false,
+            reject: None,
         },
     );
     assert_screen(&state, "permission-edit-diff");
@@ -1335,4 +1337,35 @@ fn retry_countdown() {
     assert!(render(&state).contains("⚠ Retrying in 5s · attempt 2 · Overloaded"));
     state.now = now() + 4600;
     assert!(render(&state).contains("⚠ Retry due · attempt 2 · Overloaded"));
+}
+
+/// `routes/session/permission.tsx` `PermissionReject`: the reason dialog of a child session.
+#[test]
+fn permission_reject_reason() {
+    let mut state = session(120, 50, turn(false, false));
+    asking(
+        &mut state,
+        Permission {
+            request_id: "per_3".into(),
+            action: "shell".into(),
+            resources: vec!["ls".into()],
+            save: Vec::new(),
+            metadata: json!(null),
+            subject: Some("ls".into()),
+            selected: 1,
+            fullscreen: false,
+            reject: Some("use cat".into()),
+        },
+    );
+    let screen = render(&state);
+    for text in [
+        "△ Reject permission",
+        "Tell Anysola Code what to do differently",
+        "use cat",
+        "enter confirm",
+        "esc cancel",
+    ] {
+        assert!(screen.contains(text), "{text}");
+    }
+    assert!(!screen.contains("Permission required"));
 }

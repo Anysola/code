@@ -322,12 +322,38 @@ impl App {
 
     fn permission_key(&mut self, stroke: &Stroke) {
         let exit = self.is("app.exit", stroke);
+        // A child session asks why before rejecting.
+        let child = self.in_child();
         let Some(session) = self.state.session_mut() else {
             return;
         };
         let Some(permission) = session.permission.as_mut() else {
             return;
         };
+        if let Some(reason) = permission.reject.as_mut() {
+            match stroke.key.as_str() {
+                "return" => {
+                    let text = reason.trim().to_string();
+                    let id = permission.request_id.clone();
+                    let reply = Reply::Reject((!text.is_empty()).then_some(text));
+                    self.core.reply_permission(&id, reply);
+                }
+                "escape" => permission.reject = None,
+                "backspace" => {
+                    reason.pop();
+                }
+                "space" => reason.push(' '),
+                key if key.chars().count() == 1 && !stroke.ctrl => {
+                    reason.push_str(&if stroke.shift {
+                        key.to_uppercase()
+                    } else {
+                        key.to_string()
+                    });
+                }
+                _ => {}
+            }
+            return;
+        }
         let count = permission.options().len();
         match stroke.key.as_str() {
             "left" | "h" => permission.selected = (permission.selected + count - 1) % count,
@@ -337,10 +363,17 @@ impl App {
                 let reply = match permission.options()[permission.selected] {
                     "Allow once" => Reply::Once,
                     "Always allow" => Reply::Always,
+                    _ if child => {
+                        permission.reject = Some(String::new());
+                        return;
+                    }
                     _ => Reply::Reject(None),
                 };
                 let id = permission.request_id.clone();
                 self.core.reply_permission(&id, reply);
+            }
+            _ if child && (stroke.key == "escape" || exit) => {
+                permission.reject = Some(String::new());
             }
             _ if stroke.key == "escape" || exit => {
                 let id = permission.request_id.clone();
