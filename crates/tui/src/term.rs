@@ -38,6 +38,7 @@ pub fn restore() {
 pub fn enter(mouse: bool) -> io::Result<Terminal<Backend>> {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        crate::crash::record(info);
         restore();
         previous(info);
     }));

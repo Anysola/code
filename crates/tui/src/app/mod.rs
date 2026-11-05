@@ -177,7 +177,31 @@ fn theme_dirs(paths: &Paths, directory: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-pub async fn run(core: Core, options: Options) -> Result<(), String> {
+/// Runs the UI; a panic shows the crash screen, whose Restart starts the UI again.
+pub async fn run(core: Core, mut options: Options) -> Result<(), String> {
+    use futures_util::FutureExt;
+    loop {
+        let attempt = std::panic::AssertUnwindSafe(run_once(core.clone(), options.clone()))
+            .catch_unwind()
+            .await;
+        let Err(_) = attempt else {
+            return attempt.unwrap_or(Ok(()));
+        };
+        let (message, stack) = crate::crash::take();
+        let paths = Paths::from_env();
+        let light =
+            Tui::load(paths.data.join("tui.json")).theme_mode() == Some(crate::theme::Mode::Light);
+        let mut terminal = term::enter(false).map_err(|e| e.to_string())?;
+        let choice = crate::crash::show(&mut terminal, message.clone(), stack, light);
+        term::restore();
+        match choice {
+            crate::crash::Choice::Restart => options.prompt = None,
+            crate::crash::Choice::Quit => return Err(message),
+        }
+    }
+}
+
+async fn run_once(core: Core, options: Options) -> Result<(), String> {
     let paths = Paths::from_env();
     let tui = Tui::load(paths.data.join("tui.json"));
     let keymap = Keymap::from_config(&tui.value, cfg!(windows))?;
