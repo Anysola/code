@@ -18,6 +18,9 @@ pub enum AtomKind {
     Attachment(String, String, String),
 }
 
+/// A mention before an external edit: kind, text and offset in the expanded text.
+pub type Mark = (AtomKind, String, usize);
+
 /// A placeholder occupying `start..end` of the text; edits never split it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Atom {
@@ -461,7 +464,7 @@ impl Composer {
 
     /// File, agent and skill mentions as `(kind, text, offset in `expanded()`)`, for
     /// [`Composer::realign`] after the text was edited elsewhere.
-    pub fn mention_marks(&self) -> Vec<(AtomKind, String, usize)> {
+    pub fn mention_marks(&self) -> Vec<Mark> {
         let mut atoms: Vec<&Atom> = self.atoms.iter().collect();
         atoms.sort_by_key(|a| a.start);
         let mut delta = 0isize;
@@ -484,9 +487,9 @@ impl Composer {
 
     /// Replaces the text with `content` and re-attaches earlier mentions to the occurrences of
     /// their text that keep as many mentions as possible, nearest to where each used to be.
-    pub fn realign(&mut self, content: &str, marks: &[(AtomKind, String, usize)]) {
+    pub fn realign(&mut self, content: &str, marks: &[Mark]) {
         self.set(content);
-        let mut groups: Vec<(&str, Vec<&(AtomKind, String, usize)>)> = Vec::new();
+        let mut groups: Vec<(&str, Vec<&Mark>)> = Vec::new();
         for mark in marks {
             match groups.iter_mut().find(|(text, _)| *text == mark.1) {
                 Some((_, items)) => items.push(mark),
