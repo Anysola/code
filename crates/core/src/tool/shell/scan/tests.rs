@@ -3,12 +3,14 @@
 //! `script/shell-corpus.sh`), with home `/home/tester`, cwd `/work/project`, env
 //! `{HOME, USER=tester, PROJECTS=/srv/projects}` and PowerShell at `/usr/bin/pwsh`.
 
+#[cfg(unix)]
 use std::io::Read;
 
 use serde_json::Value;
 
 use super::super::parse::{self, Host};
 
+#[cfg(unix)]
 const CORPUS: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../spec/verbatim/tools/shell-scan-corpus.jsonl.gz"

@@ -226,10 +226,18 @@ pub fn capture_places() -> Places {
 }
 
 pub fn our_places(home: &TestHome, project: &Path) -> Places {
-    Places(vec![
-        (project.display().to_string(), "<PROJECT>"),
-        (home.home().display().to_string(), "<HOME>"),
-    ])
+    // The resolved forms first: macOS temp dirs live behind the `/var` → `/private/var` symlink.
+    let mut places = Vec::new();
+    let home = home.home();
+    for (path, name) in [(project, "<PROJECT>"), (home.as_path(), "<HOME>")] {
+        if let Ok(real) = path.canonicalize()
+            && real != path
+        {
+            places.push((real.display().to_string(), name));
+        }
+        places.push((path.display().to_string(), name));
+    }
+    Places(places)
 }
 
 fn map_strings(value: &Value, f: &dyn Fn(&str) -> String) -> Value {
@@ -257,8 +265,15 @@ pub fn normalize_body(body: &Value, places: &Places, capture: bool) -> Value {
     // The same quoting inside a compaction transcript line.
     let quoted_transcript = Regex::new(r#"(?m)^\[User\]: "([^"]*)"$"#).unwrap();
     let paths = Regex::new(r"^(<PROJECT>/[^\n]*\n?)+$").unwrap();
+    // The `<env>` block names the host's platform and temp dir.
+    let platform = Regex::new(r"(?m)^  Platform: \w+$").unwrap();
+    let temp = Regex::new(r"Prefer \S+ over generic system temporary").unwrap();
     let f = |s: &str| {
         let mut s = places.apply(s);
+        s = platform.replace_all(&s, "  Platform: <OS>").into_owned();
+        s = temp
+            .replace_all(&s, "Prefer <TEMP> over generic system temporary")
+            .into_owned();
         s = date.replace_all(&s, "Today's date: <DATE>").into_owned();
         s = signature.replace_all(&s, "SIG_N").into_owned();
         if capture {

@@ -268,6 +268,7 @@ async fn media() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn directory_listing() {
     let dir = tempfile::tempdir().unwrap();
@@ -476,6 +477,7 @@ fn node_paths() {
     assert_eq!(js_join("../a", "x"), "../a/x");
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn other_file_kinds_are_not_read() {
     let dir = tempfile::tempdir().unwrap();

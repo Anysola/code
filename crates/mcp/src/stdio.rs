@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 use crate::rpc::{Error, Incoming, Transport};
 
 const CLOSE_GRACE: Duration = Duration::from_secs(2);
+#[cfg(unix)]
 const FORCE_KILL_AFTER: Duration = Duration::from_secs(2);
 const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 const EXIT_WAIT: Duration = Duration::from_secs(1);
@@ -23,6 +24,7 @@ pub struct Stdio {
     outgoing: Mutex<Option<mpsc::UnboundedSender<String>>>,
     child: Arc<tokio::sync::Mutex<Option<Child>>>,
     /// The process group to signal, which outlives the child's own exit.
+    #[cfg(unix)]
     pid: Option<u32>,
     closing: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -60,6 +62,7 @@ impl Stdio {
         #[cfg(unix)]
         process.process_group(0);
         let mut child = process.spawn().map_err(|e| spawn_error(&e, command))?;
+        #[cfg(unix)]
         let pid = child.id();
         let (mut stdin, stdout, mut stderr) = (
             child.stdin.take().expect("piped stdin"),
@@ -116,6 +119,7 @@ impl Stdio {
         Ok(Stdio {
             outgoing: Mutex::new(Some(outgoing)),
             child,
+            #[cfg(unix)]
             pid,
             closing,
         })

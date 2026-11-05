@@ -145,6 +145,7 @@ pub fn detect_mode(_wait_ms: i32) -> Mode {
     Mode::Dark
 }
 
+#[cfg(any(unix, test))]
 fn parse_background(reply: &str) -> Option<Mode> {
     let rgb = reply.split("rgb:").nth(1)?;
     let channel = |s: &str| -> Option<f64> {

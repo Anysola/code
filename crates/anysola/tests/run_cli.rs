@@ -480,7 +480,15 @@ fn busy_session_in_another_process() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    std::thread::sleep(Duration::from_millis(1500));
+    // The session is marked busy before its first model request.
+    let started = Instant::now();
+    while !gateway.messages().iter().any(|r| !r.is_title()) {
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "no model request"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
     let out = home.run(BIN, &["run", "-s", "ses_shared", "again"], None, None);
     let _ = first.kill();
     let _ = first.wait();
