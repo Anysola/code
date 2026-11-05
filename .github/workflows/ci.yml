@@ -1,5 +1,6 @@
-# CI on every push and pull request: format, lint, build, test and smoke-run on the six release platforms (native
-# runners, no cross-compiling), plus the static musl build and the size/latency budgets on Linux.
+# CI on every push and pull request: format, lint, build, test and smoke-run (linux-x64 on branch pushes; the six
+# release platforms on tags and manual runs, native runners, no cross-compiling), plus the static musl build and the
+# size/latency budgets on Linux.
 
 name: ci
 
@@ -39,14 +40,9 @@ jobs:
   test:
     strategy:
       fail-fast: false
+      # A branch push tests linux-x64 only; tags and manual runs test all six platforms.
       matrix:
-        include:
-          - { build: linux-x64, os: ubuntu-24.04, musl: x86_64-unknown-linux-musl }
-          - { build: linux-arm64, os: ubuntu-24.04-arm, musl: aarch64-unknown-linux-musl }
-          - { build: darwin-arm64, os: macos-15 }
-          - { build: darwin-x64, os: macos-15-intel }
-          - { build: windows-x64, os: windows-2025 }
-          - { build: windows-arm64, os: windows-11-arm }
+        include: ${{ fromJSON((startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') && '[{"build":"linux-x64","os":"ubuntu-24.04","musl":"x86_64-unknown-linux-musl"},{"build":"linux-arm64","os":"ubuntu-24.04-arm","musl":"aarch64-unknown-linux-musl"},{"build":"darwin-arm64","os":"macos-15"},{"build":"darwin-x64","os":"macos-15-intel"},{"build":"windows-x64","os":"windows-2025"},{"build":"windows-arm64","os":"windows-11-arm"}]' || '[{"build":"linux-x64","os":"ubuntu-24.04","musl":"x86_64-unknown-linux-musl"}]') }}
     name: test (${{ matrix.build }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
