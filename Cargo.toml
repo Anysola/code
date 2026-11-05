@@ -49,6 +49,7 @@ yaml-rust2 = { version = "0.10", default-features = false }
 anysola-core = { path = "crates/core" }
 anysola-migrate = { path = "crates/migrate" }
 anysola-testkit = { path = "crates/testkit" }
+anysola-tui = { path = "crates/tui" }
 
 [profile.release]
 opt-level = 3

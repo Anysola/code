@@ -6,3 +6,23 @@ license.workspace = true
 publish = false
 
 [dependencies]
+anysola-core.workspace = true
+base64.workspace = true
+crossterm = { version = "0.29", features = ["event-stream", "bracketed-paste"] }
+futures-util.workspace = true
+ignore.workspace = true
+libc.workspace = true
+nucleo-matcher = "0.3"
+pulldown-cmark = { version = "0.13", default-features = false }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29"] }
+serde.workspace = true
+serde_json.workspace = true
+syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "parsing", "regex-fancy"] }
+two-face = { version = "0.4", default-features = false, features = ["syntect-fancy"] }
+tokio.workspace = true
+unicode-segmentation = "1.13"
+unicode-width = "0.2"
+
+[dev-dependencies]
+anysola-testkit.workspace = true
+tempfile.workspace = true
