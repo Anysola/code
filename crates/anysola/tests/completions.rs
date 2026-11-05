@@ -23,14 +23,14 @@ fn installed(shell: &str) -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
-/// Loads `script` into `shell` with `check` run afterwards; the check's output must be `expected`.
-fn loads(shell: &str, flags: &[&str], script: &str, check: &str) -> String {
+/// Loads `script` into `shell` after `before`, then runs `check` and returns its output.
+fn loads(shell: &str, flags: &[&str], before: &str, script: &str, check: &str) -> String {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("completion");
     std::fs::write(&file, script).unwrap();
     let out = Command::new(shell)
         .args(flags)
-        .arg(format!(". '{}'; {check}", file.display()))
+        .arg(format!("{before}. '{}'; {check}", file.display()))
         .output()
         .unwrap();
     assert!(
@@ -45,7 +45,7 @@ fn loads(shell: &str, flags: &[&str], script: &str, check: &str) -> String {
 fn bash_and_sh() {
     assert_eq!(script("sh"), script("bash"));
     if installed("bash") {
-        let out = loads("bash", &["-c"], &script("bash"), "complete -p anysola");
+        let out = loads("bash", &["-c"], "", &script("bash"), "complete -p anysola");
         assert!(out.contains("anysola"), "{out}");
     }
 }
@@ -56,8 +56,10 @@ fn zsh() {
         loads(
             "zsh",
             &["-c"],
+            // The script registers itself with `compdef`, which compinit defines.
+            "autoload -U compinit; compinit -u; ",
             &script("zsh"),
-            "autoload -U compinit; compinit -u; compdef _anysola anysola",
+            "whence -w _anysola",
         );
     }
 }
@@ -68,6 +70,7 @@ fn fish() {
         let out = loads(
             "fish",
             &["-c"],
+            "",
             &script("fish"),
             "complete -C 'anysola ses'",
         );

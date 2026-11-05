@@ -2,6 +2,9 @@
 //! so nothing is downloaded or installed. Expected texts follow `V/cli/update-uninstall.txt`, with
 //! 1.0's cache dir, no service lines and a manual-removal command limited to the bin directory.
 
+// The stand-ins are bash scripts; the Windows install flow is covered by install-test.yml.
+#![cfg(unix)]
+
 mod common;
 
 use std::os::unix::fs::PermissionsExt;
