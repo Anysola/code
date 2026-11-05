@@ -1,9 +1,10 @@
 //! ```` ```mermaid ```` blocks as box drawings, after 0.5.1's `@opencode/merman`: flowcharts,
-//! timelines and gantt charts. Other diagrams (sequence, state, gitGraph) and charts these
+//! sequence diagrams, timelines and gantt charts. Other diagrams (state, gitGraph) and charts these
 //! layouts cannot draw are errors, and the block stays source.
 
 mod flowchart;
 mod gantt;
+mod sequence;
 mod timeline;
 
 pub fn render(source: &str) -> Result<Vec<String>, String> {
@@ -12,6 +13,7 @@ pub fn render(source: &str) -> Result<Vec<String>, String> {
     match keyword.to_ascii_lowercase().as_str() {
         "timeline" => timeline::render(source),
         "gantt" => gantt::render(source),
+        "sequencediagram" => sequence::render(source),
         _ => flowchart::render(source),
     }
 }
@@ -141,7 +143,6 @@ mod tests {
 
     #[test]
     fn unsupported_diagrams_fall_back() {
-        assert!(render("sequenceDiagram\nA->>B: hi").is_err());
         assert!(render("stateDiagram-v2\n[*] --> A").is_err());
     }
 }
