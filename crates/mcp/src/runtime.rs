@@ -180,35 +180,40 @@ impl Runtime {
             },
             Err(error) => Err(error),
         };
-        let mut servers = self.lock();
-        let Some(entry) = servers.get_mut(name).filter(|e| e.generation == generation) else {
-            if let Ok((connection, _)) = result {
-                tokio::spawn(async move { connection.close().await });
-            }
-            return;
+        let connected = {
+            let mut servers = self.lock();
+            let Some(entry) = servers.get_mut(name).filter(|e| e.generation == generation) else {
+                if let Ok((connection, _)) = result {
+                    tokio::spawn(async move { connection.close().await });
+                }
+                return;
+            };
+            let status = match result {
+                Ok((connection, tools)) => {
+                    entry.connection = Some(Arc::new(connection));
+                    entry.tools = tools;
+                    self.publish_tools(name, entry);
+                    Status::Connected
+                }
+                Err(ConnectError::NeedsAuth(error)) => Status::NeedsAuth { error },
+                Err(ConnectError::Failed(error)) => Status::Failed { error },
+            };
+            let connected = status == Status::Connected;
+            self.set_status(name, entry, status);
+            connected
         };
-        match result {
-            Ok((connection, tools)) => {
-                let connection = Arc::new(connection);
-                entry.connection = Some(connection.clone());
-                entry.tools = tools;
-                self.publish_tools(name, entry);
-                self.set_status(name, entry, Status::Connected);
-                let (me, name) = (self.me.clone(), name.to_string());
-                tokio::spawn(async move {
-                    if let Some(runtime) = me.upgrade() {
-                        runtime.refresh_prompts(&name, generation).await;
-                    }
-                });
-            }
-            Err(ConnectError::NeedsAuth(error)) => {
-                self.set_status(name, entry, Status::NeedsAuth { error });
-            }
-            Err(ConnectError::Failed(error)) => {
-                self.set_status(name, entry, Status::Failed { error });
-            }
+        // Prompts are known before the start counts as finished, so commands and `settled` see
+        // them.
+        if connected {
+            self.refresh_prompts(name, generation).await;
         }
-        entry.settled.send_replace(true);
+        if let Some(entry) = self
+            .lock()
+            .get_mut(name)
+            .filter(|e| e.generation == generation)
+        {
+            entry.settled.send_replace(true);
+        }
     }
 
     fn live(&self, name: &str, generation: u64) -> Option<Arc<Connection>> {
