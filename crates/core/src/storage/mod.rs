@@ -394,6 +394,19 @@ impl Db {
         )
     }
 
+    /// A session's direct children, newest first: `(id, title, agent)`.
+    pub fn children(&self, parent_id: &str) -> Result<Vec<(String, String, Option<String>)>> {
+        self.with(|c| {
+            let mut statement = c.prepare(
+                "SELECT id, title, agent FROM session WHERE parent_id = ?1
+                 ORDER BY time_created DESC",
+            )?;
+            let rows =
+                statement.query_map([parent_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            rows.collect()
+        })
+    }
+
     /// Known projects, most recently used first: `(id, worktree)`.
     pub fn projects(&self, limit: u64) -> Result<Vec<(String, String)>> {
         self.with(|c| {

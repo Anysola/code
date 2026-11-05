@@ -297,6 +297,29 @@ impl Core {
         &self.shared.project.id
     }
 
+    /// The session's running background shells.
+    pub fn background_shells(&self, session_id: &str) -> Vec<crate::tool::shell::BackgroundShell> {
+        crate::tool::shell::background_shells(session_id)
+    }
+
+    /// Ends a background shell by its shell ID.
+    pub fn kill_shell(&self, id: &str) -> bool {
+        crate::tool::shell::kill_background(id)
+    }
+
+    /// The session's direct children, newest first: `(id, title, agent)`.
+    pub fn children(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<(String, String, Option<String>)>, CoreError> {
+        Ok(self.shared.db.children(session_id)?)
+    }
+
+    /// Whether a subagent session runs in this process now.
+    pub fn child_running(&self, session_id: &str) -> bool {
+        crate::session::subagent::is_running(&self.shared, session_id)
+    }
+
     /// Moves a session into this core's project and directory.
     pub fn adopt_session(&self, id: &str) -> Result<(), CoreError> {
         let directory = self.shared.directory.display().to_string();

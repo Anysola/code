@@ -27,6 +27,7 @@ mod anysola;
 mod commands;
 mod dialogs;
 mod diff;
+mod dock;
 mod events;
 mod keys;
 mod models;
@@ -615,6 +616,7 @@ impl App {
                 attention: false,
             });
         }
+        let child = row.parent_id.is_some();
         if let Some(agent) = row.agent {
             self.state.agent = agent;
         }
@@ -625,6 +627,11 @@ impl App {
             self.state.variant = model.variant;
         }
         self.state.route = Route::Session(id.to_string());
+        // A child session has no prompt of its own: the dock stands in for it.
+        self.state.dock = None;
+        if child {
+            self.open_dock();
+        }
     }
 
     /// Rebuilds a session's transcript from storage (turn end, lag, revert).

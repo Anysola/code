@@ -67,6 +67,7 @@ pub struct Running {
     capture: Arc<Capture>,
     supervisor: JoinHandle<Ended>,
     untimed: CancellationToken,
+    stop: CancellationToken,
     _kill: DropGuard,
 }
 
@@ -78,6 +79,11 @@ impl Running {
     }
 
     /// Lets the command run without its time limit (moved to the background).
+    /// Ends the command on demand (the dock's `kill`).
+    pub fn stopper(&self) -> CancellationToken {
+        self.stop.clone()
+    }
+
     pub fn clear_timeout(&self) {
         self.untimed.cancel();
     }
@@ -139,6 +145,7 @@ pub fn spawn(job: Job<'_>) -> io::Result<Running> {
         capture,
         supervisor,
         untimed,
+        stop: kill.clone(),
         _kill: kill.drop_guard(),
     })
 }

@@ -40,6 +40,14 @@ impl Jobs {
     }
 }
 
+/// Whether this subagent session runs in this process now.
+pub(crate) fn is_running(shared: &Shared, session_id: &str) -> bool {
+    shared
+        .jobs
+        .current(session_id)
+        .is_some_and(|outcome| outcome.borrow().is_none())
+}
+
 /// Whether a child of the session runs in this process (a background subagent at idle).
 pub(crate) fn has_running_child(shared: &Shared, session_id: &str) -> bool {
     let running: Vec<String> = shared

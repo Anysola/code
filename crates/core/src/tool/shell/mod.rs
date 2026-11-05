@@ -75,20 +75,46 @@ impl Drop for Blocking {
     }
 }
 
-/// Background commands still running: (id, session, command).
-static BACKGROUND: Mutex<Vec<(u64, String, String)>> = Mutex::new(Vec::new());
+/// A background command still running.
+#[derive(Debug, Clone)]
+pub struct BackgroundShell {
+    entry: u64,
+    pub session_id: String,
+    /// The shell ID the model sees.
+    pub id: String,
+    pub command: String,
+    /// Where its output streams.
+    pub file: PathBuf,
+    stop: tokio_util::sync::CancellationToken,
+}
 
-fn background() -> std::sync::MutexGuard<'static, Vec<(u64, String, String)>> {
+static BACKGROUND: Mutex<Vec<BackgroundShell>> = Mutex::new(Vec::new());
+
+fn background() -> std::sync::MutexGuard<'static, Vec<BackgroundShell>> {
     BACKGROUND.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// The commands of the session's background shells that are still running.
 pub fn background_commands(session_id: &str) -> Vec<String> {
+    background_shells(session_id)
+        .into_iter()
+        .map(|shell| shell.command)
+        .collect()
+}
+
+/// The session's background shells that are still running, oldest first.
+pub fn background_shells(session_id: &str) -> Vec<BackgroundShell> {
     background()
         .iter()
-        .filter(|(_, session, _)| session == session_id)
-        .map(|(_, _, command)| command.clone())
+        .filter(|shell| shell.session_id == session_id)
+        .cloned()
         .collect()
+}
+
+/// Ends a background shell by its shell ID; false when none runs.
+pub fn kill_background(id: &str) -> bool {
+    let found = background().iter().find(|shell| shell.id == id).cloned();
+    found.map(|shell| shell.stop.cancel()).is_some()
 }
 
 /// Moves the session's running foreground commands to the background (their tool calls return
@@ -375,7 +401,14 @@ fn notify_when_done(started: Started, command: String, ctx: &ToolContext) {
     let session_id = ctx.session_id.clone();
     let limits = ctx.limits;
     let entry = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    background().push((entry, session_id.clone(), command.clone()));
+    background().push(BackgroundShell {
+        entry,
+        session_id: session_id.clone(),
+        id: started.id.clone(),
+        command: command.clone(),
+        file: started.file.clone(),
+        stop: started.running.stopper(),
+    });
     tokio::spawn(async move {
         let Started {
             id,
@@ -384,7 +417,7 @@ fn notify_when_done(started: Started, command: String, ctx: &ToolContext) {
             mut running,
         } = started;
         let ended = running.wait().await;
-        background().retain(|(id, ..)| *id != entry);
+        background().retain(|shell| shell.entry != entry);
         let (state, text) = match Finished::read(&file, ended, limits, timeout) {
             Ok(finished) => ("completed", finished.content().join("\n\n")),
             Err(error) => ("error", error.to_string()),

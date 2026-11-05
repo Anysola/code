@@ -1053,3 +1053,35 @@ fn terminal_pane_width_follows_the_drag_within_bounds() {
     state.pane_width = Some(110);
     assert_eq!(anysola_tui::view::terminal_width(&state), 80);
 }
+
+/// No capture exists; the dock replaces the prompt with tabs, rows and hints.
+#[test]
+fn composer_dock_replaces_the_prompt() {
+    use anysola_tui::state::{Dock, DockRow, DockTab};
+    let mut state = session(120, 36, turn(true, true));
+    state.dock = Some(Dock {
+        tabs: vec![DockTab::Subagents, DockTab::Shell, DockTab::Terminals],
+        tab: 0,
+        rows: vec![DockRow {
+            label: "└─ Explore: Find the parser".into(),
+            right: "Running".into(),
+            value: "ses_c".into(),
+        }],
+        selected: 0,
+        inactive: false,
+    });
+    let screen = render(&state);
+    let lines: Vec<&str> = screen.lines().map(str::trim_end).collect();
+    let header = lines
+        .iter()
+        .position(|l| l.contains("Subagents  Shell  Terminals"))
+        .unwrap();
+    assert!(lines[header].ends_with("esc"));
+    assert!(lines[header + 1].contains("└─ Explore: Find the parser"));
+    assert!(lines[header + 1].ends_with("Running"));
+    assert!(lines[header + 3].contains("show inactive ctrl+a  interrupt ctrl+d  tabs ←/→"));
+    assert!(!screen.contains("Build · Claude Sonnet 5.5\n"));
+    state.dock.as_mut().unwrap().rows.clear();
+    state.dock.as_mut().unwrap().tab = 1;
+    assert!(render(&state).contains("No shell commands"));
+}

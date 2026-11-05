@@ -244,6 +244,82 @@ impl Default for Settings {
     }
 }
 
+/// The composer dock's tabs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DockTab {
+    Subagents,
+    Shell,
+    Terminals,
+}
+
+impl DockTab {
+    pub fn label(self) -> &'static str {
+        match self {
+            DockTab::Subagents => "Subagents",
+            DockTab::Shell => "Shell",
+            DockTab::Terminals => "Terminals",
+        }
+    }
+}
+
+/// One dock row: text left, a status right, and what it acts on.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DockRow {
+    pub label: String,
+    pub right: String,
+    pub value: String,
+}
+
+/// The dock that replaces the prompt in a session (Subagents / Shell / Terminals).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Dock {
+    pub tabs: Vec<DockTab>,
+    pub tab: usize,
+    pub rows: Vec<DockRow>,
+    pub selected: usize,
+    /// Subagents: inactive children instead of active ones.
+    pub inactive: bool,
+}
+
+impl Dock {
+    pub fn current(&self) -> DockTab {
+        self.tabs[self.tab]
+    }
+
+    /// The text shown when the tab has no rows.
+    pub fn empty(&self) -> &'static str {
+        match (self.current(), self.inactive) {
+            (DockTab::Subagents, false) => "No active subagents",
+            (DockTab::Subagents, true) => "No inactive subagents",
+            (DockTab::Shell, _) => "No shell commands",
+            (DockTab::Terminals, _) => "",
+        }
+    }
+
+    /// Footer hints: `(label, key)`.
+    pub fn hints(&self) -> Vec<(&'static str, &'static str)> {
+        let mut hints = match self.current() {
+            DockTab::Subagents => vec![
+                (
+                    if self.inactive {
+                        "show active"
+                    } else {
+                        "show inactive"
+                    },
+                    "ctrl+a",
+                ),
+                ("interrupt", "ctrl+d"),
+            ],
+            DockTab::Shell => vec![("output", "enter"), ("kill", "ctrl+d")],
+            DockTab::Terminals => Vec::new(),
+        };
+        if self.tabs.len() > 1 {
+            hints.push(("tabs", "←/→"));
+        }
+        hints
+    }
+}
+
 /// The terminal pane: the screen of the shown terminal and whether keys go to it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pane {
@@ -319,6 +395,7 @@ pub struct State {
     pub asides: usize,
     /// The terminal pane beside the session, while shown.
     pub pane: Option<Pane>,
+    pub dock: Option<Dock>,
     /// The right pane's width once dragged.
     pub pane_width: Option<u16>,
     /// The local time zone dates are shown in.
@@ -357,6 +434,7 @@ impl State {
             hints: Hints::default(),
             update: None,
             pane: None,
+            dock: None,
             pane_width: None,
             asides: 0,
             mcp: (0, 0, 0),

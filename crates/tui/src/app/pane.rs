@@ -58,6 +58,12 @@ impl App {
         }
     }
 
+    pub(super) fn show_terminal(&mut self, index: usize) {
+        if index < self.terminals.len() {
+            self.show(index, true);
+        }
+    }
+
     fn show(&mut self, index: usize, focused: bool) {
         self.shown = Some(index);
         self.state.pane = Some(Pane {

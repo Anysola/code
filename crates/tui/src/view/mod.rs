@@ -11,6 +11,7 @@ use crate::theme::Theme;
 
 mod dialog;
 mod diffview;
+mod dock;
 mod home;
 mod prompt;
 mod prompts;

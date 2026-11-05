@@ -65,6 +65,12 @@ pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u1
         let h = prompts::question_height(question, w);
         prompts::question(c, question, x, bottom.saturating_sub(h), w);
         (h, None)
+    } else if let Some(dock) = &state.dock {
+        let h = super::dock::height(dock);
+        let y = bottom.saturating_sub(h + 1);
+        super::dock::draw(c, dock, x, y, w);
+        prompt::footer(c, state, x, y + h, w);
+        (h + 1, None)
     } else {
         let box_h = prompt::box_height(state, w);
         let y = bottom.saturating_sub(box_h + 1);

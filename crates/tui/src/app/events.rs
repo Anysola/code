@@ -124,6 +124,11 @@ impl App {
     }
 
     pub(super) fn event(&mut self, event: Event) {
+        self.fold(event);
+        self.refresh_dock();
+    }
+
+    fn fold(&mut self, event: Event) {
         let id = event.session_id().to_string();
         match &event {
             Event::PermissionAsked {

@@ -143,6 +143,9 @@ impl App {
         if self.state.session().is_some_and(|s| s.question.is_some()) {
             return self.question_key(&stroke);
         }
+        if self.state.dock.is_some() && self.dock_key(&stroke) {
+            return;
+        }
         if self.state.popup.is_some() && self.popup_key(&stroke) {
             return;
         }
@@ -273,6 +276,8 @@ impl App {
                     } else {
                         Mode::Normal
                     };
+                } else if composer.is_empty() {
+                    return self.open_dock();
                 }
             }
             "input.submit" => return self.submit(false),

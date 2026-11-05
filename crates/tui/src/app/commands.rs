@@ -178,6 +178,10 @@ impl App {
             ("prompt.editor", _) => self.deferred = Some(Deferred::Editor),
             ("terminal.suspend", _) if cfg!(unix) => self.deferred = Some(Deferred::Suspend),
             ("prompt.queue", _) => self.submit(true),
+            ("session.child.first", Some(_)) => self.open_dock(),
+            ("session.parent", Some(_)) => self.go_parent(),
+            ("session.child.next", Some(_)) => self.go_sibling(1),
+            ("session.child.previous", Some(_)) => self.go_sibling(-1),
             ("session.cd", _) if arguments.is_some_and(|a| a.trim().is_empty()) => {
                 self.toast(None, "Directory is required".into(), Variant::Warning);
             }
