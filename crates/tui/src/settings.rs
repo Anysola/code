@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use serde_json::{Map, Value};
 
-use crate::state::{DiffView, Settings};
+use crate::state::{DiffView, Settings, Verbosity};
 use crate::theme::Mode;
 
 pub struct Tui {
@@ -112,6 +112,12 @@ impl Tui {
             paste_compact: self.str(&["prompt", "paste"]) != Some("full"),
             animations: flag(&["animations"], true),
             title: flag(&["terminal", "title"], true),
+            grouping: self.str(&["session", "grouping"]) != Some("none"),
+            verbosity: match self.str(&["session", "verbosity"]) {
+                Some("low") => Verbosity::Low,
+                Some("high") => Verbosity::High,
+                _ => Verbosity::Medium,
+            },
         }
     }
 

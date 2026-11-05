@@ -5,9 +5,11 @@ use ratatui::text::Span;
 use serde_json::Value;
 
 use super::diff;
+use super::grouping::{self, Groups, Kind};
 use super::highlight::filetype;
 use super::markdown::{self, Line, wrap_spans};
 use super::model::{Assistant, Item, Part, Status};
+use crate::state::Verbosity;
 use crate::text::{self, duration, title_case};
 use crate::theme::Theme;
 
@@ -24,6 +26,8 @@ pub struct Row {
     pub bg: Option<Color>,
     pub indent: u16,
     pub spans: Line,
+    /// An exploration group's header: a click toggles the group with this ID.
+    pub group: Option<String>,
 }
 
 impl Row {
@@ -51,6 +55,11 @@ pub struct Ctx<'a> {
     /// Paths under this directory are shown relative to it.
     pub directory: &'a str,
     pub home: &'a str,
+    /// `session.grouping` is not `none`.
+    pub grouping: bool,
+    pub verbosity: Verbosity,
+    /// Groups the user opened (or closed, when they start open).
+    pub toggled: &'a std::collections::HashSet<String>,
 }
 
 impl Ctx<'_> {
@@ -100,6 +109,7 @@ impl Ctx<'_> {
                 bg: Some(bg),
                 indent: 3,
                 spans,
+                group: None,
             });
         }
         rows.push(Row {
@@ -121,7 +131,9 @@ pub fn spinner_frame(now: u64) -> &'static str {
 #[derive(Default)]
 pub struct Cache {
     context: String,
-    entries: std::collections::HashMap<usize, (Item, Vec<Vec<Row>>)>,
+    entries: std::collections::HashMap<usize, (Item, String, Vec<Vec<Row>>)>,
+    /// Header rows drawn in the last frame: `(screen row, group ID)`.
+    pub hits: Vec<(u16, String)>,
 }
 
 /// An item that no longer changes with time (no spinner, no running duration).
@@ -144,14 +156,16 @@ fn settled(item: &Item) -> bool {
 /// unchanged reuse their rows.
 pub fn layout(items: &[Item], ctx: &Ctx, cache: Option<&std::sync::Mutex<Cache>>) -> Vec<Row> {
     let context = format!(
-        "{}|{}|{}|{}|{}|{}|{:?}",
+        "{}|{}|{}|{}|{}|{}|{:?}|{}|{}",
         ctx.width,
         ctx.split,
         ctx.thinking,
         ctx.source_markdown,
         ctx.animations,
         ctx.theme.name,
-        ctx.theme.mode
+        ctx.theme.mode,
+        ctx.grouping,
+        ctx.verbosity as u8
     );
     let mut cache = cache.map(|c| c.lock().unwrap_or_else(|e| e.into_inner()));
     if let Some(cache) = cache.as_mut()
@@ -160,21 +174,30 @@ pub fn layout(items: &[Item], ctx: &Ctx, cache: Option<&std::sync::Mutex<Cache>>
         cache.context = context;
         cache.entries.clear();
     }
+    let exploration = Groups::new(
+        items,
+        ctx.grouping,
+        ctx.verbosity == Verbosity::Low,
+        ctx.verbosity == Verbosity::High,
+        ctx.toggled,
+    );
     let mut groups: Vec<Vec<Row>> = Vec::new();
     for (index, item) in items.iter().enumerate() {
+        let signature = exploration.signature(index);
         if let Some(cache) = cache.as_ref()
-            && let Some((cached, rows)) = cache.entries.get(&index)
+            && let Some((cached, sig, rows)) = cache.entries.get(&index)
             && cached == item
+            && *sig == signature
         {
             groups.extend(rows.iter().cloned());
             continue;
         }
         let start = groups.len();
-        item_groups(item, ctx, &mut groups);
+        item_groups(item, index, &exploration, ctx, &mut groups);
         if let Some(cache) = cache.as_mut() {
             if settled(item) {
                 let rows = groups[start..].to_vec();
-                cache.entries.insert(index, (item.clone(), rows));
+                cache.entries.insert(index, (item.clone(), signature, rows));
             } else {
                 cache.entries.remove(&index);
             }
@@ -188,10 +211,16 @@ pub fn layout(items: &[Item], ctx: &Ctx, cache: Option<&std::sync::Mutex<Cache>>
     rows
 }
 
-fn item_groups(item: &Item, ctx: &Ctx, groups: &mut Vec<Vec<Row>>) {
+fn item_groups(
+    item: &Item,
+    index: usize,
+    exploration: &Groups,
+    ctx: &Ctx,
+    groups: &mut Vec<Vec<Row>>,
+) {
     match item {
         Item::User { text, agent, .. } => groups.push(user(text, agent, ctx)),
-        Item::Assistant(a) => assistant(a, ctx, groups),
+        Item::Assistant(a) => assistant(a, index, exploration, ctx, groups),
         Item::Shell {
             command,
             output,
@@ -276,6 +305,7 @@ fn user(text: &str, agent: &str, ctx: &Ctx) -> Vec<Row> {
             bg,
             indent: 3,
             spans: line,
+            group: None,
         });
     }
     rows.push(Row {
@@ -286,7 +316,13 @@ fn user(text: &str, agent: &str, ctx: &Ctx) -> Vec<Row> {
     rows
 }
 
-fn assistant(a: &Assistant, ctx: &Ctx, groups: &mut Vec<Vec<Row>>) {
+fn assistant(
+    a: &Assistant,
+    index: usize,
+    exploration: &Groups,
+    ctx: &Ctx,
+    groups: &mut Vec<Vec<Row>>,
+) {
     let mut thoughts: Vec<&Part> = Vec::new();
     let flush = |thoughts: &mut Vec<&Part>, groups: &mut Vec<Vec<Row>>| {
         if !thoughts.is_empty() {
@@ -294,7 +330,14 @@ fn assistant(a: &Assistant, ctx: &Ctx, groups: &mut Vec<Vec<Row>>) {
             thoughts.clear();
         }
     };
-    for part in &a.parts {
+    for (at, part) in a.parts.iter().enumerate() {
+        if let Some(headers) = exploration.headers.get(&(index, at)) {
+            flush(&mut thoughts, groups);
+            groups.extend(headers.iter().map(|h| vec![group_header(h, ctx)]));
+        }
+        if exploration.hidden.contains(&(index, at)) {
+            continue;
+        }
         match part {
             Part::Reasoning { text, end, .. } => {
                 let redacted_only = text.replace("[REDACTED]", "").trim().is_empty();
@@ -383,6 +426,28 @@ fn assistant(a: &Assistant, ctx: &Ctx, groups: &mut Vec<Vec<Row>>) {
 }
 
 /// Strips a leading `**title**` (summary style) and returns it with the rest.
+/// `→ Explored: 2 reads, 1 search`, or the spinner and `Exploring:` while a call runs.
+/// Low verbosity: `+ 3 commands, 1 edit` (`−` when open, the spinner while closed and busy).
+fn group_header(header: &grouping::Header, ctx: &Ctx) -> Row {
+    let icon = match header.kind {
+        Kind::Exploration { done: true } => "→",
+        Kind::Exploration { done: false } => ctx.spinner(),
+        Kind::Activity { .. } if header.open => "−",
+        Kind::Activity { active: true } => ctx.spinner(),
+        Kind::Activity { active: false } => "+",
+    };
+    Row {
+        group: Some(header.id.clone()),
+        ..Row::text(
+            3,
+            vec![Span::styled(
+                format!("{icon:<2}{}", header.label),
+                ctx.style("text.muted"),
+            )],
+        )
+    }
+}
+
 fn thought_title(text: &str) -> (Option<String>, String) {
     let trimmed = text.trim_start();
     if let Some(rest) = trimmed.strip_prefix("**")
@@ -455,6 +520,7 @@ fn thinking(parts: &[&Part], ctx: &Ctx) -> Vec<Row> {
                         bg: None,
                         indent: 3,
                         spans: muted,
+                        group: None,
                     });
                 }
             }
@@ -518,6 +584,7 @@ mod tests {
             .load("anysola", crate::theme::Mode::Dark)
             .unwrap();
         let color = |_: &str| Color::Reset;
+        let toggled = std::collections::HashSet::new();
         let ctx = |width| Ctx {
             theme: &theme,
             width,
@@ -530,6 +597,9 @@ mod tests {
             background_key: None,
             directory: "/w",
             home: "/h",
+            grouping: true,
+            verbosity: Verbosity::Medium,
+            toggled: &toggled,
         };
         let items = vec![
             Item::User {

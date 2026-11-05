@@ -640,6 +640,10 @@ impl App {
                     self.selection = None;
                     return self.run_command("session.child.first", None);
                 }
+                if self.toggle_group(at.1) {
+                    self.selection = None;
+                    return;
+                }
                 if self.state.route == Route::Home {
                     self.click_recent(mouse.row);
                 }
@@ -670,6 +674,29 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// A click on an exploration group's row opens or closes it.
+    fn toggle_group(&mut self, row: u16) -> bool {
+        let Some(session) = self.state.session_mut() else {
+            return false;
+        };
+        let hit = session
+            .layout
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .hits
+            .iter()
+            .find(|(y, _)| *y == row)
+            .map(|(_, id)| id.clone());
+        let Some(id) = hit else {
+            return false;
+        };
+        if !session.toggled.remove(&id) {
+            session.toggled.insert(id);
+        }
+        true
     }
 
     /// The terminal pane's left edge, where a drag resizes it.

@@ -46,6 +46,9 @@ pub fn transcript(
         background_key: state.hints.background.clone(),
         directory: &session.directory,
         home: &state.home,
+        grouping: state.settings.grouping,
+        verbosity: state.settings.verbosity,
+        toggled: &session.toggled,
     };
     rows::layout(&session.items, &ctx, Some(&session.layout.0))
 }
@@ -86,9 +89,19 @@ pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u1
     let scroll = session.scroll.min(rows.len().saturating_sub(height));
     let end = rows.len() - scroll;
     let start = end.saturating_sub(height);
+    let mut hits = Vec::new();
     for (i, row) in rows[start..end].iter().enumerate() {
         draw_row(c, row, x, top + i as u16, w);
+        if let Some(id) = &row.group {
+            hits.push((top + i as u16, id.clone()));
+        }
     }
+    session
+        .layout
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .hits = hits;
     if session.scroll > 0 {
         let label = "Jump to latest ↓";
         let lx = x + w - width(label) as u16;

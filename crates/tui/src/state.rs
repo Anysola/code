@@ -137,6 +137,8 @@ pub struct Session {
     /// A revert is staged (`/redo` is available).
     pub reverted: bool,
     pub layout: LayoutCache,
+    /// Exploration groups whose open state the user flipped, by group ID.
+    pub toggled: std::collections::HashSet<String>,
 }
 
 /// The session's transcript layout cache, shared by clones of the session.
@@ -228,6 +230,17 @@ pub struct Settings {
     pub paste_compact: bool,
     pub animations: bool,
     pub title: bool,
+    pub grouping: bool,
+    pub verbosity: Verbosity,
+}
+
+/// `session.verbosity`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Verbosity {
+    Low,
+    #[default]
+    Medium,
+    High,
 }
 
 impl Default for Settings {
@@ -240,6 +253,8 @@ impl Default for Settings {
             paste_compact: true,
             animations: true,
             title: true,
+            grouping: true,
+            verbosity: Verbosity::Medium,
         }
     }
 }
