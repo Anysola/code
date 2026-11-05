@@ -100,6 +100,8 @@ pub struct App {
     /// The editor's file and selection, and whether it went out with a prompt already.
     editor: Option<crate::editor::Selection>,
     editor_sent: bool,
+    /// Tabs closed this run, for reopening (latest last).
+    closed: Vec<String>,
     /// The last status seen of each MCP server.
     mcp_seen: std::collections::HashMap<String, anysola_core::mcp::Status>,
 }
@@ -215,6 +217,7 @@ pub async fn run(core: Core, options: Options) -> Result<(), String> {
         editor: None,
         editor_sent: false,
         mcp_seen: std::collections::HashMap::new(),
+        closed: Vec::new(),
     };
     app.init(&paths, &options);
     if let Some((title, message)) = failure {

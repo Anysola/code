@@ -135,6 +135,7 @@ pub enum Kind {
     Devices,
     BudgetGate { prompt: String },
     Stash,
+    Queue { session: String },
 }
 
 /// One drawn row of a list dialog.
@@ -357,6 +358,7 @@ pub enum BodyKind {
     Update,
     Exported { path: String },
     Btw { answer: String },
+    Image { index: usize },
     Error { details: String },
 }
 

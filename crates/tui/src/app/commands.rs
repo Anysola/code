@@ -198,6 +198,39 @@ impl App {
                 self.state.composer.clear();
             }
             ("prompt.editor_context.clear", _) => self.editor = None,
+            ("session.tab.close", Some(current)) => {
+                self.state.tabs.retain(|t| t.session_id != current);
+                self.closed.push(current);
+                self.state.route = Route::Home;
+                self.refresh_recent();
+            }
+            ("session.tab.reopen", _) => {
+                if let Some(id) = self.closed.pop() {
+                    self.open_session(&id);
+                }
+            }
+            ("theme.switch_mode", _) => {
+                let mode = match self.theme.mode {
+                    crate::theme::Mode::Dark => crate::theme::Mode::Light,
+                    crate::theme::Mode::Light => crate::theme::Mode::Dark,
+                };
+                if self.theme.modes.contains(&mode)
+                    && let Ok(theme) = self.catalog.load(&self.theme.name, mode)
+                {
+                    self.theme = theme;
+                }
+            }
+            ("theme.mode.lock", _) => {
+                let locked = self.tui.theme_mode().is_some();
+                let value = match (locked, self.theme.mode) {
+                    (true, _) => s("system"),
+                    (false, crate::theme::Mode::Dark) => s("dark"),
+                    (false, crate::theme::Mode::Light) => s("light"),
+                };
+                let _ = self.tui.set(&["theme", "mode"], value);
+            }
+            ("prompt.images.view", _) => self.view_image(0),
+            ("session.queued_prompts", Some(current)) => self.open_queue(&current),
             ("diff.open", _) if self.state.diff.is_some() => self.state.diff = None,
             ("diff.open", _) => self.open_diff(crate::diffview::Source::All),
             ("prompt.stash.pop", _) => {
