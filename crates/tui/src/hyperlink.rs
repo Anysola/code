@@ -188,7 +188,6 @@ mod tests {
             .draw([(0, 0, &cell), (1, 0, &cell), (2, 0, &plain)].into_iter())
             .unwrap();
         ratatui::backend::Backend::flush(&mut backend).unwrap();
-        drop(backend);
         let out = String::from_utf8(bytes).unwrap();
         let open = out.find("\x1b]8;;https://example.com/a\x1b\\").unwrap();
         let close = out.rfind("\x1b]8;;\x1b\\").unwrap();
