@@ -740,6 +740,7 @@ fn budget_toasts() {
         message: anysola::budget_text(12, Some(50)),
         variant: Variant::Success,
         until: u64::MAX,
+        action: None,
     });
     assert_screen(&state, "budget-set-toast");
     let mut home = under(1);
@@ -749,6 +750,7 @@ fn budget_toasts() {
             .into(),
         variant: Variant::Warning,
         until: u64::MAX,
+        action: None,
     });
     assert_screen(&home, "budget-toast-home");
 }
@@ -1171,9 +1173,34 @@ fn diff_docks_beside_a_wide_session() {
     ));
     let screen = render(&state);
     let header = screen.lines().nth(1).unwrap();
-    assert!(header[header.char_indices().nth(60).unwrap().0..].contains("All"), "{header}");
+    assert!(
+        header[header.char_indices().nth(60).unwrap().0..].contains("All"),
+        "{header}"
+    );
     assert!(screen.contains("Loading diff…"));
     state.width = 100;
     let narrow = render(&state);
-    assert!(narrow.lines().next().unwrap().contains("All"), "full screen below 108");
+    assert!(
+        narrow.lines().next().unwrap().contains("All"),
+        "full screen below 108"
+    );
+}
+
+/// `ui/toast.tsx`: an action replaces the close mark with `› <label>`.
+#[test]
+fn toast_action_affordance() {
+    let mut state = home(120, 36);
+    state.toast = Some(Toast {
+        title: Some("MCP server failed: docs".into()),
+        message: "Run /mcps to view details.".into(),
+        variant: Variant::Error,
+        until: u64::MAX,
+        action: Some(("Open MCP servers".into(), "mcp.list".into())),
+    });
+    let screen = render(&state);
+    let row = screen.lines().nth(2).unwrap();
+    assert!(
+        row.contains("MCP server failed: docs") && row.contains("› Open MCP servers"),
+        "{row}"
+    );
 }

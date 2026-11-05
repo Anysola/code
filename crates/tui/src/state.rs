@@ -222,6 +222,8 @@ pub struct Toast {
     pub message: String,
     pub variant: Variant,
     pub until: u64,
+    /// `› <label>` in place of the close mark; a click runs the command.
+    pub action: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

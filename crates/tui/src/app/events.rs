@@ -114,6 +114,13 @@ impl App {
             ),
             _ => {}
         }
+        if matches!(
+            server.status,
+            Status::NeedsAuth { .. } | Status::Failed { .. }
+        ) && let Some(toast) = self.state.toast.as_mut()
+        {
+            toast.action = Some(("Open MCP servers".into(), "mcp.list".into()));
+        }
         let rows = self.mcp_rows();
         self.count_mcp(&rows);
         if let Some(crate::dialog::Dialog::Select(s)) = self.state.dialogs.last_mut()

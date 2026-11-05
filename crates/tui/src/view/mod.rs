@@ -259,7 +259,12 @@ fn toast(c: &mut Canvas, state: &State, toast: &crate::state::Toast) {
         .max()
         .unwrap_or(0);
     // A toast whose text wraps takes the full width.
-    let w = (longest + 9).min(max) as u16;
+    let affordance = toast
+        .action
+        .as_ref()
+        .map_or("x".to_string(), |(label, _)| format!("› {label}"));
+    let extra = width(&affordance).saturating_sub(1);
+    let w = (longest + 9 + extra).min(max) as u16;
     let h = lines.len() as u16 + 2;
     let x = state.width.saturating_sub(w + 2);
     let rect = Rect::new(x, 1, w, h);
@@ -269,7 +274,14 @@ fn toast(c: &mut Canvas, state: &State, toast: &crate::state::Toast) {
         c.put(rect.left(), y, "┃", border, 1);
         c.put(rect.right() - 1, y, "┃", border, 1);
     }
-    c.put(rect.right() - 4, 2, "x", c.style("text.muted"), 1);
+    let ax = rect.right() - 3 - width(&affordance) as u16;
+    c.put(
+        ax,
+        2,
+        &affordance,
+        c.style("text.muted"),
+        width(&affordance),
+    );
     for (i, (text, style)) in lines.iter().enumerate() {
         c.put(x + 3, 2 + i as u16, text, *style, room);
     }

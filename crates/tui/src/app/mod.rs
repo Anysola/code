@@ -479,6 +479,7 @@ impl App {
             message,
             variant,
             until: now() + TOAST_MS,
+            action: None,
         });
     }
 

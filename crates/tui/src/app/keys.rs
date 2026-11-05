@@ -668,6 +668,14 @@ impl App {
                     self.selection = None;
                     return self.run_command("session.child.first", None);
                 }
+                if let Some((label, command)) =
+                    self.state.toast.as_ref().and_then(|t| t.action.clone())
+                    && over_text(&self.last, at, &format!("› {label}"))
+                {
+                    self.selection = None;
+                    self.state.toast = None;
+                    return self.run_command(&command, None);
+                }
                 if self.toggle_group(at.1) {
                     self.selection = None;
                     return;
