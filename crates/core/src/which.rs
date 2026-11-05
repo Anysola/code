@@ -15,8 +15,17 @@ pub fn which_in(command: &str, extra: Option<&Path>) -> Option<PathBuf> {
     dirs.extend(extra.map(Path::to_path_buf));
     let extensions: Vec<String> = if cfg!(windows) {
         let pathext = env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".into());
-        std::iter::once(String::new())
-            .chain(pathext.split(';').map(str::to_string))
+        // A bare name is never run as is: npm's bin folder keeps an extensionless sh script beside
+        // each `.cmd` shim, and Windows cannot start it.
+        let bare = Path::new(command).extension().is_some();
+        bare.then(String::new)
+            .into_iter()
+            .chain(
+                pathext
+                    .split(';')
+                    .filter(|e| !e.is_empty())
+                    .map(str::to_string),
+            )
             .collect()
     } else {
         vec![String::new()]
@@ -28,6 +37,18 @@ pub fn which_in(command: &str, extra: Option<&Path>) -> Option<PathBuf> {
                 .map(move |ext| dir.join(format!("{command}{ext}")))
         })
         .find(|candidate| is_executable(candidate))
+}
+
+/// The program to start for `name`. On Windows a bare name is looked up with PATHEXT first, so
+/// `.cmd` shims such as `npx`, `npm` or `code` start (the standard library only tries `.exe`).
+pub fn program(name: &str) -> std::ffi::OsString {
+    if cfg!(windows)
+        && !name.contains(['/', '\\'])
+        && let Some(found) = which(name)
+    {
+        return found.into_os_string();
+    }
+    name.into()
 }
 
 fn is_executable(path: &Path) -> bool {

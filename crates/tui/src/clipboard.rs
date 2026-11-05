@@ -77,7 +77,12 @@ fn text_tools() -> Vec<Tool> {
 fn text_tools() -> Vec<Tool> {
     vec![(
         "powershell.exe",
-        &["-NoProfile", "-Command", "Get-Clipboard -Raw"] as &[&str],
+        // UTF-8 bytes straight to stdout: redirected PowerShell output uses the OEM code page.
+        &[
+            "-NoProfile",
+            "-Command",
+            "$t = Get-Clipboard -Raw; if ($t) { $b = [Text.Encoding]::UTF8.GetBytes($t); [Console]::OpenStandardOutput().Write($b, 0, $b.Length) }",
+        ] as &[&str],
     )]
 }
 

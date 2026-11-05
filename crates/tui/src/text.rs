@@ -47,10 +47,24 @@ pub fn clip(text: &str, max: usize) -> String {
 /// Keeps both ends of a path-like text: `…/my-ap…` style cuts put `…` in the middle.
 /// The path with the home directory shown as `~`.
 pub fn abbreviate(directory: &std::path::Path, home: &std::path::Path) -> String {
-    match directory.strip_prefix(home) {
-        Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
-        Ok(rest) => format!("~/{}", rest.display()),
-        Err(_) => directory.display().to_string(),
+    let (dir, home) = (directory.display().to_string(), home.display().to_string());
+    let sep = std::path::MAIN_SEPARATOR;
+    let home = home.trim_end_matches(['/', '\\']);
+    // Windows paths compare without case (`c:\users` is `C:\Users`).
+    let starts = if cfg!(windows) {
+        dir.to_lowercase().starts_with(&home.to_lowercase())
+    } else {
+        dir.starts_with(home)
+    };
+    let rest = if starts && !home.is_empty() {
+        dir.get(home.len()..)
+    } else {
+        None
+    };
+    match rest {
+        Some("") => "~".to_string(),
+        Some(rest) if rest.starts_with(['/', '\\']) => format!("~{sep}{}", &rest[1..]),
+        _ => dir,
     }
 }
 
@@ -75,7 +89,7 @@ pub fn path(text: &str, max: usize) -> String {
     if width(text) <= max {
         return text.to_string();
     }
-    let rest = text.find('/').map_or(text, |i| &text[i..]);
+    let rest = text.find(['/', '\\']).map_or(text, |i| &text[i..]);
     truncate(&format!("…{rest}"), max)
 }
 
@@ -172,6 +186,10 @@ fn take_start(text: &str, max: usize) -> String {
 pub fn truncate_file_path(value: &str, max: usize) -> String {
     if width(value) <= max {
         return value.to_string();
+    }
+    // Windows paths: the same cut over `\` separators.
+    if value.contains('\\') && !value.contains('/') {
+        return truncate_file_path(&value.replace('\\', "/"), max).replace('/', "\\");
     }
     let root = if value.starts_with('/') { "/" } else { "" };
     let segments: Vec<&str> = value[root.len()..]
@@ -339,6 +357,21 @@ pub fn title_case(id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn windows_paths_keep_their_separators() {
+        let sep = std::path::MAIN_SEPARATOR;
+        assert_eq!(
+            super::abbreviate(
+                std::path::Path::new("/home/u/proj/src"),
+                std::path::Path::new("/home/u")
+            ),
+            format!("~{sep}proj/src")
+        );
+        let cut = super::truncate_file_path(r"C:\Users\me\proj\src\Button.tsx", 24);
+        assert!(cut.ends_with(r"\Button.tsx") && !cut.contains('/'), "{cut}");
+        assert_eq!(super::path(r"C:\Users\me\proj", 12), r"…\Users\me\…");
+    }
+
     use super::*;
 
     #[test]

@@ -58,7 +58,7 @@ fn installed_package(exe: &Path) -> Option<String> {
 }
 
 async fn output(command: &[&str], timeout: Duration) -> Option<std::process::Output> {
-    let child = tokio::process::Command::new(command[0])
+    let child = tokio::process::Command::new(anysola_core::which::program(command[0]))
         .args(&command[1..])
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true)

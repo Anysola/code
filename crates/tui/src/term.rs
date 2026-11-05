@@ -114,8 +114,9 @@ pub fn set_title(text: &str) {
 /// Opens a URL in the browser; false when no opener could start.
 pub fn open_url(url: &str) -> bool {
     let mut command = if cfg!(windows) {
-        let mut command = std::process::Command::new("cmd");
-        command.args(["/c", "start", ""]);
+        // `cmd /c start` would cut the URL at its first `&`.
+        let mut command = std::process::Command::new("rundll32.exe");
+        command.arg("url.dll,FileProtocolHandler");
         command
     } else if cfg!(target_os = "macos") {
         std::process::Command::new("open")

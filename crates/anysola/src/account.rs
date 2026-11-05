@@ -60,8 +60,9 @@ pub async fn sign_in(db: &Db) -> Result<(), String> {
 /// Best effort: the URL is already on screen.
 pub fn open_browser(url: &str) {
     let mut command = if cfg!(windows) {
-        let mut command = std::process::Command::new("cmd");
-        command.args(["/c", "start", ""]);
+        // `cmd /c start` would cut the URL at its first `&`.
+        let mut command = std::process::Command::new("rundll32.exe");
+        command.arg("url.dll,FileProtocolHandler");
         command
     } else if cfg!(target_os = "macos") {
         std::process::Command::new("open")

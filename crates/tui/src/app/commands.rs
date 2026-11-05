@@ -762,11 +762,13 @@ impl App {
         }
         term::restore();
         let mut parts = program.split_whitespace();
-        let status = std::process::Command::new(parts.next().unwrap_or_default())
-            .args(parts)
-            .arg(&file)
-            .current_dir(self.core.directory())
-            .status();
+        let status = std::process::Command::new(anysola_core::which::program(
+            parts.next().unwrap_or_default(),
+        ))
+        .args(parts)
+        .arg(&file)
+        .current_dir(self.core.directory())
+        .status();
         let _ = term::resume(self.tui.mouse());
         let _ = terminal.clear();
         match status {
