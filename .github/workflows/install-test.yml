@@ -1,0 +1,127 @@
+# Install test: run the public install scripts on real Linux, macOS and Windows machines, the way users do, and
+# check that the installed `anysola` runs, finds its update path and its uninstall method. Runs after a release and
+# by hand; needs no token.
+
+name: install-test
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to install (default: the latest release)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  unix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Install with curl | sh
+        env:
+          ANYSOLA_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          curl -fsSL https://www.anysola.com/install | sh
+          echo "$HOME/.anysola/bin" >> "$GITHUB_PATH"
+      - name: Run it
+        run: |
+          set -euo pipefail
+          anysola --version
+          anysola --version | grep -E '^Anysola Code [0-9]'
+          anysola update --print | tee update.txt
+          grep -q "anysola.com/install" update.txt || grep -q "Already up to date" update.txt
+          anysola uninstall --dry-run | tee uninstall.txt
+          grep -q "Installation method: curl" uninstall.txt
+      - name: Run it again (update in place)
+        run: |
+          set -euo pipefail
+          curl -fsSL https://www.anysola.com/install | sh -s -- --no-modify-path
+          anysola --version
+
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Install with irm | iex (Windows PowerShell 5.1)
+        shell: powershell
+        env:
+          ANYSOLA_VERSION: ${{ inputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          irm https://www.anysola.com/install.ps1 | iex
+          "$HOME\.anysola\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+          if (($userPath -split ";") -notcontains "$HOME\.anysola\bin") { throw "the user PATH was not updated" }
+      - name: Run it
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          anysola --version
+          if (-not ((anysola --version) -match '^Anysola Code [0-9]')) { throw "unexpected version line" }
+          $update = anysola update --print | Out-String
+          Write-Output $update
+          if (-not ($update -match 'install\.ps1|Already up to date')) { throw "update does not use the install script" }
+          $uninstall = anysola uninstall --dry-run | Out-String
+          Write-Output $uninstall
+          if (-not ($uninstall -match 'Installation method: curl')) { throw "uninstall did not detect the script install" }
+      - name: Run it again while it is installed (rename path)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          irm https://www.anysola.com/install.ps1 | iex
+          anysola --version
+
+  npm:
+    # npm i -g on every OS/arch; windows-11-arm also with x64 Node (postinstall picks the arm64 binary).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04 }
+          - { os: ubuntu-24.04-arm }
+          - { os: macos-15 }
+          - { os: macos-15-intel }
+          - { os: windows-2025 }
+          - { os: windows-11-arm }
+          - { os: windows-11-arm, node-arch: x64 }
+    name: npm (${{ matrix.os }}${{ matrix.node-arch && ' x64 node' || '' }})
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          architecture: ${{ matrix.node-arch }}
+      - name: npm install -g
+        env:
+          VERSION: ${{ inputs.version || 'latest' }}
+        run: |
+          set -euo pipefail
+          npm install -g "@anysola/code@$VERSION"
+          anysola --version | tr -d '\r' | grep -E '^Anysola Code [0-9]'
+
+  npm-alpine:
+    # musl: postinstall must pick the -musl package.
+    runs-on: ubuntu-24.04
+    container: node:24-alpine
+    steps:
+      - name: npm install -g
+        env:
+          VERSION: ${{ inputs.version || 'latest' }}
+        run: |
+          set -eu
+          npm install -g "@anysola/code@$VERSION"
+          anysola --version | grep -E '^Anysola Code [0-9]'

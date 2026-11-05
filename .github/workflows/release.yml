@@ -1,0 +1,199 @@
+# Anysola Code release: build the six platform binaries on a tag push, publish the npm packages, and create the GitHub
+# release the install scripts download from (12 archives, SHA256SUMS, install.sh, install.ps1).
+#
+# Tag format: v<anysola version>, for example v1.0.0. Every target builds natively on its own runner; Linux builds
+# are static musl, so one binary fills both the glibc and the -musl asset names (ARCHITECTURE.md "Release").
+# A manual run (workflow_dispatch) is a dry run by default: build, smoke test and pack, no publishing.
+#
+# Secrets: NPM_TOKEN (npm automation token with publish rights on the @anysola scope).
+# 0.5.1's upstream.yml (daily OpenCode tag merge) has no counterpart: the Rust tree does not track OpenCode.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and pack only, do not publish"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RUST_VERSION: "1.99.0"
+  CARGO_TERM_COLOR: always
+  CC_x86_64_unknown_linux_musl: musl-gcc
+  CC_aarch64_unknown_linux_musl: musl-gcc
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.anysola }}
+    steps:
+      - id: version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then tag="0.0.0-ci.${GITHUB_RUN_NUMBER}"; fi
+          echo "anysola=$tag" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { build: linux-x64, os: ubuntu-24.04, target: x86_64-unknown-linux-musl }
+          - { build: linux-arm64, os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
+          - { build: darwin-arm64, os: macos-15, target: aarch64-apple-darwin }
+          - { build: darwin-x64, os: macos-15-intel, target: x86_64-apple-darwin }
+          - { build: windows-x64, os: windows-2025, target: x86_64-pc-windows-msvc }
+          - { build: windows-arm64, os: windows-11-arm, target: aarch64-pc-windows-msvc }
+    name: build (${{ matrix.build }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      ANYSOLA_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: ${{ matrix.target }}
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+
+      - name: Build
+        # x64 targets keep rustc's baseline x86-64 CPU (no AVX2), so the -baseline names can share the bytes.
+        run: cargo build --release --locked -p anysola --target ${{ matrix.target }}
+
+      - name: Collect
+        run: |
+          set -euo pipefail
+          mkdir -p "bin/${{ matrix.build }}"
+          exe=anysola
+          case "${{ matrix.build }}" in windows-*) exe=anysola.exe ;; esac
+          cp "target/${{ matrix.target }}/release/$exe" "bin/${{ matrix.build }}/$exe"
+          echo "BIN=bin/${{ matrix.build }}/$exe" >> "$GITHUB_ENV"
+
+      - name: Static check (Linux)
+        if: runner.os == 'Linux'
+        run: file "$BIN" | tee /dev/stderr | grep -Eq "static(-pie)? linked|statically linked"
+
+      - name: Ad-hoc sign (macOS)
+        # Replace with a Developer ID signature and notarization when Anysola has an Apple developer account.
+        if: runner.os == 'macOS'
+        run: codesign --force --sign - "$BIN"
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          out="$("$BIN" --version | tr -d '\r')"
+          echo "$out"
+          test "$out" = "Anysola Code ${ANYSOLA_VERSION} (OpenCode 2.2.5)"
+          "$BIN" --help | grep -q "anysola <subcommand>"
+          ! "$BIN" --help | grep -qi "opencode command line"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.build }}
+          path: bin
+          if-no-files-found: error
+
+  pack:
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bin-*
+          path: bin
+          merge-multiple: true
+      - name: Pack archives and npm packages
+        # Fails unless the 15 release assets of spec/verbatim/cli/release.txt come out (names, single 0755 entry,
+        # identical duplicates, SHA256SUMS).
+        run: script/pack.sh "${{ needs.version.outputs.version }}" bin dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm
+          path: dist/npm/*.tgz
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: dist/release
+          if-no-files-found: error
+
+  publish:
+    needs: [version, pack]
+    if: github.ref_type == 'tag' || inputs.dry_run == false
+    runs-on: ubuntu-24.04
+    environment: npm
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm
+          path: npm
+      - name: Publish platform packages, then @anysola/code
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag=latest
+          case "$VERSION" in *-*) tag=next ;; esac
+          # Platform packages first: the main package's postinstall installs one of them by exact version.
+          for file in ./npm/anysola-code-*-"$VERSION".tgz; do
+            npm publish "$file" --access public --tag "$tag"
+          done
+          npm publish "./npm/anysola-code-$VERSION.tgz" --access public --tag "$tag"
+
+  github-release:
+    # After npm, so `anysola update` from either install finds the same version.
+    needs: [version, publish]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: release
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          (cd release && cat SHA256SUMS && sha256sum -c SHA256SUMS)
+          test "$(ls release | wc -l)" -eq 15
+          flags=()
+          case "$VERSION" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "v$VERSION" release/* --repo "$GITHUB_REPOSITORY" --title "Anysola Code $VERSION" \
+            --notes "Install: \`curl -fsSL https://www.anysola.com/install | sh\` (macOS, Linux) or \`irm https://www.anysola.com/install.ps1 | iex\` (Windows), or \`npm i -g @anysola/code\`. Changes: CHANGELOG.md." \
+            --verify-tag "${flags[@]}"
