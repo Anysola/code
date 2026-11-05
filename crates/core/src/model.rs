@@ -144,7 +144,7 @@ impl Model {
                 .and_then(|c| c.get(key))
                 .and_then(Value::as_bool)
         };
-        let mut variants: Vec<Variant> = info
+        let configured: Vec<Variant> = info
             .get("variants")
             .and_then(Value::as_array)
             .map(|list| list.iter().filter_map(variant_from_config).collect())
@@ -156,16 +156,19 @@ impl Model {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        for effort in efforts.iter().filter_map(Value::as_str) {
-            if !variants.iter().any(|v| v.id == effort) {
-                variants.push(Variant {
-                    id: effort.to_string(),
-                    thinking: Some(json!({"type": "adaptive", "display": "summarized"})),
-                    effort: Some(effort.to_string()),
-                    headers: Vec::new(),
-                });
-            }
-        }
+        // Effort levels first, then the configured variants (0.5.1's order).
+        let mut variants: Vec<Variant> = efforts
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|effort| !configured.iter().any(|v| v.id == *effort))
+            .map(|effort| Variant {
+                id: effort.to_string(),
+                thinking: Some(json!({"type": "adaptive", "display": "summarized"})),
+                effort: Some(effort.to_string()),
+                headers: Vec::new(),
+            })
+            .collect();
+        variants.extend(configured);
         Model {
             id: id.to_string(),
             name: text(&["name"]).unwrap_or(id).to_string(),

@@ -10,6 +10,7 @@ name = "anysola"
 path = "src/main.rs"
 
 [dependencies]
+anysola-acp.workspace = true
 anysola-core.workspace = true
 anysola-mcp.workspace = true
 anysola-migrate.workspace = true

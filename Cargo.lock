@@ -93,6 +93,7 @@ name = "anysola"
 version = "1.0.0-dev"
 dependencies = [
  "anyhow",
+ "anysola-acp",
  "anysola-core",
  "anysola-mcp",
  "anysola-migrate",
@@ -119,6 +120,15 @@ dependencies = [
 [[package]]
 name = "anysola-acp"
 version = "1.0.0-dev"
+dependencies = [
+ "anysola-core",
+ "anysola-mcp",
+ "anysola-testkit",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "url",
+]
 
 [[package]]
 name = "anysola-core"

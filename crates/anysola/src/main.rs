@@ -143,11 +143,7 @@ fn main() {
             Some(Command::Update(args)) => update::update(args).await,
             Some(Command::Uninstall(args)) => uninstall::uninstall(args).await,
             Some(Command::Acp(args)) if args.login => account::login(false).await,
-            // The ACP server arrives with milestone M7.
-            Some(Command::Acp(_)) => {
-                eprintln!("anysola acp: the ACP server is not available in this build yet");
-                1
-            }
+            Some(Command::Acp(_)) => anysola_acp::serve().await,
             Some(Command::Debug(DebugArgs { command: None })) => group_help("debug"),
             Some(Command::Debug(DebugArgs {
                 command: Some(command),

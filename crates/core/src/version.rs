@@ -19,9 +19,24 @@ pub fn user_agent() -> String {
     format!("opencode/latest/{OPENCODE_VERSION}/cli")
 }
 
-/// User agent of model calls; `client` is `cli` or `acp`.
-pub fn model_user_agent(client: &str) -> String {
-    format!("opencode/latest/{OPENCODE_VERSION}+anysola.{VERSION}/{client}")
+static CLIENT: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// Marks this process as the ACP server (`anysola acp`), which model calls report.
+pub fn set_acp_client() {
+    let _ = CLIENT.set("acp");
+}
+
+/// `cli`, or `acp` under `anysola acp`.
+pub fn client() -> &'static str {
+    CLIENT.get().copied().unwrap_or("cli")
+}
+
+/// User agent of model calls.
+pub fn model_user_agent() -> String {
+    format!(
+        "opencode/latest/{OPENCODE_VERSION}+anysola.{VERSION}/{}",
+        client()
+    )
 }
 
 /// Stored on sessions as the writer's version.

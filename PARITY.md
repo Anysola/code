@@ -585,15 +585,15 @@ screens: `V/tui/screens/*.txt`.
 
 ## M7 — ACP (`anysola acp`)
 
-- [ ] `anysola acp`: NDJSON JSON-RPC 2.0 on stdin/stdout, in-process agent, `OPENCODE_CLIENT=acp` identity (decision 7); exits 0 when the client closes; message-size and fatal errors on stderr as `anysola acp: …`, exit 1 — spec/integrations.md §2, V/integrations/acp-transcript-session.log
-- [ ] `acp --login` runs the device sign-in instead — spec/integrations.md §2
-- [ ] `initialize` response exactly as captured (protocolVersion 1, capabilities, auth method `opencode-login`, `agentInfo {name:"Anysola Code", version:<ver>}`); client capabilities read (`elicitation.form`, `session.compaction`, child-session updates meta) — spec/integrations.md §2
-- [ ] Requests `authenticate`, `session/new`, `session/load`, `session/list` (cwd filter, desc, limit 100, cursor), `session/delete`, `session/resume`, `session/close`, `session/fork`, `session/set_config_option`, `session/set_mode`, `session/prompt`; notification `session/cancel` — spec/integrations.md §2
-- [ ] Session mapping (ids = session ids, absolute `cwd` equal to the session directory for load/resume/fork, `additionalDirectories` grants, `mcpServers` stdio/http added for the process lifetime, location-scoped) — spec/integrations.md §2
-- [ ] Config options `model`, `effort` (variants + `default`), `mode` (primary agents); `config_option_update` and `available_commands_update` (config commands, MCP prompts, `goal`, `compact`) — spec/integrations.md §2
-- [ ] Prompt updates (`user_message_chunk` replay, `agent_message_chunk`, `agent_thought_chunk`, `tool_call` with kind mapping, `tool_call_update` with diffs, `usage_update`), response `{stopReason, usage, _meta}` with stop-reason mapping — spec/integrations.md §2
-- [ ] Permissions via `session/request_permission` (once/always/reject, titles, diff previews; reject → `The user declined this tool call`, turn `cancelled`) and elicitation via `elicitation/create` — spec/integrations.md §2, V/integrations/acp-transcript-permission.log
-- [ ] Error texts (JSON-RPC -32602 `Invalid params: …`) — V/integrations/strings.txt
+- [x] `anysola acp`: NDJSON JSON-RPC 2.0 on stdin/stdout, in-process agent, `OPENCODE_CLIENT=acp` identity (decision 7); exits 0 when the client closes; message-size and fatal errors on stderr as `anysola acp: …`, exit 1 — spec/integrations.md §2, V/integrations/acp-transcript-session.log
+- [x] `acp --login` runs the device sign-in instead — spec/integrations.md §2
+- [ ] `initialize` response exactly as captured (protocolVersion 1, capabilities, auth method `opencode-login`, `agentInfo {name:"Anysola Code", version:<ver>}`); client capabilities read (`elicitation.form`, `session.compaction`, child-session updates meta) — spec/integrations.md §2 (response and `elicitation.form` done; `session.compaction` and child-session updates are read by nobody yet: compaction and subagent progress are not forwarded)
+- [x] Requests `authenticate`, `session/new`, `session/load`, `session/list` (cwd filter, desc, limit 100, cursor), `session/delete`, `session/resume`, `session/close`, `session/fork`, `session/set_config_option`, `session/set_mode`, `session/prompt`; notification `session/cancel` — spec/integrations.md §2
+- [x] Session mapping (ids = session ids, absolute `cwd` equal to the session directory for load/resume/fork, `additionalDirectories` grants, `mcpServers` stdio/http added for the process lifetime, location-scoped) — spec/integrations.md §2
+- [x] Config options `model`, `effort` (variants + `default`), `mode` (primary agents); `config_option_update` and `available_commands_update` (config commands, MCP prompts, `goal`, `compact`) — spec/integrations.md §2
+- [x] Prompt updates (`user_message_chunk` replay, `agent_message_chunk`, `agent_thought_chunk`, `tool_call` with kind mapping, `tool_call_update` with diffs, `usage_update`), response `{stopReason, usage, _meta}` with stop-reason mapping — spec/integrations.md §2
+- [x] Permissions via `session/request_permission` (once/always/reject, titles, diff previews; reject → `The user declined this tool call`, turn `cancelled`) and elicitation via `elicitation/create` — spec/integrations.md §2, V/integrations/acp-transcript-permission.log
+- [x] Error texts (JSON-RPC -32602 `Invalid params: …`) — V/integrations/strings.txt
 
 ---
 
