@@ -423,6 +423,10 @@ pub struct State {
     pub live: Option<String>,
     /// The selected popup row asks `Press ctrl+d to confirm` before it is removed.
     pub popup_confirm: bool,
+    /// A worktree chosen on home, created on the first submit (`(new worktree)` in the footer).
+    pub new_worktree: Option<String>,
+    /// `Creating worktree` while that happens.
+    pub worktree_progress: Option<String>,
     /// The terminal pane beside the session, while shown.
     pub pane: Option<Pane>,
     pub dock: Option<Dock>,
@@ -469,6 +473,8 @@ impl State {
             asides: 0,
             live: None,
             popup_confirm: false,
+            new_worktree: None,
+            worktree_progress: None,
             mcp: (0, 0, 0),
             diff: None,
             zone: *chrono::Local::now().offset(),

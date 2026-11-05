@@ -358,6 +358,36 @@ pub fn footer(c: &mut Canvas, state: &State, x: u16, y: u16, w: u16) {
             &interrupt,
             left_room.saturating_sub((end + 1 - x) as usize),
         );
+    } else if let Some(progress) = &state.worktree_progress {
+        let accent = Style::new().fg(c.theme.term(c.theme.hue("accent", 500)));
+        let spinner = if state.settings.animations {
+            crate::transcript::rows::spinner_frame(state.now)
+        } else {
+            "⋯"
+        };
+        let end = c.put(
+            x + 3,
+            y,
+            &format!("{spinner} {progress}"),
+            accent,
+            left_room,
+        );
+        c.put(
+            end,
+            y,
+            "...",
+            muted,
+            left_room.saturating_sub((end - x) as usize),
+        );
+    } else if state.new_worktree.is_some() {
+        let accent = Style::new().fg(c.theme.term(c.theme.hue("accent", 500)));
+        c.put(
+            x + 3,
+            y,
+            "(new worktree)",
+            accent,
+            left_room.saturating_sub(3),
+        );
     } else {
         let label = text::path(&state.location, left_room);
         c.put(x, y, &label, muted, left_room);

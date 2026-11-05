@@ -7,7 +7,7 @@ use anysola_core::worktree::RemoveError;
 
 use super::{App, Msg};
 use crate::dialog::{Confirm, ConfirmKind, Dialog, Kind, Prompt, PromptKind, Select};
-use crate::state::Variant;
+use crate::state::{Route, Variant};
 
 impl App {
     pub(super) fn worktree_prompt(&mut self) {
@@ -26,6 +26,12 @@ impl App {
         } else {
             name
         };
+        // Before the first prompt the worktree waits for the submit that needs it.
+        if self.state.route == Route::Home {
+            self.state.dialogs.clear();
+            self.state.new_worktree = Some(name);
+            return;
+        }
         if let Some(Dialog::Prompt(p)) = self.state.dialogs.last_mut() {
             p.busy = Some("Creating worktree…".into());
         }
@@ -44,6 +50,37 @@ impl App {
                 }
             })));
         });
+    }
+
+    /// On home with a worktree chosen: creates it, moves there and submits the prompt then.
+    /// True when the submit waits for that.
+    pub(super) fn submit_in_new_worktree(&mut self) -> bool {
+        if self.state.route != Route::Home || self.state.worktree_progress.is_some() {
+            return self.state.worktree_progress.is_some();
+        }
+        let Some(name) = self.state.new_worktree.take() else {
+            return false;
+        };
+        self.state.worktree_progress = Some("Creating worktree".into());
+        let (core, tx) = (self.core.clone(), self.tx.clone());
+        tokio::spawn(async move {
+            let created = core.create_worktree(&name).await;
+            let _ = tx.send(Msg::Apply(Box::new(move |app: &mut App| {
+                app.state.worktree_progress = None;
+                match created {
+                    Ok(worktree) => {
+                        app.submit_after_move = true;
+                        app.relocate(worktree, None, false);
+                    }
+                    Err(error) => app.toast(
+                        Some("Creating workspace failed".into()),
+                        error,
+                        Variant::Error,
+                    ),
+                }
+            })));
+        });
+        true
     }
 
     /// `ctrl+m` in a session: the session moves to the chosen worktree.

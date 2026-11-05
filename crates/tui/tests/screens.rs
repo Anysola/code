@@ -1151,3 +1151,13 @@ fn session_location_unavailable() {
         assert!(screen.contains(text), "{text}\n{screen}");
     }
 }
+
+/// `component/prompt/move.tsx`: a worktree chosen on home waits for the first submit.
+#[test]
+fn home_footer_new_worktree() {
+    let mut state = home(120, 36);
+    state.new_worktree = Some("brave-fox".into());
+    assert!(render(&state).contains("(new worktree)"));
+    state.worktree_progress = Some("Creating worktree".into());
+    assert!(render(&state).contains("Creating worktree..."));
+}

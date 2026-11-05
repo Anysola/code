@@ -491,12 +491,18 @@ impl App {
                 return self.run_command(command.id, arguments);
             }
             if self.core.loaded().commands.get(name).is_some() {
+                if self.submit_in_new_worktree() {
+                    return;
+                }
                 return self.server_command(
                     name.to_string(),
                     arguments.to_string(),
                     trimmed.clone(),
                 );
             }
+        }
+        if self.submit_in_new_worktree() {
+            return;
         }
         self.prompt(trimmed, queue);
     }

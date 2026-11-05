@@ -123,6 +123,8 @@ pub struct App {
     records: Option<crate::status::Records>,
     /// A directory move waiting for running turns.
     relocating: Option<relocate::Pending>,
+    /// The prompt waiting for a deferred worktree is submitted once the move lands.
+    submit_after_move: bool,
     /// The new core's events, taken by the loop after a swap.
     resubscribe: Option<broadcast::Receiver<anysola_core::events::Event>>,
 }
@@ -240,6 +242,7 @@ pub async fn run(core: Core, options: Options) -> Result<(), String> {
         tab_store,
         records: probe.program_status.then(crate::status::Records::default),
         relocating: None,
+        submit_after_move: false,
         resubscribe: None,
     };
     app.init(&paths, &options);
@@ -421,8 +424,8 @@ impl App {
         self.sync_pane();
         self.state.live = self.live();
         if let Some(session) = self.state.session_mut() {
-            session.missing = !session.directory.is_empty()
-                && !std::path::Path::new(&session.directory).is_dir();
+            session.missing =
+                !session.directory.is_empty() && !std::path::Path::new(&session.directory).is_dir();
         }
         self.tab_store.save(&self.state.tabs);
         self.report_status();

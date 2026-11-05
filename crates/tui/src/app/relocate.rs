@@ -250,7 +250,12 @@ impl App {
                 }
                 self.open_session(&id);
             }
-            None => self.state.route = Route::Home,
+            None => {
+                self.state.route = Route::Home;
+                if std::mem::take(&mut self.submit_after_move) {
+                    self.submit(false);
+                }
+            }
         }
     }
 }
