@@ -284,6 +284,28 @@ impl Db {
         })
     }
 
+    /// Root sessions, most recently updated first, optionally of one directory and strictly
+    /// after the `(time_updated, id)` position of a previous page.
+    pub fn list_sessions(
+        &self,
+        directory: Option<&str>,
+        after: Option<(u64, &str)>,
+        limit: u64,
+    ) -> Result<Vec<SessionRow>> {
+        let (updated, id) = after.map_or((i64::MAX, ""), |(t, id)| (t as i64, id));
+        self.with(|c| {
+            let mut statement = c.prepare(
+                "SELECT id, project_id, parent_id, fork_session_id, fork_boundary, slug, directory, title, version,
+                        agent, model, time_created, time_updated FROM session
+                 WHERE parent_id IS NULL AND time_archived IS NULL AND (?1 IS NULL OR directory = ?1)
+                   AND (time_updated < ?2 OR (time_updated = ?2 AND id < ?3) OR ?3 = '')
+                 ORDER BY time_updated DESC, id DESC LIMIT ?4",
+            )?;
+            let rows = statement.query_map(params![directory, updated, id, limit as i64], session_row)?;
+            rows.collect()
+        })
+    }
+
     /// Titles of sessions forked from `source`, to number a new fork.
     pub fn fork_count(&self, source: &str) -> Result<u64> {
         self.with(|c| {

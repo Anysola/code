@@ -2,6 +2,8 @@
 
 use rusqlite::{OptionalExtension, params};
 
+use serde_json::Value;
+
 use super::{Db, Result, parse};
 use crate::permission::{Effect, Rule};
 use crate::time::now_ms;
@@ -59,6 +61,37 @@ impl Db {
         Ok(parse(value.flatten())
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default())
+    }
+
+    /// The session's `metadata` column (a JSON object; empty when unset).
+    pub fn session_metadata(&self, session_id: &str) -> Result<serde_json::Map<String, Value>> {
+        let value = self.with(|c| {
+            c.query_row(
+                "SELECT metadata FROM session WHERE id = ?1",
+                [session_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()
+        })?;
+        Ok(match parse(value.flatten()) {
+            Some(Value::Object(map)) => map,
+            _ => Default::default(),
+        })
+    }
+
+    /// Replaces the session's own rules and its metadata together.
+    pub fn set_session_access(
+        &self,
+        session_id: &str,
+        rules: &[Rule],
+        metadata: &serde_json::Map<String, Value>,
+    ) -> Result<()> {
+        let rules = serde_json::to_string(rules).expect("rules serialize");
+        let metadata = serde_json::to_string(metadata).expect("metadata serializes");
+        self.touch(
+            "permission = ?2, metadata = ?4",
+            params![session_id, rules, crate::time::now_ms() as i64, metadata],
+        )
     }
 }
 

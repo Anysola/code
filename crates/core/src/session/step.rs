@@ -635,7 +635,10 @@ pub(crate) fn session_headers(shared: &Shared, session: &SessionRow) -> Vec<(Str
         .or_else(|| session.fork_session_id.clone())
         .unwrap_or_else(|| session.id.clone());
     let mut headers = vec![
-        ("x-opencode-client".to_string(), "cli".to_string()),
+        (
+            "x-opencode-client".to_string(),
+            crate::version::client().to_string(),
+        ),
         ("x-opencode-project".to_string(), shared.project.id.clone()),
         ("x-opencode-session".to_string(), affinity.clone()),
         ("x-opencode-session-id".to_string(), session.id.clone()),

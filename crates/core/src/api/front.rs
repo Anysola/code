@@ -107,3 +107,80 @@ impl Core {
         Ok(())
     }
 }
+
+/// Session metadata key of the directories an ACP client granted.
+const GRANTED: &str = "opencode.acp.additionalDirectories";
+
+impl Core {
+    /// Root sessions, most recently updated first, optionally of one directory, after the
+    /// `(time_updated, id)` position where a previous page ended.
+    pub fn list_sessions(
+        &self,
+        directory: Option<&str>,
+        after: Option<(u64, &str)>,
+        limit: u64,
+    ) -> Result<Vec<crate::storage::SessionRow>, CoreError> {
+        Ok(self.shared.db.list_sessions(directory, after, limit)?)
+    }
+
+    /// Deletes the session and its descendants; false when it does not exist.
+    pub fn delete_session(&self, session_id: &str) -> Result<bool, CoreError> {
+        Ok(self.shared.db.delete_session(session_id)?)
+    }
+
+    /// The directories granted with [`Core::grant_directories`].
+    pub fn granted_directories(&self, session_id: &str) -> Result<Vec<String>, CoreError> {
+        let metadata = self.shared.db.session_metadata(session_id)?;
+        Ok(metadata
+            .get(GRANTED)
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default())
+    }
+
+    /// Replaces the directories outside the session's own that its tools may use without asking.
+    /// The grants lead the session's rules, so its other rules keep precedence for those paths.
+    pub fn grant_directories(
+        &self,
+        session_id: &str,
+        directories: &[String],
+    ) -> Result<(), CoreError> {
+        use crate::permission::{Effect, Rule};
+        let db = &self.shared.db;
+        let rules = |directories: &[String]| -> Vec<Rule> {
+            let mut resources: Vec<String> = Vec::new();
+            for directory in directories {
+                // Tools compare written paths without following symlinks: grant both spellings.
+                let resolved = std::fs::canonicalize(directory)
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|_| directory.clone());
+                for root in [directory.clone(), resolved] {
+                    let resource = Path::new(&root).join("*").display().to_string();
+                    if !resources.contains(&resource) {
+                        resources.push(resource);
+                    }
+                }
+            }
+            resources
+                .into_iter()
+                .map(|r| Rule::new("external_directory", &r, Effect::Allow))
+                .collect()
+        };
+        let previous = self.granted_directories(session_id)?;
+        if previous == directories {
+            return Ok(());
+        }
+        let owned = rules(&previous);
+        let mut granted = rules(directories);
+        granted.extend(
+            db.session_permissions(session_id)?
+                .into_iter()
+                .filter(|rule| !owned.contains(rule)),
+        );
+        let mut metadata = db.session_metadata(session_id)?;
+        metadata.remove(GRANTED);
+        if !directories.is_empty() {
+            metadata.insert(GRANTED.into(), json!(directories));
+        }
+        Ok(db.set_session_access(session_id, &granted, &metadata)?)
+    }
+}

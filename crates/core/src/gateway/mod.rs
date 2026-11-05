@@ -332,7 +332,7 @@ impl Gateway {
             .http
             .post(self.url("/messages"))
             .header("content-type", "application/json")
-            .header("user-agent", model_user_agent("cli"))
+            .header("user-agent", model_user_agent())
             .header("anthropic-version", "2023-06-01");
         for (name, value) in headers {
             request = request.header(name.as_str(), value.as_str());

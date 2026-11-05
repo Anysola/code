@@ -45,6 +45,10 @@ pub struct Runtime {
     order: Mutex<Vec<String>>,
     /// URL elicitations waiting for their completion notice: `server\0id` → form id.
     url_forms: Mutex<HashMap<String, String>>,
+    /// Servers an ACP editor added for the process lifetime, over the configured ones.
+    added: Mutex<Vec<(String, Value)>>,
+    /// The config last reconciled, which [`Runtime::add`] reconciles again.
+    config: Mutex<Option<Arc<Config>>>,
 }
 
 /// Startups to one URL run one at a time.
@@ -68,6 +72,8 @@ impl Runtime {
             servers: Mutex::default(),
             order: Mutex::default(),
             url_forms: Mutex::default(),
+            added: Mutex::default(),
+            config: Mutex::default(),
         });
         core.attach_mcp(runtime.clone());
         runtime
@@ -79,6 +85,27 @@ impl Runtime {
 
     fn directory(&self) -> PathBuf {
         self.core.directory().to_path_buf()
+    }
+
+    /// Adds (or replaces) a server for the rest of the process, as an ACP editor's
+    /// `mcpServers` do; `server` is a config entry (`type` `local` or `remote`).
+    pub fn add(&self, name: &str, server: Value) {
+        {
+            let mut added = self.added.lock().unwrap_or_else(|e| e.into_inner());
+            if added.iter().any(|(n, s)| n == name && *s == server) {
+                return;
+            }
+            added.retain(|(n, _)| n != name);
+            added.push((name.to_string(), server));
+        }
+        let config = self
+            .config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(config) = config {
+            Mcp::reconcile(self, config);
+        }
     }
 
     /// The configured entry of a server.
@@ -410,7 +437,12 @@ impl Mcp for Runtime {
     }
 
     fn reconcile(&self, config: Arc<Config>) {
-        let desired = config.mcp_servers();
+        let mut desired = config.mcp_servers();
+        for (name, server) in self.added.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+            desired.retain(|(n, _)| n != name);
+            desired.push((name.clone(), server.clone()));
+        }
+        *self.config.lock().unwrap_or_else(|e| e.into_inner()) = Some(config);
         *self.order.lock().unwrap_or_else(|e| e.into_inner()) =
             desired.iter().map(|(n, _)| n.clone()).collect();
         let mut starting = Vec::new();
