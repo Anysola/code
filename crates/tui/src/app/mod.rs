@@ -348,7 +348,11 @@ impl App {
                 self.catalog = catalog;
                 self.theme = theme;
             }
-            Err(error) => self.toast(Some("Failed to reload themes".into()), error, Variant::Error),
+            Err(error) => self.toast(
+                Some("Failed to reload themes".into()),
+                error,
+                Variant::Error,
+            ),
         }
     }
 

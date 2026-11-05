@@ -111,6 +111,7 @@ impl App {
                     self.key(stroke);
                 }
             }
+            Event::Paste(text) if text.is_empty() => self.paste_clipboard(),
             Event::Paste(text) => {
                 if !self.pane_paste(&text) {
                     self.paste(&text)
@@ -614,13 +615,22 @@ impl App {
         let Ok(bytes) = std::fs::read(&path) else {
             return false;
         };
+        let name = std::path::Path::new(&path)
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        self.attach_bytes(mime, bytes, name);
+        true
+    }
+
+    /// Adds an `[Image N]`/`[PDF N]` chip for the bytes (20 MiB limit, toast past it).
+    fn attach_bytes(&mut self, mime: &str, bytes: Vec<u8>, name: String) {
         if bytes.len() > 20 * 1024 * 1024 {
             self.toast(
                 None,
                 "Attachments are limited to 20 MiB".into(),
                 Variant::Warning,
             );
-            return true;
+            return;
         }
         let kind = if mime == "application/pdf" {
             "PDF"
@@ -637,14 +647,26 @@ impl App {
             + 1;
         use base64::Engine;
         let data = base64::engine::general_purpose::STANDARD.encode(bytes);
-        let name = std::path::Path::new(&path)
-            .file_name()
-            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         self.state.composer.insert_atom(
             &format!("[{kind} {n}]"),
             AtomKind::Attachment(mime.into(), data, name),
         );
-        true
+    }
+
+    /// `ctrl+v` and an empty bracketed paste: the clipboard's image, else its text.
+    pub(super) fn paste_clipboard(&mut self) {
+        match crate::clipboard::read() {
+            Ok(Some(crate::clipboard::Content::Image(bytes))) => {
+                self.attach_bytes("image/png", bytes, "clipboard".into());
+            }
+            Ok(Some(crate::clipboard::Content::Text(text))) => {
+                if !self.pane_paste(&text) {
+                    self.paste(&text);
+                }
+            }
+            Ok(None) => {}
+            Err(message) => self.toast(None, message, Variant::Error),
+        }
     }
 
     fn mouse(&mut self, mouse: crossterm::event::MouseEvent) {
