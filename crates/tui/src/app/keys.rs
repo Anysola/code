@@ -808,15 +808,27 @@ impl App {
                 if let Some((anchor, end)) = self.selection {
                     if anchor == end {
                         self.selection = None;
-                    } else {
-                        let text = selected_text(&self.last, anchor, end);
-                        term::copy(&text);
-                        self.toast(None, "Copied to clipboard".into(), Variant::Info);
+                    } else if self.state.settings.copy_on_select {
+                        self.copy_selection(anchor, end);
                     }
+                }
+            }
+            MouseEventKind::Down(MouseButton::Right)
+                if !self.state.settings.copy_on_select
+                    && self.selection.is_some_and(|(a, b)| a != b) =>
+            {
+                if let Some((anchor, end)) = self.selection {
+                    self.copy_selection(anchor, end);
                 }
             }
             _ => {}
         }
+    }
+
+    fn copy_selection(&mut self, anchor: (u16, u16), end: (u16, u16)) {
+        let text = selected_text(&self.last, anchor, end);
+        term::copy(&text);
+        self.toast(None, "Copied to clipboard".into(), Variant::Info);
     }
 
     /// A click on an exploration group's row opens or closes it.

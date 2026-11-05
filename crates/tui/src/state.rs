@@ -260,6 +260,8 @@ pub struct Settings {
     pub sidebar: bool,
     pub paste_compact: bool,
     pub animations: bool,
+    /// `terminal.copy`: `select` copies on mouse release, `manual` on right-click.
+    pub copy_on_select: bool,
     pub title: bool,
     pub grouping: bool,
     pub verbosity: Verbosity,
@@ -283,6 +285,7 @@ impl Default for Settings {
             sidebar: true,
             paste_compact: true,
             animations: true,
+            copy_on_select: !cfg!(windows),
             title: true,
             grouping: true,
             verbosity: Verbosity::Medium,
