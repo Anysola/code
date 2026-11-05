@@ -126,6 +126,8 @@ pub struct App {
     sounds: PathBuf,
     /// The terminal pane's edge is being dragged.
     pane_drag: bool,
+    /// When the typed session search runs.
+    session_search: Option<u64>,
     /// The vertical tab column's edge is being dragged.
     tabs_drag: bool,
     /// `layout.json`: the vertical tab column's width.
@@ -308,6 +310,7 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
         restarter: options.restart.clone(),
         sounds: paths.data.join("cache").join("sounds"),
         pane_drag: false,
+        session_search: None,
         tabs_drag: false,
         layout_path: paths.data.join("state").join("tui").join("layout.json"),
         recents: relocate::Recents::new(&paths.data),
@@ -559,6 +562,7 @@ impl App {
         self.sync_pane();
         self.poll_shell_output();
         self.poll_shells();
+        self.poll_session_search();
         self.reveal_history();
         let docked = crate::view::diff_docked(&self.state);
         if let Some(view) = self.state.diff.as_mut() {

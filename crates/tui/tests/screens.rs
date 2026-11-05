@@ -659,6 +659,19 @@ fn session_list() {
     assert_screen(&dialog(state, select(list)), "session-list");
 }
 
+/// `V/tui/dialogs.md §5`: while the debounced search runs the list gives way to its status.
+#[test]
+fn session_search_status() {
+    let mut list = lists::sessions(&session_items(), Some("my-app"), now(), under(1).zone);
+    list.query = "fix".into();
+    list.status = Some((
+        "Searching sessions…".into(),
+        anysola_tui::dialog::Tone::Muted,
+    ));
+    let screen = render(&dialog(under(1), select(list)));
+    assert!(screen.contains("Searching sessions…"), "{screen}");
+}
+
 #[test]
 fn sessions_empty() {
     let list = lists::sessions(&[], Some("my-app"), now(), under(1).zone);

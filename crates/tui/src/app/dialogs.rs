@@ -274,6 +274,43 @@ impl App {
         self.push(Dialog::Select(select));
     }
 
+    /// Runs the session search 150 ms after the last keystroke (limit 50, newest first).
+    pub(super) fn poll_session_search(&mut self) {
+        if self.session_search.is_none_or(|at| now() < at) {
+            return;
+        }
+        self.session_search = None;
+        let Some(Dialog::Select(s)) = self.state.dialogs.last() else {
+            return;
+        };
+        let Kind::Sessions { all } = s.kind else {
+            return;
+        };
+        let query = s.query.clone();
+        let limit = self.limit();
+        let found = self.core.sessions(all, &query, 50);
+        let fresh = found
+            .as_ref()
+            .ok()
+            .map(|rows| self.sessions_select(rows.clone(), all));
+        let Some(Dialog::Select(s)) = self.state.dialogs.last_mut() else {
+            return;
+        };
+        match fresh {
+            Some(fresh) => {
+                s.options = fresh.options;
+                s.status = None;
+                s.set_query(query, limit);
+            }
+            None => {
+                s.status = Some((
+                    "Could not search sessions. Change the search to try again.".into(),
+                    Tone::Error,
+                ))
+            }
+        }
+    }
+
     pub(super) fn open_sessions(&mut self, all: bool) {
         let rows = self.core.sessions(all, "", 50).unwrap_or_default();
         let select = self.sessions_select(rows, all);
@@ -404,6 +441,10 @@ impl App {
                             return;
                         }
                         s.set_query(query, limit);
+                        if matches!(s.kind, Kind::Sessions { .. }) {
+                            s.status = Some(("Searching sessions…".into(), Tone::Muted));
+                            self.session_search = Some(now() + 150);
+                        }
                     }
                 }
                 self.after_move();
