@@ -67,7 +67,14 @@ pub fn transcript(
         verbosity: state.settings.verbosity,
         toggled: &session.toggled,
     };
-    rows::layout(&session.items, &ctx, Some(&session.layout.0))
+    let mut rows = rows::layout(&session.items, &ctx, Some(&session.layout.0));
+    rows.extend(rows::tail(
+        session.compact_queued,
+        session.revert.as_ref(),
+        state.hints.redo.as_deref(),
+        &ctx,
+    ));
+    rows
 }
 
 pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u16)> {

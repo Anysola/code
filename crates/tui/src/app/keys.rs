@@ -881,6 +881,10 @@ impl App {
         let Some(id) = hit else {
             return false;
         };
+        if id == "revert" {
+            self.run_command("session.redo", None);
+            return true;
+        }
         if !session.toggled.remove(&id) {
             session.toggled.insert(id);
         }

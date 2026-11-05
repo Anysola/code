@@ -92,6 +92,7 @@ fn base(width: u16, height: u16) -> State {
         context: Some(1_000_000),
     });
     state.hints = Hints {
+        redo: None,
         agents: Some("shift+tab".into()),
         commands: Some("ctrl+p".into()),
         sessions: Some("ctrl+x l".into()),
@@ -1368,4 +1369,31 @@ fn permission_reject_reason() {
         assert!(screen.contains(text), "{text}");
     }
     assert!(!screen.contains("Permission required"));
+}
+
+/// `routes/session/index.tsx` `RevertMessage` and `CompactionQueued`.
+#[test]
+fn revert_banner_and_queued_compaction() {
+    use anysola_tui::state::Revert;
+    let mut state = session(120, 40, Vec::new());
+    state.hints.redo = Some("ctrl+x r".into());
+    let s = state.sessions.get_mut("ses_b").unwrap();
+    s.compact_queued = true;
+    s.revert = Some(Revert {
+        count: 2,
+        files: vec![
+            ('M', "src/main.rs".into(), 3, 1),
+            ('A', "notes.md".into(), 5, 0),
+        ],
+    });
+    let screen = render(&state);
+    for text in [
+        "◇ Compaction queued",
+        "2 messages reverted",
+        "M src/main.rs +3 -1",
+        "A notes.md +5",
+        "ctrl+x r or /redo to restore",
+    ] {
+        assert!(screen.contains(text), "{text}");
+    }
 }

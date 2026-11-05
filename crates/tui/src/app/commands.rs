@@ -64,17 +64,13 @@ impl App {
                 tokio::spawn(async move { core.refresh().await });
             }
             ("session.compact", Some(current)) => {
-                if let Some(s) = self.state.sessions.get_mut(&current) {
-                    s.busy = true;
+                if let Some(s) = self.state.sessions.get_mut(&current)
+                    && s.busy
+                {
+                    s.compact_queued = true;
+                    return;
                 }
-                let (core, tx) = (self.core.clone(), self.tx.clone());
-                tokio::spawn(async move {
-                    let error = core.compact(&current).await.err().map(|e| e.to_string());
-                    let _ = tx.send(Msg::Done {
-                        session_id: current,
-                        error,
-                    });
-                });
+                self.compact(&current);
             }
             ("session.undo", Some(current)) => self.undo(&current),
             ("session.redo", Some(current)) => {
@@ -699,6 +695,34 @@ impl App {
                 let _ = terminal.clear();
             }
             None => {}
+        }
+    }
+
+    fn compact(&mut self, session: &str) {
+        if let Some(s) = self.state.sessions.get_mut(session) {
+            s.busy = true;
+            s.compact_queued = false;
+        }
+        let (core, tx) = (self.core.clone(), self.tx.clone());
+        let session = session.to_string();
+        tokio::spawn(async move {
+            let error = core.compact(&session).await.err().map(|e| e.to_string());
+            let _ = tx.send(Msg::Done {
+                session_id: session,
+                error,
+            });
+        });
+    }
+
+    /// A `/compact` asked mid-turn starts once the turn is over.
+    pub(super) fn run_queued_compaction(&mut self, session: &str) {
+        if self
+            .state
+            .sessions
+            .get(session)
+            .is_some_and(|s| s.compact_queued && !s.busy)
+        {
+            self.compact(session);
         }
     }
 

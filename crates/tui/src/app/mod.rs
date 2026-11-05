@@ -368,6 +368,7 @@ impl App {
         self.state.auto = options.auto || self.tui.auto_accept();
         self.state.example = (now() / 7) as usize % 3;
         self.state.hints = crate::state::Hints {
+            redo: self.keymap.first("session.redo"),
             agents: self.keymap.first("agent.cycle"),
             commands: self.keymap.first("command.palette.show"),
             sessions: self.keymap.first("session.list"),
@@ -625,6 +626,7 @@ impl App {
                     self.toast(Some("Failed to send prompt".into()), error, Variant::Error);
                 }
                 self.reload(&session_id);
+                self.run_queued_compaction(&session_id);
                 self.fetch_account();
                 self.resume_relocate();
             }
@@ -786,6 +788,33 @@ impl App {
         let Ok(messages) = self.core.messages(id) else {
             return;
         };
+        let revert = boundary.as_deref().map(|boundary| {
+            let hidden = messages.iter().skip_while(|(m, _)| m != boundary);
+            let files = self.core.revert_files(id).unwrap_or_default();
+            crate::state::Revert {
+                count: hidden
+                    .filter(|(_, m)| matches!(m, anysola_core::session::message::Message::User(_)))
+                    .count(),
+                files: files
+                    .iter()
+                    .map(|f| {
+                        let text = |k: &str| f.get(k).and_then(|v| v.as_str()).unwrap_or_default();
+                        let number = |k: &str| f.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+                        let mark = match text("status") {
+                            "added" => 'A',
+                            "deleted" => 'D',
+                            _ => 'M',
+                        };
+                        (
+                            mark,
+                            text("file").to_string(),
+                            number("additions"),
+                            number("deletions"),
+                        )
+                    })
+                    .collect(),
+            }
+        });
         let loaded = self.core.loaded();
         let names = |model: &str| display_name(&loaded.models, model);
         let items = model::from_messages(messages, boundary.as_deref(), &names);
@@ -794,6 +823,7 @@ impl App {
             let awaiting = session.permission.is_some();
             session.items = items;
             session.reverted = reverted;
+            session.revert = revert;
             if let Some(title) = title {
                 session.title = title;
             }

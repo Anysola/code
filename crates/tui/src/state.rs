@@ -141,6 +141,14 @@ pub struct Question {
     pub form: Option<Vec<(String, String)>>,
 }
 
+/// A staged revert: the user messages it hides and the files it changed.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Revert {
+    pub count: usize,
+    /// `(A|M|D, path, additions, deletions)`.
+    pub files: Vec<(char, String, u64, u64)>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Session {
     pub id: String,
@@ -157,6 +165,10 @@ pub struct Session {
     pub queued: Vec<String>,
     /// A revert is staged (`/redo` is available).
     pub reverted: bool,
+    /// What the staged revert undid, for the banner at the end of the transcript.
+    pub revert: Option<Revert>,
+    /// `/compact` was asked while a turn ran and starts when it ends.
+    pub compact_queued: bool,
     pub layout: LayoutCache,
     /// The session's `/goal`, if set.
     pub goal: Option<anysola_core::session::goal::Goal>,
@@ -381,6 +393,7 @@ pub struct Pane {
 /// Footer and hint keys as the keymap displays them.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Hints {
+    pub redo: Option<String>,
     pub agents: Option<String>,
     pub commands: Option<String>,
     pub sessions: Option<String>,
