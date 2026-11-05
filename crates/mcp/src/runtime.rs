@@ -390,19 +390,6 @@ impl Runtime {
         })
         .await
     }
-
-    /// Closes every connection (the process is ending).
-    pub async fn shutdown(&self) {
-        let connections: Vec<Arc<Connection>> = self
-            .lock()
-            .values_mut()
-            .filter_map(|e| {
-                e.generation += 1;
-                e.connection.take()
-            })
-            .collect();
-        futures_util::future::join_all(connections.iter().map(|c| c.close())).await;
-    }
 }
 
 impl Mcp for Runtime {
@@ -659,6 +646,21 @@ impl Mcp for Runtime {
                 let _ = sender.send(result);
             });
             Ok(attempt)
+        }
+        .boxed()
+    }
+
+    fn shutdown(&self) -> BoxFuture<'_, ()> {
+        let connections: Vec<Arc<Connection>> = self
+            .lock()
+            .values_mut()
+            .filter_map(|e| {
+                e.generation += 1;
+                e.connection.take()
+            })
+            .collect();
+        async move {
+            futures_util::future::join_all(connections.iter().map(|c| c.close())).await;
         }
         .boxed()
     }

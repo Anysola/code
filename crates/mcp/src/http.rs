@@ -90,6 +90,11 @@ impl Http {
         method: reqwest::Method,
         body: Option<&Value>,
     ) -> Result<reqwest::Response, Error> {
+        let accept = if method == reqwest::Method::GET {
+            "text/event-stream"
+        } else {
+            "application/json, text/event-stream"
+        };
         let mut retried = false;
         loop {
             let token = match &self.auth {
@@ -99,7 +104,7 @@ impl Http {
             let mut request = self
                 .client
                 .request(method.clone(), self.url.clone())
-                .header("accept", "application/json, text/event-stream");
+                .header("accept", accept);
             for (key, value) in &self.headers {
                 request = request.header(key, value);
             }

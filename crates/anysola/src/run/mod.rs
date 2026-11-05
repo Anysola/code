@@ -160,7 +160,7 @@ pub async fn run(args: RunArgs) -> i32 {
             ui::NORMAL
         ));
     }
-    mcp.shutdown().await;
+    anysola_core::mcp::Mcp::shutdown(mcp.as_ref()).await;
     core.shutdown();
     code
 }

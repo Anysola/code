@@ -320,10 +320,6 @@ impl Core {
         &self.shared.db
     }
 
-    pub fn directory(&self) -> &Path {
-        &self.shared.directory
-    }
-
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.shared.events.subscribe()
     }

@@ -119,6 +119,9 @@ pub trait Mcp: Send + Sync {
     /// Disables a server until [`Mcp::connect`] or the end of the process (config is untouched).
     fn disconnect(&self, name: &str);
 
+    /// Closes every connection and ends local server processes (the front end is exiting).
+    fn shutdown(&self) -> BoxFuture<'_, ()>;
+
     /// Starts signing in to a remote server; the server reconnects with the new credential.
     fn authorize<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<SignIn, String>>;
 }
