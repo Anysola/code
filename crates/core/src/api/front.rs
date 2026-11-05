@@ -199,7 +199,7 @@ impl Core {
             let mut resources: Vec<String> = Vec::new();
             for directory in directories {
                 // Tools compare written paths without following symlinks: grant both spellings.
-                let resolved = std::fs::canonicalize(directory)
+                let resolved = crate::paths::canonicalize(directory)
                     .map(|p| p.display().to_string())
                     .unwrap_or_else(|_| directory.clone());
                 for root in [directory.clone(), resolved] {

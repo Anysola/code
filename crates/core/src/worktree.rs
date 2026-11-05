@@ -43,7 +43,9 @@ pub fn list(db: &Db, project_id: &str) -> Vec<Worktree> {
 
 /// The directory resolved and canonical, when it is an existing directory.
 fn canonical(directory: &Path) -> Option<PathBuf> {
-    std::fs::canonicalize(directory).ok().filter(|p| p.is_dir())
+    crate::paths::canonicalize(directory)
+        .ok()
+        .filter(|p| p.is_dir())
 }
 
 async fn git(cwd: &Path, args: &[&std::ffi::OsStr]) -> Result<String, String> {
@@ -204,7 +206,7 @@ mod tests {
     #[tokio::test]
     async fn create_list_remove() {
         let tmp = tempfile::tempdir().unwrap();
-        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        let root = crate::paths::canonicalize(tmp.path()).unwrap();
         let project = root.join("proj");
         std::fs::create_dir_all(&project).unwrap();
         repo(&project);
