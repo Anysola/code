@@ -71,6 +71,23 @@ impl Core {
         Ok(())
     }
 
+    /// `/btw`: a one-shot answer from the session's context; nothing is added to the session.
+    pub async fn aside(&self, session_id: &str, question: &str) -> Result<String, String> {
+        const INSTRUCTIONS: &str = "The user is asking a quick side question about the conversation so far. Answer directly and concisely in markdown from what you already know. Do not call any tools and do not take any actions.";
+        let session = self
+            .session(session_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| CoreError::SessionNotFound.to_string())?;
+        let prompt = format!("{INSTRUCTIONS}\n\n{question}");
+        match crate::session::step::generate(&self.shared, &session, &prompt).await {
+            Ok(text) => Ok(text.trim().to_string()),
+            Err(crate::session::step::GenerateError::Overflow) => {
+                Err("The conversation is too long for a side question.".into())
+            }
+            Err(crate::session::step::GenerateError::Failed(error)) => Err(error.message),
+        }
+    }
+
     /// The project's other checkouts.
     pub fn worktrees(&self) -> Vec<crate::worktree::Worktree> {
         crate::worktree::list(&self.shared.db, &self.shared.project.id)

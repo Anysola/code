@@ -5,8 +5,8 @@ use serde_json::Value;
 
 use super::{App, Msg, now};
 use crate::dialog::{
-    Body, BodyKind, Confirm, ConfirmKind, Dialog, Export, Kind, Prompt, PromptKind, Select, Tone,
-    line, list_limit,
+    Body, BodyKind, Confirm, ConfirmKind, Dialog, Export, Kind, Prompt, PromptKind, Select, Size,
+    Tone, line, list_limit,
 };
 use crate::keymap::Stroke;
 use crate::menus::lists::{self, Connection, McpRow, ModelRow, SessionItem};
@@ -174,6 +174,16 @@ impl App {
                 skills.sort_by_key(|(n, _)| n.to_lowercase());
                 self.push(Dialog::Select(lists::skills(&skills)));
             }
+            "session.aside" if current.is_none() => {
+                self.toast(None, "Open a session first".into(), Variant::Warning)
+            }
+            "session.aside" => self.push(Dialog::Prompt(Prompt {
+                kind: PromptKind::Btw,
+                title: "/btw".into(),
+                placeholder: "Ask anything".into(),
+                text: String::new(),
+                busy: None,
+            })),
             "session.move" => {
                 let home = std::path::Path::new(&self.state.home);
                 let show = |d: &str| super::abbreviate(std::path::Path::new(d), home);
@@ -377,8 +387,8 @@ impl App {
                     return self.close_dialog();
                 }
                 match key {
-                    "up" => b.scroll = b.scroll.saturating_sub(1),
-                    "down" => b.scroll = (b.scroll + 1).min(b.lines.len().saturating_sub(1)),
+                    "up" | "k" => b.scroll = b.scroll.saturating_sub(1),
+                    "down" | "j" => b.scroll = (b.scroll + 1).min(b.lines.len().saturating_sub(1)),
                     "left" | "tab" if !b.buttons.is_empty() => {
                         b.active = (b.active + b.buttons.len() - 1) % b.buttons.len()
                     }
@@ -894,6 +904,12 @@ impl App {
                     ),
                 }
             }
+            PromptKind::Btw => {
+                self.state.dialogs.pop();
+                if !text.is_empty() {
+                    self.btw(text);
+                }
+            }
         }
     }
 
@@ -1011,6 +1027,46 @@ impl App {
             updated: local(row.as_ref().map_or(0, |r| r.time_updated)),
         };
         crate::transcript::export::markdown(&header, &session.items, thinking, tools)
+    }
+
+    /// `/btw`: asks the question with the session's context and shows the answer.
+    pub(super) fn btw(&mut self, question: String) {
+        let Some(id) = self.state.session().map(|s| s.id.clone()) else {
+            return self.toast(None, "Open a session first".into(), Variant::Warning);
+        };
+        self.state.asides += 1;
+        let (core, tx) = (self.core.clone(), self.tx.clone());
+        tokio::spawn(async move {
+            let result = core.aside(&id, &question).await;
+            let _ = tx.send(Msg::Apply(Box::new(move |app: &mut App| {
+                app.state.asides -= 1;
+                match result {
+                    Ok(answer) => {
+                        let width = Size::Large.width().saturating_sub(6) as usize;
+                        let lines =
+                            crate::transcript::markdown::render(&answer, width, &app.theme, false)
+                                .into_iter()
+                                .map(|spans| {
+                                    spans
+                                        .into_iter()
+                                        .map(|span| (span.content.into_owned(), Tone::Base))
+                                        .collect()
+                                })
+                                .collect();
+                        let mut body = Body::new(BodyKind::Btw { answer }, "/btw", lines);
+                        body.title.push((format!(" {question}"), Tone::Muted));
+                        body.size = Size::Large;
+                        body.centered = true;
+                        body.actions = vec![
+                            crate::dialog::Action::left("copy", "c"),
+                            crate::dialog::Action::right("scroll", "j/k ↑/↓"),
+                        ];
+                        app.push(Dialog::Body(body));
+                    }
+                    Err(error) => app.toast(None, error, Variant::Error),
+                }
+            })));
+        });
     }
 
     pub(super) fn open_stash(&mut self) {

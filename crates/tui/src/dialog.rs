@@ -356,6 +356,7 @@ pub enum BodyKind {
     Status,
     Update,
     Exported { path: String },
+    Btw { answer: String },
     Error { details: String },
 }
 
@@ -400,9 +401,10 @@ impl Body {
 #[derive(Debug, Clone, PartialEq)]
 pub enum PromptKind {
     Rename { session: String },
+    Btw,
 }
 
-/// A one-line text prompt (`Rename session`).
+/// A one-line text prompt (`Rename session`, `/btw`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Prompt {
     pub kind: PromptKind,

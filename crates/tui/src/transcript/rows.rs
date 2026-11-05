@@ -60,7 +60,7 @@ impl Ctx<'_> {
 
     pub(super) fn spinner(&self) -> &'static str {
         if self.animations {
-            SPINNER[(self.now / 80) as usize % SPINNER.len()]
+            spinner_frame(self.now)
         } else {
             "⋯"
         }
@@ -109,6 +109,11 @@ impl Ctx<'_> {
         });
         rows
     }
+}
+
+/// The braille spinner frame at `now` (80 ms per frame).
+pub fn spinner_frame(now: u64) -> &'static str {
+    SPINNER[(now / 80) as usize % SPINNER.len()]
 }
 
 /// Laid-out groups of settled items, so a long transcript is not laid out again every frame.

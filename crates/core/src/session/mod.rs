@@ -11,7 +11,7 @@ pub mod message;
 pub mod question;
 pub mod recent;
 pub mod request;
-mod step;
+pub(crate) mod step;
 mod stream;
 pub mod subagent;
 mod title;

@@ -237,6 +237,14 @@ pub fn footer(c: &mut Canvas, state: &State, x: u16, y: u16, w: u16) {
     let muted = c.style("text.muted");
     let shell = state.composer.mode == Mode::Shell;
     let mut right: Vec<Vec<Span>> = Vec::new();
+    if state.asides > 0 {
+        let frame = if state.settings.animations {
+            crate::transcript::rows::spinner_frame(state.now)
+        } else {
+            "⋯"
+        };
+        right.push(vec![Span::styled(format!("{frame} /btw"), muted)]);
+    }
     if let Some(status) = state.status_text() {
         let style = if state.status_warning() {
             c.style("text.feedback.warning.base")

@@ -307,6 +307,8 @@ pub struct State {
     pub hints: Hints,
     /// `/update to install v<version>` on the home screen.
     pub update: Option<String>,
+    /// `/btw` side questions waiting for their answer.
+    pub asides: usize,
     /// The terminal pane beside the session, while shown.
     pub pane: Option<Pane>,
     /// The local time zone dates are shown in.
@@ -344,6 +346,7 @@ impl State {
             hints: Hints::default(),
             update: None,
             pane: None,
+            asides: 0,
             zone: *chrono::Local::now().offset(),
         }
     }

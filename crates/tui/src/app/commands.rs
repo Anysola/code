@@ -181,8 +181,8 @@ impl App {
             ("session.cd", _) if arguments.is_some_and(|a| a.trim().is_empty()) => {
                 self.toast(None, "Directory is required".into(), Variant::Warning);
             }
-            ("session.aside", None) => {
-                self.toast(None, "Open a session first".into(), Variant::Warning)
+            ("session.aside", Some(_)) if arguments.is_some_and(|a| !a.trim().is_empty()) => {
+                self.btw(arguments.unwrap_or_default().trim().to_string())
             }
             ("session.copy", Some(_)) => {
                 let text = self.transcript(true, true);
