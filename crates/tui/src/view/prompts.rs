@@ -197,6 +197,7 @@ pub fn permission(c: &mut Canvas, state: &State, p: &Permission, x: u16, y: u16,
             bg: Some(bg),
             indent,
             spans: line,
+            group: None,
         };
         draw_row(c, &row, x + 1, at, w - 1);
         at += 1;
@@ -394,4 +395,48 @@ fn hints(c: &mut Canvas, x: u16, y: u16, w: u16, action: &str, bg: Color) {
         Span::styled("dismiss", muted),
     ];
     c.spans(x + 3, y, &spans, w.saturating_sub(6) as usize);
+}
+
+pub const LOCATION_HEIGHT: u16 = 9;
+
+/// `routes/session/location-missing.tsx`: the question that replaces the prompt while the
+/// session's directory is gone.
+pub fn location_missing(c: &mut Canvas, state: &State, directory: &str, x: u16, y: u16, w: u16) {
+    let h = LOCATION_HEIGHT;
+    let bg = c.theme.fg("background.raised.base");
+    let footer_bg = c
+        .theme
+        .term(c.theme.decrease(c.theme.get("background.raised.base"), 1));
+    let rail_color = c.theme.fg("background.action.primary.focused");
+    c.fill(Rect::new(x, y, w, h), bg);
+    c.fill(Rect::new(x + 1, y + h - 3, w - 1, 3), footer_bg);
+    for row in y..y + h {
+        let row_bg = if row >= y + h - 3 { footer_bg } else { bg };
+        c.put(x, row, "┃", Style::new().fg(rail_color).bg(row_bg), 1);
+    }
+    let base = c.style("text.base").bg(bg);
+    let end = c.put(
+        x + 3,
+        y + 1,
+        "△",
+        c.style("text.feedback.warning.base").bg(bg),
+        1,
+    );
+    let room = w.saturating_sub(6) as usize;
+    c.put(end + 1, y + 1, "Session location unavailable", base, room);
+    let home = std::path::Path::new(&state.home);
+    let shown = text::truncate_middle(&text::abbreviate(std::path::Path::new(directory), home), 72);
+    c.put(x + 3, y + 3, &shown, c.style("text.muted").bg(bg), room);
+    let line = "Choose another directory to continue this session.";
+    c.put(x + 3, y + 5, line, base, room);
+    let label = " Choose directory ";
+    let button = Style::new()
+        .fg(c.theme.fg("text.action.primary.focused"))
+        .bg(c.theme.fg("background.action.primary.focused"));
+    c.put(x + 3, y + h - 2, label, button, label.len());
+    let hints = [
+        Span::styled("enter ", c.style("text.base").bg(footer_bg)),
+        Span::styled("confirm", c.style("text.muted").bg(footer_bg)),
+    ];
+    c.spans((x + w).saturating_sub(16), y + h - 2, &hints, 13);
 }

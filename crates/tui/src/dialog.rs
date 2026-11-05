@@ -136,6 +136,9 @@ pub enum Kind {
     BudgetGate { prompt: String },
     Stash,
     Queue { session: String },
+    DiffSource,
+    DiffBase,
+    WorkingDirectory,
 }
 
 /// One drawn row of a list dialog.
@@ -371,6 +374,8 @@ pub enum BodyKind {
     Btw { answer: String },
     Image { index: usize },
     Error { details: String },
+    DiffHelp,
+    Goal,
 }
 
 /// A dialog with a title, free rows and a footer.

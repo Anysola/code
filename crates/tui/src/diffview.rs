@@ -9,6 +9,8 @@ pub enum Source {
     All,
     Committed,
     Uncommitted,
+    /// What the session's latest turn changed (only in a session).
+    Turn,
 }
 
 impl Source {
@@ -17,6 +19,16 @@ impl Source {
             Source::All => "All",
             Source::Committed => "Committed",
             Source::Uncommitted => "Uncommitted",
+            Source::Turn => "Last turn",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Source::All => "Branch + local changes",
+            Source::Committed => "Branch commits only",
+            Source::Uncommitted => "Local changes only",
+            Source::Turn => "Latest session turn",
         }
     }
 
@@ -24,7 +36,7 @@ impl Source {
         match self {
             Source::All => Source::Committed,
             Source::Committed => Source::Uncommitted,
-            Source::Uncommitted => Source::All,
+            Source::Uncommitted | Source::Turn => Source::All,
         }
     }
 }
@@ -44,6 +56,16 @@ pub struct Diff {
     pub selected: usize,
     pub scroll: usize,
     pub tree: bool,
+    /// One file at a time (`s`); otherwise every patch in one scroll.
+    pub single: bool,
+    /// The right-click menu on a tree row: `(column, row, file index)`.
+    pub menu: Option<(u16, u16, usize)>,
+    /// The branch `All` and `Committed` compare against, chosen in the picker.
+    pub base: Option<String>,
+    /// Full screen even where a session could dock it (`f`, `diffs.fullscreen`).
+    pub fullscreen: bool,
+    /// Drawn as the session's right pane this frame (the app keeps it current).
+    pub docked: bool,
 }
 
 impl Diff {
@@ -54,20 +76,66 @@ impl Diff {
             selected: 0,
             scroll: 0,
             tree: true,
+            single: false,
+            menu: None,
+            base: None,
+            fullscreen: false,
+            docked: false,
         }
     }
 
-    /// The selected patch as the viewer lays it out on a screen this wide.
-    fn rendered(
+    /// Where each file's rows start in the all-files scroll.
+    pub fn starts(&self, screen: u16, theme: &crate::theme::Theme) -> Vec<usize> {
+        let mut starts = Vec::new();
+        let mut at = 0;
+        for file in self.list() {
+            starts.push(at);
+            let options = crate::view::patch_options(self, screen, &file.path);
+            at += 3 + crate::transcript::diff::render(&file.patch, &options, theme).len();
+        }
+        starts
+    }
+
+    /// The file the all-files scroll is in.
+    pub fn current(&self, screen: u16, theme: &crate::theme::Theme) -> usize {
+        if self.single {
+            return self.selected;
+        }
+        self.starts(screen, theme)
+            .iter()
+            .rposition(|start| *start <= self.scroll)
+            .unwrap_or(0)
+    }
+
+    /// The scrolled rows as the viewer lays them out on a screen this wide: the selected patch,
+    /// or every file as a bold path, a blank row, its patch and a blank row.
+    pub fn rendered(
         &self,
         screen: u16,
         theme: &crate::theme::Theme,
     ) -> Vec<crate::transcript::markdown::Line> {
-        let Some(file) = self.list().get(self.selected) else {
-            return Vec::new();
+        let render = |file: &File| {
+            let options = crate::view::patch_options(self, screen, &file.path);
+            crate::transcript::diff::render(&file.patch, &options, theme)
         };
-        let options = crate::view::patch_options(self, screen, &file.path);
-        crate::transcript::diff::render(&file.patch, &options, theme)
+        if self.single {
+            return self
+                .list()
+                .get(self.selected)
+                .map(render)
+                .unwrap_or_default();
+        }
+        let bold = ratatui::style::Style::new()
+            .fg(theme.fg("text.base"))
+            .add_modifier(ratatui::style::Modifier::BOLD);
+        let mut lines = Vec::new();
+        for file in self.list() {
+            lines.push(vec![ratatui::text::Span::styled(file.path.clone(), bold)]);
+            lines.push(Vec::new());
+            lines.extend(render(file));
+            lines.push(Vec::new());
+        }
+        lines
     }
 
     /// Rows where the selected patch's hunks start (`]`/`[`).
@@ -148,9 +216,38 @@ pub fn split(output: &str) -> Vec<File> {
     files
 }
 
-pub fn load(directory: &Path, source: Source) -> Result<Vec<File>, String> {
-    let output = match (source, base(directory)) {
-        (Source::Uncommitted, _) => git(directory, &["diff", "HEAD"])?,
+/// Local and remote branches for the base picker (`git branch -a`), at most 100.
+pub fn branches(directory: &Path) -> Result<Vec<String>, String> {
+    let output = git(
+        directory,
+        &[
+            "branch",
+            "-a",
+            "--format=%(refname:short)",
+            "--sort=-committerdate",
+        ],
+    )?;
+    Ok(output
+        .lines()
+        .map(str::trim)
+        .filter(|b| !b.is_empty() && !b.ends_with("/HEAD") && !b.starts_with('('))
+        .take(100)
+        .map(str::to_string)
+        .collect())
+}
+
+/// The source's patches; `chosen` replaces the detected base branch.
+pub fn load(directory: &Path, source: Source, chosen: Option<&str>) -> Result<Vec<File>, String> {
+    let base = match chosen {
+        Some(branch) => Some(
+            git(directory, &["merge-base", "HEAD", branch])
+                .map(|s| s.trim().to_string())
+                .map_err(|e| e.to_string())?,
+        ),
+        None => base(directory),
+    };
+    let output = match (source, base) {
+        (Source::Uncommitted | Source::Turn, _) => git(directory, &["diff", "HEAD"])?,
         (Source::Committed, Some(base)) => git(directory, &["diff", &base, "HEAD"])?,
         (Source::All, Some(base)) => git(directory, &["diff", &base])?,
         (_, None) => git(directory, &["diff", "HEAD"])?,
@@ -169,5 +266,56 @@ mod tests {
         assert_eq!(files.len(), 2);
         assert_eq!(files[1].path, "b.rs");
         assert!(files[0].patch.ends_with("+y\n"));
+    }
+
+    #[test]
+    fn all_files_scroll_and_single_patch() {
+        let theme = crate::theme::Catalog::bundled()
+            .load("anysola", crate::theme::Mode::Dark)
+            .unwrap();
+        let output = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-x\n+y\ndiff --git a/b.rs b/b.rs\n--- a/b.rs\n+++ b/b.rs\n@@ -1 +1 @@\n-z\n+w\n";
+        let mut view = Diff::new(Source::All);
+        view.files = Some(Ok(split(output)));
+        let starts = view.starts(120, &theme);
+        let lines = view.rendered(120, &theme);
+        let text = |line: &crate::transcript::markdown::Line| {
+            line.iter()
+                .map(|s| s.content.to_string())
+                .collect::<String>()
+        };
+        assert_eq!(text(&lines[starts[0]]), "a.rs");
+        assert_eq!(text(&lines[starts[1]]), "b.rs");
+        view.scroll = starts[1];
+        assert_eq!(view.current(120, &theme), 1);
+        view.single = true;
+        view.selected = 0;
+        assert!(view.rendered(120, &theme).len() < lines.len());
+    }
+
+    #[test]
+    fn branches_list_local_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| git(dir.path(), args).unwrap();
+        run(&["init", "-q", "-b", "main"]);
+        run(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "x",
+        ]);
+        run(&["branch", "feature"]);
+        let mut names = branches(dir.path()).unwrap();
+        names.sort();
+        assert_eq!(names, ["feature", "main"]);
+        assert!(
+            load(dir.path(), Source::All, Some("feature"))
+                .unwrap()
+                .is_empty()
+        );
     }
 }

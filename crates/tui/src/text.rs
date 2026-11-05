@@ -45,6 +45,15 @@ pub fn clip(text: &str, max: usize) -> String {
 }
 
 /// Keeps both ends of a path-like text: `…/my-ap…` style cuts put `…` in the middle.
+/// The path with the home directory shown as `~`.
+pub fn abbreviate(directory: &std::path::Path, home: &std::path::Path) -> String {
+    match directory.strip_prefix(home) {
+        Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+        Ok(rest) => format!("~/{}", rest.display()),
+        Err(_) => directory.display().to_string(),
+    }
+}
+
 pub fn truncate_middle(text: &str, max: usize) -> String {
     if width(text) <= max {
         return text.to_string();

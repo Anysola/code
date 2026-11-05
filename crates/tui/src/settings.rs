@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use serde_json::{Map, Value};
 
-use crate::state::{DiffView, Settings};
+use crate::state::{DiffView, Settings, Verbosity};
 use crate::theme::Mode;
 
 pub struct Tui {
@@ -40,6 +40,16 @@ impl Tui {
 
     fn get(&self, path: &[&str]) -> Option<&Value> {
         path.iter().try_fold(&self.value, |v, k| v.get(k))
+    }
+
+    /// `diffs.fullscreen`: `/diff` never docks beside the session.
+    pub fn diff_fullscreen(&self) -> bool {
+        self.get(&["diffs", "fullscreen"]).and_then(Value::as_bool) == Some(true)
+    }
+
+    /// `tabs.scope = "global"`: one tab list for every directory instead of one per cwd.
+    pub fn global_tabs(&self) -> bool {
+        self.str(&["tabs", "scope"]) == Some("global")
     }
 
     fn str(&self, path: &[&str]) -> Option<&str> {
@@ -112,6 +122,12 @@ impl Tui {
             paste_compact: self.str(&["prompt", "paste"]) != Some("full"),
             animations: flag(&["animations"], true),
             title: flag(&["terminal", "title"], true),
+            grouping: self.str(&["session", "grouping"]) != Some("none"),
+            verbosity: match self.str(&["session", "verbosity"]) {
+                Some("low") => Verbosity::Low,
+                Some("high") => Verbosity::High,
+                _ => Verbosity::Medium,
+            },
         }
     }
 

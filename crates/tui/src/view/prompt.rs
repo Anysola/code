@@ -269,6 +269,24 @@ pub fn footer(c: &mut Canvas, state: &State, x: u16, y: u16, w: u16) {
         };
         right.push(vec![Span::styled("esc ", base), Span::styled(label, muted)]);
     } else {
+        // The live counts and the goal read as one run joined by ` · `.
+        let mut item = Vec::new();
+        if let Some(live) = &state.live {
+            if let Some(key) = &state.hints.child {
+                item.push(Span::styled(format!("{key} "), base));
+            }
+            item.push(Span::styled(live.clone(), muted));
+        }
+        if let Some(goal) = session.and_then(|s| s.goal.as_ref()) {
+            if !item.is_empty() {
+                item.push(Span::styled(" · ", muted));
+            }
+            let (text, color) = crate::app::goal_status(goal);
+            item.push(Span::styled(text, c.style(color)));
+        }
+        if !item.is_empty() {
+            right.push(item);
+        }
         let usage = session.and_then(|s| s.context_tokens()).map(|tokens| {
             let pct = state
                 .model
@@ -321,7 +339,22 @@ pub fn footer(c: &mut Canvas, state: &State, x: u16, y: u16, w: u16) {
     for item in &right {
         at = c.spans(at, y, item, (x + w).saturating_sub(at) as usize) + 2;
     }
-    let left_room = (w as usize).saturating_sub(right_width);
+    let mut left_room = (w as usize).saturating_sub(right_width);
+    if let Some((label, pending)) = &state.editor_label {
+        let most = 12.max(48.min(state.width as usize / 3));
+        let label = text::truncate_middle(label, most);
+        let lw = width(&label);
+        if lw + 4 < left_room {
+            let style = if *pending {
+                Style::new().fg(c.theme.term(c.theme.hue("accent", 500)))
+            } else {
+                muted
+            };
+            let lx = x + (left_room - lw - 2) as u16;
+            c.put(lx, y, &label, style, lw);
+            left_room -= lw + 2;
+        }
+    }
     if left_room == 0 {
         return;
     }
@@ -349,6 +382,36 @@ pub fn footer(c: &mut Canvas, state: &State, x: u16, y: u16, w: u16) {
             y,
             &interrupt,
             left_room.saturating_sub((end + 1 - x) as usize),
+        );
+    } else if let Some(progress) = &state.worktree_progress {
+        let accent = Style::new().fg(c.theme.term(c.theme.hue("accent", 500)));
+        let spinner = if state.settings.animations {
+            crate::transcript::rows::spinner_frame(state.now)
+        } else {
+            "⋯"
+        };
+        let end = c.put(
+            x + 3,
+            y,
+            &format!("{spinner} {progress}"),
+            accent,
+            left_room,
+        );
+        c.put(
+            end,
+            y,
+            "...",
+            muted,
+            left_room.saturating_sub((end - x) as usize),
+        );
+    } else if state.new_worktree.is_some() {
+        let accent = Style::new().fg(c.theme.term(c.theme.hue("accent", 500)));
+        c.put(
+            x + 3,
+            y,
+            "(new worktree)",
+            accent,
+            left_room.saturating_sub(3),
         );
     } else {
         let label = text::path(&state.location, left_room);
@@ -391,6 +454,14 @@ pub fn popup(c: &mut Canvas, state: &State, x: u16, w: u16, box_y: u16, top: u16
     {
         let row_y = y + (i - popup.offset) as u16;
         let selected = i == popup.selected;
+        if selected && state.popup_confirm {
+            let fg = c.theme.fg("text.action.destructive.focused");
+            let row_bg = c.theme.fg("background.action.destructive.focused");
+            c.fill(Rect::new(x + 1, row_y, w - 2, 1), row_bg);
+            let style = Style::new().fg(fg).bg(row_bg);
+            c.put(x + 2, row_y, "Press ctrl+d to confirm", style, inner);
+            continue;
+        }
         let (fg, desc_fg, row_bg) = if selected {
             let focused = c.theme.fg("text.action.primary.focused");
             (

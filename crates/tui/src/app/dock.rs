@@ -267,4 +267,38 @@ impl App {
         let id = siblings[next].0.clone();
         self.open_session(&id);
     }
+
+    /// `N subagent(s) · N shell(s)`: running sessions of the whole family but this one, and
+    /// this session's background shells.
+    pub(super) fn live(&self) -> Option<String> {
+        let current = self.state.session()?.id.clone();
+        let mut root = current.clone();
+        while let Some(parent) = self
+            .core
+            .session(&root)
+            .ok()
+            .flatten()
+            .and_then(|row| row.parent_id)
+        {
+            root = parent;
+        }
+        let mut running = 0;
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            for (child, ..) in self.core.children(&id).unwrap_or_default() {
+                if child != current && self.core.child_running(&child) {
+                    running += 1;
+                }
+                stack.push(child);
+            }
+        }
+        let shells = self.core.background_shells(&current).len();
+        let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
+        let parts: Vec<String> = [(running, "subagent"), (shells, "shell")]
+            .into_iter()
+            .filter(|(n, _)| *n > 0)
+            .map(|(n, word)| plural(n, word))
+            .collect();
+        (!parts.is_empty()).then(|| parts.join(" · "))
+    }
 }

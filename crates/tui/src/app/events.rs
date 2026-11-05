@@ -29,6 +29,19 @@ impl App {
             .find(|t| t.session_id == session_id)
         {
             tab.attention = on;
+            tab.question = false;
+        }
+    }
+
+    fn question_waiting(&mut self, session_id: &str) {
+        self.attention(session_id, true);
+        if let Some(tab) = self
+            .state
+            .tabs
+            .iter_mut()
+            .find(|t| t.session_id == session_id)
+        {
+            tab.question = true;
         }
     }
 
@@ -75,7 +88,7 @@ impl App {
             form: Some(fields),
         });
         let id = session.id.clone();
-        self.attention(&id, true);
+        self.question_waiting(&id);
         self.alert(&id, "Input needs response", Sound::Question);
     }
 
@@ -88,16 +101,19 @@ impl App {
         if previous.as_ref() == Some(&server.status) {
             return;
         }
+        let action = Some(("Open MCP servers".to_string(), "mcp.list".to_string()));
         match &server.status {
-            Status::NeedsAuth { .. } => self.toast(
+            Status::NeedsAuth { .. } => self.toast_with(
                 Some("MCP server needs authentication".into()),
                 format!("Connect \"{}\" to use its tools.", server.name),
                 Variant::Warning,
+                action,
             ),
-            Status::Failed { .. } => self.toast(
+            Status::Failed { .. } => self.toast_with(
                 Some(format!("MCP server failed: {}", server.name)),
                 "Run /mcps to view details.".into(),
                 Variant::Error,
+                action,
             ),
             _ => {}
         }
@@ -121,6 +137,19 @@ impl App {
             count(|s| matches!(s, Status::Connected)),
             count(|s| matches!(s, Status::Failed { .. })),
         );
+        self.state.mcp_list = rows
+            .iter()
+            .map(|r| {
+                let (dot, word) = match &r.status {
+                    Status::Connected => ("text.feedback.success.base", "Connected"),
+                    Status::Pending => ("text.muted", "Connecting"),
+                    Status::Failed { .. } => ("text.feedback.error.base", "Error"),
+                    Status::NeedsAuth { .. } => ("text.feedback.warning.base", "Sign in"),
+                    _ => ("text.muted", "Disabled"),
+                };
+                (r.name.clone(), dot, word)
+            })
+            .collect();
     }
 
     pub(super) fn event(&mut self, event: Event) {
@@ -217,7 +246,7 @@ impl App {
                     custom: None,
                     form: None,
                 });
-                self.attention(&target, true);
+                self.question_waiting(&target);
                 self.alert(&target, "Input needs response", Sound::Question);
             }
             Event::Credits(snapshot) => {
@@ -225,6 +254,12 @@ impl App {
                     session.credits = Some(snapshot.clone());
                 }
                 self.account_soon();
+            }
+            Event::GoalChanged { goal, .. } => {
+                if let Some(session) = self.state.sessions.get_mut(&id) {
+                    session.goal = goal.clone();
+                }
+                self.refresh_goal_dialog();
             }
             Event::TitleChanged { title, .. } => {
                 if let Some(session) = self.state.sessions.get_mut(&id) {
@@ -243,6 +278,10 @@ impl App {
                     session.question = None;
                 }
                 self.attention(&id, false);
+                let shown = self.state.session().is_some_and(|s| s.id == id);
+                if let Some(tab) = self.state.tabs.iter_mut().find(|t| t.session_id == id) {
+                    tab.unread = !shown;
+                }
                 match &event {
                     Event::Failed { error, .. } => {
                         self.toast(

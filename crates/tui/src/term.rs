@@ -1,5 +1,5 @@
 //! Terminal setup and teardown (raw mode, alternate screen, mouse, bracketed paste, Kitty key
-//! flags), panic restore, the window title, OSC 52 copies and the OSC 11 background query.
+//! flags), panic restore, the window title, OSC 52 copies, the OSC 11 background and OSC 7501 support queries.
 
 use std::io::{self, Stdout, Write};
 
@@ -38,6 +38,7 @@ pub fn restore() {
 pub fn enter(mouse: bool) -> io::Result<Terminal<Backend>> {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        crate::crash::record(info);
         restore();
         previous(info);
     }));
@@ -131,6 +132,13 @@ pub fn open_url(url: &str) -> bool {
         .is_ok()
 }
 
+/// Escape sequences straight to the terminal, outside the frame.
+pub fn write_raw(text: &str) {
+    let mut out = io::stdout();
+    let _ = out.write_all(text.as_bytes());
+    let _ = out.flush();
+}
+
 /// Copies through the terminal (OSC 52), which also works over SSH.
 pub fn copy(text: &str) {
     use base64::Engine;
@@ -140,24 +148,41 @@ pub fn copy(text: &str) {
     let _ = out.flush();
 }
 
-/// Asks the terminal for its background (OSC 11) and picks light or dark by brightness; dark
-/// when it does not answer in time. Runs before the input reader starts so the reply is not
-/// read as keys.
+/// What the terminal answered at start.
+pub struct Probe {
+    /// From the OSC 11 background reply, when asked for and answered.
+    pub mode: Option<Mode>,
+    /// The terminal answered the OSC 7501 program-status query.
+    pub program_status: bool,
+}
+
+/// Asks for program-status support (OSC 7501) and either the background (OSC 11, light or
+/// dark by brightness) or, with the mode locked, device attributes, whose reply ends the wait
+/// early. Runs before the input reader starts so the replies are not read as keys.
 #[cfg(unix)]
-pub fn detect_mode(wait_ms: i32) -> Mode {
+pub fn probe(wait_ms: i32, background: bool) -> Probe {
     use std::io::Read;
     use std::os::fd::AsRawFd;
+    let none = Probe {
+        mode: None,
+        program_status: false,
+    };
     if enable_raw_mode().is_err() {
-        return Mode::Dark;
+        return none;
     }
     let mut out = io::stdout();
-    let _ = write!(out, "\x1b]11;?\x07");
+    let last = if background {
+        "\x1b]11;?\x07"
+    } else {
+        "\x1b[c"
+    };
+    let _ = write!(out, "\x1b]7501;?\x1b\\{last}");
     let _ = out.flush();
     let stdin = io::stdin();
     let fd = stdin.as_raw_fd();
     let mut reply = Vec::new();
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(wait_ms as u64);
-    loop {
+    while !answered(&reply, background) {
         let left = deadline
             .saturating_duration_since(std::time::Instant::now())
             .as_millis() as i32;
@@ -178,17 +203,36 @@ pub fn detect_mode(wait_ms: i32) -> Mode {
             break;
         };
         reply.extend_from_slice(&byte[..n]);
-        if reply.contains(&0x07) || reply.windows(2).any(|w| w == b"\x1b\\") {
-            break;
-        }
     }
     let _ = disable_raw_mode();
-    parse_background(&String::from_utf8_lossy(&reply)).unwrap_or(Mode::Dark)
+    let text = String::from_utf8_lossy(&reply);
+    Probe {
+        mode: background.then(|| parse_background(&text)).flatten(),
+        program_status: text.contains("\x1b]7501;"),
+    }
+}
+
+/// The reply to the last query is complete.
+#[cfg(any(unix, test))]
+fn answered(reply: &[u8], background: bool) -> bool {
+    let text = String::from_utf8_lossy(reply);
+    if background {
+        text.split("\x1b]11;")
+            .nth(1)
+            .is_some_and(|rest| rest.contains('\x07') || rest.contains("\x1b\\"))
+    } else {
+        text.split("\x1b[?")
+            .nth(1)
+            .is_some_and(|rest| rest.contains('c'))
+    }
 }
 
 #[cfg(not(unix))]
-pub fn detect_mode(_wait_ms: i32) -> Mode {
-    Mode::Dark
+pub fn probe(_wait_ms: i32, _background: bool) -> Probe {
+    Probe {
+        mode: None,
+        program_status: false,
+    }
 }
 
 #[cfg(any(unix, test))]
@@ -216,6 +260,14 @@ fn parse_background(reply: &str) -> Option<Mode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn probe_waits_for_the_last_reply() {
+        assert!(!answered(b"\x1b]7501;?:states=idle\x1b\\", true));
+        assert!(answered(b"\x1b]7501;?\x1b\\\x1b]11;rgb:0/0/0\x07", true));
+        assert!(answered(b"\x1b[?62;22c", false));
+        assert!(!answered(b"\x1b[?62", false));
+    }
 
     #[test]
     fn titles() {

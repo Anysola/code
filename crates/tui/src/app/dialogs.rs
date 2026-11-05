@@ -206,6 +206,21 @@ impl App {
         true
     }
 
+    /// A click on the footer's directory label: `Working directory` actions.
+    pub(super) fn working_directory_menu(&mut self) {
+        let options = vec![
+            crate::dialog::Opt::new("Copy path", "location.copy")
+                .description(self.state.directory.clone()),
+            crate::dialog::Opt::new("Open folder", "location.open")
+                .description("in system file manager"),
+            crate::dialog::Opt::new("Workspaces", "session.move")
+                .description("to another working directory"),
+        ];
+        let select =
+            crate::dialog::Select::new(Kind::WorkingDirectory, "Working directory", options);
+        self.push(Dialog::Select(select));
+    }
+
     pub(super) fn palette_context(&self) -> palette::Context {
         let session = self.state.session();
         palette::Context {
@@ -675,6 +690,9 @@ impl App {
                 };
                 self.state.model = self.model_choice(&reference);
                 self.models.used(&reference.id);
+                if reference.variant.is_none() && self.models.variant(&reference.id).is_some() {
+                    self.state.variant = self.remembered_variant(&reference.id);
+                }
                 let variants = self
                     .state
                     .model
@@ -696,6 +714,10 @@ impl App {
             Kind::Variants => {
                 self.state.dialogs.pop();
                 self.state.variant = (value != "default").then_some(value);
+                if let Some(id) = self.state.model.as_ref().map(|m| m.id.clone()) {
+                    let variant = self.state.variant.clone();
+                    self.models.set_variant(&id, variant.as_deref());
+                }
             }
             Kind::Agents => {
                 self.state.dialogs.pop();
@@ -761,6 +783,22 @@ impl App {
                 let before = (!value.is_empty()).then_some(value.as_str());
                 self.fork(before);
             }
+            Kind::WorkingDirectory => {
+                self.state.dialogs.pop();
+                let directory = self.state.directory.clone();
+                match value.as_str() {
+                    "location.copy" => {
+                        term::copy(&directory);
+                        self.toast(None, "Path copied to clipboard".into(), Variant::Info);
+                    }
+                    "location.open" => {
+                        term::open_url(&directory);
+                    }
+                    _ => self.run_command("session.move", None),
+                }
+            }
+            Kind::DiffSource => self.diff_source_chosen(&value),
+            Kind::DiffBase => self.diff_base_chosen(value),
             Kind::Skills => {
                 self.state.dialogs.pop();
                 self.state
@@ -965,6 +1003,7 @@ impl App {
         let kind = b.kind.clone();
         let button = b.buttons.get(b.active).cloned();
         match (kind, stroke.key.as_str()) {
+            (BodyKind::Goal, "p" | "r" | "x") => self.goal_key(stroke),
             (BodyKind::Help, "return") => {
                 self.state.dialogs.pop();
             }

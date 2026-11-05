@@ -96,7 +96,51 @@ impl Recents {
     }
 }
 
+impl Recents {
+    pub fn remove(&self, project: &str, directory: &Path) {
+        let mut value = self.read();
+        let directory = directory.display().to_string();
+        if let Some(list) = value["projects"][project].as_array_mut() {
+            list.retain(|i| i["directory"].as_str() != Some(&directory));
+            let _ = std::fs::write(&self.0, value.to_string());
+        }
+    }
+}
+
 impl App {
+    /// `ctrl+d` twice on a `recent` `/cd` row forgets that directory.
+    pub(super) fn remove_recent(&mut self) {
+        let Some(popup) = self.state.popup.as_ref() else {
+            return;
+        };
+        let Some(row) = popup.rows.get(popup.selected) else {
+            return;
+        };
+        if row.description != "recent" {
+            return;
+        }
+        if !self.state.popup_confirm {
+            self.state.popup_confirm = true;
+            return;
+        }
+        let (shown, selected, count) = (row.display.clone(), popup.selected, popup.rows.len());
+        let home = PathBuf::from(&self.state.home);
+        let project = self.core.project_id().to_string();
+        if let Some(directory) = self
+            .recents
+            .list(&project)
+            .into_iter()
+            .find(|d| crate::complete::recent_value(d, &home) == shown)
+        {
+            self.recents.remove(&project, &directory);
+        }
+        self.state.popup_confirm = false;
+        self.refresh_popup();
+        if let Some(popup) = self.state.popup.as_mut() {
+            popup.selected = selected.min(count.saturating_sub(2));
+        }
+    }
+
     /// `/cd <dir>`: on home the next session starts there; in a session the session moves.
     pub(super) fn change_directory(&mut self, argument: &str) {
         let current = PathBuf::from(&self.state.directory);
@@ -206,7 +250,12 @@ impl App {
                 }
                 self.open_session(&id);
             }
-            None => self.state.route = Route::Home,
+            None => {
+                self.state.route = Route::Home;
+                if std::mem::take(&mut self.submit_after_move) {
+                    self.submit(false);
+                }
+            }
         }
     }
 }
@@ -227,6 +276,9 @@ mod tests {
             recents.list("p"),
             [PathBuf::from("/a"), PathBuf::from("/b")]
         );
+        recents.remove("p", Path::new("/a"));
+        assert_eq!(recents.list("p"), [PathBuf::from("/b")]);
+        assert_eq!(recents.list("q"), [PathBuf::from("/c")]);
     }
 
     #[test]

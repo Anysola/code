@@ -135,10 +135,16 @@ impl App {
                             .and_then(|i| variants.get(i + 1))
                             .cloned(),
                     };
+                    let id = model.id.clone();
+                    let variant = self.state.variant.clone();
+                    self.models.set_variant(&id, variant.as_deref());
                 }
             }
+            ("model.cycle_favorite" | "model.cycle_favorite_reverse", _) => {
+                self.cycle_model(id == "model.cycle_favorite", true)
+            }
             ("model.cycle_recent" | "model.cycle_recent_reverse", _) => {
-                self.cycle_model(id == "model.cycle_recent")
+                self.cycle_model(id == "model.cycle_recent", false)
             }
             ("session.sidebar.toggle", _) => {
                 self.state.settings.sidebar = !self.state.settings.sidebar;
@@ -151,6 +157,14 @@ impl App {
                     .tui
                     .set(&["session", "sidebar"], Value::String(value.into()));
             }
+            (
+                "session.message.next"
+                | "session.message.previous"
+                | "session.message.user.next"
+                | "session.message.user.previous"
+                | "session.messages_last_user",
+                Some(_),
+            ) => self.jump_to_message(id),
             (
                 "session.page.up"
                 | "session.page.down"
@@ -208,6 +222,15 @@ impl App {
                 self.closed.push(current);
                 self.state.route = Route::Home;
                 self.refresh_recent();
+            }
+            ("session.tab.next", _) => self.cycle_tab(1, false),
+            ("session.tab.previous", _) => self.cycle_tab(-1, false),
+            ("session.tab.next_unread", _) => self.cycle_tab(1, true),
+            ("session.tab.previous_unread", _) => self.cycle_tab(-1, true),
+            (select, _) if select.starts_with("session.tab.select.") => {
+                if let Ok(number) = select["session.tab.select.".len()..].parse() {
+                    self.select_tab(number);
+                }
             }
             ("session.tab.reopen", _) => {
                 if let Some(id) = self.closed.pop() {
@@ -297,23 +320,37 @@ impl App {
         true
     }
 
-    fn cycle_model(&mut self, forward: bool) {
+    /// `f2`/`shift+f2` walk the recent models, `model.cycle_favorite(_reverse)` the favourites;
+    /// ids no longer offered are skipped, an unknown current model starts at either end.
+    fn cycle_model(&mut self, forward: bool, favorites: bool) {
         let loaded = self.core.loaded();
-        let models = &loaded.models;
-        if models.is_empty() {
+        let list: Vec<String> = if favorites {
+            &self.models.favorite
+        } else {
+            &self.models.recent
+        }
+        .iter()
+        .filter(|id| loaded.models.iter().any(|m| m.id == **id))
+        .cloned()
+        .collect();
+        if list.is_empty() {
+            if favorites {
+                self.toast(
+                    None,
+                    "Add a favorite model to use this shortcut".into(),
+                    Variant::Info,
+                );
+            }
             return;
         }
-        let at = self
-            .state
-            .model
-            .as_ref()
-            .and_then(|m| models.iter().position(|x| x.id == m.id))
-            .unwrap_or(0);
-        let next = if forward {
-            at + 1
-        } else {
-            at + models.len() - 1
-        } % models.len();
+        let current = self.state.model.as_ref().map(|m| m.id.clone());
+        let count = list.len();
+        let next = match current.and_then(|c| list.iter().position(|id| *id == c)) {
+            Some(at) if forward => (at + 1) % count,
+            Some(at) => (at + count - 1) % count,
+            None if forward => 0,
+            None => count - 1,
+        };
         let provider = self
             .state
             .model
@@ -321,11 +358,21 @@ impl App {
             .map_or_else(|| "anysola".to_string(), |m| m.provider.clone());
         let reference = ModelRef {
             provider,
-            id: models[next].id.clone(),
+            id: list[next].clone(),
             variant: None,
         };
         self.state.model = self.model_choice(&reference);
-        self.state.variant = None;
+        self.state.variant = self.remembered_variant(&reference.id);
+    }
+
+    /// The variant last used with this model, while the model still offers it.
+    pub(super) fn remembered_variant(&self, id: &str) -> Option<String> {
+        let variant = self.models.variant(id).flatten()?;
+        self.state
+            .model
+            .as_ref()
+            .is_some_and(|m| m.variants.contains(&variant))
+            .then_some(variant)
     }
 
     fn undo(&mut self, current: &str) {
@@ -482,12 +529,18 @@ impl App {
                 return self.run_command(command.id, arguments);
             }
             if self.core.loaded().commands.get(name).is_some() {
+                if self.submit_in_new_worktree() {
+                    return;
+                }
                 return self.server_command(
                     name.to_string(),
                     arguments.to_string(),
                     trimmed.clone(),
                 );
             }
+        }
+        if self.submit_in_new_worktree() {
+            return;
         }
         self.prompt(trimmed, queue);
     }
@@ -702,5 +755,33 @@ impl App {
             ),
         }
         let _ = std::fs::remove_file(&file);
+    }
+
+    /// Message navigation: puts the next or previous (user) message, or the last user message,
+    /// at the top of the transcript.
+    fn jump_to_message(&mut self, id: &str) {
+        let Some(session) = self.state.session_mut() else {
+            return;
+        };
+        let (messages, (total, height)) = {
+            let cache = session.layout.0.lock().unwrap_or_else(|e| e.into_inner());
+            (cache.messages.clone(), cache.viewport)
+        };
+        let top = total.saturating_sub(session.scroll + height);
+        let users = id.contains("user");
+        let mut candidates = messages
+            .iter()
+            .filter(|(_, user)| !users || *user)
+            .map(|(row, _)| *row);
+        let target = match id {
+            "session.message.next" | "session.message.user.next" => {
+                candidates.find(|row| *row > top)
+            }
+            "session.messages_last_user" => candidates.next_back(),
+            _ => candidates.rev().find(|row| *row < top),
+        };
+        if let Some(row) = target {
+            session.scroll = total.saturating_sub(row + height);
+        }
     }
 }

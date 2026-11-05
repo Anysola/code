@@ -17,9 +17,10 @@ mod prompt;
 mod prompts;
 mod session;
 
-pub use diffview::patch_options;
+pub use diffview::{patch_options, tree_width as diff_tree_width};
 pub use home::WORDMARK;
 pub use prompt::{max_rows, textarea_width};
+pub use session::{diff_docked, diff_width};
 pub use session::{pane_width, terminal_size, terminal_width};
 
 /// Width of the session pane's content box.
@@ -130,6 +131,24 @@ pub fn draw(state: &State, theme: &Theme, buf: &mut Buffer) -> Drawn {
         },
     };
     let cursor = match &state.diff {
+        Some(view) if session::diff_docked(state) => {
+            let x = session::pane_width(state);
+            let top = u16::from(!state.tabs.is_empty());
+            let area = Rect::new(0, 0, state.width - x, state.height - top);
+            let mut panel = Buffer::empty(area);
+            diffview::draw(
+                &mut Canvas {
+                    buf: &mut panel,
+                    theme: c.theme,
+                },
+                view,
+            );
+            for (px, py) in (0..area.width).flat_map(|px| (0..area.height).map(move |py| (px, py)))
+            {
+                c.buf[(x + px, top + py)] = panel[(px, py)].clone();
+            }
+            cursor
+        }
         Some(view) => {
             diffview::draw(&mut c, view);
             None
@@ -184,14 +203,20 @@ fn tabs(c: &mut Canvas, state: &State) {
                 } else {
                     muted
                 };
-                if tab.attention {
-                    c.put(
-                        x as u16 + 1,
-                        0,
-                        "!",
-                        c.style("text.feedback.warning.base"),
-                        1,
-                    );
+                let busy = state.sessions.get(&tab.session_id).is_some_and(|s| s.busy);
+                let marker = match (tab.attention, tab.question) {
+                    (true, true) => Some(("?", "text.feedback.warning.base")),
+                    (true, false) => Some(("!", "text.feedback.warning.base")),
+                    _ if busy && state.settings.animations => Some((
+                        crate::transcript::rows::spinner_frame(state.now),
+                        "text.muted",
+                    )),
+                    _ if busy => Some(("⋯", "text.muted")),
+                    _ if tab.unread => Some(("•", "text.action.primary.base")),
+                    _ => None,
+                };
+                if let Some((mark, color)) = marker {
+                    c.put(x as u16 + 1, 0, mark, c.style(color), 1);
                 }
                 c.put(x as u16 + 3, 0, &tab.title, style, w.saturating_sub(3));
             }
@@ -204,6 +229,35 @@ fn tabs(c: &mut Canvas, state: &State) {
     if !home {
         c.put(x as u16 + 1, 0, "+", muted, 1);
     }
+}
+
+fn affordance(toast: &crate::state::Toast) -> String {
+    toast
+        .action
+        .as_ref()
+        .map_or("x".to_string(), |(label, _)| format!("› {label}"))
+}
+
+/// Where the toast sits: top right, as wide as its longest line allows.
+pub fn toast_rect(state: &State) -> Option<Rect> {
+    let toast = state.toast.as_ref()?;
+    let max = 60.min(state.width as usize);
+    let room = max.saturating_sub(9);
+    let rows = toast.title.as_ref().map_or(0, |_| 2)
+        + crate::text::wrap(&toast.message, room).len()
+        + if state.toast_queue.is_empty() { 0 } else { 2 };
+    let longest = toast
+        .message
+        .lines()
+        .chain(toast.title.as_deref())
+        .map(width)
+        .max()
+        .unwrap_or(0);
+    // A toast whose text wraps takes the full width.
+    let extra = width(&affordance(toast)).saturating_sub(1);
+    let w = (longest + 9 + extra).min(max) as u16;
+    let x = state.width.saturating_sub(w + 2);
+    Some(Rect::new(x, 1, w, rows as u16 + 2))
 }
 
 /// The toast at the top right: coloured side borders, text, and the `x` close mark.
@@ -223,28 +277,36 @@ fn toast(c: &mut Canvas, state: &State, toast: &crate::state::Toast) {
             c.style("text.base").add_modifier(Modifier::BOLD),
         ));
     }
+    if !lines.is_empty() {
+        lines.push((String::new(), c.style("text.base")));
+    }
     for line in crate::text::wrap(&toast.message, room) {
         lines.push((line, c.style("text.base")));
     }
-    let longest = toast
-        .message
-        .lines()
-        .chain(toast.title.as_deref())
-        .map(width)
-        .max()
-        .unwrap_or(0);
-    // A toast whose text wraps takes the full width.
-    let w = (longest + 9).min(max) as u16;
-    let h = lines.len() as u16 + 2;
-    let x = state.width.saturating_sub(w + 2);
-    let rect = Rect::new(x, 1, w, h);
+    if !state.toast_queue.is_empty() {
+        lines.push((String::new(), c.style("text.muted")));
+        let more = format!("+{} more", state.toast_queue.len());
+        lines.push((more, c.style("text.muted")));
+    }
+    let affordance = affordance(toast);
+    let Some(rect) = toast_rect(state) else {
+        return;
+    };
+    let x = rect.x;
     c.fill(rect, c.theme.fg("background.raised.high"));
     let border = c.style(color);
     for y in rect.top()..rect.bottom() {
         c.put(rect.left(), y, "┃", border, 1);
         c.put(rect.right() - 1, y, "┃", border, 1);
     }
-    c.put(rect.right() - 4, 2, "x", c.style("text.muted"), 1);
+    let ax = rect.right() - 3 - width(&affordance) as u16;
+    c.put(
+        ax,
+        2,
+        &affordance,
+        c.style("text.muted"),
+        width(&affordance),
+    );
     for (i, (text, style)) in lines.iter().enumerate() {
         c.put(x + 3, 2 + i as u16, text, *style, room);
     }

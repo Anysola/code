@@ -13,8 +13,25 @@ use crate::transcript::rows::{self, Ctx, Row};
 pub const SIDEBAR_WIDTH: u16 = 42;
 
 /// Columns of the session pane (the sidebar takes 42 on wide terminals).
+/// The diff viewer sits beside the session (0.5.1 docks it from 108 columns: 64 + 44).
+pub fn diff_docked(state: &State) -> bool {
+    state.diff.as_ref().is_some_and(|d| !d.fullscreen)
+        && matches!(state.route, crate::state::Route::Session(_))
+        && state.pane.is_none()
+        && state.width >= 108
+}
+
+/// The width the diff viewer lays out in.
+pub fn diff_width(state: &State) -> u16 {
+    if diff_docked(state) {
+        terminal_width(state)
+    } else {
+        state.width
+    }
+}
+
 pub fn pane_width(state: &State) -> u16 {
-    if state.pane.is_some() {
+    if state.pane.is_some() || diff_docked(state) {
         state.width - terminal_width(state)
     } else if state.settings.sidebar && state.width > 120 {
         state.width - SIDEBAR_WIDTH
@@ -46,6 +63,9 @@ pub fn transcript(
         background_key: state.hints.background.clone(),
         directory: &session.directory,
         home: &state.home,
+        grouping: state.settings.grouping,
+        verbosity: state.settings.verbosity,
+        toggled: &session.toggled,
     };
     rows::layout(&session.items, &ctx, Some(&session.layout.0))
 }
@@ -64,6 +84,10 @@ pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u1
     } else if let Some(question) = &session.question {
         let h = prompts::question_height(question, w);
         prompts::question(c, question, x, bottom.saturating_sub(h), w);
+        (h, None)
+    } else if session.location_missing() {
+        let h = prompts::LOCATION_HEIGHT;
+        prompts::location_missing(c, state, &session.directory, x, bottom.saturating_sub(h), w);
         (h, None)
     } else if let Some(dock) = &state.dock {
         let h = super::dock::height(dock);
@@ -86,9 +110,17 @@ pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u1
     let scroll = session.scroll.min(rows.len().saturating_sub(height));
     let end = rows.len() - scroll;
     let start = end.saturating_sub(height);
+    let mut hits = Vec::new();
     for (i, row) in rows[start..end].iter().enumerate() {
         draw_row(c, row, x, top + i as u16, w);
+        if let Some(id) = &row.group {
+            hits.push((top + i as u16, id.clone()));
+        }
     }
+    let mut cache = session.layout.0.lock().unwrap_or_else(|e| e.into_inner());
+    cache.hits = hits;
+    cache.viewport = (rows.len(), height);
+    drop(cache);
     if session.scroll > 0 {
         let label = "Jump to latest ↓";
         let lx = x + w - width(label) as u16;
@@ -264,6 +296,38 @@ fn sidebar(c: &mut Canvas, state: &State, session: &Session, x: u16, top: u16) {
             c.put(tx, y, &format!("{pct}% used"), muted, room);
             y += 1;
         }
+    }
+    if !state.mcp_list.is_empty() {
+        y += 1;
+        let (on, bad) = (state.mcp.1, state.mcp.2);
+        let many = state.mcp_list.len() > 2;
+        let mut x = tx;
+        if many {
+            x = c.put(tx, y, if state.mcp_closed { "▶" } else { "▼" }, base, 1) + 1;
+        }
+        let end = c.put(x, y, "MCP", bold, room);
+        if many && state.mcp_closed {
+            let errors = match bad {
+                0 => String::new(),
+                1 => ", 1 error".into(),
+                n => format!(", {n} errors"),
+            };
+            c.put(end + 1, y, &format!("({on} active{errors})"), muted, room);
+        } else {
+            for (name, dot, word) in &state.mcp_list {
+                y += 1;
+                c.put(tx, y, "•", c.style(dot).bg(bg), 1);
+                let word_style = if *word == "Error" {
+                    c.style("text.feedback.error.base").bg(bg)
+                } else {
+                    muted
+                };
+                let word_x = tx + room as u16 - width(word) as u16;
+                c.put(tx + 2, y, name, bold, room.saturating_sub(width(word) + 3));
+                c.put(word_x, y, word, word_style, width(word));
+            }
+        }
+        y += 1;
     }
     let todos = latest_todos(session);
     if !todos.is_empty() {

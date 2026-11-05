@@ -210,6 +210,12 @@ impl Store {
         ])
     }
 
+    /// A unified patch between two trees (the `/diff` viewer's `Last turn`).
+    pub fn patch(&self, from: &str, to: &str) -> Option<String> {
+        let out = self.run(&["diff", "--no-color", "--no-ext-diff", from, to])?;
+        Some(String::from_utf8_lossy(&out).into_owned())
+    }
+
     /// A file's content in a tree; `None` when the tree does not have it.
     pub fn read(&self, tree: &str, path: &str) -> Option<Vec<u8>> {
         self.run(&["cat-file", "blob", &format!("{tree}:{path}")])
@@ -290,6 +296,8 @@ mod tests {
         std::fs::write(project.join("new.txt"), "new\n").unwrap();
         let end = store.capture().unwrap();
         assert_eq!(store.files(&start, &end), vec!["a.txt", "new.txt"]);
+        let patch = store.patch(&start, &end).unwrap();
+        assert!(patch.contains("diff --git a/a.txt b/a.txt") && patch.contains("+two"));
         store
             .restore(&[
                 ("a.txt".into(), start.clone()),

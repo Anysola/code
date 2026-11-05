@@ -1,9 +1,10 @@
 //! ```` ```mermaid ```` blocks as box drawings, after 0.5.1's `@opencode/merman`: flowcharts,
-//! sequence diagrams, timelines and gantt charts. Other diagrams (state, gitGraph) and charts these
+//! sequence diagrams, timelines, gantt charts and git graphs. Other diagrams (state) and charts these
 //! layouts cannot draw are errors, and the block stays source.
 
 mod flowchart;
 mod gantt;
+mod gitgraph;
 mod sequence;
 mod timeline;
 
@@ -14,6 +15,7 @@ pub fn render(source: &str) -> Result<Vec<String>, String> {
         "timeline" => timeline::render(source),
         "gantt" => gantt::render(source),
         "sequencediagram" => sequence::render(source),
+        "gitgraph" | "gitgraph:" => gitgraph::render(source),
         _ => flowchart::render(source),
     }
 }

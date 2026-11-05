@@ -16,12 +16,16 @@ pub enum Route {
     Session(String),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Tab {
     pub session_id: String,
     pub title: String,
     /// A permission or question waits in this session (`!` marker).
     pub attention: bool,
+    /// The waiting input is a question (`?` marker).
+    pub question: bool,
+    /// The session finished a turn while another one was shown (`•` marker).
+    pub unread: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -137,6 +141,12 @@ pub struct Session {
     /// A revert is staged (`/redo` is available).
     pub reverted: bool,
     pub layout: LayoutCache,
+    /// The session's `/goal`, if set.
+    pub goal: Option<anysola_core::session::goal::Goal>,
+    /// The session's directory is gone (deleted worktree, moved checkout); the app checks it.
+    pub missing: bool,
+    /// Exploration groups whose open state the user flipped, by group ID.
+    pub toggled: std::collections::HashSet<String>,
 }
 
 /// The session's transcript layout cache, shared by clones of the session.
@@ -157,6 +167,10 @@ impl PartialEq for LayoutCache {
 }
 
 impl Session {
+    pub fn location_missing(&self) -> bool {
+        self.missing
+    }
+
     /// Tokens of the latest assistant step with usage.
     pub fn context_tokens(&self) -> Option<u64> {
         self.items.iter().rev().find_map(|item| match item {
@@ -210,6 +224,8 @@ pub struct Toast {
     pub message: String,
     pub variant: Variant,
     pub until: u64,
+    /// `› <label>` in place of the close mark; a click runs the command.
+    pub action: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,6 +244,17 @@ pub struct Settings {
     pub paste_compact: bool,
     pub animations: bool,
     pub title: bool,
+    pub grouping: bool,
+    pub verbosity: Verbosity,
+}
+
+/// `session.verbosity`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Verbosity {
+    Low,
+    #[default]
+    Medium,
+    High,
 }
 
 impl Default for Settings {
@@ -240,6 +267,8 @@ impl Default for Settings {
             paste_compact: true,
             animations: true,
             title: true,
+            grouping: true,
+            verbosity: Verbosity::Medium,
         }
     }
 }
@@ -335,6 +364,7 @@ pub struct Hints {
     pub sessions: Option<String>,
     pub background: Option<String>,
     pub fullscreen: Option<String>,
+    pub child: Option<String>,
 }
 
 pub const HOME_EXAMPLES: [&str; 3] = [
@@ -391,8 +421,26 @@ pub struct State {
     pub diff: Option<crate::diffview::Diff>,
     /// MCP servers: `(configured, connected, failed)`.
     pub mcp: (usize, usize, usize),
+    /// The sidebar's MCP rows: name, dot colour, status word.
+    pub mcp_list: Vec<(String, &'static str, &'static str)>,
+    /// The sidebar's MCP section is collapsed (only offered with more than two servers).
+    pub mcp_closed: bool,
     /// `/btw` side questions waiting for their answer.
     pub asides: usize,
+    /// The footer's `↓ N subagents · N shells` item while the session family has live work.
+    pub live: Option<String>,
+    /// The selected popup row asks `Press ctrl+d to confirm` before it is removed.
+    pub popup_confirm: bool,
+    /// A worktree chosen on home, created on the first submit (`(new worktree)` in the footer).
+    pub new_worktree: Option<String>,
+    /// Toasts waiting while the visible one is hovered or others wait (`+N more`).
+    pub toast_queue: Vec<Toast>,
+    /// The pointer rests on the toast: its time stands still, `left` ms remaining.
+    pub toast_hover: Option<u64>,
+    /// The IDE selection's file label and whether it still waits to be sent (accent colour).
+    pub editor_label: Option<(String, bool)>,
+    /// `Creating worktree` while that happens.
+    pub worktree_progress: Option<String>,
     /// The terminal pane beside the session, while shown.
     pub pane: Option<Pane>,
     pub dock: Option<Dock>,
@@ -437,6 +485,15 @@ impl State {
             dock: None,
             pane_width: None,
             asides: 0,
+            live: None,
+            mcp_list: Vec::new(),
+            mcp_closed: false,
+            popup_confirm: false,
+            new_worktree: None,
+            toast_queue: Vec::new(),
+            toast_hover: None,
+            editor_label: None,
+            worktree_progress: None,
             mcp: (0, 0, 0),
             diff: None,
             zone: *chrono::Local::now().offset(),

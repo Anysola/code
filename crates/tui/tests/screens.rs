@@ -97,6 +97,7 @@ fn base(width: u16, height: u16) -> State {
         sessions: Some("ctrl+x l".into()),
         background: Some("ctrl+b".into()),
         fullscreen: Some("ctrl+f".into()),
+        child: Some("↓".into()),
     };
     state.example = 1;
     state.zone = chrono::FixedOffset::east_opt(3 * 3600).unwrap();
@@ -108,7 +109,7 @@ fn tabs(state: &mut State) {
         state.tabs.push(Tab {
             session_id: id.into(),
             title: "Fix typo in hello.txt".into(),
-            attention: false,
+            ..Tab::default()
         });
     }
 }
@@ -739,6 +740,7 @@ fn budget_toasts() {
         message: anysola::budget_text(12, Some(50)),
         variant: Variant::Success,
         until: u64::MAX,
+        action: None,
     });
     assert_screen(&state, "budget-set-toast");
     let mut home = under(1);
@@ -748,6 +750,7 @@ fn budget_toasts() {
             .into(),
         variant: Variant::Warning,
         until: u64::MAX,
+        action: None,
     });
     assert_screen(&home, "budget-toast-home");
 }
@@ -1084,4 +1087,163 @@ fn composer_dock_replaces_the_prompt() {
     state.dock.as_mut().unwrap().rows.clear();
     state.dock.as_mut().unwrap().tab = 1;
     assert!(render(&state).contains("No shell commands"));
+}
+
+/// `feature-plugins/prompt/footer.tsx`: the live item leads the footer's right side.
+#[test]
+fn footer_live_subagents_and_shells() {
+    let mut state = session(120, 36, turn(true, true));
+    state.live = Some("2 subagents · 1 shell".into());
+    let screen = render(&state);
+    let footer = screen
+        .lines()
+        .find(|l| l.contains("subagents"))
+        .expect("footer row");
+    assert!(footer.contains("↓ 2 subagents · 1 shell"), "{footer}");
+}
+
+/// `component/prompt/autocomplete.tsx`: the first `ctrl+d` on a `recent` row asks first.
+#[test]
+fn cd_recent_asks_before_removal() {
+    let mut state = session(120, 36, Vec::new());
+    state.popup = Some(Popup {
+        trigger: '/',
+        start: 4,
+        rows: vec![PopupRow {
+            display: "~/old".into(),
+            description: "recent".into(),
+            label: String::new(),
+            action: PopupAction::Insert("~/old".into()),
+        }],
+        selected: 0,
+        offset: 0,
+        pad: 0,
+    });
+    state.popup_confirm = true;
+    let screen = render(&state);
+    assert!(screen.contains("Press ctrl+d to confirm"));
+    assert!(!screen.contains("~/old"));
+}
+
+/// `component/session-tabs.tsx` `TabIndicator`: `?` for a question, `•` for unread.
+#[test]
+fn tab_markers() {
+    let mut state = session(120, 36, Vec::new());
+    state.tabs[0].attention = true;
+    state.tabs[0].question = true;
+    state.tabs[1].unread = true;
+    let strip = render(&state).lines().next().unwrap().to_string();
+    assert!(strip.starts_with(" ? "), "{strip}");
+    assert!(strip.contains(" • "), "{strip}");
+}
+
+/// `routes/session/location-missing.tsx`: the question replaces the prompt.
+#[test]
+fn session_location_unavailable() {
+    let mut state = session(120, 36, Vec::new());
+    state.sessions.get_mut("ses_b").unwrap().missing = true;
+    let screen = render(&state);
+    for text in [
+        "△ Session location unavailable",
+        "~/my-app",
+        "Choose another directory to continue this session.",
+        " Choose directory ",
+        "enter confirm",
+    ] {
+        assert!(screen.contains(text), "{text}\n{screen}");
+    }
+}
+
+/// `component/prompt/move.tsx`: a worktree chosen on home waits for the first submit.
+#[test]
+fn home_footer_new_worktree() {
+    let mut state = home(120, 36);
+    state.new_worktree = Some("brave-fox".into());
+    assert!(render(&state).contains("(new worktree)"));
+    state.worktree_progress = Some("Creating worktree".into());
+    assert!(render(&state).contains("Creating worktree..."));
+}
+
+/// `feature-plugins/system/diff-viewer.tsx`: from 108 columns `/diff` docks beside the session.
+#[test]
+fn diff_docks_beside_a_wide_session() {
+    let mut state = session(120, 36, turn(true, true));
+    state.diff = Some(anysola_tui::diffview::Diff::new(
+        anysola_tui::diffview::Source::All,
+    ));
+    let screen = render(&state);
+    let header = screen.lines().nth(1).unwrap();
+    assert!(
+        header[header.char_indices().nth(60).unwrap().0..].contains("All"),
+        "{header}"
+    );
+    assert!(screen.contains("Loading diff…"));
+    state.width = 100;
+    let narrow = render(&state);
+    assert!(
+        narrow.lines().next().unwrap().contains("All"),
+        "full screen below 108"
+    );
+}
+
+/// `ui/toast.tsx`: an action replaces the close mark with `› <label>`.
+#[test]
+fn toast_action_affordance() {
+    let mut state = home(120, 36);
+    state.toast = Some(Toast {
+        title: Some("MCP server failed: docs".into()),
+        message: "Run /mcps to view details.".into(),
+        variant: Variant::Error,
+        until: u64::MAX,
+        action: Some(("Open MCP servers".into(), "mcp.list".into())),
+    });
+    state.toast_queue.push(state.toast.clone().unwrap());
+    let screen = render(&state);
+    let rows: Vec<&str> = screen.lines().collect();
+    assert!(
+        rows[2].contains("MCP server failed: docs") && rows[2].contains("› Open MCP servers"),
+        "{}",
+        rows[2]
+    );
+    // `toast.tsx`: a blank row under the title, `+N more` under the message.
+    assert!(!rows[3].contains("Run /mcps") && rows[4].contains("Run /mcps to view details."));
+    assert!(rows[6].contains("+1 more"), "{}", rows[6]);
+}
+
+/// `feature-plugins/sidebar/mcp.tsx`: one row per server; more than two can collapse.
+#[test]
+fn sidebar_mcp_section() {
+    let mut state = session(170, 40, turn(true, true));
+    state.mcp = (3, 1, 1);
+    state.mcp_list = vec![
+        ("docs".into(), "text.feedback.success.base", "Connected"),
+        ("jira".into(), "text.feedback.error.base", "Error"),
+        ("drive".into(), "text.feedback.warning.base", "Sign in"),
+    ];
+    let screen = render(&state);
+    assert!(screen.contains("▼ MCP"));
+    let row = screen.lines().find(|l| l.contains("• jira")).unwrap();
+    assert!(row.trim_end().ends_with("Error"), "{row}");
+    state.mcp_closed = true;
+    assert!(render(&state).contains("▶ MCP (1 active, 1 error)"));
+}
+
+/// `feature-plugins/prompt/footer.tsx`: the goal follows the live counts after ` · `.
+#[test]
+fn footer_goal_status() {
+    use anysola_core::session::goal::{Goal, Status as GoalStatus};
+    let mut state = session(120, 36, turn(true, true));
+    state.live = Some("2 subagents".into());
+    state.sessions.get_mut("ses_b").unwrap().goal = Some(Goal {
+        id: "g".into(),
+        objective: "Ship it".into(),
+        status: GoalStatus::Paused,
+        reason: None,
+        rounds: 0,
+        max_rounds: 50,
+        stalls: None,
+        boot: String::new(),
+        updated_at: 0,
+    });
+    assert!(render(&state).contains("↓ 2 subagents · ◎ goal paused"));
 }

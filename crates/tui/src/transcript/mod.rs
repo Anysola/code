@@ -2,6 +2,7 @@
 
 pub mod diff;
 pub mod export;
+pub mod grouping;
 pub mod highlight;
 pub mod latex;
 pub mod markdown;

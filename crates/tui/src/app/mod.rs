@@ -28,11 +28,14 @@ mod commands;
 mod dialogs;
 mod diff;
 mod dock;
+mod goal;
+pub use goal::status as goal_status;
 mod events;
 mod keys;
 mod models;
 mod pane;
 mod relocate;
+mod tabs;
 mod worktrees;
 
 pub use relocate::{Restart, resolve as resolve_directory};
@@ -117,8 +120,13 @@ pub struct App {
     /// The terminal pane's edge is being dragged.
     pane_drag: bool,
     recents: relocate::Recents,
+    tab_store: tabs::TabStore,
+    /// OSC 7501 records, when the terminal answered the support query.
+    records: Option<crate::status::Records>,
     /// A directory move waiting for running turns.
     relocating: Option<relocate::Pending>,
+    /// The prompt waiting for a deferred worktree is submitted once the move lands.
+    submit_after_move: bool,
     /// The new core's events, taken by the loop after a swap.
     resubscribe: Option<broadcast::Receiver<anysola_core::events::Event>>,
 }
@@ -127,14 +135,7 @@ fn now() -> u64 {
     anysola_core::time::now_ms()
 }
 
-/// The path with the home directory shown as `~`.
-fn abbreviate(directory: &Path, home: &Path) -> String {
-    match directory.strip_prefix(home) {
-        Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
-        Ok(rest) => format!("~/{}", rest.display()),
-        Err(_) => directory.display().to_string(),
-    }
-}
+use crate::text::abbreviate;
 
 /// `~/my-app:master`: the directory with home abbreviated and the git branch.
 fn location(directory: &Path, home: &Path) -> String {
@@ -176,13 +177,37 @@ fn theme_dirs(paths: &Paths, directory: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-pub async fn run(core: Core, options: Options) -> Result<(), String> {
+/// Runs the UI; a panic shows the crash screen, whose Restart starts the UI again.
+pub async fn run(core: Core, mut options: Options) -> Result<(), String> {
+    use futures_util::FutureExt;
+    loop {
+        let attempt = std::panic::AssertUnwindSafe(run_once(core.clone(), options.clone()))
+            .catch_unwind()
+            .await;
+        let Err(_) = attempt else {
+            return attempt.unwrap_or(Ok(()));
+        };
+        let (message, stack) = crate::crash::take();
+        let paths = Paths::from_env();
+        let light =
+            Tui::load(paths.data.join("tui.json")).theme_mode() == Some(crate::theme::Mode::Light);
+        let mut terminal = term::enter(false).map_err(|e| e.to_string())?;
+        let choice = crate::crash::show(&mut terminal, message.clone(), stack, light);
+        term::restore();
+        match choice {
+            crate::crash::Choice::Restart => options.prompt = None,
+            crate::crash::Choice::Quit => return Err(message),
+        }
+    }
+}
+
+async fn run_once(core: Core, options: Options) -> Result<(), String> {
     let paths = Paths::from_env();
     let tui = Tui::load(paths.data.join("tui.json"));
     let keymap = Keymap::from_config(&tui.value, cfg!(windows))?;
-    let mode = tui
-        .theme_mode()
-        .unwrap_or_else(|| term::detect_mode(BACKGROUND_QUERY_MS));
+    let locked = tui.theme_mode();
+    let probe = term::probe(BACKGROUND_QUERY_MS, locked.is_none());
+    let mode = locked.or(probe.mode).unwrap_or(crate::theme::Mode::Dark);
     let mut catalog = Catalog::bundled();
     let mut theme_name = tui.theme_name();
     if catalog
@@ -203,6 +228,7 @@ pub async fn run(core: Core, options: Options) -> Result<(), String> {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut events = core.subscribe();
     let mut terminal = term::enter(tui.mouse()).map_err(|e| e.to_string())?;
+    let tab_store = tabs::TabStore::new(&paths.data, core.directory(), tui.global_tabs());
     let mut app = App {
         state: State::new(anysola_core::version::VERSION),
         core,
@@ -239,7 +265,10 @@ pub async fn run(core: Core, options: Options) -> Result<(), String> {
         sounds: paths.data.join("cache").join("sounds"),
         pane_drag: false,
         recents: relocate::Recents::new(&paths.data),
+        tab_store,
+        records: probe.program_status.then(crate::status::Records::default),
         relocating: None,
+        submit_after_move: false,
         resubscribe: None,
     };
     app.init(&paths, &options);
@@ -270,6 +299,9 @@ pub async fn run(core: Core, options: Options) -> Result<(), String> {
             events = receiver;
         }
     }
+    if let Some(records) = app.records.as_mut() {
+        term::write_raw(&records.clear());
+    }
     term::restore();
     app.core.shutdown();
     if let Some(summary) = app.summary() {
@@ -299,6 +331,7 @@ impl App {
             sessions: self.keymap.first("session.list"),
             background: self.keymap.first("session.background"),
             fullscreen: self.keymap.first("permission.prompt.fullscreen"),
+            child: self.keymap.first("session.child.first"),
         };
         self.refresh_loaded();
         self.refresh_recent();
@@ -308,6 +341,7 @@ impl App {
         let rows = self.mcp_rows();
         self.count_mcp(&rows);
         self.tick_account();
+        self.restore_tabs();
         self.open_target(options);
     }
 
@@ -391,13 +425,17 @@ impl App {
 
     fn draw(&mut self, terminal: &mut Terminal<Backend>) {
         self.state.now = now();
-        if self
+        let expired = self
             .state
             .toast
             .as_ref()
-            .is_some_and(|t| t.until <= self.state.now)
-        {
-            self.state.toast = None;
+            .is_some_and(|t| t.until <= self.state.now);
+        if expired && self.state.toast_hover.is_none() {
+            self.state.toast = (!self.state.toast_queue.is_empty()).then(|| {
+                let mut next = self.state.toast_queue.remove(0);
+                next.until = self.state.now + TOAST_MS;
+                next
+            });
         }
         if self
             .state
@@ -414,6 +452,22 @@ impl App {
             self.state.height = size.height;
         }
         self.sync_pane();
+        let docked = crate::view::diff_docked(&self.state);
+        if let Some(view) = self.state.diff.as_mut() {
+            view.docked = docked;
+        }
+        self.state.live = self.live();
+        self.state.editor_label = self
+            .editor
+            .as_ref()
+            .filter(|_| self.tui.editor_context())
+            .map(|s| (crate::editor::file_label(s), !self.editor_sent));
+        if let Some(session) = self.state.session_mut() {
+            session.missing =
+                !session.directory.is_empty() && !std::path::Path::new(&session.directory).is_dir();
+        }
+        self.tab_store.save(&self.state.tabs);
+        self.report_status();
         let title = if self.state.settings.title {
             term::title(self.state.session().map(|s| s.title.as_str()))
         } else {
@@ -455,12 +509,46 @@ impl App {
     }
 
     fn toast(&mut self, title: Option<String>, message: String, variant: Variant) {
-        self.state.toast = Some(Toast {
+        self.toast_with(title, message, variant, None);
+    }
+
+    /// Shows a toast, or queues it while the visible one is hovered or others wait.
+    fn toast_with(
+        &mut self,
+        title: Option<String>,
+        message: String,
+        variant: Variant,
+        action: Option<(String, String)>,
+    ) {
+        let toast = Toast {
             title,
             message,
             variant,
             until: now() + TOAST_MS,
-        });
+            action,
+        };
+        let busy = self.state.toast_hover.is_some() || !self.state.toast_queue.is_empty();
+        if self.state.toast.is_some() && busy {
+            self.state.toast_queue.push(toast);
+        } else {
+            self.state.toast = Some(toast);
+        }
+    }
+
+    /// Hovering the toast pauses its clock; leaving resumes it with the time it had left.
+    fn hover_toast(&mut self, over: bool) {
+        let now = now();
+        match (over, self.state.toast_hover, self.state.toast.as_mut()) {
+            (true, None, Some(toast)) => {
+                self.state.toast_hover = Some(toast.until.saturating_sub(now));
+            }
+            (false, Some(left), Some(toast)) => {
+                toast.until = now + left;
+                self.state.toast_hover = None;
+            }
+            (false, Some(_), None) => self.state.toast_hover = None,
+            _ => {}
+        }
     }
 
     fn message(&mut self, message: Msg) {
@@ -604,16 +692,20 @@ impl App {
                 title: row.title.clone(),
                 directory: row.directory.clone(),
                 credits: Some(self.core.credits(id)),
+                goal: self.core.goal(id),
                 ..Session::default()
             };
             self.state.sessions.insert(id.to_string(), session);
             self.reload(id);
         }
+        if let Some(tab) = self.state.tabs.iter_mut().find(|t| t.session_id == id) {
+            tab.unread = false;
+        }
         if !self.state.tabs.iter().any(|t| t.session_id == id) {
             self.state.tabs.push(crate::state::Tab {
                 session_id: id.to_string(),
                 title: row.title,
-                attention: false,
+                ..crate::state::Tab::default()
             });
         }
         let child = row.parent_id.is_some();

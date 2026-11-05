@@ -24,6 +24,8 @@ const GLOBAL: &[&str] = &[
     "variant.cycle",
     "model.cycle_recent",
     "model.cycle_recent_reverse",
+    "model.cycle_favorite",
+    "model.cycle_favorite_reverse",
     "session.background",
     "session.compact",
     "session.undo",
@@ -51,6 +53,27 @@ const GLOBAL: &[&str] = &[
     "terminal.close",
     "pane.focus.left",
     "pane.focus.right",
+    "session.tab.close",
+    "session.tab.reopen",
+    "session.message.next",
+    "session.message.previous",
+    "session.message.user.next",
+    "session.message.user.previous",
+    "session.messages_last_user",
+    "session.tab.next",
+    "session.tab.previous",
+    "session.tab.next_unread",
+    "session.tab.previous_unread",
+    "session.tab.select.1",
+    "session.tab.select.2",
+    "session.tab.select.3",
+    "session.tab.select.4",
+    "session.tab.select.5",
+    "session.tab.select.6",
+    "session.tab.select.7",
+    "session.tab.select.8",
+    "session.tab.select.9",
+    "session.tab.select.10",
 ];
 
 /// Composer editing commands (the textarea layer).
@@ -142,6 +165,16 @@ impl App {
         }
         if self.state.session().is_some_and(|s| s.question.is_some()) {
             return self.question_key(&stroke);
+        }
+        if self.state.session().is_some_and(|s| s.location_missing()) {
+            if stroke.key == "return" {
+                self.run_command("session.move", None);
+            } else if self.is("app.exit", &stroke) {
+                self.quit = true;
+            } else if let Some(id) = self.keymap.find(std::slice::from_ref(&stroke), GLOBAL) {
+                self.run_command(id, None);
+            }
+            return;
         }
         if self.state.dock.is_some() && self.dock_key(&stroke) {
             return;
@@ -466,6 +499,16 @@ impl App {
             self.state.popup = None;
             return false;
         }
+        let recent = self.state.popup.as_ref().is_some_and(|p| {
+            p.rows
+                .get(p.selected)
+                .is_some_and(|r| r.description == "recent")
+        });
+        if recent && stroke.ctrl && stroke.key == "d" && action.is_none() {
+            self.remove_recent();
+            return true;
+        }
+        self.state.popup_confirm = false;
         let Some(popup) = self.state.popup.as_mut() else {
             return false;
         };
@@ -609,6 +652,10 @@ impl App {
         match mouse.kind {
             MouseEventKind::ScrollUp => self.scroll(3),
             MouseEventKind::ScrollDown => self.scroll(-3),
+            MouseEventKind::Down(button @ (MouseButton::Left | MouseButton::Right))
+                if self.state.diff.is_some()
+                    && self.state.dialogs.is_empty()
+                    && self.diff_click(button == MouseButton::Right, at) => {}
             MouseEventKind::Down(MouseButton::Left) => {
                 // A click while text is selected only clears the selection.
                 if self.selection.is_some_and(|(a, b)| a != b) {
@@ -624,11 +671,65 @@ impl App {
                     self.selection = None;
                     return self.run_command("anysola.credits", None);
                 }
+                let busy = self.state.session().is_some_and(|s| s.busy);
+                if !busy
+                    && self.state.new_worktree.is_none()
+                    && at.1 + 3 >= self.state.height
+                    && over_text(&self.last, at, &self.state.location)
+                {
+                    self.selection = None;
+                    return self.working_directory_menu();
+                }
+                if let Some(goal) = self.state.session().and_then(|s| s.goal.as_ref())
+                    && over_text(&self.last, at, super::goal_status(goal).0)
+                {
+                    self.selection = None;
+                    return self.open_goal();
+                }
+                if let Some(live) = &self.state.live
+                    && over_text(&self.last, at, live)
+                {
+                    self.selection = None;
+                    return self.run_command("session.child.first", None);
+                }
+                if let Some((label, command)) =
+                    self.state.toast.as_ref().and_then(|t| t.action.clone())
+                    && over_text(&self.last, at, &format!("› {label}"))
+                {
+                    self.selection = None;
+                    self.state.toast = None;
+                    return self.run_command(&command, None);
+                }
+                if self.state.route == Route::Home
+                    && self.state.mcp.0 > 0
+                    && at.1 + 3 >= self.state.height
+                    && (over_text(&self.last, at, "MCP failed")
+                        || over_text(&self.last, at, " MCP")
+                        || over_text(&self.last, at, "⊙"))
+                {
+                    self.selection = None;
+                    return self.run_command("mcp.list", None);
+                }
+                if self.state.mcp_list.len() > 2
+                    && at.0 >= crate::view::pane_width(&self.state)
+                    && (over_text(&self.last, at, "▼ MCP") || over_text(&self.last, at, "▶ MCP"))
+                {
+                    self.selection = None;
+                    self.state.mcp_closed = !self.state.mcp_closed;
+                    return;
+                }
+                if self.toggle_group(at.1) {
+                    self.selection = None;
+                    return;
+                }
                 if self.state.route == Route::Home {
                     self.click_recent(mouse.row);
                 }
             }
             MouseEventKind::Moved => {
+                let over = crate::view::toast_rect(&self.state)
+                    .is_some_and(|r| r.contains(ratatui::layout::Position::new(at.0, at.1)));
+                self.hover_toast(over);
                 self.state.status_hover = false;
                 self.state.status_hover = self.over_status(at);
             }
@@ -654,6 +755,29 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// A click on an exploration group's row opens or closes it.
+    fn toggle_group(&mut self, row: u16) -> bool {
+        let Some(session) = self.state.session_mut() else {
+            return false;
+        };
+        let hit = session
+            .layout
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .hits
+            .iter()
+            .find(|(y, _)| *y == row)
+            .map(|(_, id)| id.clone());
+        let Some(id) = hit else {
+            return false;
+        };
+        if !session.toggled.remove(&id) {
+            session.toggled.insert(id);
+        }
+        true
     }
 
     /// The terminal pane's left edge, where a drag resizes it.
