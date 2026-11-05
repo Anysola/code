@@ -1225,9 +1225,10 @@ fn session_location_unavailable() {
     let mut state = session(120, 36, Vec::new());
     state.sessions.get_mut("ses_b").unwrap().missing = true;
     let screen = render(&state);
+    let shown = format!("~{}my-app", std::path::MAIN_SEPARATOR);
     for text in [
         "△ Session location unavailable",
-        "~/my-app",
+        shown.as_str(),
         "Choose another directory to continue this session.",
         " Choose directory ",
         "enter confirm",
