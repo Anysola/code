@@ -73,6 +73,9 @@ pub struct App {
     pub state: State,
     theme: Theme,
     catalog: Catalog,
+    /// Unsent prompts of the tabs that are not shown, by route key, and the key shown now.
+    drafts: std::collections::HashMap<String, crate::composer::Composer>,
+    draft_route: String,
     /// The labels' fade-in has been started once, as 0.5.1 plays it once per app instance.
     faded: bool,
     keymap: Keymap,
@@ -192,6 +195,22 @@ async fn recv_signal(_: &mut Option<()>) -> Option<()> {
     std::future::pending().await
 }
 
+/// Stashes the prompt of the tab `left` and brings back the draft of the tab `shown`.
+fn swap_draft(
+    drafts: &mut std::collections::HashMap<String, crate::composer::Composer>,
+    left: String,
+    shown: &str,
+    composer: &mut crate::composer::Composer,
+) {
+    let current = std::mem::take(composer);
+    if !current.is_empty() {
+        drafts.insert(left, current);
+    }
+    if let Some(draft) = drafts.remove(shown) {
+        *composer = draft;
+    }
+}
+
 /// Runs the UI; a panic shows the crash screen, whose Restart starts the UI again.
 pub async fn run(core: Core, mut options: Options) -> Result<(), String> {
     use futures_util::FutureExt;
@@ -249,6 +268,8 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
         core,
         theme,
         catalog,
+        drafts: Default::default(),
+        draft_route: String::new(),
         faded: false,
         keymap,
         tui,
@@ -472,7 +493,23 @@ impl App {
         self.state.meta_fade.is_some() && self.state.meta_alpha() < 1.0
     }
 
+    /// Leaving a tab keeps its unsent prompt, restored when it is shown again (not persisted).
+    fn sync_draft(&mut self) {
+        let key = match &self.state.route {
+            Route::Home => String::new(),
+            Route::Session(id) => id.clone(),
+        };
+        if key == self.draft_route {
+            return;
+        }
+        let left = std::mem::replace(&mut self.draft_route, key.clone());
+        swap_draft(&mut self.drafts, left, &key, &mut self.state.composer);
+        self.popup_hidden = None;
+        self.state.popup = None;
+    }
+
     fn draw(&mut self, terminal: &mut Terminal<Backend>) {
+        self.sync_draft();
         self.state.now = now();
         if self.state.meta_fade.is_none() && self.state.settings.animations && !self.faded {
             self.faded = true;
@@ -892,4 +929,23 @@ pub fn selected_text(buf: &Buffer, a: (u16, u16), b: (u16, u16)) -> String {
         lines.push(line.trim_end().to_string());
     }
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod draft_tests {
+    use super::*;
+
+    #[test]
+    fn tabs_keep_their_own_drafts() {
+        let mut drafts = Default::default();
+        let mut composer = crate::composer::Composer::default();
+        composer.insert("home text");
+        swap_draft(&mut drafts, String::new(), "ses_a", &mut composer);
+        assert!(composer.is_empty());
+        composer.insert("in a");
+        swap_draft(&mut drafts, "ses_a".into(), "", &mut composer);
+        assert_eq!(composer.text, "home text");
+        swap_draft(&mut drafts, String::new(), "ses_a", &mut composer);
+        assert_eq!(composer.text, "in a");
+    }
 }
