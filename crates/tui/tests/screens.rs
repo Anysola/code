@@ -759,3 +759,49 @@ fn home_low_balance_event_banner() {
     state.recent[1].updated = now() - 130_000;
     assert_screen(&state, "home-low-balance-event-banner");
 }
+
+#[test]
+fn skills() {
+    // The captured list continues below the fold; its longest name (34 cells) sets the padding.
+    let mut skills: Vec<(String, String)> = [
+        ("Browser", "Use the in-app browser: open and read pages,"),
+        (
+            "built-in-browser",
+            "Read this skill before the first step that us",
+        ),
+        (
+            "chrome-browser",
+            "Read this skill before the first step that us",
+        ),
+        (
+            "computer-use",
+            "Read this skill before the first step of any",
+        ),
+        (
+            "deep-research",
+            "Use this skill when the user's prompt require",
+        ),
+        ("docs", "docs (editable docs people share and comment"),
+        ("docx", "Use this skill whenever the user wants to cre"),
+        (
+            "google-workspace",
+            "Read this before the first Google Drive, Docs",
+        ),
+        (
+            "import-memory",
+            "Import a memory export from another AI assist",
+        ),
+        (
+            "merakli-stil",
+            "Meraklı YouTube kanalı için banner, kapak, ka",
+        ),
+        ("morning", "Render the user's morning brief as a styled H"),
+        ("pdf", "Use this skill whenever the user wants to do"),
+    ]
+    .iter()
+    .map(|(n, d)| (n.to_string(), d.to_string()))
+    .collect();
+    skills.push(("x".repeat(34), String::new()));
+    let state = dialog(under(1), select(lists::skills(&skills)));
+    assert_screen(&state, "skills");
+}

@@ -240,7 +240,18 @@ impl Select {
             })
             .collect();
         scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-        scored.into_iter().map(|(_, i)| i).collect()
+        let mut found: Vec<usize> = scored.into_iter().map(|(_, i)| i).collect();
+        if self.grouped_search {
+            // One header per category: matches stay best-first within their category.
+            let order = self.grouped_order();
+            found.sort_by_key(|i| {
+                let category = &self.options[*i].category;
+                order
+                    .iter()
+                    .position(|j| &self.options[*j].category == category)
+            });
+        }
+        found
     }
 
     /// Options grouped by category in order of first appearance.
@@ -491,6 +502,27 @@ mod tests {
         s.set_query("agent".into(), 10);
         assert_eq!(s.current().unwrap().value, "d");
         assert_eq!(s.rows(), vec![Row::Option(3)]);
+    }
+
+    #[test]
+    fn grouped_search_keeps_one_header_per_category() {
+        let mut s = Select::new(
+            Kind::Sessions { all: false },
+            "Sessions",
+            vec![
+                Opt::new("fix a", "1").category("Today"),
+                Opt::new("other", "2").category("Mon Nov 02 2026"),
+                Opt::new("fix", "3").category("Today"),
+            ],
+        );
+        s.grouped_search = true;
+        s.set_query("fix".into(), 10);
+        let headers = s
+            .rows()
+            .iter()
+            .filter(|r| matches!(r, Row::Header(_)))
+            .count();
+        assert_eq!(headers, 1);
     }
 
     #[test]

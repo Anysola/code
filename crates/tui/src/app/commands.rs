@@ -181,6 +181,15 @@ impl App {
             ("session.cd", _) if arguments.is_some_and(|a| a.trim().is_empty()) => {
                 self.toast(None, "Directory is required".into(), Variant::Warning);
             }
+            // 1.0 binds the process to one directory, so moving a session is not offered yet.
+            ("session.cd", _) => self.toast(
+                Some("Failed to change directory".into()),
+                format!(
+                    "Run anysola in {} to work there.",
+                    arguments.unwrap_or_default().trim()
+                ),
+                Variant::Error,
+            ),
             ("session.aside", Some(_)) if arguments.is_some_and(|a| !a.trim().is_empty()) => {
                 self.btw(arguments.unwrap_or_default().trim().to_string())
             }
