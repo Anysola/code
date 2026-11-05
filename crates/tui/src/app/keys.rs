@@ -24,6 +24,8 @@ const GLOBAL: &[&str] = &[
     "variant.cycle",
     "model.cycle_recent",
     "model.cycle_recent_reverse",
+    "model.cycle_favorite",
+    "model.cycle_favorite_reverse",
     "session.background",
     "session.compact",
     "session.undo",

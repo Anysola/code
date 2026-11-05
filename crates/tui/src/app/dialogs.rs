@@ -690,6 +690,9 @@ impl App {
                 };
                 self.state.model = self.model_choice(&reference);
                 self.models.used(&reference.id);
+                if reference.variant.is_none() && self.models.variant(&reference.id).is_some() {
+                    self.state.variant = self.remembered_variant(&reference.id);
+                }
                 let variants = self
                     .state
                     .model
@@ -711,6 +714,10 @@ impl App {
             Kind::Variants => {
                 self.state.dialogs.pop();
                 self.state.variant = (value != "default").then_some(value);
+                if let Some(id) = self.state.model.as_ref().map(|m| m.id.clone()) {
+                    let variant = self.state.variant.clone();
+                    self.models.set_variant(&id, variant.as_deref());
+                }
             }
             Kind::Agents => {
                 self.state.dialogs.pop();

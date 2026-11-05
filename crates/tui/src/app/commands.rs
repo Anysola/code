@@ -135,10 +135,16 @@ impl App {
                             .and_then(|i| variants.get(i + 1))
                             .cloned(),
                     };
+                    let id = model.id.clone();
+                    let variant = self.state.variant.clone();
+                    self.models.set_variant(&id, variant.as_deref());
                 }
             }
+            ("model.cycle_favorite" | "model.cycle_favorite_reverse", _) => {
+                self.cycle_model(id == "model.cycle_favorite", true)
+            }
             ("model.cycle_recent" | "model.cycle_recent_reverse", _) => {
-                self.cycle_model(id == "model.cycle_recent")
+                self.cycle_model(id == "model.cycle_recent", false)
             }
             ("session.sidebar.toggle", _) => {
                 self.state.settings.sidebar = !self.state.settings.sidebar;
@@ -314,23 +320,37 @@ impl App {
         true
     }
 
-    fn cycle_model(&mut self, forward: bool) {
+    /// `f2`/`shift+f2` walk the recent models, `model.cycle_favorite(_reverse)` the favourites;
+    /// ids no longer offered are skipped, an unknown current model starts at either end.
+    fn cycle_model(&mut self, forward: bool, favorites: bool) {
         let loaded = self.core.loaded();
-        let models = &loaded.models;
-        if models.is_empty() {
+        let list: Vec<String> = if favorites {
+            &self.models.favorite
+        } else {
+            &self.models.recent
+        }
+        .iter()
+        .filter(|id| loaded.models.iter().any(|m| m.id == **id))
+        .cloned()
+        .collect();
+        if list.is_empty() {
+            if favorites {
+                self.toast(
+                    None,
+                    "Add a favorite model to use this shortcut".into(),
+                    Variant::Info,
+                );
+            }
             return;
         }
-        let at = self
-            .state
-            .model
-            .as_ref()
-            .and_then(|m| models.iter().position(|x| x.id == m.id))
-            .unwrap_or(0);
-        let next = if forward {
-            at + 1
-        } else {
-            at + models.len() - 1
-        } % models.len();
+        let current = self.state.model.as_ref().map(|m| m.id.clone());
+        let count = list.len();
+        let next = match current.and_then(|c| list.iter().position(|id| *id == c)) {
+            Some(at) if forward => (at + 1) % count,
+            Some(at) => (at + count - 1) % count,
+            None if forward => 0,
+            None => count - 1,
+        };
         let provider = self
             .state
             .model
@@ -338,11 +358,21 @@ impl App {
             .map_or_else(|| "anysola".to_string(), |m| m.provider.clone());
         let reference = ModelRef {
             provider,
-            id: models[next].id.clone(),
+            id: list[next].clone(),
             variant: None,
         };
         self.state.model = self.model_choice(&reference);
-        self.state.variant = None;
+        self.state.variant = self.remembered_variant(&reference.id);
+    }
+
+    /// The variant last used with this model, while the model still offers it.
+    pub(super) fn remembered_variant(&self, id: &str) -> Option<String> {
+        let variant = self.models.variant(id).flatten()?;
+        self.state
+            .model
+            .as_ref()
+            .is_some_and(|m| m.variants.contains(&variant))
+            .then_some(variant)
     }
 
     fn undo(&mut self, current: &str) {
