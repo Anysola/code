@@ -83,6 +83,7 @@ pub fn transcript(
         toggled: &session.toggled,
         shells: &session.shells,
         floor: session.floor,
+        turn_tokens: state.settings.turn_tokens,
     };
     let mut rows = rows::layout(&session.items, &ctx, Some(&session.layout.0));
     rows.extend(rows::tail(

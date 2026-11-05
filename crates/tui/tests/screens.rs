@@ -1638,3 +1638,66 @@ fn tail_first_transcript() {
     state.sessions.get_mut("ses_b").unwrap().history_loading = true;
     assert!(render(&state).contains("Loading session history…"));
 }
+
+/// `routes/session/index.tsx:1724-1863`: with `debug.turn_tokens` each finished turn gets a
+/// token summary; a click opens the per-step table with cache-bust warnings.
+#[test]
+fn turn_token_table() {
+    use anysola_core::session::message::{Cache, Tokens};
+    use anysola_tui::transcript::model::StepUsage;
+    let step = |id: &str, read: u64, finish: &str, terminal: bool| {
+        Item::Assistant(Assistant {
+            id: id.into(),
+            agent: "build".into(),
+            model: "Claude Sonnet 5.5".into(),
+            created: now(),
+            turn_start: now(),
+            completed: Some(now() + 1000),
+            terminal,
+            step: Some(Box::new(StepUsage {
+                tokens: Tokens {
+                    input: 1000,
+                    output: 200,
+                    reasoning: 0,
+                    cache: Cache { read, write: 0 },
+                },
+                finish: finish.into(),
+                model: "Claude Sonnet 5.5".into(),
+            })),
+            parts: vec![Part::Text {
+                text: "ok".into(),
+                done: true,
+            }],
+            ..Assistant::default()
+        })
+    };
+    let items = vec![
+        step("a1", 12000, "tool-calls", false),
+        step("a2", 9000, "stop", true),
+    ];
+    let mut state = session(110, 40, items);
+    let off = render(&state);
+    assert!(!off.contains("Tokens:"));
+    state.settings.turn_tokens = anysola_tui::state::TurnTokens::On;
+    let screen = render(&state);
+    assert!(
+        screen.contains("+ Tokens: 2 steps · latest: 1,200 new · 9,000 cached · 10,200 total · ! 1 likely cache bust"),
+        "{screen}"
+    );
+    state
+        .sessions
+        .get_mut("ses_b")
+        .unwrap()
+        .toggled
+        .insert("tokens:a2".into());
+    let screen = render(&state);
+    for text in [
+        "- Tokens: 2 steps",
+        "Step         New  Cached   Total",
+        "tool-call  1,200  12,000  13,200",
+        "stop       1,200   9,000  10,200",
+        "! Likely cache bust: 3,000 fewer cached tokens than the previous step",
+    ] {
+        assert!(screen.contains(text), "{text}\n{screen}");
+    }
+}

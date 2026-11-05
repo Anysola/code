@@ -127,6 +127,11 @@ impl Tui {
             title: flag(&["terminal", "title"], true),
             grouping: self.str(&["session", "grouping"]) != Some("none"),
             diff_wrap: self.str(&["diffs", "wrap"]) != Some("none"),
+            turn_tokens: match self.get(&["debug", "turn_tokens"]) {
+                Some(Value::Bool(true)) => crate::state::TurnTokens::On,
+                Some(Value::String(v)) if v == "verbose" => crate::state::TurnTokens::Verbose,
+                _ => crate::state::TurnTokens::Off,
+            },
             verbosity: match self.str(&["session", "verbosity"]) {
                 Some("low") => Verbosity::Low,
                 Some("high") => Verbosity::High,

@@ -286,6 +286,16 @@ pub struct Settings {
     pub grouping: bool,
     pub diff_wrap: bool,
     pub verbosity: Verbosity,
+    pub turn_tokens: TurnTokens,
+}
+
+/// `debug.turn_tokens`: a per-turn token table, `verbose` also lists each step's tool calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TurnTokens {
+    #[default]
+    Off,
+    On,
+    Verbose,
 }
 
 /// `session.verbosity`.
@@ -304,6 +314,7 @@ impl Default for Settings {
             source_markdown: false,
             diff_view: DiffView::Auto,
             sidebar: true,
+            turn_tokens: TurnTokens::Off,
             paste_compact: true,
             animations: true,
             copy_on_select: !cfg!(windows),

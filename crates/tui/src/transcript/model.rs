@@ -31,6 +31,14 @@ pub enum Item {
     },
 }
 
+/// A finished step's tokens (with cache reads), how it finished and the model it ran on.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct StepUsage {
+    pub tokens: anysola_core::session::message::Tokens,
+    pub finish: String,
+    pub model: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Assistant {
     pub id: String,
@@ -44,6 +52,8 @@ pub struct Assistant {
     pub error: Option<String>,
     pub interrupted: bool,
     pub output_tokens: u64,
+    /// What `debug.turn_tokens` reports of the step.
+    pub step: Option<Box<StepUsage>>,
     /// Every token of the step (input, output, reasoning, cache): the context it used.
     pub usage: u64,
     /// When the user input of this turn was created (start of the footer's duration).
@@ -233,6 +243,13 @@ pub fn from_messages(
                     error: data.error.filter(|_| !interrupted).map(|e| e.message),
                     interrupted,
                     output_tokens: data.tokens.map_or(0, |t| t.output),
+                    step: data.tokens.map(|tokens| {
+                        Box::new(StepUsage {
+                            tokens,
+                            finish: data.finish.clone().unwrap_or_else(|| "unknown".into()),
+                            model: name(&data.model.id),
+                        })
+                    }),
                     usage: data.tokens.map_or(0, |t| total(&t)),
                     turn_start,
                     retry: None,
@@ -503,6 +520,12 @@ pub fn apply(items: &mut Vec<Item>, event: &Event, now: u64, name: Names) {
                 a.terminal = *last || finish != "tool-calls";
                 a.output_tokens = tokens.output;
                 a.usage = total(tokens);
+                let model = a.model.clone();
+                a.step = Some(Box::new(StepUsage {
+                    tokens: *tokens,
+                    finish: finish.clone(),
+                    model,
+                }));
             }
         }
         Event::StepFailed {
