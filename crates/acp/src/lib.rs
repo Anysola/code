@@ -55,7 +55,10 @@ pub async fn serve() -> i32 {
 async fn write(mut lines: mpsc::UnboundedReceiver<String>) {
     let mut stdout = tokio::io::stdout();
     while let Some(line) = lines.recv().await {
-        if stdout.write_all(format!("{line}\n").as_bytes()).await.is_err()
+        if stdout
+            .write_all(format!("{line}\n").as_bytes())
+            .await
+            .is_err()
             || stdout.flush().await.is_err()
         {
             return;

@@ -52,10 +52,7 @@ fn string(params: &Value, key: &str) -> Option<String> {
 }
 
 pub(crate) fn not_found(id: &str) -> Failure {
-    Failure::invalid_params(
-        format!("session not found: {id}"),
-        json!({"sessionId": id}),
-    )
+    Failure::invalid_params(format!("session not found: {id}"), json!({"sessionId": id}))
 }
 
 /// `cwd` must be absolute; the extra directories absolute and free of glob characters.
@@ -550,7 +547,8 @@ fn effort_not_found(effort: &str) -> Failure {
 }
 
 fn select(core: &Core, session: &SessionRow, config: &str, value: &str) -> Result<(), Failure> {
-    let internal = |e: anysola_core::api::CoreError| Failure::internal(e, json!({"service": "session"}));
+    let internal =
+        |e: anysola_core::api::CoreError| Failure::internal(e, json!({"service": "session"}));
     let loaded = core.loaded();
     let current = current_model(core, session);
     match config {

@@ -170,7 +170,13 @@ fn within(agent: &Agent, session_id: &str, root: &str) -> bool {
         if current == root {
             return true;
         }
-        match agent.db.session(&current).ok().flatten().and_then(|s| s.parent_id) {
+        match agent
+            .db
+            .session(&current)
+            .ok()
+            .flatten()
+            .and_then(|s| s.parent_id)
+        {
             Some(parent) => current = parent,
             None => return false,
         }
@@ -216,8 +222,10 @@ async fn follow(
         match event {
             Event::TextDelta {
                 message_id, text, ..
-            } if own => send(json!({"sessionUpdate": "agent_message_chunk", "messageId": message_id,
-                "content": {"type": "text", "text": text}})),
+            } if own => send(
+                json!({"sessionUpdate": "agent_message_chunk", "messageId": message_id,
+                "content": {"type": "text", "text": text}}),
+            ),
             Event::ReasoningDelta {
                 message_id,
                 ordinal,
@@ -276,7 +284,10 @@ async fn follow(
                 let call = tools.remove(&key).unwrap_or_else(|| unknown(&call_id));
                 if own {
                     let mut update = json!({"sessionUpdate": "tool_call_update"});
-                    merge(&mut update, tool::completed(&call, &content, Some(&metadata), cwd));
+                    merge(
+                        &mut update,
+                        tool::completed(&call, &content, Some(&metadata), cwd),
+                    );
                     send(update);
                 }
             }
@@ -459,7 +470,10 @@ async fn ask_permission(agent: Arc<Agent>, core: Core, session: SessionRow, ask:
                 paths.push(path);
             }
         }
-        locations = paths.into_iter().map(|path| json!({"path": path})).collect();
+        locations = paths
+            .into_iter()
+            .map(|path| json!({"path": path}))
+            .collect();
     }
     tool_call["locations"] = locations;
     if !previews.is_empty() {
@@ -600,9 +614,7 @@ fn blocks(prompt: &Value) -> Result<Prompt, Failure> {
                     .filter(|u| u.scheme() == "file")
                     .and_then(|u| u.to_file_path().ok());
                 match path.and_then(|p| Some((std::fs::read_to_string(&p).ok()?, p))) {
-                    Some((content, path)) => {
-                        texts.push(format!("[{}]\n{content}", path.display()))
-                    }
+                    Some((content, path)) => texts.push(format!("[{}]\n{content}", path.display())),
                     None => texts.push(link(text("name"), uri)),
                 }
             }
@@ -620,7 +632,11 @@ fn blocks(prompt: &Value) -> Result<Prompt, Failure> {
                             let line = url
                                 .fragment()
                                 .and_then(|f| f.strip_prefix('L'))
-                                .map(|f| f.chars().take_while(char::is_ascii_digit).collect::<String>())
+                                .map(|f| {
+                                    f.chars()
+                                        .take_while(char::is_ascii_digit)
+                                        .collect::<String>()
+                                })
                                 .filter(|l| !l.is_empty());
                             match line {
                                 Some(line) => format!("{path}:{line}"),
@@ -668,13 +684,17 @@ pub fn replay(connection: &Connection, core: &Core, session: &SessionRow) {
         match message {
             Message::User(data) => {
                 if !data.text.is_empty() {
-                    send(json!({"sessionUpdate": "user_message_chunk", "messageId": id,
-                        "content": {"type": "text", "text": data.text}}));
+                    send(
+                        json!({"sessionUpdate": "user_message_chunk", "messageId": id,
+                        "content": {"type": "text", "text": data.text}}),
+                    );
                 }
                 for file in data.files.unwrap_or_default() {
                     if file.mime.starts_with("image/") {
-                        send(json!({"sessionUpdate": "user_message_chunk", "messageId": id,
-                            "content": {"type": "image", "mimeType": file.mime, "data": file.data}}));
+                        send(
+                            json!({"sessionUpdate": "user_message_chunk", "messageId": id,
+                            "content": {"type": "image", "mimeType": file.mime, "data": file.data}}),
+                        );
                     }
                 }
             }
@@ -682,10 +702,10 @@ pub fn replay(connection: &Connection, core: &Core, session: &SessionRow) {
                 let mut reasoning = 0;
                 for part in data.content {
                     match part {
-                        Part::Text { text, .. } if !text.is_empty() => {
-                            send(json!({"sessionUpdate": "agent_message_chunk", "messageId": id,
-                                "content": {"type": "text", "text": text}}))
-                        }
+                        Part::Text { text, .. } if !text.is_empty() => send(
+                            json!({"sessionUpdate": "agent_message_chunk", "messageId": id,
+                                "content": {"type": "text", "text": text}}),
+                        ),
                         Part::Reasoning { text, .. } => {
                             if !text.is_empty() {
                                 send(json!({"sessionUpdate": "agent_thought_chunk",
@@ -730,7 +750,13 @@ fn replay_tool(send: &impl Fn(Value), id: String, name: String, state: ToolState
             content,
             metadata,
             ..
-        } => tool::failed(&call, content, stored(metadata).as_ref(), &error.message, cwd),
+        } => tool::failed(
+            &call,
+            content,
+            stored(metadata).as_ref(),
+            &error.message,
+            cwd,
+        ),
         _ => return,
     };
     let mut update = json!({"sessionUpdate": "tool_call_update"});
@@ -752,9 +778,18 @@ mod tests {
             {"type": "resource_link", "uri": "https://x.dev/a", "name": "a"},
         ]))
         .unwrap();
-        assert_eq!(prompt.text, "look\n[/p/a.rs:3]\nfn a() {}\n[a](https://x.dev/a)");
-        assert_eq!(prompt.files, [("image/png".into(), "AAAA".into(), "image".into())]);
+        assert_eq!(
+            prompt.text,
+            "look\n[/p/a.rs:3]\nfn a() {}\n[a](https://x.dev/a)"
+        );
+        assert_eq!(
+            prompt.files,
+            [("image/png".into(), "AAAA".into(), "image".into())]
+        );
         let error = blocks(&json!([{"type": "image", "mimeType": "image/png"}])).unwrap_err();
-        assert_eq!(error.message, "Invalid params: image content has no data or uri");
+        assert_eq!(
+            error.message,
+            "Invalid params: image content has no data or uri"
+        );
     }
 }

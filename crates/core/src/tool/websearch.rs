@@ -93,7 +93,7 @@ impl Tool for WebsearchTool {
                 .search(&ctx.session_id, &input.query)
                 .await
                 .map_err(ToolError::execution)?;
-            Ok(ToolOutput::text(format_results(&results)))
+            Ok(ToolOutput::text(format_results(&results)).with_metadata("provider", "anysola"))
         }
         .boxed()
     }

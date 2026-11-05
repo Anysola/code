@@ -29,9 +29,11 @@ pub fn kind(name: &str) -> &'static str {
         "shell" => "execute",
         "webfetch" => "fetch",
         "edit" | "patch" | "write" => "edit",
-        "grep" | "glob" | "context" | "context7_resolve_library_id" | "context7_get_library_docs" => {
-            "search"
-        }
+        "grep"
+        | "glob"
+        | "context"
+        | "context7_resolve_library_id"
+        | "context7_get_library_docs" => "search",
         "read" => "read",
         "subagent" => "think",
         _ => "other",
@@ -63,9 +65,14 @@ fn patch_paths(input: &Value) -> Vec<String> {
     patch
         .lines()
         .filter_map(|line| {
-            ["*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: "]
-                .iter()
-                .find_map(|prefix| line.strip_prefix(prefix))
+            [
+                "*** Add File: ",
+                "*** Update File: ",
+                "*** Delete File: ",
+                "*** Move to: ",
+            ]
+            .iter()
+            .find_map(|prefix| line.strip_prefix(prefix))
         })
         .map(|path| path.trim().to_string())
         .collect()
@@ -92,7 +99,11 @@ pub fn locations(name: &str, input: &Value, cwd: &str) -> Value {
         "read" | "edit" | "write" => vec![file_path(input)],
         "patch" => patch_paths(input).into_iter().map(Some).collect(),
         "external_directory" => vec![text(input, "filepath")],
-        "grep" | "glob" | "context" | "context7_resolve_library_id" | "context7_get_library_docs" => {
+        "grep"
+        | "glob"
+        | "context"
+        | "context7_resolve_library_id"
+        | "context7_get_library_docs" => {
             vec![text(input, "path")]
         }
         _ => Vec::new(),

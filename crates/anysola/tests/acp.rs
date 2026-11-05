@@ -52,7 +52,13 @@ fn serve_mcp_if_asked() {
 
 fn fake_server() -> (String, Vec<String>) {
     let exe = std::env::current_exe().unwrap().display().to_string();
-    let args = ["--exact", "mcp_server", "--nocapture", "--test-threads=1", "-q"];
+    let args = [
+        "--exact",
+        "mcp_server",
+        "--nocapture",
+        "--test-threads=1",
+        "-q",
+    ];
     (exe, args.iter().map(|a| a.to_string()).collect())
 }
 
@@ -209,17 +215,21 @@ impl Normalizer {
             Value::Array(items) => Value::Array(items.iter().map(|v| self.value(v)).collect()),
             Value::Object(map) => Value::Object(
                 map.iter()
-                    .map(|(k, v)| {
+                    .filter_map(|(k, v)| {
                         let v = match k.as_str() {
                             "used" | "inputTokens" | "outputTokens" | "totalTokens" => json!(0),
-                            "updatedAt" | "title" if v.is_string() && map.contains_key("sessionId") => {
+                            "updatedAt" | "title"
+                                if v.is_string() && map.contains_key("sessionId") =>
+                            {
                                 json!("<varies>")
                             }
                             "version" if map.contains_key("name") => json!("<ver>"),
                             "sessions" => self.value(&json!(v.as_array().unwrap()[..1])),
+                            // The capture's store held more sessions than this run's.
+                            "nextCursor" => return None,
                             _ => self.value(v),
                         };
-                        (k.clone(), v)
+                        Some((k.clone(), v))
                     })
                     .collect(),
             ),
@@ -271,14 +281,16 @@ fn replay(name: &str) {
     let home = TestHome::new(&gateway.url);
     let cwd = common::my_app(&home);
     let (exe, args) = fake_server();
-    let mut server = json!({"type": "local", "command": [exe], "environment": {"FAKE_ACP_MCP": "1"}});
+    let mut server =
+        json!({"type": "local", "command": [exe], "environment": {"FAKE_ACP_MCP": "1"}});
     server["command"]
         .as_array_mut()
         .unwrap()
         .extend(args.iter().map(|a| json!(a)));
     std::fs::write(
         cwd.join("opencode.json"),
-        json!({"mcp": {"testsrv": server}}).to_string(),
+        // The capture's config asked before reads.
+        json!({"mcp": {"testsrv": server}, "permission": {"read": "ask"}}).to_string(),
     )
     .unwrap();
     let cwd = cwd.display().to_string();
@@ -296,7 +308,9 @@ fn replay(name: &str) {
         assert!(*outgoing && request.get("method").is_some());
         let mut expected = Vec::new();
         let mut answers = Vec::new();
-        while index < entries.len() && !(entries[index].0 && entries[index].1.get("method").is_some()) {
+        while index < entries.len()
+            && !(entries[index].0 && entries[index].1.get("method").is_some())
+        {
             let (outgoing, message) = &entries[index];
             if *outgoing {
                 answers.push(message.clone());
@@ -310,21 +324,29 @@ fn replay(name: &str) {
             sent = sent.replace(theirs, ours);
         }
         let mut sent: Value = serde_json::from_str(&sent).unwrap();
-        for server in sent["params"]["mcpServers"].as_array_mut().into_iter().flatten() {
+        for server in sent["params"]["mcpServers"]
+            .as_array_mut()
+            .into_iter()
+            .flatten()
+        {
             server["command"] = json!(exe);
             server["args"] = json!(args);
             server["env"] = json!([{"name": "FAKE_ACP_MCP", "value": "1"}]);
         }
         let received = client.call(&sent, &mut answers);
         if request["method"] == "session/new" {
-            let theirs = expected.last().unwrap()["result"]["sessionId"].as_str().unwrap();
-            let id = received.last().unwrap()["result"]["sessionId"].as_str().unwrap();
+            let response = expected.iter().find(|m| m.get("result").is_some()).unwrap();
+            let theirs = response["result"]["sessionId"].as_str().unwrap();
+            let id = received.last().unwrap()["result"]["sessionId"]
+                .as_str()
+                .unwrap();
             sessions.insert(theirs.to_string(), id.to_string());
             // MCP servers connect in the background; wait until both servers' prompts are in.
             for _ in 0..200 {
-                if last_commands(&our_commands)
-                    .is_some_and(|c| c.to_string().contains("acpmcp:greet") && c.to_string().contains("testsrv:greet"))
-                {
+                if last_commands(&our_commands).is_some_and(|c| {
+                    c.to_string().contains("acpmcp:greet")
+                        && c.to_string().contains("testsrv:greet")
+                }) {
                     break;
                 }
                 if let Ok(message) = client.lines.recv_timeout(Duration::from_millis(100)) {
