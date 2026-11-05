@@ -138,11 +138,11 @@ fn observed<T>(value: Option<T>, encode: impl FnOnce(T) -> Value) -> Observed {
 /// Block 2's sources in 0.5.1's order (most shared first, so the baseline stays a reusable
 /// prompt-cache prefix): the Code Mode catalog (its summary), skill guidance, instruction files,
 /// the date, the environment, then the session's API entries. MCP server instructions and
-/// references belong between the catalog and the skill guidance. A changed catalog or skill
-/// listing is shown whole again.
+/// references belong between the catalog and the skill guidance. A changed catalog is shown
+/// whole again.
 pub fn sources(
     catalog: Option<&crate::codemode::catalog::Summary>,
-    skills: Option<String>,
+    skills: Option<Value>,
     files: Observed,
     date: &str,
     env: &Environment,
@@ -160,10 +160,12 @@ pub fn sources(
         },
         Source {
             key: "core/skill-guidance".into(),
-            observed: observed(skills, Value::String),
-            initial: Box::new(|v| text(v).map(str::to_string)),
-            changed: Box::new(|_, v| text(v).map(str::to_string)),
-            removed: Box::new(state::never),
+            observed: skills.map_or(Observed::Removed, Observed::Value),
+            initial: Box::new(crate::skill::render_guidance),
+            changed: Box::new(crate::skill::guidance_update),
+            removed: Box::new(|_| {
+                Some("Skill guidance is no longer available. Do not use any previously listed skill.".into())
+            }),
         },
         Source {
             key: "core/instructions".into(),
