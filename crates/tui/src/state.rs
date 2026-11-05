@@ -319,6 +319,8 @@ pub struct State {
     pub asides: usize,
     /// The terminal pane beside the session, while shown.
     pub pane: Option<Pane>,
+    /// The right pane's width once dragged.
+    pub pane_width: Option<u16>,
     /// The local time zone dates are shown in.
     pub zone: chrono::FixedOffset,
 }
@@ -355,6 +357,7 @@ impl State {
             hints: Hints::default(),
             update: None,
             pane: None,
+            pane_width: None,
             asides: 0,
             mcp: (0, 0, 0),
             diff: None,

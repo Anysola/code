@@ -610,6 +610,10 @@ impl App {
                     self.selection = None;
                     return;
                 }
+                if self.on_pane_edge(at.0) {
+                    self.pane_drag = true;
+                    return;
+                }
                 self.selection = Some((at, at));
                 if self.over_account(at) {
                     self.selection = None;
@@ -623,6 +627,10 @@ impl App {
                 self.state.status_hover = false;
                 self.state.status_hover = self.over_status(at);
             }
+            MouseEventKind::Drag(MouseButton::Left) if self.pane_drag => {
+                self.state.pane_width = Some(self.state.width.saturating_sub(at.0));
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.pane_drag => self.pane_drag = false,
             MouseEventKind::Drag(MouseButton::Left) => {
                 if let Some((anchor, _)) = self.selection {
                     self.selection = Some((anchor, at));
@@ -641,6 +649,13 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// The terminal pane's left edge, where a drag resizes it.
+    fn on_pane_edge(&self, x: u16) -> bool {
+        self.state.pane.is_some()
+            && matches!(self.state.route, Route::Session(_))
+            && x == crate::view::pane_width(&self.state)
     }
 
     /// Whether `at` falls on the credit status line in the last frame.

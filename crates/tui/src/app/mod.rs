@@ -111,6 +111,8 @@ pub struct App {
     /// The last status seen of each MCP server.
     mcp_seen: std::collections::HashMap<String, anysola_core::mcp::Status>,
     restarter: Option<Restart>,
+    /// The terminal pane's edge is being dragged.
+    pane_drag: bool,
     recents: relocate::Recents,
     /// A directory move waiting for running turns.
     relocating: Option<relocate::Pending>,
@@ -231,6 +233,7 @@ pub async fn run(core: Core, options: Options) -> Result<(), String> {
         mcp_seen: std::collections::HashMap::new(),
         closed: Vec::new(),
         restarter: options.restart.clone(),
+        pane_drag: false,
         recents: relocate::Recents::new(&paths.data),
         relocating: None,
         resubscribe: None,

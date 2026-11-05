@@ -1041,3 +1041,15 @@ fn status_line_hover_shows_renewal() {
     let screen = render(&state);
     assert!(screen.contains("728 credits · this turn 12 · session 12 · renews 23 Nov"));
 }
+
+#[test]
+fn terminal_pane_width_follows_the_drag_within_bounds() {
+    let mut state = base(120, 36);
+    assert_eq!(anysola_tui::view::terminal_width(&state), 60);
+    state.pane_width = Some(30);
+    assert_eq!(anysola_tui::view::terminal_width(&state), 30);
+    state.pane_width = Some(5);
+    assert_eq!(anysola_tui::view::terminal_width(&state), 24);
+    state.pane_width = Some(110);
+    assert_eq!(anysola_tui::view::terminal_width(&state), 80);
+}

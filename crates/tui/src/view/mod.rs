@@ -18,7 +18,7 @@ mod session;
 
 pub use home::WORDMARK;
 pub use prompt::{max_rows, textarea_width};
-pub use session::terminal_size;
+pub use session::{pane_width, terminal_size, terminal_width};
 
 /// Width of the session pane's content box.
 pub fn session_content_width(state: &State) -> usize {

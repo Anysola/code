@@ -118,9 +118,12 @@ fn banners(c: &mut Canvas, state: &State, x: u16, composer: u16, w: u16) -> u16 
     count
 }
 
-/// The right pane's width: half the screen, at least 24 columns.
+/// The right pane's width: half the screen until dragged, at least 24 columns and leaving the
+/// session at least 40.
 pub fn terminal_width(state: &State) -> u16 {
-    (state.width / 2).max(24.min(state.width))
+    let wanted = state.pane_width.unwrap_or(state.width / 2);
+    let most = state.width.saturating_sub(40).max(24);
+    wanted.clamp(24, most).min(state.width)
 }
 
 /// The terminal grid inside the right pane: `(rows, columns)`.
