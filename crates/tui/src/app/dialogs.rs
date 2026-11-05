@@ -785,10 +785,11 @@ impl App {
             }
             Kind::Stash => {
                 self.state.dialogs.pop();
-                if let Ok(index) = value.parse::<usize>()
-                    && index < self.stash.len()
+                if let Some(text) = value
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|index| self.stash.remove(index))
                 {
-                    let text = self.stash.remove(index);
                     self.state.composer.set(&text);
                 }
             }
@@ -1155,16 +1156,20 @@ impl App {
     }
 
     pub(super) fn open_stash(&mut self) {
+        let now = now();
         let options = self
             .stash
+            .entries()
             .iter()
             .enumerate()
             .rev()
-            .map(|(i, text)| {
-                let first = text.lines().next().unwrap_or_default();
+            .map(|(i, entry)| {
+                let text = &entry.prompt;
+                let first = text.lines().next().unwrap_or_default().trim();
                 let lines = text.lines().count();
                 let mut opt =
                     crate::dialog::Opt::new(crate::text::truncate(first, 50), i.to_string());
+                opt.description = crate::stash::age(entry.timestamp, now);
                 if lines > 1 {
                     opt.footer = format!("~{lines} lines");
                 }
@@ -1322,7 +1327,14 @@ impl App {
             let _ = tx.send(Msg::Apply(Box::new(move |app: &mut App| {
                 app.state.dialogs.pop();
                 match stored {
-                    Ok(()) => app.toast(None, "Connected Anysola".into(), Variant::Success),
+                    Ok(()) => {
+                        app.toast(None, "Connected Anysola".into(), Variant::Success);
+                        // The core holds the credential it started with; a fresh one picks up
+                        // the new sign-in without leaving the app.
+                        let directory = std::path::PathBuf::from(&app.state.directory);
+                        let session = app.state.session().map(|s| s.id.clone());
+                        app.relocate(directory, session);
+                    }
                     Err(error) => app.toast(None, error, Variant::Error),
                 }
             })));

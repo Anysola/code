@@ -288,6 +288,24 @@ impl Core {
         });
     }
 
+    /// Known projects, most recently used first: `(id, worktree)`.
+    pub fn projects(&self, limit: u64) -> Result<Vec<(String, String)>, CoreError> {
+        Ok(self.shared.db.projects(limit)?)
+    }
+
+    pub fn project_id(&self) -> &str {
+        &self.shared.project.id
+    }
+
+    /// Moves a session into this core's project and directory.
+    pub fn adopt_session(&self, id: &str) -> Result<(), CoreError> {
+        let directory = self.shared.directory.display().to_string();
+        Ok(self
+            .shared
+            .db
+            .move_session(id, &self.shared.project.id, &directory)?)
+    }
+
     pub fn mcp(&self) -> Option<Arc<dyn crate::mcp::Mcp>> {
         self.shared.mcp.get().cloned()
     }

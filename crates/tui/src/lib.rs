@@ -11,6 +11,7 @@ pub mod form;
 pub mod keymap;
 pub mod menus;
 pub mod settings;
+pub mod stash;
 pub mod state;
 pub mod term;
 pub mod terminal;

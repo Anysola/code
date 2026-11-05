@@ -467,6 +467,14 @@ impl Composer {
         Some(('@', at, query.to_string()))
     }
 
+    /// The argument being typed after `/cd `: where it starts and its text.
+    pub fn cd_argument(&self) -> Option<(usize, String)> {
+        let before = &self.text[..self.cursor];
+        let argument = before.strip_prefix("/cd ")?;
+        (self.mode == Mode::Normal && !argument.contains(char::is_whitespace))
+            .then(|| (4, argument.to_string()))
+    }
+
     /// Replaces `start..cursor` with `text`.
     pub fn replace_token(&mut self, start: usize, text: &str) {
         self.save();

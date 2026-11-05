@@ -394,6 +394,29 @@ impl Db {
         )
     }
 
+    /// Known projects, most recently used first: `(id, worktree)`.
+    pub fn projects(&self, limit: u64) -> Result<Vec<(String, String)>> {
+        self.with(|c| {
+            let mut statement = c.prepare(
+                "SELECT id, worktree FROM project WHERE id != 'global'
+                 ORDER BY time_updated DESC LIMIT ?1",
+            )?;
+            let rows = statement.query_map([limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect()
+        })
+    }
+
+    /// Points a session at another project and directory (`/cd` in a session).
+    pub fn move_session(&self, id: &str, project_id: &str, directory: &str) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE session SET project_id = ?2, directory = ?3, time_updated = ?4 WHERE id = ?1",
+                params![id, project_id, directory, now_ms() as i64],
+            )
+            .map(drop)
+        })
+    }
+
     fn touch(&self, set: &str, params: &[&dyn rusqlite::ToSql]) -> Result<()> {
         let sql = format!("UPDATE session SET {set}, time_updated = ?3 WHERE id = ?1");
         self.with(|c| c.execute(&sql, params).map(drop))

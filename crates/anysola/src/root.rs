@@ -7,6 +7,10 @@ use anysola_core::gateway::Token;
 use anysola_core::paths::Paths;
 use anysola_core::storage::Db;
 
+use std::sync::{Arc, Mutex};
+
+use futures_util::FutureExt;
+
 use crate::clack;
 use crate::cli::RootArgs;
 
@@ -51,17 +55,38 @@ pub async fn root(args: RootArgs) -> i32 {
         Ok(core) => core,
         Err(error) => return crate::fail(&error.to_string()),
     };
-    let mcp = anysola_mcp::Runtime::attach(&core);
+    let mcp = Arc::new(Mutex::new(anysola_mcp::Runtime::attach(&core)));
     let options = anysola_tui::app::Options {
         session: args.session,
         continue_last: args.continue_last,
         prompt: args.prompt,
         auto: args.auto || args.yolo || args.dangerously_skip_permissions,
+        restart: Some(restart(mcp.clone())),
     };
     let result = anysola_tui::app::run(core, options).await;
-    anysola_core::mcp::Mcp::shutdown(mcp.as_ref()).await;
+    let runtime = mcp.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    anysola_core::mcp::Mcp::shutdown(runtime.as_ref()).await;
     match result {
         Ok(()) => 0,
         Err(error) => crate::fail(&error),
     }
+}
+
+/// Starts a core for another directory in this process: the old MCP servers stop, the new
+/// core gets its own.
+fn restart(current: Arc<Mutex<Arc<anysola_mcp::Runtime>>>) -> anysola_tui::app::Restart {
+    Arc::new(move |directory| {
+        let current = current.clone();
+        async move {
+            let core = anysola_core::api::Core::start(&directory)
+                .await
+                .map_err(|e| e.to_string())?;
+            let old = current.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            anysola_core::mcp::Mcp::shutdown(old.as_ref()).await;
+            *current.lock().unwrap_or_else(|e| e.into_inner()) =
+                anysola_mcp::Runtime::attach(&core);
+            Ok(core)
+        }
+        .boxed()
+    })
 }

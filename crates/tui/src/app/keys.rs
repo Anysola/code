@@ -450,6 +450,17 @@ impl App {
             "prompt.autocomplete.complete",
         ];
         let action = self.keymap.find(one, &ids);
+        // Enter on a `/cd` row that is already typed submits instead of inserting it again.
+        let typed = self.state.popup.as_ref().is_some_and(|p| {
+            p.rows.get(p.selected).is_some_and(|r| {
+                matches!(&r.action, PopupAction::Insert(v)
+                    if self.state.composer.text.get(p.start..) == Some(v.as_str()))
+            })
+        });
+        if typed && action == Some("prompt.autocomplete.select") {
+            self.state.popup = None;
+            return false;
+        }
         let Some(popup) = self.state.popup.as_mut() else {
             return false;
         };
@@ -666,6 +677,26 @@ impl App {
             return;
         }
         self.popup_hidden = None;
+        if let Some((start, query)) = self.state.composer.cd_argument() {
+            let home = std::path::PathBuf::from(&self.state.home);
+            let recents: Vec<String> = self
+                .recents
+                .list(self.core.project_id())
+                .iter()
+                .map(|d| crate::complete::recent_value(d, &home))
+                .collect();
+            let rows =
+                crate::complete::directory_rows(&query, self.core.directory(), &home, &recents);
+            self.state.popup = (!rows.is_empty()).then_some(crate::state::Popup {
+                trigger: '/',
+                start,
+                rows,
+                selected: 0,
+                offset: 0,
+                pad: 0,
+            });
+            return;
+        }
         let Some((trigger, start, query)) = self.state.composer.token() else {
             self.state.popup = None;
             return;

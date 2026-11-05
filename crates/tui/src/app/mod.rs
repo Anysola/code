@@ -31,14 +31,19 @@ mod events;
 mod keys;
 mod models;
 mod pane;
+mod relocate;
+
+pub use relocate::{Restart, resolve as resolve_directory};
 
 /// How bare `anysola` was started.
-#[derive(Debug, Default, Clone)]
+#[derive(Default, Clone)]
 pub struct Options {
     pub session: Option<String>,
     pub continue_last: bool,
     pub prompt: Option<String>,
     pub auto: bool,
+    /// Starts a core for another directory; without it `/cd` is refused.
+    pub restart: Option<Restart>,
 }
 
 /// Results of work the loop started in the background.
@@ -82,7 +87,7 @@ pub struct App {
     deferred: Option<commands::Deferred>,
     quit: bool,
     /// Stashed prompts, oldest first.
-    stash: Vec<String>,
+    stash: crate::stash::Stash,
     models: models::Models,
     db_path: PathBuf,
     /// The budget gate let the next prompt through once.
@@ -104,6 +109,12 @@ pub struct App {
     closed: Vec<String>,
     /// The last status seen of each MCP server.
     mcp_seen: std::collections::HashMap<String, anysola_core::mcp::Status>,
+    restarter: Option<Restart>,
+    recents: relocate::Recents,
+    /// A directory move waiting for running turns.
+    relocating: Option<relocate::Pending>,
+    /// The new core's events, taken by the loop after a swap.
+    resubscribe: Option<broadcast::Receiver<anysola_core::events::Event>>,
 }
 
 fn now() -> u64 {
@@ -204,7 +215,7 @@ pub async fn run(core: Core, options: Options) -> Result<(), String> {
         title: String::new(),
         deferred: None,
         quit: false,
-        stash: Vec::new(),
+        stash: crate::stash::Stash::load(&paths.data.join("state").join("prompt-stash.jsonl")),
         models: models::Models::load(paths.data.join("state").join("model.json")),
         db_path: paths.database(),
         gate_passed: false,
@@ -218,6 +229,10 @@ pub async fn run(core: Core, options: Options) -> Result<(), String> {
         editor_sent: false,
         mcp_seen: std::collections::HashMap::new(),
         closed: Vec::new(),
+        restarter: options.restart.clone(),
+        recents: relocate::Recents::new(&paths.data),
+        relocating: None,
+        resubscribe: None,
     };
     app.init(&paths, &options);
     if let Some((title, message)) = failure {
@@ -242,6 +257,9 @@ pub async fn run(core: Core, options: Options) -> Result<(), String> {
             },
             Some(message) = rx.recv() => app.message(message),
             _ = tokio::time::sleep(Duration::from_millis(80)), if tick => {}
+        }
+        if let Some(receiver) = app.resubscribe.take() {
+            events = receiver;
         }
     }
     term::restore();
@@ -274,6 +292,19 @@ impl App {
             background: self.keymap.first("session.background"),
             fullscreen: self.keymap.first("permission.prompt.fullscreen"),
         };
+        self.refresh_loaded();
+        self.refresh_recent();
+        self.fetch_account();
+        self.check_update(false);
+        self.watch_editor(&paths.home);
+        let rows = self.mcp_rows();
+        self.count_mcp(&rows);
+        self.tick_account();
+        self.open_target(options);
+    }
+
+    /// Agents and the default model from the loaded config.
+    fn refresh_loaded(&mut self) {
         let loaded = self.core.loaded();
         self.state.agents = loaded
             .agents
@@ -290,12 +321,9 @@ impl App {
             .model()
             .and_then(ModelRef::parse)
             .and_then(|r| self.model_choice(&r));
-        self.refresh_recent();
-        self.fetch_account();
-        self.check_update(false);
-        self.watch_editor(&paths.home);
-        let rows = self.mcp_rows();
-        self.count_mcp(&rows);
+    }
+
+    fn tick_account(&self) {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let mut ticks = 0u64;
@@ -314,6 +342,9 @@ impl App {
                 }
             }
         });
+    }
+
+    fn open_target(&mut self, options: &Options) {
         let target = match (&options.session, options.continue_last) {
             (Some(id), _) => Some(anysola_core::api::Target::Id(id.clone())),
             (None, true) => Some(anysola_core::api::Target::Continue),
@@ -447,6 +478,7 @@ impl App {
                 }
                 self.reload(&session_id);
                 self.fetch_account();
+                self.resume_relocate();
             }
             Msg::Reload(session_id) => self.reload(&session_id),
             Msg::Toast(title, message, variant) => self.toast(title, message, variant),

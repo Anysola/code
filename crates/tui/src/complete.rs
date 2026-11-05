@@ -282,3 +282,120 @@ mod tests {
         );
     }
 }
+
+/// Where a `/cd` query lists from: the directory to read, the text kept before the matched
+/// name, and the name prefix to match.
+fn directory_search(
+    query: &str,
+    current: &Path,
+    home: &Path,
+) -> (std::path::PathBuf, String, String) {
+    let split = |query: &str, root: &Path, prefix: &str| match query.rfind('/') {
+        None => (root.to_path_buf(), prefix.to_string(), query.to_string()),
+        Some(at) => (
+            root.join(&query[..=at]),
+            format!("{prefix}{}", &query[..=at]),
+            query[at + 1..].to_string(),
+        ),
+    };
+    if query == "~" {
+        return (home.to_path_buf(), "~/".into(), String::new());
+    }
+    if let Some(rest) = query.strip_prefix("~/") {
+        return split(rest, home, "~/");
+    }
+    if !query.is_empty() && query.split('/').all(|part| part == "..") {
+        return (current.join(query), format!("{query}/"), String::new());
+    }
+    if let Some(rest) = query.strip_prefix('/') {
+        let root = current.ancestors().last().unwrap_or(Path::new("/"));
+        return split(rest, root, "/");
+    }
+    split(query, current, "")
+}
+
+/// `/cd` argument rows: for an empty query the project's recent directories (`recent`), then
+/// subdirectories whose name starts with the typed part (case-insensitive; dot-directories
+/// only when a dot is typed).
+pub fn directory_rows(
+    query: &str,
+    current: &Path,
+    home: &Path,
+    recents: &[String],
+) -> Vec<PopupRow> {
+    let row = |value: String, description: &str| PopupRow {
+        display: value.clone(),
+        description: description.to_string(),
+        label: String::new(),
+        action: PopupAction::Insert(value),
+    };
+    let mut rows = Vec::new();
+    if query.is_empty() {
+        rows.extend(recents.iter().take(10).map(|r| row(r.clone(), "recent")));
+    }
+    let (directory, prefix, name) = directory_search(query, current, home);
+    if !query.is_empty() && !prefix.is_empty() && name.is_empty() {
+        rows.push(row(query.to_string(), ""));
+    }
+    let mut names: Vec<String> = std::fs::read_dir(&directory)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|n| {
+            (!name.is_empty() || !n.starts_with('.'))
+                && n.to_lowercase().starts_with(&name.to_lowercase())
+        })
+        .collect();
+    names.sort_by_key(|n| n.to_lowercase());
+    rows.extend(names.into_iter().map(|n| row(format!("{prefix}{n}/"), "")));
+    rows
+}
+
+/// How a recent directory is shown: `~`, `~/…`, else absolute.
+pub fn recent_value(directory: &Path, home: &Path) -> String {
+    match directory.strip_prefix(home) {
+        Ok(rest) if rest.as_os_str().is_empty() => "~".into(),
+        Ok(rest) => format!("~/{}", rest.to_string_lossy().replace('\\', "/")),
+        Err(_) => directory.display().to_string(),
+    }
+}
+
+#[cfg(test)]
+mod directory_tests {
+    use super::*;
+
+    #[test]
+    fn lists_subdirectories_recents_and_prefixes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for d in ["src", "Scripts", ".git", "docs/api"] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        std::fs::write(root.join("file.txt"), "").unwrap();
+        let shown = |q: &str| -> Vec<String> {
+            directory_rows(q, root, root, &["~/old".into()])
+                .into_iter()
+                .map(|r| {
+                    format!(
+                        "{}{}",
+                        r.display,
+                        if r.description.is_empty() {
+                            ""
+                        } else {
+                            " (recent)"
+                        }
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(shown(""), ["~/old (recent)", "docs/", "Scripts/", "src/"]);
+        assert_eq!(shown("s"), ["Scripts/", "src/"]);
+        assert_eq!(shown("."), [".git/"]);
+        assert_eq!(shown("docs/"), ["docs/", "docs/api/"]);
+        assert_eq!(shown("~/d"), ["~/docs/"]);
+        assert_eq!(shown("~"), ["~", "~/docs/", "~/Scripts/", "~/src/"]);
+        assert_eq!(recent_value(&root.join("a/b"), root), "~/a/b");
+    }
+}
