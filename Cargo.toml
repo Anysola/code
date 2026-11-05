@@ -45,6 +45,7 @@ tokio-util = "0.7"
 url = "2.5"
 
 anysola-core = { path = "crates/core" }
+anysola-migrate = { path = "crates/migrate" }
 anysola-testkit = { path = "crates/testkit" }
 
 [profile.release]

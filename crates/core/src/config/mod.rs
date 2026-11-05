@@ -6,7 +6,7 @@
 //! files farthest first, project `.opencode/` directories farthest first, `OPENCODE_CONFIG_CONTENT`,
 //! then managed settings.
 
-mod jsonc;
+pub mod jsonc;
 mod normalize;
 mod substitute;
 

@@ -6,3 +6,13 @@ license.workspace = true
 publish = false
 
 [dependencies]
+anysola-core.workspace = true
+base64.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+anysola-testkit.workspace = true
+tokio.workspace = true

@@ -239,6 +239,10 @@ impl Store {
     pub fn work_tree(&self) -> &Path {
         &self.work_tree
     }
+
+    pub fn git_dir(&self) -> &Path {
+        &self.git_dir
+    }
 }
 
 #[cfg(test)]

@@ -33,6 +33,25 @@ pub fn fail(message: &str) -> i32 {
     1
 }
 
+/// The first start after 0.5.x imports its data. A failure is reported and retried next start;
+/// stdout stays untouched.
+fn import(paths: &anysola_core::paths::Paths) {
+    match anysola_migrate::run(paths) {
+        Ok(Some(counts)) if counts.sessions > 0 => ui::println(&format!(
+            "Imported {} sessions from Anysola Code 0.5.x.",
+            counts.sessions
+        )),
+        Ok(_) => {}
+        Err(error @ anysola_migrate::Error::Outdated) => ui::println(&error.to_string()),
+        Err(error) => {
+            anysola_core::log::warn("import from 0.5.x failed", &[("error", &error.to_string())]);
+            ui::println(&format!(
+                "Could not import data from Anysola Code 0.5.x ({error}); it will be tried again next start."
+            ));
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let flags: Vec<&str> = args
@@ -79,6 +98,32 @@ fn main() {
             ("args", &crate::json(&serde_json::json!(args[1..]))),
         ],
     );
+    // Commands that read sessions, the token or config import 0.5.x data first.
+    let imports = match &cli.command {
+        None
+        | Some(
+            Command::Run(_)
+            | Command::Login(_)
+            | Command::Logout
+            | Command::Status
+            | Command::Usage(_)
+            | Command::Devices(_)
+            | Command::Acp(_)
+            | Command::Mcp(_)
+            | Command::Models
+            | Command::Session(_),
+        ) => true,
+        Some(
+            Command::Update(_)
+            | Command::Uninstall(_)
+            | Command::Debug(_)
+            | Command::Plugin(_)
+            | Command::Reload,
+        ) => false,
+    };
+    if imports {
+        import(&paths);
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

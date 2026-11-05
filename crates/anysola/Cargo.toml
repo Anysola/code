@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 anysola-core.workspace = true
+anysola-migrate.workspace = true
 anyhow.workspace = true
 base64.workspace = true
 chrono.workspace = true
@@ -27,8 +28,8 @@ tokio.workspace = true
 url.workspace = true
 
 [dev-dependencies]
-rusqlite.workspace = true
 regex.workspace = true
+rusqlite.workspace = true
 anysola-testkit.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
