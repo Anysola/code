@@ -1,0 +1,7 @@
+{
+  "mcp": {
+    "servers": {
+      "e": {"type": "remote", "url": "http://old"}
+    }
+  }
+}

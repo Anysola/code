@@ -2,14 +2,17 @@
 //! Timestamps are epoch milliseconds. A session driven by one process carries a busy marker that
 //! other processes respect.
 
+mod credential;
 mod inbox;
 mod instruction;
 mod permission;
 mod revert;
 mod schema;
+mod transfer;
 
 pub use inbox::InboxRow;
 pub use instruction::{InstructionState, Values};
+pub use transfer::{ImportError, SessionSummary, sanitize};
 
 use std::path::Path;
 use std::sync::Mutex;
