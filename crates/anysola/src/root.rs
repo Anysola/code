@@ -51,13 +51,16 @@ pub async fn root(args: RootArgs) -> i32 {
         Ok(core) => core,
         Err(error) => return crate::fail(&error.to_string()),
     };
+    let mcp = anysola_mcp::Runtime::attach(&core);
     let options = anysola_tui::app::Options {
         session: args.session,
         continue_last: args.continue_last,
         prompt: args.prompt,
         auto: args.auto || args.yolo || args.dangerously_skip_permissions,
     };
-    match anysola_tui::app::run(core, options).await {
+    let result = anysola_tui::app::run(core, options).await;
+    anysola_core::mcp::Mcp::shutdown(mcp.as_ref()).await;
+    match result {
         Ok(()) => 0,
         Err(error) => crate::fail(&error),
     }

@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 anysola-core.workspace = true
+anysola-mcp.workspace = true
 anysola-migrate.workspace = true
 anysola-tui.workspace = true
 anyhow.workspace = true

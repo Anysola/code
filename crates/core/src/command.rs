@@ -22,6 +22,8 @@ pub enum Template {
     User(String),
     /// `/goal`: the arguments are the objective or a control word, handled by the goal loop.
     Goal,
+    /// An MCP prompt: the arguments fill its arguments positionally.
+    Mcp(crate::mcp::PromptCommand),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -138,6 +140,23 @@ impl Commands {
             list.push(command);
         }
         Commands { list }
+    }
+
+    /// The same commands plus MCP prompts `<server>:<prompt>` (names already taken stay).
+    pub fn with_prompts(mut self, prompts: Vec<crate::mcp::PromptCommand>) -> Commands {
+        for prompt in prompts {
+            if self.get(&prompt.name).is_none() {
+                self.list.push(Command {
+                    name: prompt.name.clone(),
+                    description: prompt.description.clone(),
+                    agent: None,
+                    model: None,
+                    subagent: false,
+                    template: Template::Mcp(prompt),
+                });
+            }
+        }
+        self
     }
 
     pub fn list(&self) -> &[Command] {
@@ -260,15 +279,24 @@ pub async fn interpolate(
         .into_owned())
 }
 
+/// Where a command renders: the project, the shell for ``!`cmd` ``, and the MCP runtime.
+pub struct RenderEnv<'a> {
+    pub project: &'a Path,
+    pub shell: Option<&'a str>,
+    pub cwd: &'a Path,
+    pub env: &'a [(std::ffi::OsString, std::ffi::OsString)],
+    pub mcp: Option<&'a dyn crate::mcp::Mcp>,
+}
+
 /// The prompt text a command produces from the user's arguments.
-pub async fn render(
-    command: &Command,
-    input: &str,
-    project: &Path,
-    shell: Option<&str>,
-    cwd: &Path,
-    env: &[(std::ffi::OsString, std::ffi::OsString)],
-) -> Result<String, String> {
+pub async fn render(command: &Command, input: &str, at: &RenderEnv<'_>) -> Result<String, String> {
+    let RenderEnv {
+        project,
+        shell,
+        cwd,
+        env,
+        mcp,
+    } = *at;
     match &command.template {
         Template::Builtin(template) => Ok(append(
             &template.replacen("${path}", &project.display().to_string(), 1),
@@ -278,6 +306,13 @@ pub async fn render(
             interpolate(&substitute(template, input), shell, cwd, env).await
         }
         Template::Goal => Ok(input.to_string()),
+        Template::Mcp(prompt) => match mcp {
+            Some(mcp) => mcp.expand_prompt(prompt, parse_arguments(input)).await,
+            None => Err(format!(
+                "MCP prompt not found: {}:{}",
+                prompt.server, prompt.prompt
+            )),
+        },
     }
 }
 

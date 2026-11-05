@@ -112,6 +112,9 @@ pub(crate) struct Shared {
     reloading: tokio::sync::Mutex<()>,
     watch: crate::watch::Watch,
     pub registry: Registry,
+    /// The MCP runtime, once a front end attaches it.
+    pub mcp: std::sync::OnceLock<Arc<dyn crate::mcp::Mcp>>,
+    pub forms: crate::mcp::Forms,
     pub asks: Arc<Asks>,
     pub questions: Questions,
     pub jobs: Jobs,
@@ -148,6 +151,10 @@ impl crate::codemode::Host for Shared {
 
     fn formatters(&self) -> Option<Arc<crate::formatter::Formatters>> {
         self.loaded().formatters.clone()
+    }
+
+    fn mcp(&self) -> Option<Arc<dyn crate::mcp::Mcp>> {
+        self.mcp.get().cloned()
     }
 }
 
@@ -234,6 +241,8 @@ impl Core {
             reloading: Default::default(),
             watch: Default::default(),
             registry: Registry::builtin(),
+            mcp: Default::default(),
+            forms: Default::default(),
             asks,
             questions: Questions::default(),
             jobs: Jobs::default(),
@@ -255,6 +264,60 @@ impl Core {
         }
         tokio::spawn(crate::reference::keep_fresh(Arc::downgrade(&shared)));
         Ok(Core { shared })
+    }
+
+    /// Hands the MCP runtime its config and keeps it in step with config changes, which are
+    /// reloaded as they happen from now on (not only before a step).
+    pub fn attach_mcp(&self, mcp: Arc<dyn crate::mcp::Mcp>) {
+        if self.shared.mcp.set(mcp.clone()).is_err() {
+            return;
+        }
+        mcp.reconcile(self.loaded().config.clone());
+        let shared = Arc::downgrade(&self.shared);
+        let changes = self.shared.changes.clone();
+        tokio::spawn(async move {
+            loop {
+                changes.marked().await;
+                let Some(shared) = shared.upgrade() else {
+                    return;
+                };
+                shared.refresh().await;
+            }
+        });
+    }
+
+    pub fn mcp(&self) -> Option<Arc<dyn crate::mcp::Mcp>> {
+        self.shared.mcp.get().cloned()
+    }
+
+    /// Adds or replaces a Code Mode namespace (an MCP server's tools).
+    pub fn set_namespace(&self, namespace: Arc<crate::codemode::Namespace>) {
+        self.shared.registry.set_namespace(namespace);
+    }
+
+    pub fn remove_namespace(&self, name: &str) {
+        self.shared.registry.remove_namespace(name);
+    }
+
+    pub fn emit(&self, event: Event) {
+        let _ = self.shared.events.send(event);
+    }
+
+    /// Asks the front ends to fill in a form; [`Core::reply_form`] answers it.
+    pub async fn ask_form(&self, form: crate::mcp::Form) -> crate::mcp::FormReply {
+        self.shared.forms.ask(&self.shared.events, form).await
+    }
+
+    pub fn reply_form(&self, id: &str, reply: crate::mcp::FormReply) -> bool {
+        self.shared.forms.reply(id, reply)
+    }
+
+    pub fn paths(&self) -> &Paths {
+        &self.shared.paths
+    }
+
+    pub fn db(&self) -> &Arc<Db> {
+        &self.shared.db
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {

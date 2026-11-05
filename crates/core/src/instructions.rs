@@ -131,17 +131,27 @@ fn render_catalog(value: &Value) -> Option<String> {
     Some(crate::codemode::catalog::render(&summary))
 }
 
+fn catalog_update(previous: &Value, current: &Value) -> Option<String> {
+    let summary =
+        |v: &Value| serde_json::from_value::<crate::codemode::catalog::Summary>(v.clone()).ok();
+    Some(crate::codemode::catalog::update(
+        &summary(previous)?,
+        &summary(current)?,
+    ))
+}
+
 fn observed<T>(value: Option<T>, encode: impl FnOnce(T) -> Value) -> Observed {
     value.map_or(Observed::Removed, |v| Observed::Value(encode(v)))
 }
 
 /// Block 2's sources in 0.5.1's order (most shared first, so the baseline stays a reusable
-/// prompt-cache prefix): the Code Mode catalog (its summary), references, skill guidance,
-/// instruction files, the date, the environment, then the session's API entries. MCP server
-/// instructions belong between the catalog and the references. A changed catalog is shown whole
-/// again.
+/// prompt-cache prefix): the Code Mode catalog (its summary), MCP server instructions,
+/// references, skill guidance, instruction files, the date, the environment, then the session's
+/// API entries.
+#[allow(clippy::too_many_arguments)]
 pub fn sources(
     catalog: Option<&crate::codemode::catalog::Summary>,
+    mcp: Option<Value>,
     references: Option<Value>,
     skills: Option<Value>,
     files: Observed,
@@ -154,10 +164,17 @@ pub fn sources(
             key: "core/codemode".into(),
             observed: observed(catalog, |s| serde_json::to_value(s).unwrap_or_default()),
             initial: Box::new(render_catalog),
-            changed: Box::new(|_, v| render_catalog(v)),
+            changed: Box::new(catalog_update),
             removed: Box::new(|_| {
                 Some("Code Mode tools are no longer available. Do not use any previously listed Code Mode tools.".into())
             }),
+        },
+        Source {
+            key: "core/mcp-guidance".into(),
+            observed: mcp.map_or(Observed::Removed, Observed::Value),
+            initial: Box::new(crate::mcp::render_instructions),
+            changed: Box::new(crate::mcp::instructions_update),
+            removed: Box::new(|_| Some("MCP server instructions are no longer available.".into())),
         },
         Source {
             key: "core/reference-guidance".into(),

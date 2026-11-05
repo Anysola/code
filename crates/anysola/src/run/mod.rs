@@ -83,6 +83,7 @@ pub async fn run(args: RunArgs) -> i32 {
         Ok(core) => core,
         Err(error) => return report(mode, &error.to_string(), ""),
     };
+    let mcp = anysola_mcp::Runtime::attach(&core);
     let target = match (&args.session, args.continue_last) {
         (Some(id), _) => Target::Id(id.clone()),
         (None, true) => Target::Continue,
@@ -159,6 +160,7 @@ pub async fn run(args: RunArgs) -> i32 {
             ui::NORMAL
         ));
     }
+    anysola_core::mcp::Mcp::shutdown(mcp.as_ref()).await;
     core.shutdown();
     code
 }
@@ -177,7 +179,14 @@ async fn drive(
     let user_interrupt = renderer.user_interrupt.clone();
     let exit = Arc::new(AtomicI32::new(0));
     let events = core.subscribe();
-    let consumer = tokio::spawn(consume(core.clone(), events, renderer, auto));
+    let cancelled_form = Arc::new(AtomicBool::new(false));
+    let consumer = tokio::spawn(consume(
+        core.clone(),
+        events,
+        renderer,
+        auto,
+        cancelled_form.clone(),
+    ));
     let signals = tokio::spawn(signals(
         core.clone(),
         session_id.to_string(),
@@ -210,6 +219,9 @@ async fn drive(
         Outcome::Failed(_) => code = 1,
         Outcome::Succeeded | Outcome::Interrupted(InterruptReason::Declined) => {}
     }
+    if cancelled_form.load(Ordering::Relaxed) {
+        code = code.max(1);
+    }
     match exit.load(Ordering::Relaxed) {
         0 => code,
         signal => signal,
@@ -218,12 +230,14 @@ async fn drive(
 
 /// Follows the session's events until its turn ends. Nobody can answer here: permission asks (of
 /// the session and its subagents) are rejected with feedback the model continues on (or approved
-/// once with `--auto`), and questions are cancelled with feedback.
+/// once with `--auto`), questions are cancelled with feedback, and forms MCP servers ask for are
+/// cancelled, which fails the run.
 async fn consume(
     core: Core,
     mut events: tokio::sync::broadcast::Receiver<Event>,
     mut renderer: Renderer,
     auto: bool,
+    cancelled_form: Arc<AtomicBool>,
 ) -> Renderer {
     loop {
         let event = match events.recv().await {
@@ -237,6 +251,11 @@ async fn consume(
                 request_id,
                 QuestionReply::Dismissed(Some(QUESTION_CANCELLED.into())),
             );
+            continue;
+        }
+        if let Event::FormAsked { form } = &event {
+            core.reply_form(&form.id, anysola_core::mcp::FormReply::Cancelled);
+            cancelled_form.store(true, Ordering::Relaxed);
             continue;
         }
         if let Event::PermissionAsked {

@@ -59,6 +59,9 @@ pub enum Reply {
 
 pub type Script = Arc<dyn Fn(&Recorded, usize) -> Reply + Send + Sync>;
 
+/// Answers every request to one path.
+pub type Route = Arc<dyn Fn(&Recorded) -> Reply + Send + Sync>;
+
 /// Answers the n-th `POST /device/token`.
 pub type DevicePoll = Arc<dyn Fn(usize) -> Reply + Send + Sync>;
 
@@ -70,6 +73,8 @@ struct State {
     config: Mutex<Option<Reply>>,
     /// Fixed answers by path, ahead of the defaults.
     replies: Mutex<Vec<(String, Reply)>>,
+    /// Answers computed per request by path (other servers on this port, such as MCP).
+    routes: Mutex<Vec<(String, Route)>>,
     device: Mutex<DevicePoll>,
     requests: Mutex<Vec<Recorded>>,
     /// Plain-text files served at other paths (instruction URLs).
@@ -226,7 +231,15 @@ async fn handle(
         .iter()
         .find(|(p, _)| *p == path)
         .map(|(_, reply)| reply.clone());
+    let route = state
+        .routes
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(p, _)| *p == path)
+        .map(|(_, route)| route.clone());
     let reply = match path.as_str() {
+        _ if let Some(route) = route => route(&recorded),
         _ if let Some(reply) = fixed => reply,
         "/v1/code/config" => state
             .config
@@ -296,6 +309,7 @@ impl FakeGateway {
             version: Mutex::new(json!({"latest": "0.5.1", "minimum": "0.2.0"})),
             config: Mutex::new(None),
             replies: Mutex::new(Vec::new()),
+            routes: Mutex::new(Vec::new()),
             device: Mutex::new(Arc::new(default_poll)),
             requests: Mutex::new(Vec::new()),
             files: Mutex::new(Vec::new()),
@@ -368,6 +382,13 @@ impl FakeGateway {
         let mut replies = self.state.replies.lock().unwrap();
         replies.retain(|(p, _)| p != path);
         replies.push((path.to_string(), reply));
+    }
+
+    /// Answers every later request to `path` (no query) with what `route` computes.
+    pub fn route(&self, path: &str, route: impl Fn(&Recorded) -> Reply + Send + Sync + 'static) {
+        let mut routes = self.state.routes.lock().unwrap();
+        routes.retain(|(p, _)| p != path);
+        routes.push((path.to_string(), Arc::new(route)));
     }
 
     pub fn set_device_poll(&self, poll: impl Fn(usize) -> Reply + Send + Sync + 'static) {

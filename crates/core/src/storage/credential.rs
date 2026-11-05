@@ -36,4 +36,46 @@ impl Db {
             )
         })
     }
+
+    /// The newest active credential of an integration: `(id, value)`.
+    pub fn active_credential(&self, integration_id: &str) -> Result<Option<(String, Value)>> {
+        let row = self.with(|c| {
+            c.query_row(
+                "SELECT id, value FROM credential WHERE integration_id = ?1 AND active = 1
+                 ORDER BY time_updated DESC LIMIT 1",
+                [integration_id],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })
+        })?;
+        Ok(row.and_then(|(id, value)| Some((id, serde_json::from_str(&value).ok()?))))
+    }
+
+    /// Rewrites a credential in place (a refresh rotates tokens without a new row).
+    pub fn update_credential(&self, id: &str, value: &Value) -> Result<()> {
+        let now = now_ms() as i64;
+        self.with(|c| {
+            c.execute(
+                "UPDATE credential SET value = ?2, time_updated = ?3 WHERE id = ?1",
+                params![id, json(value), now],
+            )
+            .map(drop)
+        })
+    }
+
+    /// Removes a credential only while it still holds this refresh token (another process may
+    /// have rotated it meanwhile); true when it was removed.
+    pub fn remove_credential_holding(&self, id: &str, refresh: &str) -> Result<bool> {
+        self.with(|c| {
+            c.execute(
+                "DELETE FROM credential WHERE id = ?1 AND json_extract(value, '$.refresh') = ?2",
+                params![id, refresh],
+            )
+        })
+        .map(|n| n > 0)
+    }
 }

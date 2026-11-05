@@ -18,6 +18,15 @@ const SMALL_PNG_MAX_PIXELS: u64 = 256 * 256;
 const JPEG_QUALITIES: [u8; 4] = [80, 70, 55, 40];
 const SIZE_STEPS: usize = 32;
 
+/// Media the read tool returns as files; MCP results with these types are sent the same way.
+pub const READABLE: [&str; 5] = [
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "application/pdf",
+];
+
 /// Prompt attachments with these types are normalized; others pass as they are.
 pub const RESIZABLE: [&str; 5] = [
     "image/png",
