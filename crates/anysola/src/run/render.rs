@@ -407,7 +407,8 @@ impl Renderer {
             | Event::QuestionAsked { .. }
             | Event::PermissionReplied { .. }
             | Event::Credits(_)
-            | Event::TitleChanged { .. } => {}
+            | Event::TitleChanged { .. }
+            | Event::GoalChanged { .. } => {}
         }
         false
     }

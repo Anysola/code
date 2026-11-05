@@ -40,6 +40,21 @@ impl Jobs {
     }
 }
 
+/// Whether a child of the session runs in this process (a background subagent at idle).
+pub(crate) fn has_running_child(shared: &Shared, session_id: &str) -> bool {
+    let running: Vec<String> = shared
+        .jobs
+        .running
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .keys()
+        .cloned()
+        .collect();
+    running.iter().any(|child| {
+        session(shared, child).is_some_and(|c| c.parent_id.as_deref() == Some(session_id))
+    })
+}
+
 /// Cancels the child's run when the parent's tool call goes away (interrupted or dropped).
 struct CancelOnDrop(Option<CancellationToken>);
 

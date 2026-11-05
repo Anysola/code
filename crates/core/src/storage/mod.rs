@@ -35,6 +35,9 @@ pub enum StorageError {
 
 pub type Result<T> = std::result::Result<T, StorageError>;
 
+/// KV key prefix of a session's `/goal` state (`goal:<sessionID>`); deleting the session drops it.
+pub(crate) const GOAL_PREFIX: &str = "goal:";
+
 pub struct Db {
     conn: Mutex<Connection>,
 }
@@ -512,7 +515,7 @@ fn session_row(r: &rusqlite::Row) -> rusqlite::Result<SessionRow> {
 }
 
 /// Busy owners are `<pid>:<nonce>`; a holder whose process is gone does not block.
-fn owner_alive(owner: &str) -> bool {
+pub(crate) fn owner_alive(owner: &str) -> bool {
     let Some(pid) = owner.split(':').next().and_then(|p| p.parse::<i32>().ok()) else {
         return true;
     };

@@ -212,7 +212,9 @@ pub(crate) async fn drive(
             }
         }
         let capped = selection.agent.steps == Some(number);
+        super::goal::touch(shared, &session.id);
         let end = step(shared, session, selection, capped, cancel).await;
+        super::goal::touch(shared, &session.id);
         shared.warming.settled(&session.id);
         match end {
             StepEnd::Compacted => {
@@ -349,11 +351,30 @@ async fn triggered(
 /// A one-shot request from the session's current context with `prompt` as the last user
 /// message; nothing is recorded but instruction updates and credits. Retries only failures that
 /// never reached the model.
+pub(crate) enum GenerateError {
+    /// The request is larger than the model takes.
+    Overflow,
+    Failed(SessionError),
+}
+
+impl From<SessionError> for GenerateError {
+    fn from(error: SessionError) -> Self {
+        GenerateError::Failed(error)
+    }
+}
+
+fn generate_error(error: ApiError) -> GenerateError {
+    match error.reason {
+        Reason::ContextOverflow => GenerateError::Overflow,
+        _ => GenerateError::Failed(error.to_session_error()),
+    }
+}
+
 pub(crate) async fn generate(
     shared: &Arc<Shared>,
     session: &SessionRow,
     prompt: &str,
-) -> Result<String, SessionError> {
+) -> Result<String, GenerateError> {
     let selection = super::select(shared, session)?;
     super::warming::context(
         shared,
@@ -370,6 +391,7 @@ pub(crate) async fn generate(
     };
     let estimate = compaction::estimate_prompt(&history, &target, &ctx.system, &ctx.definitions);
     let mut messages = lower(&history, &target);
+    super::goal::remind(shared, &session.id, &mut messages);
     messages.push(Entry::Turn(
         json!({"role": "user", "content": [{"type": "text", "text": prompt}]}),
     ));
@@ -397,22 +419,23 @@ pub(crate) async fn generate(
     let mut stream = loop {
         match shared.gateway.messages(body.clone(), &headers).await {
             Ok(stream) => break stream,
+            Err(error) if error.reason == Reason::ContextOverflow => {
+                return Err(GenerateError::Overflow);
+            }
             Err(error) => match retry.next_one_shot(&error) {
                 Some(delay) => tokio::time::sleep(delay).await,
-                None => return Err(error.to_session_error()),
+                None => return Err(error.to_session_error().into()),
             },
         }
     };
     let mut assembly = Assembly::default();
     while let Some(item) = stream.next().await {
-        match item.map_err(|e| e.to_session_error())? {
+        match item.map_err(generate_error)? {
             StreamItem::Credits { charged, remaining } => {
                 shared.credits.record(&session.id, charged, remaining)
             }
             StreamItem::Event(event) => {
-                assembly
-                    .on_event(&event)
-                    .map_err(|e| e.to_session_error())?;
+                assembly.on_event(&event).map_err(generate_error)?;
             }
         }
     }
@@ -472,6 +495,7 @@ async fn step(
     }
     let mut messages = lower(&history, &target);
     super::plan_context(shared, &session.id, &selection.agent.id, &mut messages);
+    super::goal::remind(shared, &session.id, &mut messages);
     if capped {
         messages.push(Entry::Turn(
             json!({"role": "assistant", "content": [{"type": "text", "text": MAX_STEPS_PROMPT}]}),

@@ -125,6 +125,7 @@ pub(crate) struct Shared {
     pub owner: String,
     pub turns: Mutex<std::collections::HashMap<String, CancellationToken>>,
     pub warming: crate::session::Warming,
+    pub goals: crate::session::goal::Goals,
     /// Background summaries held until automatic compaction takes them.
     pub precomputed: Mutex<std::collections::HashMap<String, crate::session::compaction::Held>>,
     /// Set once the front end shuts down: background completions no longer wake sessions.
@@ -170,6 +171,7 @@ impl SessionNotifier for StoreNotifier {
             session_id,
             &text,
             description.as_deref(),
+            None,
             Delivery::Steer,
         );
         let idle = !shared
@@ -242,6 +244,7 @@ impl Core {
             owner: format!("{}:{}", std::process::id(), crate::ids::part()),
             turns: Mutex::default(),
             warming: Default::default(),
+            goals: Default::default(),
             precomputed: Mutex::default(),
             closing: Default::default(),
         });

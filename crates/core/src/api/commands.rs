@@ -1,8 +1,10 @@
 //! Running slash commands through the core API.
 
 use super::{Core, CoreError, Prompt};
-use crate::command::{Command, Commands};
+use crate::command::{Command, Commands, Template};
+use crate::gateway::error::SessionError;
 use crate::model::ModelRef;
+use crate::session::goal::{self, Goal};
 use crate::session::inbox::Delivery;
 use crate::session::{Outcome, TurnOptions};
 
@@ -42,11 +44,12 @@ impl Core {
         {
             Ok(text) => text,
             Err(message) => {
-                return Ok(Outcome::Failed(crate::gateway::error::SessionError::new(
-                    "unknown", message,
-                )));
+                return Ok(Outcome::Failed(SessionError::new("unknown", message)));
             }
         };
+        if command.template == Template::Goal {
+            return self.goal_command(session_id, &text, options).await;
+        }
         let agent = command.agent.as_deref().and_then(|a| loaded.agents.get(a));
         let model = command
             .model
@@ -71,6 +74,41 @@ impl Core {
             files: Vec::new(),
         };
         self.prompt(session_id, prompt, options).await
+    }
+
+    /// The session's `/goal`, if one is set.
+    pub fn goal(&self, session_id: &str) -> Option<Goal> {
+        goal::read(&self.shared.db, &self.shared.events, session_id)
+    }
+
+    /// `/goal <objective> | pause | resume | clear`; usage errors come back as a failed outcome
+    /// with the text to show.
+    async fn goal_command(
+        &self,
+        session_id: &str,
+        arguments: &str,
+        options: TurnOptions,
+    ) -> Result<Outcome, CoreError> {
+        match goal::command(&self.shared, session_id, arguments) {
+            Err(text) => Ok(Outcome::Failed(SessionError::new("unknown", text))),
+            Ok(goal::Command::Done) => Ok(Outcome::Succeeded),
+            Ok(goal::Command::Run {
+                text,
+                description,
+                metadata,
+            }) => {
+                super::revert::commit(&self.shared, session_id)?;
+                crate::session::inbox::enqueue_synthetic(
+                    &self.shared.db,
+                    session_id,
+                    &text,
+                    description.as_deref(),
+                    Some(&metadata),
+                    Delivery::Steer,
+                )?;
+                self.drain(session_id, options).await
+            }
+        }
     }
 
     async fn subagent_command(
@@ -126,6 +164,7 @@ impl Core {
             &parent.id,
             &completion,
             Some(&description),
+            None,
             Delivery::Steer,
         )?;
         self.drain(&parent.id, options).await

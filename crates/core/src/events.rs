@@ -153,6 +153,11 @@ pub enum Event {
         session_id: String,
         reason: InterruptReason,
     },
+    /// The session's `/goal` was set, changed or cleared (`None`).
+    GoalChanged {
+        session_id: String,
+        goal: Option<crate::session::goal::Goal>,
+    },
 }
 
 impl Event {
@@ -176,7 +181,8 @@ impl Event {
             | Event::TitleChanged { session_id, .. }
             | Event::Succeeded { session_id }
             | Event::Failed { session_id, .. }
-            | Event::Interrupted { session_id, .. } => session_id,
+            | Event::Interrupted { session_id, .. }
+            | Event::GoalChanged { session_id, .. } => session_id,
             Event::Credits(snapshot) => &snapshot.session_id,
         }
     }

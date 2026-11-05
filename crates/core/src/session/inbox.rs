@@ -75,12 +75,16 @@ pub fn enqueue_synthetic(
     session_id: &str,
     text: &str,
     description: Option<&str>,
+    metadata: Option<&Value>,
     delivery: Delivery,
 ) -> Result<String> {
     let id = crate::ids::message();
     let mut payload = json!({"time": {"created": now_ms()}, "text": text});
     if let Some(description) = description {
         payload["description"] = json!(description);
+    }
+    if let Some(metadata) = metadata {
+        payload["metadata"] = metadata.clone();
     }
     db.inbox_push(session_id, &id, "synthetic", &payload, delivery.as_str())?;
     Ok(id)

@@ -3,6 +3,7 @@
 
 pub mod compaction;
 pub mod gate;
+pub mod goal;
 mod host;
 pub mod inbox;
 pub mod lower;
@@ -267,7 +268,8 @@ fn settle_stale(shared: &Shared, session_id: &str) {
     }
 }
 
-fn finish(shared: &Shared, session_id: &str, outcome: &Outcome) {
+fn finish(shared: &Arc<Shared>, session_id: &str, outcome: &Outcome) {
+    goal::ended(shared, session_id, outcome);
     shared.credits.close_turn(session_id);
     let (outcome_label, event) = match outcome {
         Outcome::Succeeded => (
@@ -342,7 +344,9 @@ async fn turn(
 }
 
 /// Runs the session until its inbox is empty: a manual compaction or a turn per pending item,
-/// queued prompts one at a time. Stops at the first turn that does not succeed.
+/// queued prompts one at a time. Stops at the first turn that does not succeed. A turn that
+/// leaves nothing pending stays open for the idle hook (`/goal`): input it admits continues the
+/// same execution.
 pub(crate) async fn drain(
     shared: Arc<Shared>,
     session_id: &str,
@@ -350,7 +354,9 @@ pub(crate) async fn drain(
     cancel: CancellationToken,
 ) -> Outcome {
     settle_stale(&shared, session_id);
+    goal::started(&shared, session_id);
     let mut outcome = Outcome::Succeeded;
+    let mut open = false;
     loop {
         let session = match shared.db.session(session_id) {
             Ok(Some(session)) => session,
@@ -362,6 +368,12 @@ pub(crate) async fn drain(
             Err(error) => return Outcome::Failed(storage(error)),
         };
         let Some(next) = next else {
+            if open {
+                if goal::idle(&shared, session_id).await {
+                    continue;
+                }
+                finish(&shared, session_id, &outcome);
+            }
             return outcome;
         };
         if next.kind == "compaction" {
@@ -370,9 +382,19 @@ pub(crate) async fn drain(
                 compaction::Outcome::Failed(error) => Outcome::Failed(error),
                 _ => Outcome::Succeeded,
             };
+            if open && outcome != Outcome::Succeeded {
+                finish(&shared, session_id, &outcome);
+            }
         } else {
             outcome = turn(&shared, &session, options, &cancel).await;
-            finish(&shared, session_id, &outcome);
+            open = outcome == Outcome::Succeeded
+                && matches!(
+                    inbox::next(&shared.db, session_id, inbox::Scope::Input),
+                    Ok(None)
+                );
+            if !open {
+                finish(&shared, session_id, &outcome);
+            }
         }
         if outcome != Outcome::Succeeded {
             return outcome;
