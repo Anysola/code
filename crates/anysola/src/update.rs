@@ -60,6 +60,8 @@ pub async fn update(args: UpdateArgs) -> i32 {
         direct.args(&command[1..]);
         direct
     };
+    #[cfg(windows)]
+    let _retained = retain_image(&Paths::from_env().data.join("cache"));
     let failure = match process.status() {
         Ok(status) if status.success() => None,
         Ok(status) => Some(format!(
@@ -79,6 +81,50 @@ pub async fn update(args: UpdateArgs) -> i32 {
             0
         }
     }
+}
+
+/// Windows refuses to delete the last hard link of a running executable, so the installer could
+/// not replace this one (or the TUI that started it). A second link in the data folder, held
+/// while the installer runs, lets it. Links of runs that have exited are swept first.
+#[cfg(windows)]
+struct Retained(Option<std::path::PathBuf>);
+
+#[cfg(windows)]
+impl Drop for Retained {
+    fn drop(&mut self) {
+        // The last link of a still-running image refuses deletion; a later sweep removes it.
+        if let Some(path) = &self.0 {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn retain_image(directory: &std::path::Path) -> Retained {
+    let _ = std::fs::create_dir_all(directory);
+    for entry in std::fs::read_dir(directory).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let pid = name
+            .strip_prefix("anysola-upgrade-")
+            .and_then(|rest| rest.split('-').next())
+            .and_then(|pid| pid.parse::<u32>().ok());
+        if let Some(pid) = pid
+            && !anysola_core::storage::process_alive(pid)
+        {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    let target = directory.join(format!(
+        "anysola-upgrade-{}-{nonce:08x}.exe",
+        std::process::id()
+    ));
+    let linked = std::env::current_exe()
+        .and_then(|exe| std::fs::hard_link(exe, &target))
+        .is_ok();
+    Retained(linked.then_some(target))
 }
 
 #[cfg(test)]

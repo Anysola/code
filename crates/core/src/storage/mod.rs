@@ -577,6 +577,11 @@ fn session_row(r: &rusqlite::Row) -> rusqlite::Result<SessionRow> {
     })
 }
 
+/// Whether a process with this id is running.
+pub fn process_alive(pid: u32) -> bool {
+    owner_alive(&pid.to_string())
+}
+
 /// Busy owners are `<pid>:<nonce>`; a holder whose process is gone does not block.
 pub(crate) fn owner_alive(owner: &str) -> bool {
     let Some(pid) = owner.split(':').next().and_then(|p| p.parse::<i32>().ok()) else {
