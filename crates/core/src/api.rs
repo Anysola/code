@@ -156,25 +156,27 @@ impl SessionNotifier for StoreNotifier {
     }
 }
 
+/// The gateway's `/config` body: live (and cached), else the last cached one.
+pub async fn remote_config(gateway: &Gateway, db: &Db) -> crate::storage::Result<Option<String>> {
+    Ok(match gateway.config().await {
+        ConfigFetch::Ok(body) => {
+            db.kv_set(CONFIG_CACHE_KEY, &Value::String(body.clone()))?;
+            Some(body)
+        }
+        ConfigFetch::Unauthorized | ConfigFetch::Failed => db
+            .kv_get(CONFIG_CACHE_KEY)?
+            .and_then(|v| v.as_str().map(str::to_string)),
+    })
+}
+
 impl Core {
     /// Opens storage, loads the remote config (live, else cached) and every config source.
     pub async fn start(directory: &Path) -> Result<Core, CoreError> {
         let paths = Arc::new(Paths::from_env());
         let db = Arc::new(Db::open(&paths.database())?);
-        let token = match std::env::var("ANYSOLA_TOKEN") {
-            Ok(token) if !token.trim().is_empty() => Some(Token::Env(token.trim().to_string())),
-            _ => db.anysola_login()?.map(Token::Login),
-        };
+        let token = Token::resolve(&db)?;
         let gateway = Arc::new(Gateway::new(token));
-        let remote = match gateway.config().await {
-            ConfigFetch::Ok(body) => {
-                db.kv_set(CONFIG_CACHE_KEY, &Value::String(body.clone()))?;
-                Some(body)
-            }
-            ConfigFetch::Unauthorized | ConfigFetch::Failed => db
-                .kv_get(CONFIG_CACHE_KEY)?
-                .and_then(|v| v.as_str().map(str::to_string)),
-        };
+        let remote = remote_config(&gateway, &db).await?;
         let options = LoadOptions {
             remote,
             api_url: gateway.base().to_string(),

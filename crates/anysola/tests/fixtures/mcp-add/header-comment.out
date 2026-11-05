@@ -1,0 +1,15 @@
+// header
+{
+    "theme": "dark",
+    "mcp": {
+      "servers": {
+        "n": {
+          "type": "remote",
+          "url": "https://x/y",
+          "headers": {
+            "K": "V"
+          }
+        }
+      }
+    } /* c */
+}

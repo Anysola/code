@@ -1,0 +1,13 @@
+{
+  "mcp": {
+    "servers": {
+      "n": {
+        "type": "remote",
+        "url": "https://x/y",
+        "headers": {
+          "K": "V"
+        }
+      }
+    }
+  }
+}

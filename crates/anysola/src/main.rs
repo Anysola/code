@@ -1,18 +1,36 @@
 //! The `anysola` binary.
 
+mod account;
+mod clack;
 mod cli;
+mod completions;
+mod debug;
 mod gate;
+mod install;
+mod mcp;
+mod models;
+mod prompt;
+mod root;
 mod run;
+mod sessions;
 mod ui;
+mod uninstall;
+mod update;
 
 use clap::Parser;
 use serde_json::Value;
 
-use cli::{Cli, Command};
+use cli::{Cli, Command, DebugArgs, McpArgs, SessionArgs};
 
 /// `JSON.stringify(value)`.
 pub fn json(value: &Value) -> String {
     anysola_core::json::compact(value)
+}
+
+/// The single error line every plain command handler prints on failure.
+pub fn fail(message: &str) -> i32 {
+    eprintln!("Error: {message}");
+    1
 }
 
 /// The first start after 0.5.x imports its data. A failure is reported and retried next start;
@@ -36,28 +54,32 @@ fn import(paths: &anysola_core::paths::Paths) {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let flags = args.iter().skip(1).take_while(|a| a.as_str() != "--");
-    if flags.into_iter().any(|a| a == "--version" || a == "-v") {
+    let flags: Vec<&str> = args
+        .iter()
+        .skip(1)
+        .map(String::as_str)
+        .take_while(|a| *a != "--")
+        .collect();
+    if flags.iter().any(|a| *a == "--version" || *a == "-v") {
         println!("{}", anysola_core::version::version_line());
+        return;
+    }
+    let path = cli::path(&args);
+    if flags.iter().any(|a| *a == "--help" || *a == "-h") {
+        print!("{}", cli::help(&path));
         return;
     }
     let cli = match Cli::try_parse_from(&args) {
         Ok(cli) => cli,
         Err(error) => {
-            let command = if args.get(1).is_some_and(|a| a == "run") {
-                "anysola run"
-            } else {
-                "anysola"
-            };
-            if command == "anysola run" {
-                print!("{}", cli::RUN_HELP);
-            }
-            eprintln!("\nERROR\n  {}", cli::error_message(&error, command));
+            print!("{}", cli::help(&path));
+            let message = cli::error_message(&error, &cli::command_name(&path));
+            eprintln!("\nERROR\n  {message}");
             std::process::exit(1);
         }
     };
-    if cli.help || cli.command.is_none() {
-        print!("{}", cli::RUN_HELP);
+    if let Some(shell) = cli.completions {
+        completions::print(shell);
         return;
     }
     if cli.server.is_some()
@@ -76,9 +98,28 @@ fn main() {
             ("args", &crate::json(&serde_json::json!(args[1..]))),
         ],
     );
+    // Commands that read sessions, the token or config import 0.5.x data first.
     let imports = match &cli.command {
-        Some(Command::Run(_)) => true,
-        None => false,
+        None
+        | Some(
+            Command::Run(_)
+            | Command::Login(_)
+            | Command::Logout
+            | Command::Status
+            | Command::Usage(_)
+            | Command::Devices(_)
+            | Command::Acp(_)
+            | Command::Mcp(_)
+            | Command::Models
+            | Command::Session(_),
+        ) => true,
+        Some(
+            Command::Update(_)
+            | Command::Uninstall(_)
+            | Command::Debug(_)
+            | Command::Plugin(_)
+            | Command::Reload,
+        ) => false,
     };
     if imports {
         import(&paths);
@@ -87,10 +128,50 @@ fn main() {
         .enable_all()
         .build()
         .expect("tokio runtime");
-    let code = match cli.command {
-        Some(Command::Run(args)) => runtime.block_on(run::run(args)),
-        None => 0,
+    let group_help = |name: &str| {
+        print!("{}", cli::help(&[name.to_string()]));
+        0
     };
+    let code = runtime.block_on(async {
+        match cli.command {
+            None => root::root(cli.root).await,
+            Some(Command::Login(args)) => account::login(args.force).await,
+            Some(Command::Logout) => account::logout().await,
+            Some(Command::Status) => account::status().await,
+            Some(Command::Usage(args)) => account::usage(args).await,
+            Some(Command::Devices(args)) => account::devices(args.command).await,
+            Some(Command::Update(args)) => update::update(args).await,
+            Some(Command::Uninstall(args)) => uninstall::uninstall(args).await,
+            Some(Command::Acp(args)) if args.login => account::login(false).await,
+            // The ACP server arrives with milestone M7.
+            Some(Command::Acp(_)) => {
+                eprintln!("anysola acp: the ACP server is not available in this build yet");
+                1
+            }
+            Some(Command::Debug(DebugArgs { command: None })) => group_help("debug"),
+            Some(Command::Debug(DebugArgs {
+                command: Some(command),
+            })) => debug::debug(command).await,
+            Some(Command::Mcp(McpArgs { command: None })) => group_help("mcp"),
+            Some(Command::Mcp(McpArgs {
+                command: Some(command),
+            })) => mcp::mcp(command).await,
+            Some(Command::Plugin(args)) if args.args.is_empty() => group_help("plugin"),
+            Some(Command::Plugin(_)) => fail(
+                "Plugins are not supported since Anysola Code 1.0; built-in features are native.",
+            ),
+            Some(Command::Models) => models::models().await,
+            Some(Command::Run(args)) => run::run(args).await,
+            Some(Command::Session(SessionArgs { command: None })) => group_help("session"),
+            Some(Command::Session(SessionArgs {
+                command: Some(command),
+            })) => sessions::session(command).await,
+            Some(Command::Reload) => {
+                println!("Configuration reloaded");
+                0
+            }
+        }
+    });
     runtime.shutdown_timeout(std::time::Duration::from_millis(100));
     std::process::exit(code);
 }

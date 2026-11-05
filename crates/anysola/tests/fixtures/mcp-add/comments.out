@@ -1,0 +1,22 @@
+{
+  // my config
+  "model": "anysola/auto", /* trailing */
+  "mcp": {
+    "servers": {
+      "old": {
+        "type": "local",
+        "command": [
+          "x"
+        ]
+      },
+      "web": {
+        "type": "remote",
+        "url": "https://mcp.example.com/mcp",
+        "headers": {
+          "Authorization": "Bearer x",
+          "X-A": "1"
+        }
+      }
+    }
+  }
+}

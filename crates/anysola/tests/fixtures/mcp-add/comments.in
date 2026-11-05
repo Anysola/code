@@ -1,0 +1,9 @@
+{
+  // my config
+  "model": "anysola/auto", /* trailing */
+  "mcp": {
+    "servers": {
+      "old": {"type": "local", "command": ["x"]}
+    }
+  }
+}

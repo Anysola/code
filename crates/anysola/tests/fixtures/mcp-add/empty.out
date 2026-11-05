@@ -1,0 +1,17 @@
+{
+  "mcp": {
+    "servers": {
+      "e": {
+        "type": "local",
+        "command": [
+          "node",
+          "s.js"
+        ],
+        "environment": {
+          "A": "1",
+          "B": "2"
+        }
+      }
+    }
+  }
+}

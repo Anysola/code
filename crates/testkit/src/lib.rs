@@ -6,6 +6,8 @@ mod home;
 mod legacy;
 pub mod sse;
 
-pub use gateway::{FakeGateway, Recorded, Reply, Script};
+pub use gateway::{
+    DEVICE_TOKEN, DevicePoll, FakeGateway, Recorded, Reply, Script, default_tokens, default_usage,
+};
 pub use home::{Output, TestHome};
 pub use legacy::Legacy;

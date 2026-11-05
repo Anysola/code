@@ -1,0 +1,13 @@
+{
+  "model": "anysola/auto",
+  "mcp": {
+    "servers": {
+      "e": {
+        "type": "local",
+        "command": [
+          "node"
+        ]
+      }
+    }
+  }
+}
