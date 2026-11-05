@@ -1505,3 +1505,31 @@ fn execute_dialog_frame() {
         assert!(screen.contains(text), "{text}");
     }
 }
+
+/// `session-frame.tsx:387-398`: at ≤ 120 columns the toggled sidebar is an overlay, right-aligned
+/// over the dimmed session, with the docked sidebar's contents.
+#[test]
+fn sidebar_overlay_below_121_columns() {
+    let mut state = session(100, 40, turn(true, true));
+    state.sessions.get_mut("ses_b").unwrap().credits = credits(0, 12, Some(50), 731);
+    let closed = render(&state);
+    assert!(!anysola_tui::view::sidebar_overlay(&state));
+    state.sidebar_open = true;
+    assert!(anysola_tui::view::sidebar_overlay(&state));
+    let wide = {
+        let mut wide = session(170, 40, turn(true, true));
+        wide.sessions.get_mut("ses_b").unwrap().credits = credits(0, 12, Some(50), 731);
+        render(&wide)
+    };
+    let open = render(&state);
+    for (row, (narrow, docked)) in open.split('\n').zip(wide.split('\n')).enumerate().skip(1) {
+        let tail: String = narrow.chars().skip(58).collect();
+        let want: String = docked.chars().skip(128).collect();
+        assert_eq!(tail, want, "row {row}");
+    }
+    assert_ne!(open, closed);
+    let theme = Catalog::bundled().load("anysola", ThemeMode::Dark).unwrap();
+    let mut buffer = Buffer::empty(Rect::new(0, 0, 100, 40));
+    anysola_tui::view::draw(&state, &theme, &mut buffer);
+    assert_ne!(buffer[(5, 10)].bg, theme.fg("background.base"));
+}

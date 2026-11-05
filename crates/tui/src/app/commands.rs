@@ -143,12 +143,19 @@ impl App {
                 self.cycle_model(id == "model.cycle_recent", false)
             }
             ("session.sidebar.toggle", _) => {
-                self.state.settings.sidebar = !self.state.settings.sidebar;
-                let value = if self.state.settings.sidebar {
-                    "auto"
-                } else {
-                    "hide"
-                };
+                // 0.5.1 toggles what the right pane shows, so opening it also closes the
+                // terminal pane and a docked diff.
+                let open = !crate::view::sidebar_shown(&self.state);
+                self.state.settings.sidebar = open;
+                self.state.sidebar_open = open;
+                if open {
+                    self.shown = None;
+                    self.state.pane = None;
+                    if crate::view::diff_docked(&self.state) {
+                        self.state.diff = None;
+                    }
+                }
+                let value = if open { "auto" } else { "hide" };
                 let _ = self
                     .tui
                     .set(&["session", "sidebar"], Value::String(value.into()));

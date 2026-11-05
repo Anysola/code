@@ -431,6 +431,8 @@ pub struct State {
     pub toast: Option<Toast>,
     /// Open dialogs; the last one is on top.
     pub dialogs: Vec<crate::dialog::Dialog>,
+    /// The sidebar was opened with its toggle; below 121 columns it shows as an overlay.
+    pub sidebar_open: bool,
     pub account: Account,
     /// When the prompt's agent, model and variant labels began fading in (first draw of the
     /// app instance); `None` shows them fully.
@@ -505,6 +507,7 @@ impl State {
             popup: None,
             toast: None,
             dialogs: Vec::new(),
+            sidebar_open: false,
             account: Account::default(),
             onboarding_dismissed: false,
             meta_fade: None,

@@ -140,6 +140,16 @@ impl App {
         if self.state.diff.is_some() {
             return self.diff_key(&stroke);
         }
+        let blocked = self
+            .state
+            .session()
+            .is_some_and(|s| s.permission.is_some() || s.question.is_some());
+        if crate::view::sidebar_overlay(&self.state)
+            && !blocked
+            && (stroke.key == "escape" || (stroke.ctrl && stroke.key == "c"))
+        {
+            return self.run_command("session.sidebar.toggle", None);
+        }
         let mut strokes = std::mem::take(&mut self.pending);
         if now() > self.pending_until {
             strokes.clear();
@@ -735,6 +745,10 @@ impl App {
                 self.hover_popup(at);
                 self.choose(false);
             }
+            MouseEventKind::Down(MouseButton::Left)
+                if crate::view::sidebar_overlay(&self.state)
+                    && self.state.dialogs.is_empty()
+                    && at.0 + crate::view::SIDEBAR_WIDTH < self.state.width => {}
             MouseEventKind::Down(MouseButton::Left) => {
                 // A click while text is selected only clears the selection.
                 if self.selection.is_some_and(|(a, b)| a != b) {

@@ -20,8 +20,10 @@ mod session;
 pub use diffview::{patch_options, tree_width as diff_tree_width};
 pub use home::WORDMARK;
 pub use prompt::{max_rows, textarea_width};
+pub use session::{
+    SIDEBAR_WIDTH, pane_width, sidebar_overlay, sidebar_shown, terminal_size, terminal_width,
+};
 pub use session::{diff_docked, diff_width, onboarding_shown};
-pub use session::{pane_width, terminal_size, terminal_width};
 
 /// Width of the session pane's content box.
 pub fn session_content_width(state: &State) -> usize {
@@ -154,6 +156,13 @@ pub fn draw(state: &State, theme: &Theme, buf: &mut Buffer) -> Drawn {
             None
         }
         None => cursor,
+    };
+    let cursor = match state.session() {
+        Some(session) if session::sidebar_overlay(state) => {
+            session::overlay(&mut c, state, session);
+            None
+        }
+        _ => cursor,
     };
     let cursor = match state.dialogs.last() {
         Some(top) => dialog::draw(&mut c, top),
