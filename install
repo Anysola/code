@@ -1,0 +1,218 @@
+#!/bin/sh
+# Anysola Code installer for macOS and Linux.
+#   curl -fsSL https://www.anysola.com/install | sh
+#   curl -fsSL https://www.anysola.com/install | sh -s -- --version 0.4.0
+# Installs the `anysola` binary from the GitHub release of Anysola/code into ~/.anysola/bin, checks its SHA-256,
+# and adds that directory to PATH. Run it again to update.
+set -eu
+
+APP=anysola
+REPO=Anysola/code
+API_URL=${ANYSOLA_API_URL:-https://api.anysola.com}
+INSTALL_DIR=${ANYSOLA_INSTALL_DIR:-$HOME/.anysola/bin}
+
+if [ -t 2 ]; then
+  MUTED=$(printf '\033[0;2m')
+  RED=$(printf '\033[0;31m')
+  NC=$(printf '\033[0m')
+else
+  MUTED=""
+  RED=""
+  NC=""
+fi
+
+say() { printf '%s\n' "$*"; }
+muted() { printf '%s%s%s\n' "$MUTED" "$*" "$NC"; }
+fail() {
+  printf '%sError: %s%s\n' "$RED" "$*" "$NC" >&2
+  exit 1
+}
+
+usage() {
+  cat <<EOF
+Anysola Code installer
+
+Usage: install [options]
+
+Options:
+  -h, --help              Show this help
+  -v, --version <version> Install a specific version (default: the latest release)
+      --no-modify-path    Do not add $INSTALL_DIR to PATH
+
+Examples:
+  curl -fsSL https://www.anysola.com/install | sh
+  curl -fsSL https://www.anysola.com/install | sh -s -- --version 0.4.0
+EOF
+}
+
+version=${ANYSOLA_VERSION:-}
+modify_path=true
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    -v | --version)
+      [ -n "${2:-}" ] || fail "--version needs a version, for example --version 0.4.0"
+      version=$2
+      shift 2
+      ;;
+    --no-modify-path)
+      modify_path=false
+      shift
+      ;;
+    *)
+      say "Unknown option: $1" >&2
+      shift
+      ;;
+  esac
+done
+
+command -v curl >/dev/null 2>&1 || fail "curl is required"
+command -v tar >/dev/null 2>&1 || fail "tar is required"
+
+# Platform: the same targets as the @anysola/code-<target> npm packages.
+raw_os=$(uname -s)
+case "$raw_os" in
+  Darwin*) os=darwin ;;
+  Linux*) os=linux ;;
+  MINGW* | MSYS* | CYGWIN*) fail "On Windows, run in PowerShell: irm https://www.anysola.com/install.ps1 | iex" ;;
+  *) fail "Unsupported OS: $raw_os" ;;
+esac
+case "$(uname -m)" in
+  x86_64 | amd64) arch=x64 ;;
+  aarch64 | arm64) arch=arm64 ;;
+  *) fail "Unsupported architecture: $(uname -m)" ;;
+esac
+# An x64 shell under Rosetta on Apple silicon gets the native build.
+if [ "$os" = darwin ] && [ "$arch" = x64 ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)" = 1 ]; then
+  arch=arm64
+fi
+
+target="$os-$arch"
+if [ "$arch" = x64 ]; then
+  avx2=1
+  if [ "$os" = linux ] && ! grep -qwi avx2 /proc/cpuinfo 2>/dev/null; then avx2=0; fi
+  if [ "$os" = darwin ] && [ "$(sysctl -n hw.optional.avx2_0 2>/dev/null || echo 0)" != 1 ]; then avx2=0; fi
+  [ "$avx2" = 1 ] || target="$target-baseline"
+fi
+if [ "$os" = linux ]; then
+  if [ -f /etc/alpine-release ] || { command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; }; then
+    target="$target-musl"
+  fi
+fi
+
+if [ "$os" = linux ]; then
+  archive="$APP-$target.tar.gz"
+else
+  command -v unzip >/dev/null 2>&1 || fail "unzip is required"
+  archive="$APP-$target.zip"
+fi
+
+if [ -z "$version" ]; then
+  # The release the Anysola server names as latest (Admin > Code > Release).
+  version=$(curl -fsSL "$API_URL/v1/code/version" 2>/dev/null | sed -n 's/.*"latest" *: *"\([^"]*\)".*/\1/p' || true)
+  [ -n "$version" ] || fail "Could not read the latest version from $API_URL"
+fi
+version=${version#v}
+
+base="${ANYSOLA_DOWNLOAD_URL:-https://github.com/$REPO/releases/download}/v$version"
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/anysola-install.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT INT TERM
+
+if command -v "$APP" >/dev/null 2>&1; then
+  muted "Installed: $("$APP" --version 2>/dev/null || echo unknown)"
+fi
+say "Installing Anysola Code $version ($target)"
+
+curl -fL --progress-bar -o "$tmp/$archive" "$base/$archive" || fail "Download failed: $base/$archive"
+curl -fsSL -o "$tmp/SHA256SUMS" "$base/SHA256SUMS" || fail "Download failed: $base/SHA256SUMS"
+
+expected=$(awk -v name="$archive" '$2 == name || $2 == "*" name { print $1 }' "$tmp/SHA256SUMS")
+[ -n "$expected" ] || fail "$archive is not listed in SHA256SUMS"
+if command -v sha256sum >/dev/null 2>&1; then
+  actual=$(sha256sum "$tmp/$archive" | awk '{ print $1 }')
+elif command -v shasum >/dev/null 2>&1; then
+  actual=$(shasum -a 256 "$tmp/$archive" | awk '{ print $1 }')
+else
+  fail "sha256sum or shasum is required to check the download"
+fi
+[ "$expected" = "$actual" ] || fail "Checksum mismatch for $archive"
+
+mkdir -p "$tmp/x"
+if [ "$os" = linux ]; then
+  tar -xzf "$tmp/$archive" -C "$tmp/x"
+else
+  unzip -q "$tmp/$archive" -d "$tmp/x"
+fi
+[ -f "$tmp/x/$APP" ] || fail "The archive has no $APP binary"
+mkdir -p "$INSTALL_DIR"
+# Copy next to the target, then rename over it: a running anysola keeps its old file.
+cp "$tmp/x/$APP" "$INSTALL_DIR/.$APP.new"
+chmod 755 "$INSTALL_DIR/.$APP.new"
+mv -f "$INSTALL_DIR/.$APP.new" "$INSTALL_DIR/$APP"
+"$INSTALL_DIR/$APP" --version >/dev/null 2>&1 || fail "The installed binary does not run on this system"
+
+path_line=""
+config=""
+if [ "$modify_path" = true ]; then
+  case ":$PATH:" in
+    *":$INSTALL_DIR:"*) ;;
+    *)
+      shell_name=$(basename "${SHELL:-sh}")
+      xdg=${XDG_CONFIG_HOME:-$HOME/.config}
+      case "$shell_name" in
+        fish)
+          files="$xdg/fish/config.fish"
+          path_line="fish_add_path $INSTALL_DIR"
+          ;;
+        zsh)
+          files="${ZDOTDIR:-$HOME}/.zshrc ${ZDOTDIR:-$HOME}/.zshenv"
+          path_line="export PATH=\"$INSTALL_DIR:\$PATH\""
+          ;;
+        bash)
+          files="$HOME/.bashrc $HOME/.bash_profile $HOME/.profile"
+          path_line="export PATH=\"$INSTALL_DIR:\$PATH\""
+          ;;
+        *)
+          files="$HOME/.profile"
+          path_line="export PATH=\"$INSTALL_DIR:\$PATH\""
+          ;;
+      esac
+      for file in $files; do
+        if [ -f "$file" ]; then
+          config=$file
+          break
+        fi
+      done
+      # A new Mac has no ~/.zshrc: create the shell's main file.
+      if [ -z "$config" ]; then
+        config=$(printf '%s' "$files" | awk '{ print $1 }')
+        mkdir -p "$(dirname "$config")" && touch "$config" || config=""
+      fi
+      if [ -n "$config" ] && ! grep -Fq "$INSTALL_DIR" "$config" 2>/dev/null; then
+        printf '\n# anysola\n%s\n' "$path_line" >>"$config"
+        muted "Added $INSTALL_DIR to PATH in $config"
+      elif [ -z "$config" ]; then
+        say "Add $INSTALL_DIR to your PATH:"
+        say "  $path_line"
+      fi
+      ;;
+  esac
+fi
+
+if [ "${GITHUB_ACTIONS:-}" = true ] && [ -n "${GITHUB_PATH:-}" ]; then
+  echo "$INSTALL_DIR" >>"$GITHUB_PATH"
+fi
+
+say ""
+say "Anysola Code $version is installed in $INSTALL_DIR"
+say ""
+if [ -n "$config" ]; then
+  say "  exec \$SHELL     $(muted '# reload PATH, or open a new terminal')"
+fi
+say "  cd <project>"
+say "  anysola         $(muted '# sign in on first run')"
+say ""
+muted "https://www.anysola.com/code"
