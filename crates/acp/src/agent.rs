@@ -37,6 +37,8 @@ pub struct Attached {
     /// Follows the session's commands once the client knows the session.
     watcher: Option<AbortHandle>,
     pub prompting: bool,
+    /// The config options the client was last told.
+    options: Value,
 }
 
 pub struct Agent {
@@ -258,6 +260,25 @@ impl Agent {
         }
     }
 
+    /// At exit: stops the MCP servers, rejects pending asks and kills background shells.
+    pub async fn shutdown(&self) {
+        let open: Vec<String> = self.sessions().keys().cloned().collect();
+        for id in open {
+            self.close(&id);
+        }
+        let locations: Vec<Location> = self
+            .locations
+            .lock()
+            .await
+            .drain()
+            .map(|(_, l)| l)
+            .collect();
+        for location in locations {
+            anysola_core::mcp::Mcp::shutdown(location.mcp.as_ref()).await;
+            location.core.shutdown();
+        }
+    }
+
     pub fn sessions(&self) -> std::sync::MutexGuard<'_, HashMap<String, Attached>> {
         self.sessions.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -358,6 +379,7 @@ impl Agent {
             location,
             watcher: None,
             prompting: false,
+            options: options.clone(),
         };
         if let Some(previous) = self.sessions().insert(session.id.clone(), attached)
             && let Some(watcher) = previous.watcher
@@ -520,7 +542,9 @@ impl Agent {
         };
         select(&location.core, &session, &config, value)?;
         let session = self.require(&id)?.1;
-        Ok(json!({"configOptions": config_options(&location.core, &session)}))
+        let options = config_options(&location.core, &session);
+        self.told(&id, &options);
+        Ok(json!({"configOptions": options}))
     }
 
     pub fn set_mode(&self, params: &Value) -> Result<Value, Failure> {
@@ -528,7 +552,20 @@ impl Agent {
         let (location, session) = self.require(&id)?;
         let mode = string(params, "modeId").unwrap_or_default();
         select(&location.core, &session, "mode", &mode)?;
+        let session = self.require(&id)?.1;
+        self.told(&id, &config_options(&location.core, &session));
         Ok(json!({}))
+    }
+
+    /// Records the options the client now has; true when they changed.
+    fn told(&self, id: &str, options: &Value) -> bool {
+        match self.sessions().get_mut(id) {
+            Some(attached) if attached.options != *options => {
+                attached.options = options.clone();
+                true
+            }
+            _ => false,
+        }
     }
 }
 
@@ -627,7 +664,6 @@ fn select(core: &Core, session: &SessionRow, config: &str, value: &str) -> Resul
 async fn follow(agent: std::sync::Weak<Agent>, session_id: String, location: Location) {
     let mut events = location.core.subscribe();
     let mut commands = Value::Null;
-    let mut options = Value::Null;
     loop {
         let Some(agent) = agent.upgrade() else {
             return;
@@ -642,13 +678,12 @@ async fn follow(agent: std::sync::Weak<Agent>, session_id: String, location: Loc
         }
         if let Ok(Some(session)) = agent.db.session(&session_id) {
             let next = config_options(&location.core, &session);
-            if !options.is_null() && next != options {
+            if agent.told(&session_id, &next) {
                 agent.connection.update(
                     &session_id,
                     json!({"sessionUpdate": "config_option_update", "configOptions": next}),
                 );
             }
-            options = next;
         }
         drop(agent);
         loop {

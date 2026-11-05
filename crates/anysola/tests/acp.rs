@@ -495,6 +495,33 @@ fn scripted_client() {
         &mut none,
     );
     assert_eq!(response(&turn)["result"]["stopReason"], "end_turn");
+    assert!(
+        !turn
+            .iter()
+            .any(|m| m["params"]["update"]["sessionUpdate"] == "config_option_update")
+    );
+    let command = base64::engine::general_purpose::STANDARD.encode(r#"{"command":"sleep 5"}"#);
+    client.send(&request(
+        13,
+        "session/prompt",
+        json!({"sessionId": session, "prompt": [{"type": "text", "text": format!("TOOLTEST:shell:{command}END")}]}),
+    ));
+    loop {
+        let message = client.next();
+        if message["params"]["update"]["status"] == "in_progress" {
+            break;
+        }
+    }
+    client.send(
+        &json!({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session}}),
+    );
+    let cancelled = loop {
+        let message = client.next();
+        if message["id"] == 13 {
+            break message;
+        }
+    };
+    assert_eq!(cancelled["result"]["stopReason"], "cancelled");
     let model = gateway
         .messages()
         .into_iter()

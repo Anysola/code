@@ -36,10 +36,7 @@ pub async fn serve() -> i32 {
     let agent = Arc::new(Agent::new(connection.clone(), db));
     let failure = read(&agent).await;
     connection.close();
-    let open: Vec<String> = agent.sessions().keys().cloned().collect();
-    for id in open {
-        agent.close(&id);
-    }
+    agent.shutdown().await;
     drop(agent);
     drop(connection);
     let _ = writer.await;
