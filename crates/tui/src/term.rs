@@ -13,11 +13,10 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, SetTitle, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
 
 use crate::theme::Mode;
 
-pub type Backend = CrosstermBackend<Stdout>;
+pub type Backend = crate::hyperlink::Backend<Stdout>;
 
 /// Restores the terminal; safe to call more than once.
 pub fn restore() {
@@ -43,7 +42,7 @@ pub fn enter(mouse: bool) -> io::Result<Terminal<Backend>> {
         previous(info);
     }));
     resume(mouse)?;
-    Terminal::new(CrosstermBackend::new(io::stdout()))
+    Terminal::new(Backend::new(io::stdout(), crate::hyperlink::supported()))
 }
 
 /// Puts the terminal (back) into the UI's modes, after start or a suspend.

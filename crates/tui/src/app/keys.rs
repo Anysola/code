@@ -855,6 +855,16 @@ impl App {
                 if let Some((anchor, end)) = self.selection {
                     if anchor == end {
                         self.selection = None;
+                        // A plain click on a link opens it; modified clicks are the terminal's.
+                        let plain = mouse.modifiers.is_empty();
+                        let link = self
+                            .last
+                            .cell(at)
+                            .and_then(crate::hyperlink::url)
+                            .filter(|_| plain && self.state.dialogs.is_empty());
+                        if let Some(url) = link {
+                            term::open_url(&url);
+                        }
                     } else if self.state.settings.copy_on_select {
                         self.copy_selection(anchor, end);
                     }

@@ -105,7 +105,10 @@ struct Builder<'t> {
     quote: usize,
     code: Option<(String, String)>,
     table: Option<Table>,
-    link: Option<String>,
+    /// The open link's URL and where its label starts in `inline`.
+    link: Option<(String, usize)>,
+    /// The terminal shows OSC 8 links, so the URL is not printed after the label.
+    hyperlinks: bool,
 }
 
 impl Builder<'_> {
@@ -271,7 +274,7 @@ impl Builder<'_> {
                 self.styles.push(style);
             }
             Tag::Link { dest_url, .. } => {
-                self.link = Some(dest_url.to_string());
+                self.link = Some((dest_url.to_string(), self.inline.len()));
                 self.with("markdown.linkText", Modifier::UNDERLINED);
             }
             Tag::Image { .. } => self.with("markdown.imageText", Modifier::empty()),
@@ -346,11 +349,16 @@ impl Builder<'_> {
             }
             TagEnd::Link => {
                 self.styles.pop();
-                if let Some(url) = self.link.take() {
+                if let Some((url, start)) = self.link.take() {
                     let label: String = plain(&self.inline);
-                    if !label.ends_with(&url) {
+                    let linked = self.hyperlinks && url.len() <= crate::hyperlink::MAX_URL_BYTES;
+                    if !linked && !label.ends_with(&url) {
                         let style = Style::new().fg(self.theme.fg("markdown.link"));
                         push(&mut self.inline, &format!(" ({url})"), style);
+                    }
+                    // Every cell of the label and of the printed URL opens the link on click.
+                    for span in self.inline.iter_mut().skip(start) {
+                        span.style = crate::hyperlink::mark(span.style, &url);
                     }
                 }
             }
@@ -451,6 +459,10 @@ fn wrap_code(line: Line, room: usize) -> Vec<Line> {
 
 /// Lays out `text`; `source` keeps the markdown markers (`session.markdown = source`).
 pub fn render(text: &str, width: usize, theme: &Theme, source: bool) -> Vec<Line> {
+    layout(text, width, theme, source, crate::hyperlink::supported())
+}
+
+fn layout(text: &str, width: usize, theme: &Theme, source: bool, hyperlinks: bool) -> Vec<Line> {
     if source {
         let style = Style::new().fg(theme.fg("markdown.text"));
         return wrap_spans(&[Span::styled(text.to_string(), style)], width);
@@ -467,6 +479,7 @@ pub fn render(text: &str, width: usize, theme: &Theme, source: bool) -> Vec<Line
         code: None,
         table: None,
         link: None,
+        hyperlinks,
     };
     let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
     for event in Parser::new_ext(text, options) {
@@ -505,7 +518,7 @@ mod tests {
 
     fn lines(text: &str, width: usize) -> Vec<String> {
         let theme = Catalog::bundled().load("anysola", Mode::Dark).unwrap();
-        render(text, width, &theme, false)
+        layout(text, width, &theme, false, false)
             .iter()
             .map(plain)
             .collect()
@@ -549,5 +562,13 @@ mod tests {
     #[test]
     fn links_show_their_url() {
         assert_eq!(lines("[docs](https://x.y)", 40), ["docs (https://x.y)"]);
+        let theme = crate::theme::Catalog::bundled()
+            .load("anysola", crate::theme::Mode::Dark)
+            .unwrap();
+        let linked = layout("see [docs](https://x.y)", 40, &theme, false, true);
+        assert_eq!(plain(&linked[0]), "see docs");
+        let mut cell = ratatui::buffer::Cell::new("d");
+        cell.set_style(linked[0].last().unwrap().style);
+        assert_eq!(crate::hyperlink::url(&cell).as_deref(), Some("https://x.y"));
     }
 }
