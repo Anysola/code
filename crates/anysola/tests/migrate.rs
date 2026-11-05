@@ -2,6 +2,10 @@
 //! `run -c` must send what 0.5.1 sent for the same continuation of the same database
 //! (`crates/migrate/tests/fixtures/rich/capture-*.json`, made by `testing/m3-fixtures.sh`).
 
+// The fixtures' instruction baselines hold a Linux `<env>` block; elsewhere 1.0 rightly sends an
+// instruction update before continuing. Import itself is tested on every platform in crates/migrate.
+#![cfg(target_os = "linux")]
+
 mod common;
 
 use std::path::PathBuf;

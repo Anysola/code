@@ -152,10 +152,8 @@ fn binary(bytes: &[u8]) -> bool {
 
 pub fn attach(input: &str, directory: &Path) -> Result<Attachment, String> {
     let path = directory.join(input);
-    let file = std::fs::File::open(&path).map_err(|_| format!("File not found: {input}"))?;
-    let meta = file
-        .metadata()
-        .map_err(|_| format!("File not found: {input}"))?;
+    // Metadata first: Windows cannot open a directory as a file.
+    let meta = std::fs::metadata(&path).map_err(|_| format!("File not found: {input}"))?;
     if !meta.is_file() || meta.len() > ATTACH_MAX_BYTES {
         return Err(format!(
             "Cannot attach a directory, special file, or file larger than 10 MiB: {input}"

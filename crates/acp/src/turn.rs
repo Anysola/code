@@ -661,6 +661,7 @@ fn blocks(prompt: &Value) -> Result<Prompt, Failure> {
     Ok(Prompt {
         text: texts.join("\n"),
         files,
+        skills: Vec::new(),
     })
 }
 
