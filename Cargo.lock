@@ -94,11 +94,13 @@ version = "1.0.0-dev"
 dependencies = [
  "anyhow",
  "anysola-core",
+ "anysola-migrate",
  "anysola-testkit",
  "base64 0.22.1",
  "clap",
  "libc",
  "regex",
+ "rusqlite",
  "serde_json",
  "tempfile",
  "tokio",
@@ -156,16 +158,30 @@ version = "1.0.0-dev"
 [[package]]
 name = "anysola-migrate"
 version = "1.0.0-dev"
+dependencies = [
+ "anysola-core",
+ "anysola-testkit",
+ "base64 0.22.1",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
 
 [[package]]
 name = "anysola-testkit"
 version = "1.0.0-dev"
 dependencies = [
  "bytes",
+ "chrono",
  "http-body-util",
  "hyper",
  "hyper-util",
+ "rusqlite",
  "serde_json",
+ "sha1",
+ "sha2",
  "tempfile",
  "tokio",
 ]

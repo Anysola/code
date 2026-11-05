@@ -15,6 +15,25 @@ pub fn json(value: &Value) -> String {
     anysola_core::json::compact(value)
 }
 
+/// The first start after 0.5.x imports its data. A failure is reported and retried next start;
+/// stdout stays untouched.
+fn import(paths: &anysola_core::paths::Paths) {
+    match anysola_migrate::run(paths) {
+        Ok(Some(counts)) if counts.sessions > 0 => ui::println(&format!(
+            "Imported {} sessions from Anysola Code 0.5.x.",
+            counts.sessions
+        )),
+        Ok(_) => {}
+        Err(error @ anysola_migrate::Error::Outdated) => ui::println(&error.to_string()),
+        Err(error) => {
+            anysola_core::log::warn("import from 0.5.x failed", &[("error", &error.to_string())]);
+            ui::println(&format!(
+                "Could not import data from Anysola Code 0.5.x ({error}); it will be tried again next start."
+            ));
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let flags = args.iter().skip(1).take_while(|a| a.as_str() != "--");
@@ -57,6 +76,13 @@ fn main() {
             ("args", &crate::json(&serde_json::json!(args[1..]))),
         ],
     );
+    let imports = match &cli.command {
+        Some(Command::Run(_)) => true,
+        None => false,
+    };
+    if imports {
+        import(&paths);
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

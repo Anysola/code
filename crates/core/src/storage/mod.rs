@@ -121,6 +121,18 @@ impl Db {
         Ok(f(&mut conn)?)
     }
 
+    /// Runs `f` in one `BEGIN IMMEDIATE` transaction that is committed only when `f` succeeds.
+    pub fn immediate<T, E: From<rusqlite::Error>>(
+        &self,
+        f: impl FnOnce(&rusqlite::Transaction) -> std::result::Result<T, E>,
+    ) -> std::result::Result<T, E> {
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let value = f(&tx)?;
+        tx.commit()?;
+        Ok(value)
+    }
+
     pub fn kv_get(&self, key: &str) -> Result<Option<Value>> {
         self.with(|c| {
             c.query_row("SELECT value FROM kv WHERE key = ?1", [key], |r| {

@@ -1,0 +1,9 @@
+[core]
+	repositoryformatversion = 0
+	filemode = true
+	bare = false
+	logallrefupdates = true
+	worktree = @HOME@/proj
+
+[include]
+	path = opencode.gitconfig
