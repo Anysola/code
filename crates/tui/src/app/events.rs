@@ -124,8 +124,15 @@ impl App {
     }
 
     pub(super) fn event(&mut self, event: Event) {
+        let boundary = matches!(
+            event,
+            Event::Succeeded { .. } | Event::Failed { .. } | Event::Interrupted { .. }
+        );
         self.fold(event);
-        self.refresh_dock();
+        if boundary {
+            self.refresh_dock();
+            self.resume_relocate();
+        }
     }
 
     fn fold(&mut self, event: Event) {

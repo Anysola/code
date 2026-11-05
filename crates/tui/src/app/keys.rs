@@ -681,7 +681,9 @@ impl App {
                     .map(crate::text::title_case)
             })
             .flatten();
-        self.over_status(at) || plan.is_some_and(|plan| over_text(&self.last, at, &plan))
+        let footer = at.1 + 1 == self.state.height;
+        self.over_status(at)
+            || (footer && plan.is_some_and(|plan| over_text(&self.last, at, &plan)))
     }
 
     /// A click on a home `Recent` row opens that session.

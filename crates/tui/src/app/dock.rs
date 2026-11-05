@@ -138,9 +138,24 @@ impl App {
             }
             ("d", true) => self.dock_stop(),
             ("return", false) => self.dock_choose(),
-            _ => return true,
+            (key, false) if !stroke.alt && key.chars().count() == 1 => {
+                // Typing goes back to the prompt; a child session has none, so it is ignored.
+                if self.in_child() {
+                    return true;
+                }
+                self.state.dock = None;
+                return false;
+            }
+            _ => return false,
         }
         true
+    }
+
+    fn in_child(&self) -> bool {
+        self.state
+            .session()
+            .and_then(|s| self.core.session(&s.id).ok().flatten())
+            .is_some_and(|row| row.parent_id.is_some())
     }
 
     /// `esc`: closes the dock; in a child session it returns to the parent.

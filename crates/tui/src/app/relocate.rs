@@ -190,6 +190,9 @@ impl App {
         self.files = None;
         self.refresh_loaded();
         self.reload_all();
+        self.mcp_seen.clear();
+        let rows = self.mcp_rows();
+        self.count_mcp(&rows);
         self.refresh_recent();
         self.fetch_account();
         match session {
