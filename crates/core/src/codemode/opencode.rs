@@ -212,24 +212,13 @@ async fn worktree_create(
         .with_text(format!("Created worktree in {directory}.")))
 }
 
-/// Config `worktree.directory` (`~/` is home, relative is the project root), else the data dir.
 fn worktree_base(ctx: &ToolContext) -> PathBuf {
-    let config = ctx.host.config();
-    let configured = config
-        .get("worktree")
-        .and_then(|w| w.get("directory"))
-        .and_then(Value::as_str);
-    match configured {
-        Some(directory) => match directory.strip_prefix("~/") {
-            Some(rest) => ctx.paths.home.join(rest),
-            None => crate::paths::normalize(&ctx.worktree.join(directory)),
-        },
-        None => ctx
-            .paths
-            .data
-            .join("worktree")
-            .join(ctx.project_id.chars().take(6).collect::<String>()),
-    }
+    crate::worktree::base(
+        &ctx.host.config(),
+        &ctx.paths,
+        &ctx.worktree,
+        &ctx.project_id,
+    )
 }
 
 fn worktree_list(ctx: &ToolContext) -> Called {

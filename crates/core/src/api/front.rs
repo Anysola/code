@@ -93,6 +93,34 @@ impl Core {
         crate::worktree::list(&self.shared.db, &self.shared.project.id)
     }
 
+    /// Adds a detached worktree of the project named `name` (suffixed when taken).
+    pub async fn create_worktree(&self, name: &str) -> Result<std::path::PathBuf, String> {
+        let shared = &self.shared;
+        let base = crate::worktree::base(
+            &self.loaded().config,
+            &shared.paths,
+            &shared.project.worktree,
+            &shared.project.id,
+        );
+        crate::worktree::create(
+            &shared.db,
+            &base,
+            &shared.project.id,
+            &shared.project.worktree,
+            name,
+        )
+        .await
+    }
+
+    /// Removes a worktree this project created; `force` drops its file changes.
+    pub async fn remove_worktree(
+        &self,
+        directory: &Path,
+        force: bool,
+    ) -> Result<(), crate::worktree::RemoveError> {
+        crate::worktree::remove(&self.shared.db, &self.shared.project.id, directory, force).await
+    }
+
     /// The session's stored messages, decoded, oldest first.
     pub fn messages(&self, session_id: &str) -> Result<Vec<(String, Message)>, CoreError> {
         Ok(self

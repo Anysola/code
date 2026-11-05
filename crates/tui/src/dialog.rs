@@ -415,6 +415,7 @@ impl Body {
 pub enum PromptKind {
     Rename { session: String },
     Btw,
+    NewWorktree,
 }
 
 /// A one-line text prompt (`Rename session`, `/btw`).
@@ -430,6 +431,7 @@ pub struct Prompt {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConfirmKind {
     Revoke { id: String },
+    DeleteWorktree { directory: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]

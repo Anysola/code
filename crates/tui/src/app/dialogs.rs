@@ -595,6 +595,9 @@ impl App {
                 self.state.dialogs.pop();
                 self.open_queue(&session);
             }
+            (Kind::Worktrees, true, "a") => self.worktree_prompt(),
+            (Kind::Worktrees, true, "m") => self.worktree_move(value),
+            (Kind::Worktrees, true, "d") => self.worktree_delete_key(),
             (Kind::Worktrees, true, "r") => {
                 self.state.dialogs.pop();
                 self.open_dialog("session.move", None);
@@ -777,8 +780,12 @@ impl App {
             }
             Kind::Worktrees => {
                 self.state.dialogs.pop();
-                if !opt.current {
-                    self.relocate(value.into(), None, false);
+                let current = std::path::PathBuf::from(&self.state.directory);
+                let home = std::path::PathBuf::from(&self.state.home);
+                if !opt.current
+                    && let Some(directory) = super::resolve_directory(&value, &current, &home)
+                {
+                    self.relocate(directory, None, false);
                 }
             }
             Kind::Connect => {
@@ -929,6 +936,7 @@ impl App {
                     ),
                 }
             }
+            PromptKind::NewWorktree => self.create_worktree(text),
             PromptKind::Btw => {
                 self.state.dialogs.pop();
                 if !text.is_empty() {
@@ -944,6 +952,9 @@ impl App {
         };
         match k.kind {
             ConfirmKind::Revoke { id } => self.revoke_device(id),
+            ConfirmKind::DeleteWorktree { directory } => {
+                self.delete_worktree(directory.into(), true)
+            }
         }
     }
 

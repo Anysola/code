@@ -32,6 +32,7 @@ mod keys;
 mod models;
 mod pane;
 mod relocate;
+mod worktrees;
 
 pub use relocate::{Restart, resolve as resolve_directory};
 

@@ -30,6 +30,30 @@ pub enum RemoveError {
     Failed(String),
 }
 
+/// Where new worktrees go: config `worktree.directory` (`~/` is home, relative is the project
+/// root), else `<data>/worktree/<first 6 of the project id>`.
+pub fn base(
+    config: &crate::config::Config,
+    paths: &crate::paths::Paths,
+    root: &Path,
+    project_id: &str,
+) -> PathBuf {
+    let configured = config
+        .get("worktree")
+        .and_then(|w| w.get("directory"))
+        .and_then(serde_json::Value::as_str);
+    match configured {
+        Some(directory) => match directory.strip_prefix("~/") {
+            Some(rest) => paths.home.join(rest),
+            None => crate::paths::normalize(&root.join(directory)),
+        },
+        None => paths
+            .data
+            .join("worktree")
+            .join(project_id.chars().take(6).collect::<String>()),
+    }
+}
+
 pub fn list(db: &Db, project_id: &str) -> Vec<Worktree> {
     db.worktrees(project_id)
         .unwrap_or_default()
