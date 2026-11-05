@@ -111,75 +111,67 @@ impl Ctx<'_> {
     }
 }
 
-/// Every item's rows, one blank row between items.
-pub fn layout(items: &[Item], ctx: &Ctx) -> Vec<Row> {
+/// Laid-out groups of settled items, so a long transcript is not laid out again every frame.
+/// Valid for one layout context (width and display settings).
+#[derive(Default)]
+pub struct Cache {
+    context: String,
+    entries: std::collections::HashMap<usize, (Item, Vec<Vec<Row>>)>,
+}
+
+/// An item that no longer changes with time (no spinner, no running duration).
+fn settled(item: &Item) -> bool {
+    match item {
+        Item::Assistant(a) => {
+            a.completed.is_some()
+                && a.parts.iter().all(|p| match p {
+                    Part::Tool(t) => !matches!(t.status, Status::Running | Status::Streaming),
+                    Part::Reasoning { end, .. } => end.is_some(),
+                    Part::Text { done, .. } => *done,
+                })
+        }
+        Item::Compaction { running, .. } => !running,
+        _ => true,
+    }
+}
+
+/// Every item's rows, one blank row between items; with a cache, settled items whose content is
+/// unchanged reuse their rows.
+pub fn layout(items: &[Item], ctx: &Ctx, cache: Option<&std::sync::Mutex<Cache>>) -> Vec<Row> {
+    let context = format!(
+        "{}|{}|{}|{}|{}|{}|{:?}",
+        ctx.width,
+        ctx.split,
+        ctx.thinking,
+        ctx.source_markdown,
+        ctx.animations,
+        ctx.theme.name,
+        ctx.theme.mode
+    );
+    let mut cache = cache.map(|c| c.lock().unwrap_or_else(|e| e.into_inner()));
+    if let Some(cache) = cache.as_mut()
+        && cache.context != context
+    {
+        cache.context = context;
+        cache.entries.clear();
+    }
     let mut groups: Vec<Vec<Row>> = Vec::new();
-    for item in items {
-        match item {
-            Item::User { text, agent, .. } => groups.push(user(text, agent, ctx)),
-            Item::Assistant(a) => assistant(a, ctx, &mut groups),
-            Item::Shell {
-                command,
-                output,
-                exit,
-                timed_out,
-            } => {
-                let mut lines = vec![vec![Span::styled(
-                    format!("$ {command}"),
-                    ctx.style("text.base"),
-                )]];
-                lines.extend(collapsed_output(output, ctx));
-                let error = if *timed_out {
-                    Some("Command timed out".to_string())
-                } else {
-                    exit.filter(|c| *c != 0)
-                        .map(|c| format!("Command exited with code {c}"))
-                };
-                if let Some(error) = error {
-                    lines.push(Vec::new());
-                    lines.push(vec![Span::styled(
-                        error,
-                        ctx.style("text.feedback.error.base"),
-                    )]);
-                }
-                groups.push(ctx.block(lines, false));
-            }
-            Item::Notice(text) => groups.push(vec![Row::text(
-                3,
-                vec![Span::styled(text.clone(), ctx.style("text.muted"))],
-            )]),
-            Item::Compaction {
-                running,
-                summary,
-                error,
-            } => {
-                let label = if *running {
-                    format!(" {} Compaction ", ctx.spinner())
-                } else if error.is_some() {
-                    " ✗ Compaction ".to_string()
-                } else {
-                    " Compaction ".to_string()
-                };
-                let side = ctx.width.saturating_sub(3 + text::width(&label)) / 2;
-                let rule = format!("{}{label}{}", "─".repeat(side), "─".repeat(side));
-                let mut rows = vec![Row::text(
-                    3,
-                    vec![Span::styled(rule, ctx.style("border.base"))],
-                )];
-                if let Some(summary) = summary {
-                    rows.push(Row::default());
-                    rows.extend(
-                        markdown::render(
-                            summary,
-                            ctx.width.saturating_sub(3),
-                            ctx.theme,
-                            ctx.source_markdown,
-                        )
-                        .into_iter()
-                        .map(|l| Row::text(3, l)),
-                    );
-                }
-                groups.push(rows);
+    for (index, item) in items.iter().enumerate() {
+        if let Some(cache) = cache.as_ref()
+            && let Some((cached, rows)) = cache.entries.get(&index)
+            && cached == item
+        {
+            groups.extend(rows.iter().cloned());
+            continue;
+        }
+        let start = groups.len();
+        item_groups(item, ctx, &mut groups);
+        if let Some(cache) = cache.as_mut() {
+            if settled(item) {
+                let rows = groups[start..].to_vec();
+                cache.entries.insert(index, (item.clone(), rows));
+            } else {
+                cache.entries.remove(&index);
             }
         }
     }
@@ -189,6 +181,76 @@ pub fn layout(items: &[Item], ctx: &Ctx) -> Vec<Row> {
         rows.extend(group);
     }
     rows
+}
+
+fn item_groups(item: &Item, ctx: &Ctx, groups: &mut Vec<Vec<Row>>) {
+    match item {
+        Item::User { text, agent, .. } => groups.push(user(text, agent, ctx)),
+        Item::Assistant(a) => assistant(a, ctx, groups),
+        Item::Shell {
+            command,
+            output,
+            exit,
+            timed_out,
+        } => {
+            let mut lines = vec![vec![Span::styled(
+                format!("$ {command}"),
+                ctx.style("text.base"),
+            )]];
+            lines.extend(collapsed_output(output, ctx));
+            let error = if *timed_out {
+                Some("Command timed out".to_string())
+            } else {
+                exit.filter(|c| *c != 0)
+                    .map(|c| format!("Command exited with code {c}"))
+            };
+            if let Some(error) = error {
+                lines.push(Vec::new());
+                lines.push(vec![Span::styled(
+                    error,
+                    ctx.style("text.feedback.error.base"),
+                )]);
+            }
+            groups.push(ctx.block(lines, false));
+        }
+        Item::Notice(text) => groups.push(vec![Row::text(
+            3,
+            vec![Span::styled(text.clone(), ctx.style("text.muted"))],
+        )]),
+        Item::Compaction {
+            running,
+            summary,
+            error,
+        } => {
+            let label = if *running {
+                format!(" {} Compaction ", ctx.spinner())
+            } else if error.is_some() {
+                " ✗ Compaction ".to_string()
+            } else {
+                " Compaction ".to_string()
+            };
+            let side = ctx.width.saturating_sub(3 + text::width(&label)) / 2;
+            let rule = format!("{}{label}{}", "─".repeat(side), "─".repeat(side));
+            let mut rows = vec![Row::text(
+                3,
+                vec![Span::styled(rule, ctx.style("border.base"))],
+            )];
+            if let Some(summary) = summary {
+                rows.push(Row::default());
+                rows.extend(
+                    markdown::render(
+                        summary,
+                        ctx.width.saturating_sub(3),
+                        ctx.theme,
+                        ctx.source_markdown,
+                    )
+                    .into_iter()
+                    .map(|l| Row::text(3, l)),
+                );
+            }
+            groups.push(rows);
+        }
+    }
 }
 
 fn user(text: &str, agent: &str, ctx: &Ctx) -> Vec<Row> {
@@ -439,4 +501,51 @@ pub fn patch_rows(
         filetype: filetype(path),
     };
     Some(diff::render(patch, &options, theme))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cache_reuses_settled_items_and_drops_on_context_change() {
+        let theme = crate::theme::Catalog::bundled()
+            .load("anysola", crate::theme::Mode::Dark)
+            .unwrap();
+        let color = |_: &str| Color::Reset;
+        let ctx = |width| Ctx {
+            theme: &theme,
+            width,
+            now: 0,
+            animations: true,
+            split: false,
+            thinking: false,
+            source_markdown: false,
+            agent_color: &color,
+            background_key: None,
+            directory: "/w",
+            home: "/h",
+        };
+        let items = vec![
+            Item::User {
+                id: "m".into(),
+                text: "hello".into(),
+                agent: "build".into(),
+                files: Vec::new(),
+                created: 0,
+            },
+            Item::Compaction {
+                running: true,
+                summary: None,
+                error: None,
+            },
+        ];
+        let cache = std::sync::Mutex::new(Cache::default());
+        let fresh = layout(&items, &ctx(80), None);
+        assert_eq!(layout(&items, &ctx(80), Some(&cache)), fresh);
+        assert_eq!(cache.lock().unwrap().entries.len(), 1);
+        assert_eq!(layout(&items, &ctx(80), Some(&cache)), fresh);
+        layout(&items, &ctx(60), Some(&cache));
+        assert_eq!(cache.lock().unwrap().context.split('|').next(), Some("60"));
+    }
 }

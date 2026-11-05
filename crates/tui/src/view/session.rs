@@ -45,7 +45,7 @@ pub fn transcript(
         directory: &session.directory,
         home: &state.home,
     };
-    rows::layout(&session.items, &ctx)
+    rows::layout(&session.items, &ctx, Some(&session.layout.0))
 }
 
 pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u16)> {

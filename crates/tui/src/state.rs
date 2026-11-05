@@ -134,6 +134,24 @@ pub struct Session {
     pub queued: Vec<String>,
     /// A revert is staged (`/redo` is available).
     pub reverted: bool,
+    pub layout: LayoutCache,
+}
+
+/// The session's transcript layout cache, shared by clones of the session.
+#[derive(Clone, Default)]
+pub struct LayoutCache(pub std::sync::Arc<std::sync::Mutex<crate::transcript::rows::Cache>>);
+
+impl std::fmt::Debug for LayoutCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LayoutCache")
+    }
+}
+
+/// A cache never makes two sessions differ.
+impl PartialEq for LayoutCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 
 impl Session {

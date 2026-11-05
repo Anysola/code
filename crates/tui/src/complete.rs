@@ -157,7 +157,10 @@ pub fn mention_rows(
             .collect()
     };
     let alias = query.split_once('/').map(|(head, _)| head);
-    if let Some(reference) = references.iter().find(|(name, _)| Some(name.as_str()) == alias) {
+    if let Some(reference) = references
+        .iter()
+        .find(|(name, _)| Some(name.as_str()) == alias)
+    {
         return named(std::slice::from_ref(reference), "reference", AtomKind::File);
     }
     let mut rows = named(skills, "skill", AtomKind::Skill);
