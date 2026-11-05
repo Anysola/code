@@ -57,15 +57,15 @@ pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u1
     let bottom = state.height.saturating_sub(1);
     let (block_h, cursor) = if let Some(permission) = &session.permission {
         let h = prompts::permission_height(c, state, permission, w);
-        prompts::permission(c, state, permission, x, bottom - h, w, h);
+        prompts::permission(c, state, permission, x, bottom.saturating_sub(h), w, h);
         (h, None)
     } else if let Some(question) = &session.question {
         let h = prompts::question_height(question, w);
-        prompts::question(c, question, x, bottom - h, w);
+        prompts::question(c, question, x, bottom.saturating_sub(h), w);
         (h, None)
     } else {
         let box_h = prompt::box_height(state, w);
-        let y = bottom - box_h - 1;
+        let y = bottom.saturating_sub(box_h + 1);
         let cursor = prompt::draw_box(c, state, x, y, w, false);
         prompt::footer(c, state, x, y + box_h, w);
         prompt::popup(c, state, x, w, y, top);
@@ -74,7 +74,8 @@ pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u1
     let status_y = bottom.saturating_sub(block_h + 1);
     let height = status_y.saturating_sub(top) as usize;
     let rows = transcript(state, session, c.theme, w as usize);
-    let end = rows.len().saturating_sub(session.scroll.min(rows.len()));
+    let scroll = session.scroll.min(rows.len().saturating_sub(height));
+    let end = rows.len() - scroll;
     let start = end.saturating_sub(height);
     for (i, row) in rows[start..end].iter().enumerate() {
         draw_row(c, row, x, top + i as u16, w);

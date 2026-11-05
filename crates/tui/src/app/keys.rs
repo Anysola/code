@@ -567,6 +567,11 @@ impl App {
             MouseEventKind::ScrollUp => self.scroll(3),
             MouseEventKind::ScrollDown => self.scroll(-3),
             MouseEventKind::Down(MouseButton::Left) => {
+                // A click while text is selected only clears the selection.
+                if self.selection.is_some_and(|(a, b)| a != b) {
+                    self.selection = None;
+                    return;
+                }
                 self.selection = Some((at, at));
                 if self.state.route == Route::Home {
                     self.click_recent(mouse.row);
@@ -616,8 +621,15 @@ impl App {
     }
 
     pub(super) fn scroll(&mut self, rows: isize) {
+        let Some(session) = self.state.session() else {
+            return;
+        };
+        let width = crate::view::session_content_width(&self.state);
+        let total = crate::view::transcript_rows(&self.state, session, &self.theme, width);
+        let limit = total.saturating_sub(self.state.height as usize / 2);
         if let Some(session) = self.state.session_mut() {
-            session.scroll = (session.scroll as isize + rows).max(0) as usize;
+            session.scroll =
+                ((session.scroll as isize).saturating_add(rows).max(0) as usize).min(limit);
         }
     }
 

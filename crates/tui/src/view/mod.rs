@@ -16,6 +16,22 @@ mod session;
 
 pub use prompt::{max_rows, textarea_width};
 
+/// Width of the session pane's content box.
+pub fn session_content_width(state: &State) -> usize {
+    let pad = if state.width < 44 { 1 } else { 2 };
+    session::pane_width(state).saturating_sub(2 * pad) as usize
+}
+
+/// How many rows the session's transcript lays out to at `width`.
+pub fn transcript_rows(
+    state: &State,
+    s: &crate::state::Session,
+    theme: &Theme,
+    width: usize,
+) -> usize {
+    session::transcript(state, s, theme, width).len()
+}
+
 /// Where the terminal cursor goes after drawing.
 pub struct Drawn {
     pub cursor: Option<(u16, u16)>,

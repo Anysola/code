@@ -158,6 +158,25 @@ fn build(theme: &Theme) -> SynTheme {
     }
 }
 
+/// The syntect theme for the active theme, built once per theme and mode.
+fn cached(theme: &Theme) -> std::sync::Arc<SynTheme> {
+    type Cache = std::sync::Mutex<Option<((String, crate::theme::Mode), std::sync::Arc<SynTheme>)>>;
+    static CACHE: OnceLock<Cache> = OnceLock::new();
+    let key = (theme.name.clone(), theme.mode);
+    let mut slot = CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    match slot.as_ref() {
+        Some((k, built)) if *k == key => built.clone(),
+        _ => {
+            let built = std::sync::Arc::new(build(theme));
+            *slot = Some((key, built.clone()));
+            built
+        }
+    }
+}
+
 /// `code` as styled lines; unknown languages come back in the base text colour.
 pub fn highlight(code: &str, language: &str, theme: &Theme) -> Vec<Vec<Span<'static>>> {
     let plain = || {
@@ -173,7 +192,7 @@ pub fn highlight(code: &str, language: &str, theme: &Theme) -> Vec<Vec<Span<'sta
     let Some(syntax) = find(language) else {
         return plain();
     };
-    let synth = build(theme);
+    let synth = cached(theme);
     let mut lines = HighlightLines::new(syntax, &synth);
     let mut out = Vec::new();
     for line in LinesWithEndings::from(code) {
