@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use super::App;
 use crate::state::Tab;
+use crate::status::{Pending, Report};
 
 pub(super) struct TabStore {
     path: PathBuf,
@@ -125,6 +126,65 @@ impl App {
             .map(|t| t.session_id.clone());
         if let Some(id) = id {
             self.open_session(&id);
+        }
+    }
+
+    /// Open tabs and the viewed session that work or wait, as OSC 7501 records.
+    pub(super) fn report_status(&mut self) {
+        let Some(records) = self.records.as_mut() else {
+            return;
+        };
+        let mut ids: Vec<&str> = self
+            .state
+            .tabs
+            .iter()
+            .map(|t| t.session_id.as_str())
+            .collect();
+        if let Some(viewed) = self.state.session()
+            && !ids.contains(&viewed.id.as_str())
+        {
+            ids.push(&viewed.id);
+        }
+        let reports: Vec<Report> = ids
+            .into_iter()
+            .filter_map(|id| {
+                let session = self.state.sessions.get(id);
+                let tab = self.state.tabs.iter().find(|t| t.session_id == id);
+                let waiting = session.map(|s| (s.permission.is_some(), s.question.is_some()));
+                let state = match (waiting, tab) {
+                    (Some((true, _)), _)
+                    | (
+                        _,
+                        Some(Tab {
+                            attention: true,
+                            question: false,
+                            ..
+                        }),
+                    ) => Pending::Blocked("permission", "Permission needs input"),
+                    (Some((_, true)), _)
+                    | (
+                        _,
+                        Some(Tab {
+                            attention: true, ..
+                        }),
+                    ) => Pending::Blocked("question", "Input needs response"),
+                    _ if session.is_some_and(|s| s.busy) => Pending::Working,
+                    _ => return None,
+                };
+                let title = session
+                    .map(|s| s.title.clone())
+                    .or_else(|| tab.map(|t| t.title.clone()))
+                    .unwrap_or_default();
+                Some(Report {
+                    id: id.to_string(),
+                    title,
+                    state,
+                })
+            })
+            .collect();
+        let out = records.update(&reports);
+        if !out.is_empty() {
+            crate::term::write_raw(&out);
         }
     }
 

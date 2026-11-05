@@ -119,6 +119,8 @@ pub struct App {
     pane_drag: bool,
     recents: relocate::Recents,
     tab_store: tabs::TabStore,
+    /// OSC 7501 records, when the terminal answered the support query.
+    records: Option<crate::status::Records>,
     /// A directory move waiting for running turns.
     relocating: Option<relocate::Pending>,
     /// The new core's events, taken by the loop after a swap.
@@ -182,9 +184,9 @@ pub async fn run(core: Core, options: Options) -> Result<(), String> {
     let paths = Paths::from_env();
     let tui = Tui::load(paths.data.join("tui.json"));
     let keymap = Keymap::from_config(&tui.value, cfg!(windows))?;
-    let mode = tui
-        .theme_mode()
-        .unwrap_or_else(|| term::detect_mode(BACKGROUND_QUERY_MS));
+    let locked = tui.theme_mode();
+    let probe = term::probe(BACKGROUND_QUERY_MS, locked.is_none());
+    let mode = locked.or(probe.mode).unwrap_or(crate::theme::Mode::Dark);
     let mut catalog = Catalog::bundled();
     let mut theme_name = tui.theme_name();
     if catalog
@@ -243,6 +245,7 @@ pub async fn run(core: Core, options: Options) -> Result<(), String> {
         pane_drag: false,
         recents: relocate::Recents::new(&paths.data),
         tab_store,
+        records: probe.program_status.then(crate::status::Records::default),
         relocating: None,
         resubscribe: None,
     };
@@ -273,6 +276,9 @@ pub async fn run(core: Core, options: Options) -> Result<(), String> {
         if let Some(receiver) = app.resubscribe.take() {
             events = receiver;
         }
+    }
+    if let Some(records) = app.records.as_mut() {
+        term::write_raw(&records.clear());
     }
     term::restore();
     app.core.shutdown();
@@ -422,6 +428,7 @@ impl App {
         self.sync_pane();
         self.state.live = self.live();
         self.tab_store.save(&self.state.tabs);
+        self.report_status();
         let title = if self.state.settings.title {
             term::title(self.state.session().map(|s| s.title.as_str()))
         } else {

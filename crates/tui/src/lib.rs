@@ -14,6 +14,7 @@ pub mod settings;
 pub mod sound;
 pub mod stash;
 pub mod state;
+pub mod status;
 pub mod term;
 pub mod terminal;
 pub mod text;
