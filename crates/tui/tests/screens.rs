@@ -42,6 +42,11 @@ fn render(state: &State) -> String {
 
 /// Compares row by row, ignoring trailing spaces; prints both screens on a mismatch.
 fn assert_screen(state: &State, name: &str) {
+    let diff = screen_diff(state, name);
+    assert!(diff.is_empty(), "{name} differs:\n{}", diff.join("\n"));
+}
+
+fn screen_diff(state: &State, name: &str) -> Vec<String> {
     let actual = render(state);
     let expected = capture(name);
     let norm =
@@ -58,7 +63,7 @@ fn assert_screen(state: &State, name: &str) {
             )
         })
         .collect();
-    assert!(diff.is_empty(), "{name} differs:\n{}", diff.join("\n"));
+    diff
 }
 
 fn now() -> u64 {
@@ -804,4 +809,129 @@ fn skills() {
     skills.push(("x".repeat(34), String::new()));
     let state = dialog(under(1), select(lists::skills(&skills)));
     assert_screen(&state, "skills");
+}
+
+#[test]
+fn session_120x36_after_turn() {
+    let mut items = turn(true, true);
+    if let Some(Item::Assistant(a)) = items.last_mut() {
+        a.created = now() + 69;
+        a.completed = Some(now() + 345);
+        a.output_tokens = 183;
+        for part in &mut a.parts {
+            if let Part::Reasoning { end, .. } = part {
+                *end = Some(now() + 19);
+            }
+        }
+    }
+    let mut state = session(120, 36, items);
+    state.tabs.remove(0);
+    state.sessions.get_mut("ses_b").unwrap().credits = credits(12, 12, None, 728);
+    assert_screen(&state, "session-120x36-after-turn");
+}
+
+/// The first `/name` drawn in a capture, for finding the scroll offset it was taken at.
+fn first_slash(name: &str) -> String {
+    capture(name)
+        .lines()
+        .find_map(|l| {
+            l.split('┃')
+                .nth(1)?
+                .split_whitespace()
+                .next()
+                .map(str::to_string)
+        })
+        .unwrap()
+}
+
+#[test]
+fn slash_popup_scroll_series() {
+    let scope = anysola_tui::complete::Scope {
+        in_session: false,
+        revert_staged: false,
+        server: &[
+            (
+                "goal".into(),
+                "keep working until an objective is met [pause|resume|clear]".into(),
+            ),
+            ("init".into(), "guided AGENTS.md setup".into()),
+            (
+                "review".into(),
+                "review changes [commit|branch|pr], defaults to uncommitted".into(),
+            ),
+        ],
+    };
+    let (mut rows, pad) = anysola_tui::complete::slash_rows(&scope);
+    // `/plugins` is not carried over (decision 5) but sits in the 0.5.1 captures.
+    let at = rows.iter().position(|r| r.display == "/project").unwrap();
+    rows.insert(
+        at,
+        PopupRow {
+            display: "/plugins".into(),
+            description: "Plugins".into(),
+            label: String::new(),
+            action: PopupAction::Command("plugins.list".into()),
+        },
+    );
+    for i in 0..=6 {
+        let name = format!("slash-popup-scroll-{i}");
+        let first = first_slash(&name);
+        let offset = rows.iter().position(|r| r.display == first).unwrap();
+        let mut state = base(120, 60);
+        state.composer.insert("/");
+        state.popup = Some(Popup {
+            trigger: '/',
+            start: 0,
+            rows: rows.clone(),
+            selected: offset,
+            offset,
+            pad,
+        });
+        assert_screen(&state, &name);
+    }
+}
+
+#[test]
+fn command_palette_scroll_series() {
+    let keymap = anysola_tui::keymap::Keymap::defaults();
+    let cx = palette::Context {
+        connected: true,
+        tabs: true,
+        variants: true,
+        ..palette::Context::default()
+    };
+    // `Toggle console` and `Plugins` are not carried over but sit in the 0.5.1 captures.
+    let list = || {
+        let mut list = palette::dialog(&keymap, &cx);
+        let at = list
+            .options
+            .iter()
+            .position(|o| o.title == "Exit the app")
+            .unwrap()
+            + 1;
+        for title in ["Plugins", "Toggle console"] {
+            let mut opt = list.options[at - 1].clone();
+            opt.title = title.into();
+            opt.footer = String::new();
+            list.options.insert(at, opt);
+        }
+        list
+    };
+    for i in 0..=7 {
+        let name = format!("command-palette-60rows-scroll-{i}");
+        let mut state = under(1);
+        state.height = 60;
+        state.composer.set("Ask");
+        let found = (0..200).any(|offset| {
+            let mut list = list();
+            list.offset = offset;
+            screen_diff(&dialog(state.clone(), select(list)), &name).is_empty()
+        });
+        let list = list();
+        assert!(
+            found,
+            "{name}: no offset matches; offset 0:\n{}",
+            screen_diff(&dialog(state, select(list)), &name).join("\n")
+        );
+    }
 }
