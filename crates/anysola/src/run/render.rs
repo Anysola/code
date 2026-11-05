@@ -412,7 +412,12 @@ impl Renderer {
             | Event::TitleChanged { .. }
             | Event::GoalChanged { .. }
             | Event::FormAsked { .. }
-            | Event::McpStatusChanged { .. } => {}
+            | Event::McpStatusChanged { .. }
+            | Event::SessionCreated { .. }
+            | Event::Started { .. }
+            | Event::CompactionStarted { .. }
+            | Event::CompactionEnded { .. }
+            | Event::CompactionFailed { .. } => {}
         }
         false
     }

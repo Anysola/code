@@ -355,6 +355,9 @@ pub(crate) async fn drain(
 ) -> Outcome {
     settle_stale(&shared, session_id);
     goal::started(&shared, session_id);
+    let _ = shared.events.send(Event::Started {
+        session_id: session_id.to_string(),
+    });
     let mut outcome = Outcome::Succeeded;
     let mut open = false;
     loop {

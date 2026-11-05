@@ -2,6 +2,7 @@
 //! stdin and stdout, with the agent running in this process.
 
 mod agent;
+mod child;
 mod rpc;
 mod tool;
 mod turn;

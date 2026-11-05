@@ -182,6 +182,35 @@ pub enum Event {
         session_id: String,
         goal: Option<crate::session::goal::Goal>,
     },
+    /// A session was created; subagents create children of the running session.
+    SessionCreated {
+        session_id: String,
+        parent_id: Option<String>,
+        title: String,
+    },
+    /// The session started working through its inbox.
+    Started {
+        session_id: String,
+    },
+    /// A summary of the history started; `message_id` is its compaction message, `reason`
+    /// `auto` or `manual`.
+    CompactionStarted {
+        session_id: String,
+        message_id: String,
+        reason: String,
+    },
+    CompactionEnded {
+        session_id: String,
+        message_id: String,
+        reason: String,
+        summary: String,
+    },
+    CompactionFailed {
+        session_id: String,
+        message_id: String,
+        reason: String,
+        error: SessionError,
+    },
 }
 
 impl Event {
@@ -208,7 +237,12 @@ impl Event {
             | Event::Succeeded { session_id }
             | Event::Failed { session_id, .. }
             | Event::Interrupted { session_id, .. }
-            | Event::GoalChanged { session_id, .. } => session_id,
+            | Event::GoalChanged { session_id, .. }
+            | Event::SessionCreated { session_id, .. }
+            | Event::Started { session_id }
+            | Event::CompactionStarted { session_id, .. }
+            | Event::CompactionEnded { session_id, .. }
+            | Event::CompactionFailed { session_id, .. } => session_id,
             Event::Credits(snapshot) => &snapshot.session_id,
             Event::FormAsked { .. } | Event::McpStatusChanged { .. } => crate::mcp::GLOBAL,
         }

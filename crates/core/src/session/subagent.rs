@@ -178,6 +178,11 @@ fn create_child(
     if let Some(model) = &row.model {
         shared.db.set_model(&row.id, model).map_err(|_| failed())?;
     }
+    let _ = shared.events.send(crate::events::Event::SessionCreated {
+        session_id: row.id.clone(),
+        parent_id: row.parent_id.clone(),
+        title: row.title.clone(),
+    });
     Ok(row)
 }
 
