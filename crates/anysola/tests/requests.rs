@@ -336,8 +336,14 @@ fn background_subagent_returns_at_once() {
         .filter(|r| !r.is_title() && r.header("x-opencode-parent-session-id").is_none())
         .collect();
     let body = parent[1].json();
-    let result = body["messages"].as_array().unwrap().last().unwrap()["content"][0]["content"]
-        .as_str()
+    // The subagent can finish before this request, adding its report after the tool result.
+    let result = body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|m| m["content"].as_array().into_iter().flatten())
+        .find(|part| part["type"] == "tool_result")
+        .and_then(|part| part["content"].as_str())
         .unwrap()
         .to_string();
     assert!(result.starts_with("The subagent is working in the background (sessionID: ses_"));
