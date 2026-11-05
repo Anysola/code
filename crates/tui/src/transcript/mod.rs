@@ -5,6 +5,7 @@ pub mod export;
 pub mod highlight;
 pub mod latex;
 pub mod markdown;
+pub mod mermaid;
 pub mod model;
 pub mod rows;
 mod tools;

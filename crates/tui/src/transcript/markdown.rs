@@ -296,8 +296,12 @@ impl Builder<'_> {
             TagEnd::CodeBlock => {
                 if let Some((language, code)) = self.code.take() {
                     let room = self.width.saturating_sub(self.indent()).max(1);
-                    let math = matches!(language.as_str(), "latex" | "math" | "tex");
-                    if let Some(rows) = math.then(|| super::latex::render(&code).ok()).flatten() {
+                    let drawn = match language.as_str() {
+                        "latex" | "math" | "tex" => super::latex::render(&code).ok(),
+                        "mermaid" => super::mermaid::render(&code).ok(),
+                        _ => None,
+                    };
+                    if let Some(rows) = drawn {
                         let style = Style::new().fg(self.theme.fg("text.base"));
                         let lines = rows
                             .into_iter()
