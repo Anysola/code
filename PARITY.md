@@ -448,22 +448,22 @@ Exact texts: `V/tui/dialogs.md`, `V/tui/slash-commands.md`, `V/tui/keybinds-defa
 screens: `V/tui/screens/*.txt`.
 
 ### M4.1 Home and layout
-- [ ] Home at 120×36: tab strip (when tabs exist), centered 3-row wordmark with `Code` right-aligned, prompt box (`┃` rail, `╹▀▀▀` bottom edge), placeholder `Ask anything… "<example>"`, metadata row, footer row, `Recent` list (≤3, `ctrl+x l all sessions`), bottom plan line + version — spec/tui.md §0, V/tui/screens/home-120x36-*.txt
-- [ ] Narrow home (width < 64: A symbol + `Anysola Code`; height < 24 hides recents; height < 12 hides logo); 170×40 home — spec/tui.md §0, §5 "Wordmark", V/tui/wordmark.md, V/tui/screens/home-60x20-narrow.txt, home-170x40.txt
+- [x] Home at 120×36: tab strip (when tabs exist), centered 3-row wordmark with `Code` right-aligned, prompt box (`┃` rail, `╹▀▀▀` bottom edge), placeholder `Ask anything… "<example>"`, metadata row, footer row, `Recent` list (≤3, `ctrl+x l all sessions`), bottom plan line + version — spec/tui.md §0, V/tui/screens/home-120x36-*.txt
+- [x] Narrow home (width < 64: A symbol + `Anysola Code`; height < 24 hides recents; height < 12 hides logo); 170×40 home — spec/tui.md §0, §5 "Wordmark", V/tui/wordmark.md, V/tui/screens/home-60x20-narrow.txt, home-170x40.txt
 - [ ] Home footer: MCP count `⊙ N` (click → `/mcps`), Anysola plan/banners slot, version; hidden when height < 14 or width < 44 — spec/tui.md §4 "Home route, tabs, keymap"
 - [ ] `/update to install v<version>` home notice when `/version` reports a newer release (checked at start and every 10 min) — spec/tui.md §4, spec/protocol.md §1.9
-- [ ] Layout regions, session frame (session pane + right pane), padding rules, one blank line between transcript rows, 3-cell indent, `┃` split border — spec/tui.md §Layout regions
+- [x] Layout regions, session frame (session pane + right pane), padding rules, one blank line between transcript rows, 3-cell indent, `┃` split border — spec/tui.md §Layout regions
 - [ ] Responsive rules: sidebar docked when width > 120 else overlay (`RGBA(0,0,0,70)` dim, esc/ctrl+c close), assistant footer width rules, diff split > 120, permission diff uses terminal width, prompts stack < 80, form tab fit rule, docked panel ≥ 108, inline image size, crash screen sizes — spec/tui.md §Responsive breakpoints
 
 ### M4.2 Session transcript
 - [ ] Sticky-bottom transcript, optional scrollbar, wheel speed/acceleration, tail-first mounting with older-history paging, `Jump to latest ↓`, `Loading session history…`, per-tab scroll anchor — spec/tui.md §Transcript mechanics
 - [ ] Scroll and message-navigation keys (page/half/line, first/last, last user, next/previous) — spec/tui.md §Transcript mechanics, V/tui/slash-commands.md
-- [ ] Streaming markdown with an unstable trailing block; rows appear on text/reasoning/tool-input events — spec/tui.md §Transcript mechanics
+- [x] Streaming markdown with an unstable trailing block; rows appear on text/reasoning/tool-input events — spec/tui.md §Transcript mechanics
 - [ ] Grouping (`session.grouping`), exploration rows `Exploring:`/`Explored:` counts, verbosity low/medium/high with activity rows, instruction groups `◈ Instructions: N file(s)`, permission-blocked tools visible, per-tab expansion state — spec/tui.md §Grouping and verbosity
 - [ ] Thinking hide/show modes, `Thought` rows with title/steps/duration, expanded markdown in muted colours, `[REDACTED]` removal, palette toggle — spec/tui.md §Thinking / reasoning
 - [ ] Markdown: rendered/source modes, headings, fenced code, lists, blockquotes, hr, grid tables, inline styles, OSC 8 links with ` (url)` fallback, clickable links; user messages plain — spec/tui.md §Assistant text (markdown)
-- [ ] Syntax highlighting built into the binary for every language 0.5.1 bundled or downloaded (javascript, typescript, tsx, markdown, zig, python, rust, go, cpp, csharp, bash, c, java, kotlin, ruby, php, scala, html, vue, hcl, json, yaml, haskell, css, julia, lua, ocaml, clojure, swift, toml, nix, diff, elixir, fsharp, r, make, vim, xml, agda) with the theme's scope → token mapping; no downloads — spec/tui.md §Assistant text (markdown), V/tui/themes-bundled.md §Syntax highlighting style
-- [ ] File-path → filetype map for tool output — spec/tui.md §Assistant text (markdown)
+- [x] Syntax highlighting built into the binary for every language 0.5.1 bundled or downloaded (javascript, typescript, tsx, markdown, zig, python, rust, go, cpp, csharp, bash, c, java, kotlin, ruby, php, scala, html, vue, hcl, json, yaml, haskell, css, julia, lua, ocaml, clojure, swift, toml, nix, diff, elixir, fsharp, r, make, vim, xml, agda) with the theme's scope → token mapping; no downloads — spec/tui.md §Assistant text (markdown), V/tui/themes-bundled.md §Syntax highlighting style
+- [x] File-path → filetype map for tool output — spec/tui.md §Assistant text (markdown)
 - [ ] ```` ```mermaid ```` diagrams (flowchart, sequence, state, gantt, gitGraph, timeline) as box drawings with the fallback rules — spec/tui.md §Assistant text (markdown)
 - [ ] ```` ```latex ````/```` ```math ```` blocks as 2-D Unicode math with limits and fallback — spec/tui.md §Assistant text (markdown)
 - [ ] User message box (agent-colour rail, pending colour), attachment chips, image previews when enabled, click → Message Actions (Jump to / Revert / Copy / Fork), pending steer actions — spec/tui.md §User message
@@ -479,23 +479,23 @@ screens: `V/tui/screens/*.txt`.
 
 ### M4.3 Permission and question prompts
 - [ ] Permission prompt replacing the input: `△ Permission required`, per-action titles/bodies, `Allow once` / `Always allow` (only with save patterns) / `Reject`, "always" explanation texts, keys, fullscreen `ctrl+f`, child-session reject reason dialog, warning tint on awaiting rows, tab `!` marker — spec/tui.md §Permission prompt, spec/tools.md §TUI prompt (texts), V/tui/dialogs.md §29
-- [ ] Auto-accept mode (`--auto` or Settings Permissions = auto accept), `auto` label in the metadata row — spec/tools.md §TUI prompt (texts), spec/tui.md §2 "Metadata row"
+- [x] Auto-accept mode (`--auto` or Settings Permissions = auto accept), `auto` label in the metadata row — spec/tools.md §TUI prompt (texts), spec/tui.md §2 "Metadata row"
 - [ ] Question/form prompt: title, fields/tabs, options, multiselect, custom answer row, keys, action labels, placeholders, review tab, answers kept across tab switches — spec/tui.md §Question / form prompt, V/tui/dialogs.md §30
 
 ### M4.4 Composer
-- [ ] Prompt box layout, colours, textarea height `max(6, floor(h/3))`, focus rules, hidden while prompts/forms/dock are active — spec/tui.md §2 "Layout of the prompt box"
-- [ ] Placeholders (home examples, shell-mode examples, none in session, width cut) — spec/tui.md §2 "Placeholder", V/tui/composer-strings.md
+- [x] Prompt box layout, colours, textarea height `max(6, floor(h/3))`, focus rules, hidden while prompts/forms/dock are active — spec/tui.md §2 "Layout of the prompt box"
+- [x] Placeholders (home examples, shell-mode examples, none in session, width cut) — spec/tui.md §2 "Placeholder", V/tui/composer-strings.md
 - [ ] Metadata row (agent, `auto`, model name, blank provider for Anysola, variant), responsive fit, fade-in, shell mode `Shell` — spec/tui.md §2 "Metadata row"
 - [ ] Footer row: directory label with branch and working-directory menu, running spinner + `esc interrupt` / `esc again to interrupt`, workspace-move status, `/btw` spinner, credit status line, editor-file label, right hints (`shift+tab agents`, `ctrl+p commands`), subagent/shell counts, goal status, context usage `<tokens> (<pct>%)`, shell-mode hint — spec/tui.md §2 "Footer row under the prompt"
 - [ ] Submit/newline/editing keys, in-input undo/redo, double-submit guard, `exit`/`quit`/`:q`, empty Enter behaviour, steer vs `<leader>return` queue, queue refusals, synchronous clear and restore on failure, optimistic session creation on home, model/budget/revert checks, submit error toasts, `ctrl+c` clear with history save, `ctrl+z` suspend (not on Windows), per-tab drafts — spec/tui.md §2 "Multiline input, submit, newline, editing keys"
-- [ ] Interrupt with double Esc (5 s), `ctrl+b` background blocking tools — spec/tui.md §2 "Interrupt / background"
+- [x] Interrupt with double Esc (5 s), `ctrl+b` background blocking tools — spec/tui.md §2 "Interrupt / background"
 - [ ] Prompt history (50 entries, up/down rules, shell entries, fall-through to subagent picker) in `~/.anysola/state/prompt-history.jsonl` — spec/tui.md §2 "Prompt history"
 - [ ] Text paste: bracketed paste normalisation, empty-paste clipboard read, ANSI strip, `[Pasted ~N lines]` placeholders (expand on re-paste/click/copy/submit), `prompt.paste` setting, toggle command — spec/tui.md §2 "Paste handling (text)"
 - [ ] File/image paste: local paths to images/PDF (≤32, 20 MiB), `[Image N]`/`[PDF N]`/`[SVG: name]` chips, `ctrl+v` clipboard image, clipboard error toasts, dedupe, image previews and viewer (`<leader>i`) — spec/tui.md §2 "Paste handling (files and images)"
 - [ ] `@` autocomplete: trigger rules, sources (skills, references, agents, files limit 20), ranking rules, `#L` ranges, reference shortcut, mention extmarks, directory Tab, relative paths; file search = fuzzy matcher over an `ignore` walk — spec/tui.md §2 "`@` mention autocomplete", spec/integrations.md §7 (fff)
 - [ ] `/` autocomplete: opening rule, rows per name and alias plus server commands, sorting/padding, fuzzy filter, run-or-insert, `/cd` directory argument completion with recents — spec/tui.md §2 "`/` command autocomplete"
 - [ ] Autocomplete popup look, keys, empty-state texts — spec/tui.md §2 "Autocomplete popup (shared)"
-- [ ] `!` shell mode: enter/exit rules, look, runs through the session shell, output rows, skips model/budget checks — spec/tui.md §2 "`!` shell mode"
+- [x] `!` shell mode: enter/exit rules, look, runs through the session shell, output rows, skips model/budget checks — spec/tui.md §2 "`!` shell mode"
 - [ ] External editor `/editor` / `<leader>e` (`$VISUAL`/`$EDITOR`, temp `.md`, mention realignment, error toasts) — spec/tui.md §2 "External editor"
 - [ ] Editor context: IDE lock files `~/.claude/ide/<port>.lock` / `CLAUDE_CODE_SSE_PORT` / `OPENCODE_EDITOR_SSE_PORT` WebSocket JSON-RPC, `at_mentioned` insertion, Zed DB polling ([mac]/Linux paths, `OPENCODE_ZED_DB`), hidden `<system-reminder>` texts, remove command, `prompt.editor` setting — spec/tui.md §2 "Editor context (IDE / Zed selection)", §Zed
 - [ ] Agent switch (`shift+tab`, `/agents`, `Agent not found` toast, per-session draft committed on submit) — spec/tui.md §2 "Agent switch"
@@ -515,7 +515,7 @@ screens: `V/tui/screens/*.txt`.
 - [ ] Settings dialog: every row of dialogs.md §8 cycled with ←/→/Enter and written to `tui.json`; [fix] Animations default `on` (§B11) — V/tui/dialogs.md §8
 - [ ] Every slash and palette command of `V/tui/slash-commands.md` marked [0.5.1], except those listed under "Not carried over"; `/new`, `/clear` (closes tab), `/open`, `/mcps`, `/status`, `/reload` (in-process), `/help`, `/exit` (`/quit`, `/q`), `Open docs` (`https://www.anysola.com/code`), theme mode switch/lock, toggles for terminal title/animations/file context/diff wrap/paste summary — V/tui/slash-commands.md
 - [ ] Session tabs: strip, `+ New session`, `!`/`?`/spinner markers, unread tracking, close `<leader>w`, reopen `ctrl+shift+t`, next/previous (+unread), select 1–10, quick slots when tabs are off, persisted per cwd in `~/.anysola/state/tui/tabs.json`, vertical layout (width 42, clamp, drag resize) — spec/tui.md §4 "Home route, tabs, keymap", §Layout regions
-- [ ] Keymap: leader `ctrl+x` with 2000 ms timeout, comma alternatives, display format (`ctrl+x m`), layers/modes, every v2 default and v1 legacy name accepted from config, [fix] `<leader>q` per §B12, [win] `ctrl+z` → undo, Kitty keyboard protocol for shift/ctrl+return — V/tui/keybinds-default.md, spec/tui.md §Rust implementation notes
+- [x] Keymap: leader `ctrl+x` with 2000 ms timeout, comma alternatives, display format (`ctrl+x m`), layers/modes, every v2 default and v1 legacy name accepted from config, [fix] `<leader>q` per §B12, [win] `ctrl+z` → undo, Kitty keyboard protocol for shift/ctrl+return — V/tui/keybinds-default.md, spec/tui.md §Rust implementation notes
 
 ### M4.6 Anysola UI
 - [ ] Account state refresh (`/me` at start, every 5 min, 1.5 s after credits; estimates/notes at start); balance source order; low balance = not free and (`lowBalance` or remaining < 100) — spec/tui.md §5 "State and refresh", spec/protocol.md §4.1
@@ -527,18 +527,18 @@ screens: `V/tui/screens/*.txt`.
 - [ ] Home recent sessions (≤3, `formatAgo`, click opens) and home version `<ver>` — spec/tui.md §5 "Wordmark, version, exit summary"
 
 ### M4.7 Themes and other UX
-- [ ] Default theme `anysola` (v2 "Grafit", dark + light token tables), unknown names fall back to it, load failure toast + switch to `opencode` — spec/tui.md §6 "Themes", V/tui/theme-anysola.json, V/tui/theme-anysola.md
+- [x] Default theme `anysola` (v2 "Grafit", dark + light token tables), unknown names fall back to it, load failure toast + switch to `opencode` — spec/tui.md §6 "Themes", V/tui/theme-anysola.json, V/tui/theme-anysola.md
 - [ ] `/themes` dialog with 35 entries, live preview, Esc restores, every change written to `tui.json`; bundled 32 v1 themes + `opencode` + `anysola` + `system` — spec/tui.md §6 "Themes", V/tui/themes-bundled.md §What `/themes` lists
 - [ ] Theme formats v2 and v1 (v1 → v2 migration with OKLCH hue inference), stateful colours, custom themes from `themes/*.json` in global dirs and `.opencode/` ancestors (decision-3 bound), discovery error fallback, `SIGUSR2` reload — spec/tui.md §6 "Themes", V/tui/themes-bundled.md
 - [ ] Colour mode: config lock, else OSC 10/11 query within 1000 ms (brightness rule), DEC 2031 theme-change following, switch/lock commands, Settings rows; `system` theme from the 16-colour palette with transparent background — spec/tui.md §6 "Themes", V/tui/themes-bundled.md §Mode, §system theme
 - [ ] Prompt extmark styles and syntax token mapping per theme — spec/tui.md §6 "Themes"
 - [ ] Clipboard: native write + OSC 52, read (image/png then text), `terminal.copy` select (default) / manual ([win] default), selection key rules, dialog copy-on-release, link click opens browser — spec/tui.md §Clipboard, §Copy, selection, mouse
-- [ ] Mouse capture on by default (`mouse` config), clickable targets ignore clicks while text is selected — spec/tui.md §Copy, selection, mouse
-- [ ] Terminal title: `Anysola Code` at home/untitled, [fix] `Anysola | <title>` (§B10), toggle command and setting, cleared on exit, not changed while suspended — spec/tui.md §Terminal title
+- [x] Mouse capture on by default (`mouse` config), clickable targets ignore clicks while text is selected — spec/tui.md §Copy, selection, mouse
+- [x] Terminal title: `Anysola Code` at home/untitled, [fix] `Anysola | <title>` (§B10), toggle command and setting, cleared on exit, not changed while suspended — spec/tui.md §Terminal title
 - [ ] Toasts: single visible toast, position/size/borders, title and action affordances, 5000 ms default, hover pause, queue `+N more`, texts listed — spec/tui.md §Toasts
 - [ ] [cond: `attention.notifications` / `attention.sound`] notifications and sounds for done/subagent done/question/permission/error with title/message limits, focus-out rule, built-in sounds, volume, Settings rows; `Session failed` toast always — spec/tui.md §Attention & notifications
 - [ ] Program status records (OSC 7501) per tab/session, cleared on exit — spec/tui.md §Attention & notifications
-- [ ] Animations (runtime default on), `app.toggle.animations`, spinner frames, static fallbacks — spec/tui.md §Animations
+- [x] Animations (runtime default on), `app.toggle.animations`, spinner frames, static fallbacks — spec/tui.md §Animations
 - [ ] Locale helpers (`time`, `datetime`, `1.2K`/`3.4M`, grapheme-aware truncation, east-asian width) — spec/tui.md §Locale helpers, §Rust implementation notes
 - [ ] [cond: Settings "Developer tools" / `debug.devtools`] DevTools bar with runtime/theme panels and `Write debug snapshot`; [cond: `debug.timing`] time to first draw — spec/tui.md §Devtools
 - [ ] Toasts for MCP needs-auth/failed (once per state change, action `Open MCP servers`) and `Invalid model format: <arg>` — spec/tui.md §Toasts, spec/integrations.md §1.8
