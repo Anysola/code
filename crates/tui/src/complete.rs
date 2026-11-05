@@ -138,6 +138,32 @@ pub fn walk(root: &Path, limit: usize) -> Vec<String> {
 /// `@` rows: skills, subagents, then the files matching `query` (at most 20).
 /// `@` rows: skills, references (`(name, description)`), agents, then files. A query that
 /// starts with a reference name and `/` lists only that reference.
+/// Splits a trailing `#<start>` / `#<start>-<end>` off a file query. The end counts only when
+/// it is greater than the start; any other `#` text stays part of the query.
+pub fn split_line_range(query: &str) -> (&str, Option<String>) {
+    let Some(hash) = query.rfind('#').filter(|&h| h > 0) else {
+        return (query, None);
+    };
+    let tail = &query[hash + 1..];
+    let (start, end) = match tail.split_once('-') {
+        Some((start, end)) => (start, Some(end)),
+        None => (tail, None),
+    };
+    let digits = |t: &str| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit());
+    if !digits(start) || end.is_some_and(|e| !e.is_empty() && !digits(e)) {
+        return (query, None);
+    }
+    let first: u64 = start.parse().unwrap_or(0);
+    let last = end
+        .and_then(|e| e.parse::<u64>().ok())
+        .filter(|&e| first < e);
+    let suffix = match last {
+        Some(last) => format!("#{first}-{last}"),
+        None => format!("#{first}"),
+    };
+    (&query[..hash], Some(suffix))
+}
+
 pub fn mention_rows(
     query: &str,
     skills: &[(String, String)],
@@ -166,14 +192,11 @@ pub fn mention_rows(
     let mut rows = named(skills, "skill", AtomKind::Skill);
     rows.extend(named(references, "reference", AtomKind::File));
     rows.extend(named(agents, "agent", AtomKind::Agent));
-    let (path, range) = match query.split_once('#') {
-        Some((path, range)) => (path, Some(range)),
-        None => (query, None),
-    };
+    let (path, range) = split_line_range(query);
     let file_rows: Vec<PopupRow> = files
         .iter()
         .map(|file| {
-            let suffix = range.map_or(String::new(), |r| format!("#{r}"));
+            let suffix = range.clone().unwrap_or_default();
             let action = if file.ends_with('/') {
                 PopupAction::Directory(format!("@{file}"))
             } else {
@@ -199,6 +222,26 @@ pub fn mention_rows(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn line_ranges() {
+        use super::split_line_range;
+        assert_eq!(
+            split_line_range("src/a.rs#12-20"),
+            ("src/a.rs", Some("#12-20".into()))
+        );
+        assert_eq!(
+            split_line_range("src/a.rs#20-12"),
+            ("src/a.rs", Some("#20".into()))
+        );
+        assert_eq!(
+            split_line_range("src/a.rs#7-"),
+            ("src/a.rs", Some("#7".into()))
+        );
+        assert_eq!(split_line_range("src/a.rs#x"), ("src/a.rs#x", None));
+        assert_eq!(split_line_range("#5"), ("#5", None));
+        assert_eq!(split_line_range("src/a.rs"), ("src/a.rs", None));
+    }
+
     use super::*;
 
     /// The home `/` list equals 0.5.1's (`slash-list-home-context.txt`) minus `/plugins`, which

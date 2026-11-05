@@ -718,6 +718,7 @@ impl App {
                 Variant::Error,
             );
         };
+        let marks = self.state.composer.mention_marks();
         let file = std::env::temp_dir().join(format!("{}.md", now()));
         if std::fs::write(&file, self.state.composer.expanded()).is_err() {
             return;
@@ -739,7 +740,7 @@ impl App {
                     _ => content,
                 };
                 if !content.is_empty() {
-                    self.state.composer.set(&content);
+                    self.state.composer.realign(&content, &marks);
                 }
             }
             Ok(status) => {
