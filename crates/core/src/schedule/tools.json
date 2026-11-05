@@ -1,0 +1,1244 @@
+[
+ {
+  "name": "schedule_create",
+  "description": "Schedule a prompt that wakes this session later: once after a delay, at a time, every interval, on a cron, or gated by an `if` / `until` shell (`{ run }`) or Code Mode (`{ code }`) check. Returns the schedule with its next run (or `done` immediately if `until` already matches).",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "name": {
+     "type": "string",
+     "description": "A short label for the schedule."
+    },
+    "when": {
+     "anyOf": [
+      {
+       "type": "object",
+       "properties": {
+        "in": {
+         "type": "string",
+         "description": "A duration such as \"90 seconds\", \"5 minutes\" or \"2 hours\"."
+        },
+        "tz": {
+         "type": "string",
+         "description": "IANA time zone. Defaults to the configured timezone, then the server's local zone."
+        }
+       },
+       "required": [
+        "in"
+       ],
+       "additionalProperties": false
+      },
+      {
+       "type": "object",
+       "properties": {
+        "at": {
+         "type": "string"
+        },
+        "tz": {
+         "type": "string",
+         "description": "IANA time zone. Defaults to the configured timezone, then the server's local zone."
+        }
+       },
+       "required": [
+        "at"
+       ],
+       "additionalProperties": false
+      },
+      {
+       "type": "object",
+       "properties": {
+        "every": {
+         "type": "string",
+         "description": "A duration such as \"90 seconds\", \"5 minutes\" or \"2 hours\"."
+        },
+        "tz": {
+         "type": "string",
+         "description": "IANA time zone. Defaults to the configured timezone, then the server's local zone."
+        }
+       },
+       "required": [
+        "every"
+       ],
+       "additionalProperties": false
+      },
+      {
+       "type": "object",
+       "properties": {
+        "cron": {
+         "type": "string"
+        },
+        "tz": {
+         "type": "string",
+         "description": "IANA time zone. Defaults to the configured timezone, then the server's local zone."
+        }
+       },
+       "required": [
+        "cron"
+       ],
+       "additionalProperties": false
+      }
+     ],
+     "description": "When it fires: { in: \"20 minutes\" }, { at: \"2026-10-27T09:00\" }, { every: \"1 hour\" } or { cron: \"0 9 * * 1-5\" }. Optional with `until` (defaults to { every: \"30 seconds\" })."
+    },
+    "if": {
+     "anyOf": [
+      {
+       "type": "object",
+       "properties": {
+        "run": {
+         "type": "string",
+         "minLength": 1,
+         "description": "Shell command to run in the Session's directory. Alone, exit 0 wakes and stdout is appended."
+        },
+        "is": {
+         "type": "string",
+         "description": "Wake when exit is 0 and trimmed stdout equals this value."
+        },
+        "matches": {
+         "type": "string",
+         "description": "Wake when exit is 0 and stdout matches this regular expression."
+        },
+        "changes": {
+         "type": "boolean",
+         "description": "Wake when exit is 0 and stdout differs from the previous check."
+        }
+       },
+       "required": [
+        "run"
+       ],
+       "additionalProperties": false
+      },
+      {
+       "type": "object",
+       "properties": {
+        "code": {
+         "type": "string",
+         "minLength": 1,
+         "description": "Code Mode JavaScript check (no fetch; 30s, 20 tool calls, 32 KB output cap). Call tools statically as tools.<ns>.<tool>(...) or tools[\"ns-name\"].tool(...); each is authorized once at creation to run unattended. Runs once at creation with state = null (if baselines state without waking; until matches immediately if true), with globals state, now (epoch ms) and runs. Return a boolean or { wake, state?, message? } (message is appended to prompt on wake), e.g.: const t = await tools.slack.read_thread({ id }); return { wake: state !== null && t.count > state.count, state: { count: t.count }, message: \"New reply\" }"
+        }
+       },
+       "required": [
+        "code"
+       ],
+       "additionalProperties": false
+      }
+     ],
+     "description": "Recurring gate ({ run } shell command or { code } Code Mode script): check on each slot with no model call, and wake on every slot where it passes."
+    },
+    "until": {
+     "anyOf": [
+      {
+       "type": "object",
+       "properties": {
+        "run": {
+         "type": "string",
+         "minLength": 1,
+         "description": "Shell command to run in the Session's directory. Alone, exit 0 wakes and stdout is appended."
+        },
+        "is": {
+         "type": "string",
+         "description": "Wake when exit is 0 and trimmed stdout equals this value."
+        },
+        "matches": {
+         "type": "string",
+         "description": "Wake when exit is 0 and stdout matches this regular expression."
+        },
+        "changes": {
+         "type": "boolean",
+         "description": "Wake when exit is 0 and stdout differs from the previous check."
+        }
+       },
+       "required": [
+        "run"
+       ],
+       "additionalProperties": false
+      },
+      {
+       "type": "object",
+       "properties": {
+        "code": {
+         "type": "string",
+         "minLength": 1,
+         "description": "Code Mode JavaScript check (no fetch; 30s, 20 tool calls, 32 KB output cap). Call tools statically as tools.<ns>.<tool>(...) or tools[\"ns-name\"].tool(...); each is authorized once at creation to run unattended. Runs once at creation with state = null (if baselines state without waking; until matches immediately if true), with globals state, now (epoch ms) and runs. Return a boolean or { wake, state?, message? } (message is appended to prompt on wake), e.g.: const t = await tools.slack.read_thread({ id }); return { wake: state !== null && t.count > state.count, state: { count: t.count }, message: \"New reply\" }"
+        }
+       },
+       "required": [
+        "code"
+       ],
+       "additionalProperties": false
+      }
+     ],
+     "description": "One-shot gate ({ run } shell command or { code } Code Mode script): poll with no model call, wake once when it passes, and stop. Defaults ends.after to \"24 hours\"."
+    },
+    "ends": {
+     "type": "object",
+     "properties": {
+      "after": {
+       "type": "string",
+       "description": "A duration such as \"90 seconds\", \"5 minutes\" or \"2 hours\"."
+      },
+      "at": {
+       "type": "string"
+      },
+      "times": {
+       "type": "integer",
+       "exclusiveMinimum": 0
+      }
+     },
+     "required": [],
+     "additionalProperties": false,
+     "description": "Stops a repeating schedule at the first limit reached: { after: \"8 hours\" }, { at }, { times: 3 }."
+    },
+    "prompt": {
+     "type": "string",
+     "minLength": 1,
+     "description": "The message the Session receives when the schedule wakes."
+    }
+   },
+   "required": [
+    "prompt"
+   ],
+   "additionalProperties": false
+  },
+  "output_schema": {
+   "type": "object",
+   "properties": {
+    "id": {
+     "type": "string",
+     "pattern": "^sch_"
+    },
+    "name": {
+     "type": "string"
+    },
+    "when": {
+     "anyOf": [
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "in"
+        },
+        "in": {
+         "type": "string",
+         "description": "A duration such as \"90 seconds\", \"5 minutes\" or \"2 hours\"."
+        },
+        "tz": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "type",
+        "in"
+       ]
+      },
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "at"
+        },
+        "at": {
+         "type": "string"
+        },
+        "tz": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "type",
+        "at"
+       ]
+      },
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "every"
+        },
+        "every": {
+         "type": "string",
+         "description": "A duration such as \"90 seconds\", \"5 minutes\" or \"2 hours\"."
+        },
+        "tz": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "type",
+        "every"
+       ]
+      },
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "cron"
+        },
+        "cron": {
+         "type": "string"
+        },
+        "tz": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "type",
+        "cron"
+       ]
+      }
+     ]
+    },
+    "tz": {
+     "type": "string"
+    },
+    "if": {
+     "anyOf": [
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "shell"
+        },
+        "run": {
+         "type": "string"
+        },
+        "is": {
+         "type": "string"
+        },
+        "matches": {
+         "type": "string"
+        },
+        "changes": {
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "type",
+        "run"
+       ]
+      },
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "code"
+        },
+        "code": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "type",
+        "code"
+       ]
+      }
+     ]
+    },
+    "until": {
+     "anyOf": [
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "shell"
+        },
+        "run": {
+         "type": "string"
+        },
+        "is": {
+         "type": "string"
+        },
+        "matches": {
+         "type": "string"
+        },
+        "changes": {
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "type",
+        "run"
+       ]
+      },
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "code"
+        },
+        "code": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "type",
+        "code"
+       ]
+      }
+     ]
+    },
+    "prompt": {
+     "type": "string"
+    },
+    "status": {
+     "type": "string",
+     "enum": [
+      "active",
+      "paused",
+      "done"
+     ]
+    },
+    "nextDueAt": {
+     "type": "string"
+    },
+    "endsAt": {
+     "type": "string"
+    },
+    "remainingRuns": {
+     "type": "number"
+    },
+    "runCount": {
+     "type": "number"
+    },
+    "lastFiredAt": {
+     "type": "string"
+    },
+    "lastOutcome": {
+     "type": "string",
+     "enum": [
+      "fired",
+      "late",
+      "checked",
+      "expired",
+      "skipped",
+      "disabled",
+      "failed"
+     ]
+    },
+    "lastOutput": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "id",
+    "when",
+    "tz",
+    "prompt",
+    "status",
+    "runCount"
+   ]
+  }
+ },
+ {
+  "name": "schedule_list",
+  "description": "List this session's schedules with their status and next run, and the current time.",
+  "input_schema": {
+   "type": "object",
+   "properties": {},
+   "required": [],
+   "additionalProperties": false
+  },
+  "output_schema": {
+   "type": "object",
+   "properties": {
+    "now": {
+     "type": "string",
+     "description": "The current time, in UTC."
+    },
+    "schedules": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "properties": {
+       "id": {
+        "type": "string",
+        "pattern": "^sch_"
+       },
+       "name": {
+        "type": "string"
+       },
+       "when": {
+        "anyOf": [
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "const": "in"
+           },
+           "in": {
+            "type": "string",
+            "description": "A duration such as \"90 seconds\", \"5 minutes\" or \"2 hours\"."
+           },
+           "tz": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "type",
+           "in"
+          ]
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "const": "at"
+           },
+           "at": {
+            "type": "string"
+           },
+           "tz": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "type",
+           "at"
+          ]
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "const": "every"
+           },
+           "every": {
+            "type": "string",
+            "description": "A duration such as \"90 seconds\", \"5 minutes\" or \"2 hours\"."
+           },
+           "tz": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "type",
+           "every"
+          ]
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "const": "cron"
+           },
+           "cron": {
+            "type": "string"
+           },
+           "tz": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "type",
+           "cron"
+          ]
+         }
+        ]
+       },
+       "tz": {
+        "type": "string"
+       },
+       "if": {
+        "anyOf": [
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "const": "shell"
+           },
+           "run": {
+            "type": "string"
+           },
+           "is": {
+            "type": "string"
+           },
+           "matches": {
+            "type": "string"
+           },
+           "changes": {
+            "type": "boolean"
+           }
+          },
+          "required": [
+           "type",
+           "run"
+          ]
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "const": "code"
+           },
+           "code": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "type",
+           "code"
+          ]
+         }
+        ]
+       },
+       "until": {
+        "anyOf": [
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "const": "shell"
+           },
+           "run": {
+            "type": "string"
+           },
+           "is": {
+            "type": "string"
+           },
+           "matches": {
+            "type": "string"
+           },
+           "changes": {
+            "type": "boolean"
+           }
+          },
+          "required": [
+           "type",
+           "run"
+          ]
+         },
+         {
+          "type": "object",
+          "properties": {
+           "type": {
+            "type": "string",
+            "const": "code"
+           },
+           "code": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "type",
+           "code"
+          ]
+         }
+        ]
+       },
+       "prompt": {
+        "type": "string"
+       },
+       "status": {
+        "type": "string",
+        "enum": [
+         "active",
+         "paused",
+         "done"
+        ]
+       },
+       "nextDueAt": {
+        "type": "string"
+       },
+       "endsAt": {
+        "type": "string"
+       },
+       "remainingRuns": {
+        "type": "number"
+       },
+       "runCount": {
+        "type": "number"
+       },
+       "lastFiredAt": {
+        "type": "string"
+       },
+       "lastOutcome": {
+        "type": "string",
+        "enum": [
+         "fired",
+         "late",
+         "checked",
+         "expired",
+         "skipped",
+         "disabled",
+         "failed"
+        ]
+       },
+       "lastOutput": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "id",
+       "when",
+       "tz",
+       "prompt",
+       "status",
+       "runCount"
+      ]
+     }
+    }
+   },
+   "required": [
+    "now",
+    "schedules"
+   ]
+  }
+ },
+ {
+  "name": "schedule_pause",
+  "description": "Pause a schedule. It keeps its settings and does not fire until resumed.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "id": {
+     "type": "string",
+     "pattern": "^sch_",
+     "description": "Schedule id from schedule_list."
+    }
+   },
+   "required": [
+    "id"
+   ],
+   "additionalProperties": false
+  },
+  "output_schema": {
+   "type": "object",
+   "properties": {
+    "id": {
+     "type": "string",
+     "pattern": "^sch_"
+    },
+    "name": {
+     "type": "string"
+    },
+    "when": {
+     "anyOf": [
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "in"
+        },
+        "in": {
+         "type": "string",
+         "description": "A duration such as \"90 seconds\", \"5 minutes\" or \"2 hours\"."
+        },
+        "tz": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "type",
+        "in"
+       ]
+      },
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "at"
+        },
+        "at": {
+         "type": "string"
+        },
+        "tz": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "type",
+        "at"
+       ]
+      },
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "every"
+        },
+        "every": {
+         "type": "string",
+         "description": "A duration such as \"90 seconds\", \"5 minutes\" or \"2 hours\"."
+        },
+        "tz": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "type",
+        "every"
+       ]
+      },
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "cron"
+        },
+        "cron": {
+         "type": "string"
+        },
+        "tz": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "type",
+        "cron"
+       ]
+      }
+     ]
+    },
+    "tz": {
+     "type": "string"
+    },
+    "if": {
+     "anyOf": [
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "shell"
+        },
+        "run": {
+         "type": "string"
+        },
+        "is": {
+         "type": "string"
+        },
+        "matches": {
+         "type": "string"
+        },
+        "changes": {
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "type",
+        "run"
+       ]
+      },
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "code"
+        },
+        "code": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "type",
+        "code"
+       ]
+      }
+     ]
+    },
+    "until": {
+     "anyOf": [
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "shell"
+        },
+        "run": {
+         "type": "string"
+        },
+        "is": {
+         "type": "string"
+        },
+        "matches": {
+         "type": "string"
+        },
+        "changes": {
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "type",
+        "run"
+       ]
+      },
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "code"
+        },
+        "code": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "type",
+        "code"
+       ]
+      }
+     ]
+    },
+    "prompt": {
+     "type": "string"
+    },
+    "status": {
+     "type": "string",
+     "enum": [
+      "active",
+      "paused",
+      "done"
+     ]
+    },
+    "nextDueAt": {
+     "type": "string"
+    },
+    "endsAt": {
+     "type": "string"
+    },
+    "remainingRuns": {
+     "type": "number"
+    },
+    "runCount": {
+     "type": "number"
+    },
+    "lastFiredAt": {
+     "type": "string"
+    },
+    "lastOutcome": {
+     "type": "string",
+     "enum": [
+      "fired",
+      "late",
+      "checked",
+      "expired",
+      "skipped",
+      "disabled",
+      "failed"
+     ]
+    },
+    "lastOutput": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "id",
+    "when",
+    "tz",
+    "prompt",
+    "status",
+    "runCount"
+   ]
+  }
+ },
+ {
+  "name": "schedule_resume",
+  "description": "Resume a paused schedule. A one-shot that fell due while paused fires once now; a repeating one resumes at its next slot.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "id": {
+     "type": "string",
+     "pattern": "^sch_",
+     "description": "Schedule id from schedule_list."
+    }
+   },
+   "required": [
+    "id"
+   ],
+   "additionalProperties": false
+  },
+  "output_schema": {
+   "type": "object",
+   "properties": {
+    "id": {
+     "type": "string",
+     "pattern": "^sch_"
+    },
+    "name": {
+     "type": "string"
+    },
+    "when": {
+     "anyOf": [
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "in"
+        },
+        "in": {
+         "type": "string",
+         "description": "A duration such as \"90 seconds\", \"5 minutes\" or \"2 hours\"."
+        },
+        "tz": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "type",
+        "in"
+       ]
+      },
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "at"
+        },
+        "at": {
+         "type": "string"
+        },
+        "tz": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "type",
+        "at"
+       ]
+      },
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "every"
+        },
+        "every": {
+         "type": "string",
+         "description": "A duration such as \"90 seconds\", \"5 minutes\" or \"2 hours\"."
+        },
+        "tz": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "type",
+        "every"
+       ]
+      },
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "cron"
+        },
+        "cron": {
+         "type": "string"
+        },
+        "tz": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "type",
+        "cron"
+       ]
+      }
+     ]
+    },
+    "tz": {
+     "type": "string"
+    },
+    "if": {
+     "anyOf": [
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "shell"
+        },
+        "run": {
+         "type": "string"
+        },
+        "is": {
+         "type": "string"
+        },
+        "matches": {
+         "type": "string"
+        },
+        "changes": {
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "type",
+        "run"
+       ]
+      },
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "code"
+        },
+        "code": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "type",
+        "code"
+       ]
+      }
+     ]
+    },
+    "until": {
+     "anyOf": [
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "shell"
+        },
+        "run": {
+         "type": "string"
+        },
+        "is": {
+         "type": "string"
+        },
+        "matches": {
+         "type": "string"
+        },
+        "changes": {
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "type",
+        "run"
+       ]
+      },
+      {
+       "type": "object",
+       "properties": {
+        "type": {
+         "type": "string",
+         "const": "code"
+        },
+        "code": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "type",
+        "code"
+       ]
+      }
+     ]
+    },
+    "prompt": {
+     "type": "string"
+    },
+    "status": {
+     "type": "string",
+     "enum": [
+      "active",
+      "paused",
+      "done"
+     ]
+    },
+    "nextDueAt": {
+     "type": "string"
+    },
+    "endsAt": {
+     "type": "string"
+    },
+    "remainingRuns": {
+     "type": "number"
+    },
+    "runCount": {
+     "type": "number"
+    },
+    "lastFiredAt": {
+     "type": "string"
+    },
+    "lastOutcome": {
+     "type": "string",
+     "enum": [
+      "fired",
+      "late",
+      "checked",
+      "expired",
+      "skipped",
+      "disabled",
+      "failed"
+     ]
+    },
+    "lastOutput": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "id",
+    "when",
+    "tz",
+    "prompt",
+    "status",
+    "runCount"
+   ]
+  }
+ },
+ {
+  "name": "schedule_delete",
+  "description": "Delete a schedule for good.",
+  "input_schema": {
+   "type": "object",
+   "properties": {
+    "id": {
+     "type": "string",
+     "pattern": "^sch_",
+     "description": "Schedule id from schedule_list."
+    }
+   },
+   "required": [
+    "id"
+   ],
+   "additionalProperties": false
+  },
+  "output_schema": {
+   "type": "object",
+   "properties": {
+    "id": {
+     "type": "string",
+     "pattern": "^sch_"
+    },
+    "removed": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "id",
+    "removed"
+   ]
+  }
+ }
+]

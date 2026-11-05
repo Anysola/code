@@ -13,6 +13,7 @@ use crate::config::{Config, Entry};
 
 const INITIALIZE: &str = include_str!("prompt/initialize.txt");
 const REVIEW: &str = include_str!("prompt/review.txt");
+const SCHEDULE: &str = include_str!("prompt/schedule.txt");
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Template {
@@ -128,6 +129,19 @@ impl Commands {
                 template: Template::Goal,
             },
         ];
+        if crate::schedule::enabled(config) {
+            list.push(Command {
+                name: "schedule".into(),
+                description: Some(
+                    "schedule a prompt for later, or list, pause and delete this session's schedules"
+                        .into(),
+                ),
+                agent: None,
+                model: None,
+                subagent: false,
+                template: Template::Builtin(SCHEDULE),
+            });
+        }
         let defined = config.entries.iter().flat_map(|entry| match entry {
             Entry::Directory(dir) => markdown_commands(dir),
             Entry::Document { commands, .. } => commands

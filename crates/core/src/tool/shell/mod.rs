@@ -5,7 +5,7 @@ mod exec;
 mod output;
 pub mod parse;
 pub mod scan;
-mod select;
+pub(crate) mod select;
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -197,7 +197,7 @@ fn scan_command(
 
 /// Checks the working directory and every static `cd` target as external directories, then asks
 /// `shell` for the scanned commands. A command the scanner cannot analyze fails before any ask.
-async fn authorize(
+pub(crate) async fn authorize(
     ctx: &ToolContext,
     command: &str,
     shell: &str,

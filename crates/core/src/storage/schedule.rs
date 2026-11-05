@@ -245,6 +245,16 @@ impl Db {
         })
     }
 
+    pub fn message_exists(&self, id: &str) -> Result<bool> {
+        self.with(|c| {
+            c.query_row(
+                "SELECT EXISTS (SELECT 1 FROM message WHERE id = ?1)",
+                [id],
+                |r| r.get(0),
+            )
+        })
+    }
+
     pub fn inbox_has(&self, id: &str) -> Result<bool> {
         self.with(|c| {
             c.query_row(

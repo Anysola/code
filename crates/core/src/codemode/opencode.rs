@@ -46,6 +46,16 @@ fn definitions() -> &'static [Value] {
 
 /// The namespace with its eight tools in 0.5.1's registration order.
 pub fn namespace() -> Arc<Namespace> {
+    build(false)
+}
+
+/// The namespace with the `schedule_*` tools after those, which the registry hides unless
+/// `experimental.schedules` (see `registry::Gates`).
+pub fn namespace_with_schedules() -> Arc<Namespace> {
+    build(true)
+}
+
+fn build(with_schedules: bool) -> Arc<Namespace> {
     let kinds = [
         Kind::SessionRename,
         Kind::SessionMove,
@@ -56,7 +66,7 @@ pub fn namespace() -> Arc<Namespace> {
         Kind::ListMcpResources,
         Kind::ReadMcpResource,
     ];
-    let tools = kinds
+    let mut tools: Vec<Arc<dyn NamespaceTool>> = kinds
         .into_iter()
         .zip(definitions())
         .map(|(kind, def)| {
@@ -72,6 +82,9 @@ pub fn namespace() -> Arc<Namespace> {
             }) as Arc<dyn NamespaceTool>
         })
         .collect();
+    if with_schedules {
+        tools.extend(crate::schedule::tools::tools());
+    }
     Arc::new(Namespace {
         name: NAME.into(),
         description: Some(DESCRIPTION.into()),

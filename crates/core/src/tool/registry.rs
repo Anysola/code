@@ -71,7 +71,7 @@ impl Registry {
         ];
         Registry {
             tools,
-            namespaces: RwLock::new(vec![opencode::namespace()]),
+            namespaces: RwLock::new(vec![opencode::namespace_with_schedules()]),
         }
     }
 
@@ -89,35 +89,52 @@ impl Registry {
 
     /// The Code Mode tools an agent with these rules can reach; `None` when `execute` is denied.
     pub fn code_mode(&self, rules: &[Rule]) -> Option<Inventory> {
-        (!wholly_disabled("execute", rules)).then(|| self.inventory(false).visible(rules))
+        self.code_mode_gated(rules, Gates::default())
     }
 
-    /// The Code Mode namespaces (`direct: false`) or the direct ones.
-    fn inventory(&self, direct: bool) -> Inventory {
+    pub fn code_mode_gated(&self, rules: &[Rule], gates: Gates) -> Option<Inventory> {
+        (!wholly_disabled("execute", rules)).then(|| self.inventory(false, gates).visible(rules))
+    }
+
+    /// The Code Mode namespaces (`direct: false`) or the direct ones, without gated-off tools.
+    fn inventory(&self, direct: bool, gates: Gates) -> Inventory {
         Inventory::new(
             self.namespaces
                 .read()
                 .unwrap_or_else(|e| e.into_inner())
                 .iter()
                 .filter(|n| n.direct == direct)
-                .cloned()
+                .map(|n| gates.apply(n))
                 .collect(),
         )
     }
 
     /// Tools advertised to an agent with these rules, in request order.
     pub fn active(&self, rules: &[Rule]) -> Vec<Arc<dyn Tool>> {
+        self.active_gated(rules, Gates::default())
+    }
+
+    pub fn active_gated(&self, rules: &[Rule], gates: Gates) -> Vec<Arc<dyn Tool>> {
         let enabled = |tool: &Arc<dyn Tool>| {
             // 0.5.1 advertises `skill` even to agents whose rules end in `* deny` (explore); the
             // skill tool still asks `skill:<id>` per call.
             tool.name() == "skill" || !wholly_disabled(tool.permission(), rules)
         };
         let mut direct: Vec<_> = self.tools.iter().filter(|t| enabled(t)).cloned().collect();
-        let code_mode = self.code_mode(rules);
+        let code_mode = self.code_mode_gated(rules, gates);
         // Without `execute` the namespace tools would be unreachable, so they become direct.
-        let mut exposed = self.inventory(true).visible(rules).namespaces().to_vec();
+        let mut exposed = self
+            .inventory(true, gates)
+            .visible(rules)
+            .namespaces()
+            .to_vec();
         if code_mode.is_none() {
-            exposed.extend(self.inventory(false).visible(rules).namespaces().to_vec());
+            exposed.extend(
+                self.inventory(false, gates)
+                    .visible(rules)
+                    .namespaces()
+                    .to_vec(),
+            );
         }
         for namespace in &exposed {
             for tool in &namespace.tools {
@@ -137,6 +154,38 @@ impl Registry {
 }
 
 /// Process-start year for the websearch description.
+/// Config flags that add tools to a namespace.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Gates {
+    /// `experimental.schedules`: the `schedule_*` tools of the `opencode` namespace.
+    pub schedules: bool,
+}
+
+impl Gates {
+    pub fn from_config(config: &crate::config::Config) -> Gates {
+        Gates {
+            schedules: crate::schedule::enabled(config),
+        }
+    }
+
+    fn apply(&self, namespace: &Arc<Namespace>) -> Arc<Namespace> {
+        if self.schedules || namespace.name != opencode::NAME {
+            return namespace.clone();
+        }
+        Arc::new(Namespace {
+            name: namespace.name.clone(),
+            description: namespace.description.clone(),
+            direct: namespace.direct,
+            tools: namespace
+                .tools
+                .iter()
+                .filter(|t| !t.name().starts_with("schedule_"))
+                .cloned()
+                .collect(),
+        })
+    }
+}
+
 pub fn process_year() -> i32 {
     static YEAR: OnceLock<i32> = OnceLock::new();
     *YEAR.get_or_init(crate::time::local_year)

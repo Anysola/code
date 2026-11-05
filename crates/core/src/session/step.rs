@@ -87,7 +87,10 @@ fn instructions(
     };
     let catalog = shared
         .registry
-        .code_mode(rules)
+        .code_mode_gated(
+            rules,
+            crate::tool::registry::Gates::from_config(&sources.config),
+        )
         .map(|inventory| inventory.summary());
     let mcp = shared
         .mcp
@@ -125,8 +128,9 @@ fn context(
     selection: &Selection,
 ) -> Result<Context, SessionError> {
     let rules = selection.agent.permissions.clone();
-    let mut tools = shared.registry.active(&rules);
     let sources = &selection.sources;
+    let gates = crate::tool::registry::Gates::from_config(&sources.config);
+    let mut tools = shared.registry.active_gated(&rules, gates);
     if !sources.config.websearch_enabled() {
         tools.retain(|t| t.name() != "websearch");
     }

@@ -330,3 +330,38 @@ fn denied_execute_exposes_direct_tools() {
     let inventory = registry.code_mode(&edit_denied).unwrap();
     assert_eq!(inventory.summary().total, 7);
 }
+
+#[test]
+fn schedule_tools_render_as_captured_and_only_when_enabled() {
+    use crate::tool::registry::Gates;
+    let registry = Registry::builtin();
+    let hidden = registry.code_mode(&[]).unwrap();
+    assert!(hidden.find("opencode.schedule_create").is_none());
+    let shown = registry
+        .code_mode_gated(&[], Gates { schedules: true })
+        .unwrap();
+    let captured: Value = serde_json::from_str(include_str!(
+        "../../../../spec/verbatim/tools/_captured-request-build-experimental-flags.json"
+    ))
+    .unwrap();
+    let system = captured["body"]["system"].to_string();
+    let system: String = serde_json::from_str(&format!("\"{}\"", {
+        let start = system.find("tools.opencode.schedule_delete(").unwrap();
+        let end = system[start..]
+            .find("tools.opencode.session_move(")
+            .unwrap()
+            + start;
+        &system[start..end]
+    }))
+    .unwrap();
+    for name in ["schedule_delete", "schedule_pause", "schedule_resume"] {
+        let path = format!("opencode.{name}");
+        let (_, tool) = shown.find(&path).unwrap();
+        let signature =
+            super::typescript::signature(&path, tool.input_schema(), tool.output_schema());
+        assert!(
+            system.contains(&format!("{signature} // ")),
+            "{signature}\n---\n{system}"
+        );
+    }
+}

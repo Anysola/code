@@ -33,6 +33,10 @@ fn create(descending: bool) -> String {
     out
 }
 
+pub fn schedule() -> String {
+    format!("sch_{}", create(false))
+}
+
 pub fn session() -> String {
     format!("ses_{}", create(true))
 }
