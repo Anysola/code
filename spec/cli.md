@@ -17,6 +17,7 @@ Parser: effect/cli (`cli/commands/commands.ts`, `cli/framework/{spec,runtime}.ts
 
 ### 1.1 Root (`anysola [flags] [<directory>]`) — default command = TUI
 - `[0.5.1]` Description `Anysola Code command line interface (based on OpenCode, MIT)` (commands.ts:48).
+- `[1.0.1]` Description `Anysola Code command line interface`.
 - `[0.5.1]` Positional `directory` (optional): `process.chdir(dir)` before anything else (default.ts:28). An unknown
   word such as `anysola foo` is this argument → uncaught `Error: ENOENT: ... chdir '<cwd>' -> 'foo'` + stack, exit 1
   (`V/framework-errors.txt`). Note `AnysolaVersion.enforceMinimum()` (network call) runs before the chdir.
