@@ -134,6 +134,8 @@ impl Tui {
                 Some(Value::String(v)) if v == "verbose" => crate::state::TurnTokens::Verbose,
                 _ => crate::state::TurnTokens::Off,
             },
+            image_preview: flag(&["session", "image_preview"], false),
+            prompt_image_preview: flag(&["prompt", "image_preview"], false),
             verbosity: match self.str(&["session", "verbosity"]) {
                 Some("low") => Verbosity::Low,
                 Some("high") => Verbosity::High,

@@ -1001,6 +1001,7 @@ impl App {
                 }
             }
             Hit::ToggleTodos => self.state.todo_closed = !self.state.todo_closed,
+            Hit::Image(set, index) => self.view_images(set, index),
             Hit::CloseToast => {
                 if let Some(toast) = self.state.toast.as_mut() {
                     toast.until = 0;

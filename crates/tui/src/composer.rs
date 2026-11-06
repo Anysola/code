@@ -535,6 +535,40 @@ impl Composer {
             .collect()
     }
 
+    /// The attached images in order, labelled with their chips (`[Image N]`).
+    pub fn images(&self) -> Vec<std::sync::Arc<crate::preview::Source>> {
+        let mut atoms: Vec<&Atom> = self.atoms.iter().collect();
+        atoms.sort_by_key(|a| a.start);
+        atoms
+            .into_iter()
+            .filter_map(|a| match &a.kind {
+                AtomKind::Attachment(mime, data, _) if mime.starts_with("image/") => {
+                    Some(std::sync::Arc::new(crate::preview::Source {
+                        mime: mime.clone(),
+                        data: data.clone(),
+                        label: self.text[a.start..a.end].to_string(),
+                    }))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The image attachments' base64 data in order, without copying it (for drawing).
+    pub fn image_data(&self) -> Vec<&str> {
+        let mut atoms: Vec<&Atom> = self.atoms.iter().collect();
+        atoms.sort_by_key(|a| a.start);
+        atoms
+            .into_iter()
+            .filter_map(|a| match &a.kind {
+                AtomKind::Attachment(mime, data, _) if mime.starts_with("image/") => {
+                    Some(data.as_str())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The `@<skill>` mentions, in order of appearance.
     pub fn skills(&self) -> Vec<String> {
         let mut atoms: Vec<&Atom> = self

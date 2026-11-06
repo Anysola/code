@@ -277,6 +277,7 @@ mod tests {
             error: None,
             started: 0,
             awaiting: false,
+            images: Vec::new(),
         })
     }
 

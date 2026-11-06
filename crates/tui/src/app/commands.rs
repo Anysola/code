@@ -266,7 +266,7 @@ impl App {
                 };
                 let _ = self.tui.set(&["theme", "mode"], value);
             }
-            ("prompt.images.view", _) => self.view_image(0),
+            ("prompt.images.view", _) => self.view_images(crate::preview::Set::Composer, 0),
             ("prompt.paste", _) => self.paste_clipboard(),
             ("session.queued_prompts", Some(current)) => self.open_queue(&current),
             ("diff.open", _) if self.state.diff.is_some() => self.state.diff = None,
@@ -626,6 +626,7 @@ impl App {
             text: text.clone(),
             shell: false,
         });
+        let images = self.state.composer.images();
         self.state.composer.clear();
         self.state.popup = None;
         let agent = self.state.agent.clone();
@@ -638,6 +639,7 @@ impl App {
             text,
             agent,
             files: Vec::new(),
+            images,
             created: now(),
         });
         if session.busy || queue {

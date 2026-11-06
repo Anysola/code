@@ -242,6 +242,7 @@ dependencies = [
  "crossterm",
  "futures-util",
  "ignore",
+ "image",
  "libc",
  "nucleo-matcher",
  "portable-pty",

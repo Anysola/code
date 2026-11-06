@@ -63,7 +63,49 @@ pub fn box_height(state: &State, w: u16) -> u16 {
     let lines = rows(&state.composer.text, room)
         .len()
         .clamp(1, max_rows(state.height));
-    lines as u16 + 4
+    lines as u16 + 4 + preview_height(state)
+}
+
+/// Rows the image previews take above the textarea (thumbnails and a blank row), under
+/// `prompt.image_preview` with images attached (`component/prompt/index.tsx:1713-1780`).
+fn preview_height(state: &State) -> u16 {
+    if state.settings.prompt_image_preview && !state.composer.image_data().is_empty() {
+        crate::preview::size(state.height).1 + 1
+    } else {
+        0
+    }
+}
+
+/// The attached images' thumbnails at `(x, y)`; each tile opens the viewer on its image.
+fn previews(c: &mut Canvas, state: &State, x: u16, y: u16, room: usize, bg: Color) {
+    let data = state.composer.image_data();
+    let set = crate::preview::Set::Composer;
+    let (lines, tiles) = crate::preview::strip(
+        &data,
+        crate::preview::size(state.height),
+        &set,
+        c.style("text.feedback.error.base").bg(bg),
+        c.style("text.muted").bg(bg),
+    );
+    for (i, line) in lines.iter().enumerate() {
+        let spans: Vec<Span> = line
+            .iter()
+            .map(|s| match s.style.bg {
+                None => Span::styled(s.content.clone(), s.style.bg(bg)),
+                Some(_) => s.clone(),
+            })
+            .collect();
+        c.spans(x, y + i as u16, &spans, room);
+    }
+    let h = lines.len() as u16;
+    for tile in tiles {
+        // A tile cut off by the box is only clickable where it shows.
+        let w = tile.w.min((room as u16).saturating_sub(tile.x));
+        c.hit(
+            Rect::new(x + tile.x, y, w, h),
+            crate::view::Hit::Image(tile.set, tile.index),
+        );
+    }
 }
 
 /// Draws the box at `(x, y)`; returns the cursor position.
@@ -107,6 +149,11 @@ pub fn draw_box(
     let room = textarea_width(w, state.width);
     let composer = &state.composer;
     let mut cursor = None;
+    let offset = preview_height(state);
+    if offset > 0 {
+        previews(c, state, tx, y + 1, room, bg);
+    }
+    let y = y + offset;
     if composer.is_empty() {
         let placeholder = if !home {
             None
@@ -178,7 +225,7 @@ pub fn draw_box(
             }
         }
     }
-    metadata(c, state, tx, y + h - 2, room, highlight, bg);
+    metadata(c, state, tx, y + h - offset - 2, room, highlight, bg);
     cursor
 }
 

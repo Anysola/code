@@ -276,6 +276,7 @@ pub fn permission(c: &mut Canvas, state: &State, p: &Permission, x: u16, y: u16,
             indent,
             spans: line,
             group: None,
+            tiles: Vec::new(),
         };
         draw_row(c, &row, x + 1, at, w - 1);
         at += 1;

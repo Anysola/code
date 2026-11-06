@@ -13,6 +13,8 @@ pub enum Item {
         text: String,
         agent: String,
         files: Vec<String>,
+        /// The attached images, previewed when `session.image_preview` is on.
+        images: Vec<std::sync::Arc<crate::preview::Source>>,
         created: u64,
     },
     Assistant(Assistant),
@@ -105,6 +107,9 @@ pub struct Tool {
     pub error: Option<String>,
     pub started: u64,
     pub awaiting: bool,
+    /// Images among the result's content (`data:` URIs), previewed under the tool when
+    /// `session.image_preview` is on.
+    pub images: Vec<std::sync::Arc<crate::preview::Source>>,
 }
 
 impl Tool {
@@ -122,6 +127,19 @@ fn content_text(content: &[ToolContent]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn content_images(content: &[ToolContent]) -> Vec<std::sync::Arc<crate::preview::Source>> {
+    content
+        .iter()
+        .filter_map(|c| match c {
+            ToolContent::File { uri, mime, name } if mime.starts_with("image/") => {
+                let n = name.clone().unwrap_or_default();
+                crate::preview::Source::from_uri(uri, n).map(std::sync::Arc::new)
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn part(stored: StoredPart) -> Option<Part> {
@@ -152,6 +170,7 @@ fn part(stored: StoredPart) -> Option<Part> {
                 error: None,
                 started: time.created,
                 awaiting: false,
+                images: Vec::new(),
             };
             match state {
                 ToolState::Streaming { .. } => {}
@@ -167,6 +186,7 @@ fn part(stored: StoredPart) -> Option<Part> {
                 } => {
                     tool.input = input;
                     tool.output = content_text(&content);
+                    tool.images = content_images(&content);
                     tool.metadata = metadata;
                     tool.status = Status::Completed;
                 }
@@ -178,6 +198,7 @@ fn part(stored: StoredPart) -> Option<Part> {
                 } => {
                     tool.input = input;
                     tool.output = content_text(&content);
+                    tool.images = content_images(&content);
                     tool.metadata = metadata;
                     tool.error = Some(error.message);
                     tool.status = Status::Failed;
@@ -211,9 +232,20 @@ pub fn from_messages(
         match message {
             Message::User(data) => {
                 turn_start = data.time.created;
-                let files = data
-                    .files
-                    .unwrap_or_default()
+                let stored = data.files.unwrap_or_default();
+                let images = stored
+                    .iter()
+                    .filter(|f| f.mime.starts_with("image/"))
+                    .enumerate()
+                    .map(|(i, f)| {
+                        std::sync::Arc::new(crate::preview::Source {
+                            mime: f.mime.clone(),
+                            data: f.data.clone(),
+                            label: f.name.clone().unwrap_or_else(|| format!("Image {}", i + 1)),
+                        })
+                    })
+                    .collect();
+                let files = stored
                     .into_iter()
                     .map(|f| f.name.unwrap_or_else(|| "attachment".into()))
                     .collect();
@@ -222,6 +254,7 @@ pub fn from_messages(
                     text: data.text,
                     agent: agent.clone(),
                     files,
+                    images,
                     created: data.time.created,
                 });
             }
@@ -469,6 +502,7 @@ pub fn apply(items: &mut Vec<Item>, event: &Event, now: u64, name: Names) {
                     error: None,
                     started: now,
                     awaiting: false,
+                    images: Vec::new(),
                 }));
             }
         }
@@ -487,6 +521,7 @@ pub fn apply(items: &mut Vec<Item>, event: &Event, now: u64, name: Names) {
         } => {
             if let Some(t) = tool(items, call_id) {
                 t.output = content_text(content);
+                t.images = content_images(content);
                 t.metadata = metadata.clone();
                 t.status = Status::Completed;
                 t.awaiting = false;
@@ -501,6 +536,7 @@ pub fn apply(items: &mut Vec<Item>, event: &Event, now: u64, name: Names) {
         } => {
             if let Some(t) = tool(items, call_id) {
                 t.output = content_text(content);
+                t.images = content_images(content);
                 t.metadata = metadata.clone();
                 t.error = Some(error.message.clone());
                 t.status = Status::Failed;
