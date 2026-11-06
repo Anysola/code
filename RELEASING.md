@@ -22,11 +22,11 @@ from (`github.com/Anysola/code/releases`) and the www `/install` routes proxy (`
 6. Web deploy if the `/code` page or News mention the version.
 7. install-test runs on the `published` release event; for a re-check run it by hand with the version.
 
-## Owner decisions for 1.0.0
+## Decided for 1.0.0 (2026-11-06)
 
-- Repository: this tree has no remote yet. The 1.0 tag must be created in `Anysola/code` (the 0.5.x TypeScript line
-  lives on its `anysola` branch there), otherwise the install scripts and `/install` do not see the release.
-- Minimum version: keep `minimum` as it is (0.5.x keeps working, updates are offered), or raise it to `1.0.0` so every
-  0.5.x start is gated until updated.
-- `NOTICE` is shipped unchanged from 0.5.1 (it calls Anysola Code a fork of OpenCode); reword it for the rewrite or
-  keep it.
+- Repository: `Anysola/code`, default branch `main` (this tree). The 0.5.x TypeScript line is the `legacy-0.5`
+  branch; its tags and releases stay as they are.
+- Minimum version stays as it is: 0.5.x keeps working and is offered the update.
+- `NOTICE` describes the rewrite.
+- Before Admin `latest` moves to 1.0.0, update a real 0.5.1 install through both of its paths (`anysola update` with
+  the install script, and npm) and check that sessions were imported.
