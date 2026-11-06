@@ -380,6 +380,15 @@ mod tests {
     }
 
     #[test]
+    fn labels_beside_narrow_neighbours_stay_whole() {
+        let rows = draw(
+            "stateDiagram-v2\n[*] --> C\nstate C <<choice>>\nC --> A: timeout\nC --> B: retry",
+        );
+        assert!(rows.iter().any(|r| r.contains("▼ timeout")), "{rows:?}");
+        assert!(rows.iter().any(|r| r.contains("▼ retry")), "{rows:?}");
+    }
+
+    #[test]
     fn composites_flatten_and_notes_are_skipped() {
         let rows = draw(
             "stateDiagram-v2\n  [*] --> Auth\n  state Auth {\n    [*] --> Idle\n    \

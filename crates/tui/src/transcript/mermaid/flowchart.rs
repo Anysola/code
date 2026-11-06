@@ -251,18 +251,36 @@ fn draw_down(chart: &Chart) -> Result<Vec<String>, String> {
             Shape::Pass => 1,
         };
     }
+    // Room right of a node for the labels written beside its lines (the next node starts after it).
+    let mut room = widths.clone();
+    for (a, b, label) in &edges {
+        if let Some(label) = label {
+            for i in [*a, *b] {
+                room[i] = room[i].max(widths[i] / 2 + 2 + width(label) + 1);
+            }
+        }
+    }
+    // A row is centred on its nodes; the last one's labels may run past the right edge.
+    let span = |row: &Vec<usize>| -> usize {
+        row.iter()
+            .enumerate()
+            .map(|(k, i)| {
+                if k + 1 == row.len() {
+                    widths[*i]
+                } else {
+                    room[*i] + gap
+                }
+            })
+            .sum()
+    };
     for row in &rows_of {
-        let w: usize =
-            row.iter().map(|i| widths[*i]).sum::<usize>() + gap * row.len().saturating_sub(1);
-        total = total.max(w);
+        total = total.max(span(row));
     }
     for row in &rows_of {
-        let w: usize =
-            row.iter().map(|i| widths[*i]).sum::<usize>() + gap * row.len().saturating_sub(1);
-        let mut at = (total - w) / 2;
+        let mut at = (total - span(row)) / 2;
         for i in row {
             x[*i] = at;
-            at += widths[*i] + gap;
+            at += room[*i] + gap;
         }
     }
     let band = 3;
