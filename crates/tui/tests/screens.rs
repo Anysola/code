@@ -352,6 +352,7 @@ fn tool(name: &str, input: serde_json::Value, status: Status) -> Tool {
         error: None,
         started: now(),
         awaiting: false,
+        images: Vec::new(),
     }
 }
 
@@ -373,6 +374,7 @@ fn turn(edit_done: bool, shell_done: bool) -> Vec<Item> {
         text: "fix the typo in hello.txt".into(),
         agent: "build".into(),
         files: Vec::new(),
+        images: Vec::new(),
         created: parse_iso("2026-11-05T14:02:00Z").unwrap(),
     }];
     let mut parts = vec![Part::Tool(todo), Part::Tool(shell)];
@@ -1691,6 +1693,7 @@ fn tail_first_transcript() {
             text: format!("message {n}"),
             agent: "build".into(),
             files: Vec::new(),
+            images: Vec::new(),
             created: now(),
         })
         .collect();

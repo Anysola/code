@@ -1125,14 +1125,14 @@ impl App {
                     b.actions = vec![crate::dialog::Action::right("✓", "copied")];
                 }
             }
-            (BodyKind::Image { index }, "left" | "right") => {
-                let count = self.state.composer.attachments().len().max(1);
+            (BodyKind::Image { set, index, .. }, "left" | "right") => {
+                let count = crate::preview::images(&self.state, &set).len().max(1);
                 let next = if stroke.key == "left" {
                     index + count - 1
                 } else {
                     index + 1
                 };
-                self.view_image(next);
+                self.view_images(set, next);
             }
             (BodyKind::Usage { days }, "t") => {
                 let days = if days == 7 { 30 } else { 7 };
@@ -1347,31 +1347,11 @@ impl App {
         self.push(Dialog::Body(body));
     }
 
-    /// `Image <i> of <n>` over the composer's image attachments (no inline graphics: the name).
-    pub(super) fn view_image(&mut self, index: usize) {
-        let images: Vec<String> = self
-            .state
-            .composer
-            .attachments()
-            .into_iter()
-            .filter(|(mime, _, _)| mime.starts_with("image/"))
-            .map(|(_, _, name)| name)
-            .collect();
-        if images.is_empty() {
+    /// The image viewer on image `index` of `set` (replacing an open one).
+    pub(super) fn view_images(&mut self, set: crate::preview::Set, index: usize) {
+        let Some(body) = crate::preview::viewer(&self.state, &set, index) else {
             return;
-        }
-        let index = index % images.len();
-        let mut body = Body::new(
-            BodyKind::Image { index },
-            &format!("Image {} of {}", index + 1, images.len()),
-            vec![line("No preview", Tone::Error)],
-        );
-        body.size = Size::XLarge;
-        body.footer = vec![
-            ("← previous  ".into(), Tone::Muted),
-            (images[index].clone(), Tone::Base),
-            ("  next →".into(), Tone::Muted),
-        ];
+        };
         if let Some(Dialog::Body(Body {
             kind: BodyKind::Image { .. },
             ..

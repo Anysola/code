@@ -291,6 +291,10 @@ pub struct Settings {
     pub diff_wrap: bool,
     pub verbosity: Verbosity,
     pub turn_tokens: TurnTokens,
+    /// `session.image_preview`: images in user messages and tool results.
+    pub image_preview: bool,
+    /// `prompt.image_preview`: thumbnails of the attached images above the textarea.
+    pub prompt_image_preview: bool,
 }
 
 /// `debug.turn_tokens`: a per-turn token table, `verbose` also lists each step's tool calls.
@@ -328,6 +332,8 @@ impl Default for Settings {
             grouping: true,
             diff_wrap: true,
             verbosity: Verbosity::Medium,
+            image_preview: false,
+            prompt_image_preview: false,
         }
     }
 }

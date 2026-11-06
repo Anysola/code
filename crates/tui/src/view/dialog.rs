@@ -287,7 +287,19 @@ fn option(c: &mut Canvas, f: &Frame, y: u16, s: &Select, index: usize, active: b
 /// Draws a plain dialog; returns the row and column its first line starts at.
 fn body(c: &mut Canvas, b: &Body) -> (u16, u16) {
     let height = c.buf.area.height;
-    let rows = b.lines.len().min(height.saturating_sub(10) as usize);
+    let mut rows = b.lines.len().min(height.saturating_sub(10) as usize);
+    // The viewer's picture fills what the dialog can hold, fitted with its aspect kept.
+    let picture = match &b.kind {
+        crate::dialog::BodyKind::Image { source, .. } => {
+            let room = Frame::new(c, b.size, 3, 0).room() as u16;
+            // The panel starts a quarter down and needs 6 rows of its own plus a margin.
+            let fit = height.saturating_sub(height / 4 + 7).max(1);
+            let grid = crate::preview::grid(&source.data, room, fit);
+            rows = grid.as_ref().map_or(1, |g| g.rows as usize);
+            Some(grid)
+        }
+        _ => None,
+    };
     let footer = !b.footer.is_empty() || !b.actions.is_empty() || !b.buttons.is_empty();
     let panel_h = 3 + rows as u16 + if footer { 2 } else { 0 } + 1;
     let top = if b.centered {
@@ -300,6 +312,19 @@ fn body(c: &mut Canvas, b: &Body) -> (u16, u16) {
     header(c, &f, &b.title, &b.close);
     for (i, line) in b.lines.iter().skip(b.scroll).take(rows).enumerate() {
         put_line(c, f.left, top + 3 + i as u16, line, f.room());
+    }
+    match picture {
+        Some(Some(grid)) => {
+            let x = f.left + (f.room() as u16).saturating_sub(grid.cols) / 2;
+            for (i, line) in grid.lines.iter().enumerate() {
+                c.spans(x, top + 3 + i as u16, line, grid.cols as usize);
+            }
+        }
+        Some(None) => {
+            let style = tone(c, Tone::Error);
+            c.put(f.left, top + 3, "No preview", style, f.room());
+        }
+        None => {}
     }
     if !footer {
         return (top + 3, f.left);

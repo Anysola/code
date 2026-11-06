@@ -84,6 +84,8 @@ pub fn transcript(
         shells: &session.shells,
         floor: session.floor,
         turn_tokens: state.settings.turn_tokens,
+        image_preview: state.settings.image_preview,
+        image_size: crate::preview::size(state.height),
     };
     let mut rows = rows::layout(&session.items, &ctx, Some(&session.layout.0));
     rows.extend(rows::tail(
@@ -138,6 +140,12 @@ pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u1
     let mut hits = Vec::new();
     for (i, row) in rows[start..end].iter().enumerate() {
         draw_row(c, row, x, top + i as u16, w);
+        for tile in &row.tiles {
+            c.hit(
+                Rect::new(x + row.indent + tile.x, top + i as u16, tile.w, 1),
+                Hit::Image(tile.set.clone(), tile.index),
+            );
+        }
         if let Some(id) = &row.group {
             hits.push((top + i as u16, id.clone()));
         }

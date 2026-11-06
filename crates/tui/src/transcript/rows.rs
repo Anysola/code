@@ -28,6 +28,8 @@ pub struct Row {
     pub spans: Line,
     /// An exploration group's header: a click toggles the group with this ID.
     pub group: Option<String>,
+    /// Image thumbnails on this row (columns from the indent): a click opens the viewer.
+    pub tiles: Vec<crate::preview::Tile>,
 }
 
 impl Row {
@@ -67,6 +69,10 @@ pub struct Ctx<'a> {
     pub floor: usize,
     /// Background shells by shell ID, as last polled.
     pub shells: &'a std::collections::HashMap<String, BackgroundView>,
+    /// `session.image_preview`: user and tool-result images are drawn as thumbnails.
+    pub image_preview: bool,
+    /// The thumbnail box (`preview::size` of the terminal height).
+    pub image_size: (u16, u16),
 }
 
 /// What the transcript knows of a background shell: whether it still runs, and its output
@@ -127,6 +133,7 @@ impl Ctx<'_> {
                 indent: 3,
                 spans,
                 group: None,
+                tiles: Vec::new(),
             });
         }
         rows.push(Row {
@@ -225,7 +232,7 @@ fn settled(item: &Item) -> bool {
 /// unchanged reuse their rows.
 pub fn layout(items: &[Item], ctx: &Ctx, cache: Option<&std::sync::Mutex<Cache>>) -> Vec<Row> {
     let context = format!(
-        "{}|{}|{}|{}|{}|{}|{:?}|{}|{}",
+        "{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{}|{:?}",
         ctx.width,
         ctx.split,
         ctx.thinking,
@@ -234,7 +241,9 @@ pub fn layout(items: &[Item], ctx: &Ctx, cache: Option<&std::sync::Mutex<Cache>>
         ctx.theme.name,
         ctx.theme.mode,
         ctx.grouping,
-        ctx.verbosity as u8
+        ctx.verbosity as u8,
+        ctx.image_preview,
+        ctx.image_size
     );
     let mut cache = cache.map(|c| c.lock().unwrap_or_else(|e| e.into_inner()));
     if let Some(cache) = cache.as_mut()
@@ -588,7 +597,12 @@ fn item_groups(
     groups: &mut Vec<Vec<Row>>,
 ) {
     match item {
-        Item::User { text, agent, .. } => groups.push(user(text, agent, index, ctx)),
+        Item::User {
+            text,
+            agent,
+            images,
+            ..
+        } => groups.push(user(text, agent, images, index, ctx)),
         Item::Assistant(a) => assistant(a, index, exploration, ctx, groups),
         Item::Shell {
             command,
@@ -657,7 +671,13 @@ fn item_groups(
 }
 
 /// A user message box; a click on any of its rows opens its actions (`user:<item index>`).
-fn user(text: &str, agent: &str, index: usize, ctx: &Ctx) -> Vec<Row> {
+fn user(
+    text: &str,
+    agent: &str,
+    images: &[std::sync::Arc<crate::preview::Source>],
+    index: usize,
+    ctx: &Ctx,
+) -> Vec<Row> {
     let rail = Some((ctx.agent_color)(agent));
     let bg = Some(ctx.theme.fg("background.raised.base"));
     let style = ctx.style("text.base");
@@ -666,6 +686,18 @@ fn user(text: &str, agent: &str, index: usize, ctx: &Ctx) -> Vec<Row> {
         bg,
         ..Row::default()
     }];
+    if ctx.image_preview && !images.is_empty() {
+        for mut row in image_rows(images, crate::preview::Set::User(index), ctx) {
+            row.rail = rail;
+            row.bg = bg;
+            rows.push(row);
+        }
+        rows.push(Row {
+            rail,
+            bg,
+            ..Row::default()
+        });
+    }
     for line in wrap_spans(
         &[Span::styled(text.to_string(), style)],
         ctx.width.saturating_sub(4),
@@ -676,6 +708,7 @@ fn user(text: &str, agent: &str, index: usize, ctx: &Ctx) -> Vec<Row> {
             indent: 3,
             spans: line,
             group: None,
+            tiles: Vec::new(),
         });
     }
     rows.push(Row {
@@ -688,6 +721,31 @@ fn user(text: &str, agent: &str, index: usize, ctx: &Ctx) -> Vec<Row> {
         row.group = Some(hit.clone());
     }
     rows
+}
+
+/// Thumbnails of `images` at the content indent, one row per cell row.
+fn image_rows(
+    images: &[std::sync::Arc<crate::preview::Source>],
+    set: crate::preview::Set,
+    ctx: &Ctx,
+) -> Vec<Row> {
+    let data: Vec<&str> = images.iter().map(|s| s.data.as_str()).collect();
+    let (lines, tiles) = crate::preview::strip(
+        &data,
+        ctx.image_size,
+        &set,
+        ctx.style("text.feedback.error.base"),
+        ctx.style("text.muted"),
+    );
+    lines
+        .into_iter()
+        .map(|spans| Row {
+            indent: 3,
+            spans,
+            tiles: tiles.clone(),
+            ..Row::default()
+        })
+        .collect()
 }
 
 fn assistant(
@@ -734,7 +792,31 @@ fn assistant(
             }
             Part::Tool(tool) => {
                 flush(&mut thoughts, groups);
-                groups.extend(super::tools::render(tool, ctx));
+                let mut rendered = super::tools::render(tool, ctx);
+                if ctx.image_preview && !tool.images.is_empty() {
+                    // Right under the tool's rows, in its block's colours when it has one.
+                    let set = crate::preview::Set::Tool(tool.call_id.clone());
+                    let mut images = image_rows(&tool.images, set, ctx);
+                    match rendered.last_mut() {
+                        Some(group) => {
+                            let (rail, bg) = group.last().map_or((None, None), |r| (r.rail, r.bg));
+                            for row in &mut images {
+                                row.rail = rail;
+                                row.bg = bg;
+                            }
+                            group.extend(images);
+                            if bg.is_some() {
+                                group.push(Row {
+                                    rail,
+                                    bg,
+                                    ..Row::default()
+                                });
+                            }
+                        }
+                        None => rendered.push(images),
+                    }
+                }
+                groups.extend(rendered);
                 if tool.status == Status::Running
                     && matches!(tool.name.as_str(), "shell" | "bash" | "task" | "subagent")
                     && ctx.now.saturating_sub(tool.started) >= BACKGROUND_HINT_MS
@@ -913,6 +995,7 @@ fn thinking(parts: &[&Part], ctx: &Ctx) -> Vec<Row> {
                         indent: 3,
                         spans: muted,
                         group: None,
+                        tiles: Vec::new(),
                     });
                 }
             }
@@ -950,6 +1033,7 @@ pub fn tail(
         indent: 3,
         spans,
         group: Some("revert".into()),
+        tiles: Vec::new(),
     };
     rows.push(Row::default());
     rows.push(banner(Vec::new()));
@@ -1081,6 +1165,8 @@ mod tests {
             shells: &shells,
             floor: 0,
             turn_tokens: Default::default(),
+            image_preview: false,
+            image_size: (8, 4),
         };
         let items = vec![
             Item::User {
@@ -1088,6 +1174,7 @@ mod tests {
                 text: "hello".into(),
                 agent: "build".into(),
                 files: Vec::new(),
+                images: Vec::new(),
                 created: 0,
             },
             Item::Compaction {

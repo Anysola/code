@@ -408,8 +408,11 @@ pub enum BodyKind {
         code: String,
         output: String,
     },
+    /// The image viewer on image `index` of `set`.
     Image {
+        set: crate::preview::Set,
         index: usize,
+        source: std::sync::Arc<crate::preview::Source>,
     },
     Error {
         details: String,

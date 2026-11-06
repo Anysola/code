@@ -79,6 +79,8 @@ pub enum Hit {
     CloseToast,
     /// Folds or unfolds the sidebar's todo list.
     ToggleTodos,
+    /// An image thumbnail: opens the image viewer on that set at that index.
+    Image(crate::preview::Set, usize),
 }
 
 pub struct Canvas<'a> {
