@@ -4,7 +4,7 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
-## 1.0.1 (unreleased)
+## 1.0.1 (2026-11-06)
 
 - `/reset` spends a banked reset whenever you choose, after a confirm that shows how many you have, when the next
   one expires and which windows it clears. `/usage` offers the same with `r` (or a click) when your bank holds one.
