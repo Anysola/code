@@ -1,22 +1,39 @@
 //! Flowcharts as box drawings, a subset of 0.5.1's `@opencode/merman`: `flowchart`/`graph`
-//! top-down charts whose edges each go one layer down, and left-to-right chains. Charts this
-//! layout cannot draw are errors, and the block stays source.
+//! top-down charts whose edges go down (an edge that skips layers passes through them as a
+//! line), and left-to-right chains. Charts this layout cannot draw (edges that loop back) are
+//! errors, and the block stays source. State diagrams (`state.rs`) are drawn with this layout.
 
 use std::collections::HashMap;
 
 use crate::text::width;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Direction {
+pub(super) enum Direction {
     Down,
     Right,
 }
 
-struct Chart {
-    direction: Direction,
-    /// Node ids in order of first mention, with their labels.
-    nodes: Vec<(String, String)>,
-    edges: Vec<(usize, usize, Option<String>)>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Shape {
+    /// The label in a box.
+    Box,
+    /// The label alone, as a small glyph (`●`, `◉`, `◇`) edges reach without a box.
+    Point,
+    /// A line through a layer, for an edge that skips it (made while drawing).
+    Pass,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct Node {
+    pub label: String,
+    pub shape: Shape,
+}
+
+pub(super) struct Chart {
+    pub direction: Direction,
+    /// Nodes in order of first mention.
+    pub nodes: Vec<Node>,
+    pub edges: Vec<(usize, usize, Option<String>)>,
 }
 
 /// `A`, `A[Label]`, `A(Label)`, `A{Label}`, `A((Label))`, `A([Label])`: the id and its label.
@@ -72,11 +89,14 @@ fn parse(source: &str) -> Result<Chart, String> {
     let mut intern = |chart: &mut Chart, text: &str| -> Result<usize, String> {
         let (id, label) = node(text).ok_or_else(|| format!("cannot read node {text}"))?;
         let at = *index.entry(id.clone()).or_insert_with(|| {
-            chart.nodes.push((id.clone(), id.clone()));
+            chart.nodes.push(Node {
+                label: id.clone(),
+                shape: Shape::Box,
+            });
             chart.nodes.len() - 1
         });
         if let Some(label) = label {
-            chart.nodes[at].1 = label;
+            chart.nodes[at].label = label;
         }
         Ok(at)
     };
@@ -131,7 +151,7 @@ fn draw_right(chart: &Chart) -> Result<Vec<String>, String> {
         return Err("left-to-right charts are drawn only as chains".into());
     }
     let mut rows = [String::new(), String::new(), String::new()];
-    for (i, (_, label)) in chart.nodes.iter().enumerate() {
+    for (i, node) in chart.nodes.iter().enumerate() {
         if i > 0 {
             let text = chart.edges[i - 1].2.clone().unwrap_or_default();
             let arrow = format!("─{text}─▶");
@@ -140,25 +160,54 @@ fn draw_right(chart: &Chart) -> Result<Vec<String>, String> {
             rows[1].push_str(&arrow);
             rows[2].push_str(&pad);
         }
-        for (row, part) in rows.iter_mut().zip(boxed(label)) {
+        let parts = match node.shape {
+            Shape::Box => boxed(&node.label),
+            _ => {
+                let pad = " ".repeat(width(&node.label));
+                [pad.clone(), node.label.clone(), pad]
+            }
+        };
+        for (row, part) in rows.iter_mut().zip(parts) {
             row.push_str(&part);
         }
     }
-    Ok(rows.to_vec())
+    Ok(rows.iter().map(|r| r.trim_end().to_string()).collect())
 }
 
+/// A line cell's arms: up, down, left, right.
+const LINES: [(char, u8); 11] = [
+    ('│', 0b1100),
+    ('─', 0b0011),
+    ('┌', 0b0101),
+    ('┐', 0b0110),
+    ('└', 0b1001),
+    ('┘', 0b1010),
+    ('├', 0b1101),
+    ('┤', 0b1110),
+    ('┬', 0b0111),
+    ('┴', 0b1011),
+    ('┼', 0b1111),
+];
+
+fn arms(c: char) -> Option<u8> {
+    LINES.iter().find(|(l, _)| *l == c).map(|(_, a)| *a)
+}
+
+/// Writes a line cell, joining it with a line already there (`┘` over `└` is `┴`).
 fn put(canvas: &mut [Vec<char>], x: usize, y: usize, c: char) {
     if let Some(cell) = canvas.get_mut(y).and_then(|r| r.get_mut(x)) {
-        *cell = match (*cell, c) {
-            ('─', '│') | ('│', '─') => '┼',
-            ('┴', '│') | ('│', '┴') => '┼',
-            ('┬', '│') | ('│', '┬') => '┼',
-            (_, c) => c,
+        *cell = match (arms(*cell), arms(c)) {
+            (Some(old), Some(new)) => LINES
+                .iter()
+                .find(|(_, a)| *a == old | new)
+                .map_or(c, |(l, _)| *l),
+            _ => c,
         };
     }
 }
 
-/// Top-down by layers; each edge must go exactly one layer down.
+/// Top-down by layers; every edge must go down. An edge that skips layers passes through each
+/// of them as a one-cell `Pass` node.
 fn draw_down(chart: &Chart) -> Result<Vec<String>, String> {
     let n = chart.nodes.len();
     let mut layer = vec![0usize; n];
@@ -167,13 +216,27 @@ fn draw_down(chart: &Chart) -> Result<Vec<String>, String> {
             layer[*b] = layer[*b].max(layer[*a] + 1);
         }
     }
-    if chart
-        .edges
-        .iter()
-        .any(|(a, b, _)| layer[*b] != layer[*a] + 1)
-    {
-        return Err("edges that skip layers or loop back are not drawn".into());
+    if chart.edges.iter().any(|(a, b, _)| layer[*b] <= layer[*a]) {
+        return Err("edges that loop back are not drawn".into());
     }
+    let mut nodes = chart.nodes.clone();
+    let mut edges: Vec<(usize, usize, Option<String>)> = Vec::new();
+    for (a, b, label) in &chart.edges {
+        let (mut from, mut label) = (*a, label.clone());
+        for l in layer[*a] + 1..layer[*b] {
+            nodes.push(Node {
+                label: String::new(),
+                shape: Shape::Pass,
+            });
+            layer.push(l);
+            edges.push((from, nodes.len() - 1, label.take()));
+            from = nodes.len() - 1;
+        }
+        edges.push((from, *b, label));
+    }
+    let n = nodes.len();
+    let has_in: Vec<bool> = (0..n).map(|i| edges.iter().any(|e| e.1 == i)).collect();
+    let has_out: Vec<bool> = (0..n).map(|i| edges.iter().any(|e| e.0 == i)).collect();
     let layers = layer.iter().max().copied().unwrap_or(0) + 1;
     let gap = 2;
     let mut x = vec![0usize; n];
@@ -182,7 +245,11 @@ fn draw_down(chart: &Chart) -> Result<Vec<String>, String> {
     let mut rows_of: Vec<Vec<usize>> = vec![Vec::new(); layers];
     for i in 0..n {
         rows_of[layer[i]].push(i);
-        widths[i] = width(&chart.nodes[i].1) + 4;
+        widths[i] = match nodes[i].shape {
+            Shape::Box => width(&nodes[i].label) + 4,
+            Shape::Point => width(&nodes[i].label).max(1),
+            Shape::Pass => 1,
+        };
     }
     for row in &rows_of {
         let w: usize =
@@ -203,17 +270,42 @@ fn draw_down(chart: &Chart) -> Result<Vec<String>, String> {
     let mut canvas = vec![vec![' '; total]; height];
     for i in 0..n {
         let y = layer[i] * (3 + band);
-        for (dy, row) in boxed(&chart.nodes[i].1).iter().enumerate() {
-            for (dx, c) in row.chars().enumerate() {
-                canvas[y + dy][x[i] + dx] = c;
+        let center = x[i] + widths[i] / 2;
+        match nodes[i].shape {
+            Shape::Box => {
+                for (dy, row) in boxed(&nodes[i].label).iter().enumerate() {
+                    for (dx, c) in row.chars().enumerate() {
+                        canvas[y + dy][x[i] + dx] = c;
+                    }
+                }
+            }
+            Shape::Point => {
+                // Reached from above: the glyph takes the top row and a line runs down from it;
+                // a source only: the glyph sits on the bottom row, next to its edges.
+                let at = if has_in[i] { y } else { y + 2 };
+                for (dx, c) in nodes[i].label.chars().enumerate() {
+                    canvas[at][x[i] + dx] = c;
+                }
+                if has_out[i] {
+                    for row in canvas.iter_mut().take(y + 3).skip(at + 1) {
+                        row[center] = '│';
+                    }
+                }
+            }
+            Shape::Pass => {
+                for row in canvas.iter_mut().skip(y).take(3) {
+                    row[center] = '│';
+                }
             }
         }
     }
-    for (a, b, label) in &chart.edges {
+    for (a, b, label) in &edges {
         let from = x[*a] + widths[*a] / 2;
         let to = x[*b] + widths[*b] / 2;
         let top = layer[*a] * (3 + band) + 3;
-        put(&mut canvas, from, top - 1, '┬');
+        if nodes[*a].shape == Shape::Box {
+            put(&mut canvas, from, top - 1, '┬');
+        }
         put(&mut canvas, from, top, '│');
         let (left, right) = (from.min(to), from.max(to));
         for cx in left..=right {
@@ -232,29 +324,54 @@ fn draw_down(chart: &Chart) -> Result<Vec<String>, String> {
             );
             put(&mut canvas, to, top + 1, if to > from { '┐' } else { '┌' });
         }
-        put(&mut canvas, to, top + 2, '▼');
+        let head = if nodes[*b].shape == Shape::Pass {
+            '│'
+        } else {
+            '▼'
+        };
+        put(&mut canvas, to, top + 2, head);
         if let Some(label) = label {
+            // Beside a straight line, or beside the head of a bent one (fanned-out edges share
+            // their first rows). The label may run past the boxes' width.
+            let (y, at) = if from == to {
+                (top, from + 2)
+            } else {
+                (top + 2, to + 2)
+            };
+            let row = &mut canvas[y];
+            if row.len() < at + label.chars().count() {
+                row.resize(at + label.chars().count(), ' ');
+            }
             for (i, c) in label.chars().enumerate() {
-                let cx = from + 2 + i;
-                if canvas[top].get(cx) == Some(&' ') {
-                    canvas[top][cx] = c;
+                if row[at + i] == ' ' {
+                    row[at + i] = c;
                 }
             }
         }
     }
-    Ok(canvas
+    let mut rows: Vec<String> = canvas
         .into_iter()
         .map(|r| r.into_iter().collect::<String>().trim_end().to_string())
-        .collect())
+        .collect();
+    // A source point on the first layer or an end point on the last leaves blank rows.
+    while rows.last().is_some_and(String::is_empty) {
+        rows.pop();
+    }
+    let blank = rows.iter().take_while(|r| r.is_empty()).count();
+    Ok(rows.split_off(blank))
+}
+
+/// The chart's rows in its direction, or why it cannot be drawn.
+pub(super) fn draw(chart: &Chart) -> Result<Vec<String>, String> {
+    match chart.direction {
+        Direction::Down => draw_down(chart),
+        Direction::Right => draw_right(chart),
+    }
 }
 
 /// The drawing's rows, or why the chart cannot be drawn (the block then stays source).
 pub fn render(source: &str) -> Result<Vec<String>, String> {
-    let chart = parse(source)?;
-    match chart.direction {
-        Direction::Down => draw_down(&chart),
-        Direction::Right => draw_right(&chart),
-    }
+    draw(&parse(source)?)
 }
 
 #[cfg(test)]
@@ -291,6 +408,30 @@ mod tests {
         assert_eq!(
             render("graph LR\nA[a] --> B[b]").unwrap(),
             vec!["┌───┐   ┌───┐", "│ a │──▶│ b │", "└───┘   └───┘"]
+        );
+    }
+
+    #[test]
+    fn edges_that_skip_layers_pass_through() {
+        assert_eq!(
+            render("flowchart TD\nA --> B\nB --> C\nA --> C").unwrap(),
+            vec![
+                " ┌───┐",
+                " │ A │",
+                " └─┬─┘",
+                "   │",
+                "  ┌┴───┐",
+                "  ▼    │",
+                "┌───┐  │",
+                "│ B │  │",
+                "└─┬─┘  │",
+                "  │    │",
+                "  └┬───┘",
+                "   ▼",
+                " ┌───┐",
+                " │ C │",
+                " └───┘",
+            ]
         );
     }
 
