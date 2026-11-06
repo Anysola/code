@@ -135,7 +135,7 @@ pub fn pad_right(text: &str, total: usize) -> String {
     format!("{text}{}", " ".repeat(total.saturating_sub(w)))
 }
 
-pub use anysola_core::gateway::format::credits;
+pub use anysola_core::gateway::format::grouped;
 
 /// `950`, `1.2K`, `3.4M`.
 pub fn compact(value: u64) -> String {
@@ -376,7 +376,7 @@ mod tests {
 
     #[test]
     fn formats() {
-        assert_eq!(credits(12345.4), "12,345");
+        assert_eq!(grouped(12345.4), "12,345");
         assert_eq!(compact(1260), "1.3K");
         assert_eq!(duration(7100), "7.1s");
         assert_eq!(duration(4), "4ms");

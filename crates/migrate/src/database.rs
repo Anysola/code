@@ -181,7 +181,7 @@ pub fn import(conn: &Connection, tx: &Transaction) -> Result<Counts, Error> {
             "time_updated",
         ],
     )?;
-    copy_kv(conn, tx, &sessions)?;
+    copy_kv(conn, tx)?;
     Ok(counts)
 }
 
@@ -396,19 +396,15 @@ fn copy_messages(
     Ok(count)
 }
 
-/// Budgets, per-session credit totals of imported sessions and the cached remote config, which
-/// 1.0 keeps as the response text.
-fn copy_kv(conn: &Connection, tx: &Transaction, sessions: &HashSet<String>) -> Result<(), Error> {
+/// The cached remote config, which 1.0 keeps as the response text. Budgets and per-session
+/// totals (`anysola:budget:default`, `anysola:session:<id>`) were counted in credits; 1.0 counts
+/// percent of the 5-hour usage window, so they are dropped, not converted.
+fn copy_kv(conn: &Connection, tx: &Transaction) -> Result<(), Error> {
     for row in select(conn, "SELECT * FROM kv")? {
         let Some(key) = text(&row, "key") else {
             continue;
         };
-        let keep = key == "anysola:budget:default"
-            || key == "anysola:config"
-            || key
-                .strip_prefix("anysola:session:")
-                .is_some_and(|id| sessions.contains(id));
-        if !keep {
+        if key != "anysola:config" {
             continue;
         }
         let value = match (key.as_str(), get(&row, "value")) {

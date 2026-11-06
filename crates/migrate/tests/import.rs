@@ -139,10 +139,8 @@ fn imports_everything_once_without_touching_old_files() {
         db.anysola_login().unwrap().as_deref(),
         Some("asc_FAKEtoken0000000000")
     );
-    assert_eq!(
-        db.kv_get("anysola:budget:default").unwrap(),
-        Some(json!(25))
-    );
+    // Credit budgets and totals are dropped: 1.0 budgets are percent of the 5-hour window.
+    assert_eq!(db.kv_get("anysola:budget:default").unwrap(), None);
     assert_eq!(db.kv_get("anysola:session:ses_orphan").unwrap(), None);
     let root = text(
         &rows(
@@ -150,10 +148,7 @@ fn imports_everything_once_without_touching_old_files() {
             "SELECT id FROM session_v2 WHERE title = 'Rich storage test'",
         )[0][0],
     );
-    assert_eq!(
-        db.kv_get(&format!("anysola:session:{root}")).unwrap(),
-        Some(json!({"total": 16, "turns": 1, "budget": null}))
-    );
+    assert_eq!(db.kv_get(&format!("anysola:session:{root}")).unwrap(), None);
     let config = db.kv_get("anysola:config").unwrap().expect("cached config");
     let body: Value =
         serde_json::from_str(config.as_str().expect("kept as the response text")).unwrap();

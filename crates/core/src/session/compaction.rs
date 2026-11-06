@@ -646,11 +646,7 @@ impl Call<'_> {
         let mut assembly = Assembly::default();
         while let Some(item) = stream.next().await {
             match item.map_err(Failure::Api)? {
-                StreamItem::Credits { charged, remaining } => {
-                    self.shared
-                        .credits
-                        .record(&self.session.id, charged, remaining)
-                }
+                StreamItem::Usage(usage) => self.shared.usage.record(&self.session.id, &usage),
                 StreamItem::Event(event) => {
                     assembly.on_event(&event).map_err(Failure::Api)?;
                 }

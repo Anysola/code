@@ -1,6 +1,6 @@
-//! A fake `api.anysola.com/v1/code` on 127.0.0.1: `/config`, the account routes (`/me`, `/usage`,
-//! `/tokens`, revokes, the device flow), `/version`, `/search` and scripted `/messages` streams.
-//! Every request is recorded.
+//! A fake `api.anysola.com/v1/code` on 127.0.0.1: `/config`, the account routes (`/me`,
+//! `/limits`, `/limits/redeem`, `/usage`, `/tokens`, revokes, the device flow), `/version`,
+//! `/search` and scripted `/messages` streams. Every request is recorded.
 
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
@@ -48,8 +48,8 @@ impl Recorded {
 
 #[derive(Debug, Clone)]
 pub enum Reply {
-    /// `text/event-stream` with `x-credits-available-before` when given.
-    Sse { body: String, before: Option<u64> },
+    /// `text/event-stream`.
+    Sse { body: String },
     Json {
         status: u16,
         body: Value,
@@ -71,6 +71,11 @@ struct State {
     search: Mutex<Reply>,
     version: Mutex<Value>,
     config: Mutex<Option<Reply>>,
+    /// Banked resets `/limits` reports; `/limits/redeem` spends one.
+    bank: Mutex<usize>,
+    spent: Mutex<usize>,
+    /// `/limits` reports a full 5-hour window until a redeem.
+    full: Mutex<bool>,
     /// Fixed answers by path, ahead of the defaults.
     replies: Mutex<Vec<(String, Reply)>>,
     /// Answers computed per request by path (other servers on this port, such as MCP).
@@ -102,8 +107,8 @@ pub fn default_config(base: &str) -> Value {
                     "capabilities": {"reasoning": {"supported": true, "effort": efforts}},
                     "compatibility": {"supportsThinkingBlockBinding": true, "supportsEffortUpdates": true}, "variants": [economy]},
                 "claude-sonnet-5-5": {"name": "Claude Sonnet 5.5", "description": "Default", "limit": {"context": 1000000, "output": 32000},
-                    "capabilities": {"reasoning": {"supported": true, "effort": efforts}}, "variants": [economy], "credits_per_turn_estimate": 6},
-                "claude-haiku-5-5": {"name": "Claude Haiku 5.5", "description": "Fastest", "limit": {"context": 200000, "output": 32000}, "credits_per_turn_estimate": 1}
+                    "capabilities": {"reasoning": {"supported": true, "effort": efforts}}, "variants": [economy]},
+                "claude-haiku-5-5": {"name": "Claude Haiku 5.5", "description": "Fastest", "limit": {"context": 200000, "output": 32000}}
             }}}
     })
 }
@@ -128,16 +133,72 @@ fn default_poll(index: usize) -> Reply {
     }
 }
 
-/// The `/usage` body of the 0.5.1 capture.
+/// The fake's windows reset 2 h (5-hour) and 3 d 4 h (weekly) after each reply, so texts that
+/// count down from the real clock read the same in every run.
+pub fn five_hour_reset() -> String {
+    from_now(2 * 3_600_000)
+}
+
+pub fn weekly_reset() -> String {
+    from_now(76 * 3_600_000)
+}
+
+fn from_now(ms: i64) -> String {
+    (chrono::Utc::now() + chrono::Duration::milliseconds(ms))
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+/// `UsageLimitsWire` with `bank` banked resets; `full` fills the 5-hour window.
+pub fn limits(bank: usize, full: bool) -> Value {
+    limits_after(0, bank, full)
+}
+
+/// [`limits`] once `spent` banked resets were spent (the ones that expired first).
+fn limits_after(spent: usize, bank: usize, full: bool) -> Value {
+    let bank: Vec<Value> = (spent..spent + bank)
+        .map(|i| json!({"id": format!("bank_{}", i + 1), "expiresAt": format!("2026-12-{:02}T00:00:00Z", i + 1), "scope": "five_hour"}))
+        .collect();
+    json!({
+        "plan": "team", "allowed": !full, "blockedBy": if full { json!("five_hour") } else { Value::Null },
+        "fiveHour": {"percent": if full { 100 } else { 42 }, "resetsAt": five_hour_reset()},
+        "weekly": {"percent": 18, "resetsAt": weekly_reset()},
+        "bank": bank
+    })
+}
+
+/// The `/me` body: a paid Team account, the 5-hour window at 42%.
+pub fn default_me() -> Value {
+    json!({"plan": "team", "access": "paid", "limits": limits(2, false), "usageToday": {"requests": 3}, "event": null})
+}
+
+/// The `/usage` body.
 pub fn default_usage() -> Value {
     json!({
         "days": 7,
-        "totals": {"requests": 42, "credits": 1234, "costUsd": 0.0512, "cacheHitRate": 0.61},
-        "byDay": [{"date": "2026-11-03", "requests": 30, "credits": 1000}, {"date": "2026-11-04", "requests": 12, "credits": 234}],
-        "byModel": [{"model": "claude-sonnet-5-5", "requests": 40, "credits": 1200}, {"model": "claude-haiku-5-5", "requests": 2, "credits": 34}],
-        "today": {"requests": 12, "credits": 234}, "freeQuota": null, "plan": "team",
-        "creditsAvailable": 731, "renewsAt": "2026-11-23T00:00:00Z"
+        "totals": {"requests": 42, "cacheHitRate": 0.61},
+        "byDay": [{"date": "2026-11-03", "requests": 30}, {"date": "2026-11-04", "requests": 12}],
+        "byModel": [{"model": "claude-sonnet-5-5", "requests": 40}, {"model": "claude-haiku-5-5", "requests": 2}],
+        "today": {"requests": 12}, "plan": "team",
+        "limits": limits(2, false)
     })
+}
+
+/// The 429 a full 5-hour window answers a model request with.
+pub fn limit_reply(bank: usize) -> Reply {
+    let plural = if bank == 1 { "" } else { "s" };
+    let banked = if bank > 0 {
+        format!(" You have {bank} banked reset{plural}.")
+    } else {
+        String::new()
+    };
+    Reply::Json {
+        status: 429,
+        body: json!({"type": "error", "error": {"type": "rate_limit_error", "message": format!("5-hour limit reached. Resets in 2 h.{banked}")}}),
+        headers: vec![
+            ("x-should-retry".into(), "false".into()),
+            ("x-anysola-limit".into(), "five_hour".into()),
+        ],
+    }
 }
 
 /// The `/tokens` body of the 0.5.1 capture.
@@ -152,17 +213,11 @@ pub fn default_tokens() -> Value {
 
 fn respond(reply: Reply) -> Response<Full<Bytes>> {
     match reply {
-        Reply::Sse { body, before } => {
-            let mut response = Response::builder()
-                .status(200)
-                .header("content-type", "text/event-stream");
-            if let Some(before) = before {
-                response = response.header("x-credits-available-before", before.to_string());
-            }
-            response
-                .body(Full::new(Bytes::from(body)))
-                .expect("valid response")
-        }
+        Reply::Sse { body } => Response::builder()
+            .status(200)
+            .header("content-type", "text/event-stream")
+            .body(Full::new(Bytes::from(body)))
+            .expect("valid response"),
         Reply::Json {
             status,
             body,
@@ -247,9 +302,30 @@ async fn handle(
             .unwrap()
             .clone()
             .unwrap_or_else(|| ok(default_config(&base))),
-        "/v1/code/me" => ok(
-            json!({"plan": "team", "access": "paid", "credits": {"available": 731, "renewsAt": "2026-11-23T00:00:00Z"}, "lowBalance": false, "usageToday": {"requests": 3, "credits": 9}}),
-        ),
+        "/v1/code/me" => ok(default_me()),
+        "/v1/code/limits" => ok(limits_after(
+            *state.spent.lock().unwrap(),
+            *state.bank.lock().unwrap(),
+            *state.full.lock().unwrap(),
+        )),
+        "/v1/code/limits/redeem" if recorded.method == "POST" => {
+            let mut bank = state.bank.lock().unwrap();
+            if *bank == 0 {
+                Reply::Json {
+                    status: 409,
+                    body: json!({"type": "error", "error": {"type": "invalid_request_error", "message": "No banked resets to spend."}}),
+                    headers: Vec::new(),
+                }
+            } else {
+                *bank -= 1;
+                *state.full.lock().unwrap() = false;
+                let mut spent = state.spent.lock().unwrap();
+                *spent += 1;
+                let mut limits = limits_after(*spent, *bank, false);
+                limits["fiveHour"] = json!({"percent": 0, "resetsAt": null});
+                ok(limits)
+            }
+        }
         "/v1/code/usage" => ok(default_usage()),
         "/v1/code/tokens" => ok(default_tokens()),
         "/v1/code/device/code" => ok(
@@ -303,11 +379,14 @@ impl FakeGateway {
             script: Arc::new(script),
             search: Mutex::new(Reply::Json {
                 status: 200,
-                body: json!({"results": [{"url": "https://bun.com", "title": "Bun", "content": "Bun 1.4.4"}], "credits": 2}),
+                body: json!({"results": [{"url": "https://bun.com", "title": "Bun", "content": "Bun 1.4.4"}]}),
                 headers: Vec::new(),
             }),
             version: Mutex::new(json!({"latest": "0.5.1", "minimum": "0.2.0"})),
             config: Mutex::new(None),
+            bank: Mutex::new(2),
+            spent: Mutex::new(0),
+            full: Mutex::new(false),
             replies: Mutex::new(Vec::new()),
             routes: Mutex::new(Vec::new()),
             device: Mutex::new(Arc::new(default_poll)),
@@ -355,6 +434,17 @@ impl FakeGateway {
             .lock()
             .unwrap()
             .push((path.to_string(), text.to_string()));
+    }
+
+    /// How many banked resets `/limits` reports, and whether the 5-hour window is full.
+    pub fn set_limits(&self, bank: usize, full: bool) {
+        *self.state.bank.lock().unwrap() = bank;
+        *self.state.full.lock().unwrap() = full;
+    }
+
+    /// Banked resets left.
+    pub fn bank(&self) -> usize {
+        *self.state.bank.lock().unwrap()
     }
 
     pub fn set_search(&self, reply: Reply) {

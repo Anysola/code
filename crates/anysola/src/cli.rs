@@ -64,6 +64,7 @@ pub enum Command {
     Logout,
     Status,
     Usage(UsageArgs),
+    Limits(LimitsArgs),
     Devices(DevicesArgs),
     #[command(alias = "upgrade")]
     Update(UpdateArgs),
@@ -96,6 +97,19 @@ pub struct UsageArgs {
     pub days: String,
     #[arg(long, value_enum, default_value_t = UsageFormat::Default)]
     pub format: UsageFormat,
+}
+
+#[derive(Debug, Args)]
+pub struct LimitsArgs {
+    #[command(subcommand)]
+    pub command: Option<LimitsCommand>,
+    #[arg(long, value_enum, default_value_t = UsageFormat::Default)]
+    pub format: UsageFormat,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum LimitsCommand {
+    Redeem,
 }
 
 #[derive(Debug, Args)]
@@ -260,6 +274,8 @@ pub struct RunArgs {
     #[arg(long, value_parser = budget)]
     pub budget: Option<u64>,
     #[arg(long)]
+    pub use_banked_reset: bool,
+    #[arg(long)]
     pub auto: bool,
     #[arg(long, hide = true)]
     pub yolo: bool,
@@ -267,12 +283,14 @@ pub struct RunArgs {
     pub dangerously_skip_permissions: bool,
 }
 
+/// Percent of the 5-hour window, 1 to 100.
 fn budget(value: &str) -> Result<u64, String> {
-    match value.parse::<i64>() {
-        Ok(n) if n >= 1 => Ok(n as u64),
-        Ok(_) => {
+    match value.trim_end_matches('%').parse::<i64>() {
+        Ok(n) if (1..=100).contains(&n) => Ok(n as u64),
+        Ok(n) if n < 1 => {
             Err("Schema validation failed: Expected a value greater than or equal to 1".into())
         }
+        Ok(_) => Err("Schema validation failed: Expected a value less than or equal to 100".into()),
         Err(_) => Err("Schema validation failed: Expected an integer".into()),
     }
 }
@@ -302,6 +320,8 @@ pub fn help(path: &[String]) -> &'static str {
         "logout" => include_str!("help/logout.txt"),
         "status" => include_str!("help/status.txt"),
         "usage" => include_str!("help/usage.txt"),
+        "limits" => include_str!("help/limits.txt"),
+        "limits_redeem" => include_str!("help/limits_redeem.txt"),
         "devices" => include_str!("help/devices.txt"),
         "devices_revoke" => include_str!("help/devices_revoke.txt"),
         "update" => include_str!("help/update.txt"),

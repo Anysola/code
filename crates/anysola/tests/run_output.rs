@@ -1,7 +1,8 @@
 //! `anysola run` output against the scenarios captured in `spec/verbatim/cli/run/` (the fake2
 //! gateway). Text mode is compared byte for byte with the 1.0 deltas applied: one blank line around
-//! each block (§B14), the lowest balance of the turn (§B19), no billing URL twice (§B5), no stack
-//! dump (§B15). JSON lines are compared with ids and times normalized.
+//! each block (§B14), no stack dump (§B15), and 1.0's usage limits in place of credits (the summary
+//! line, budgets in percent of the 5-hour window, the 429 for a full window). JSON lines are
+//! compared with ids and times normalized.
 
 mod common;
 
@@ -13,8 +14,9 @@ use common::*;
 use regex::Regex;
 use serde_json::{Value, json};
 
-/// fake2.mjs: a shell call for "run ls", thinking for "think", 402 for "nocredits", a web search
-/// for "latest"; 2 credits per request, titles free.
+/// fake2.mjs: a shell call for "run ls", thinking for "think", a full 5-hour window for
+/// "limitreached" (until a "Continue." follows it), a web search for "latest"; each request takes
+/// 2% of the 5-hour window, titles nothing.
 fn fake2(request: &Recorded, _: usize) -> Reply {
     let body = request.json();
     let last = body["messages"]
@@ -27,12 +29,8 @@ fn fake2(request: &Recorded, _: usize) -> Reply {
         .is_some_and(|c| c.iter().any(|p| p["type"] == "tool_result"));
     let text = last.to_string().to_lowercase();
     let title = request.is_title();
-    if !title && text.contains("nocredits") {
-        return Reply::Json {
-            status: 402,
-            body: json!({"type": "error", "error": {"type": "insufficient_credits", "message": "You've used this cycle's Anysola credits. They renew on 23 Nov. account.anysola.com/billing"}}),
-            headers: Vec::new(),
-        };
+    if !title && text.contains("limitreached") {
+        return anysola_testkit::limit_reply(2);
     }
     let stream = if !title && !after_tool && text.contains("run ls") {
         Stream::new().tool(
@@ -58,7 +56,6 @@ fn fake2(request: &Recorded, _: usize) -> Reply {
     let model = body["model"].as_str().unwrap_or_default().to_string();
     Reply::Sse {
         body: stream.finish(&model, Some(if title { 0 } else { 2 })),
-        before: Some(731),
     }
 }
 
@@ -95,7 +92,7 @@ fn text_plain() {
     assert_eq!(out.stdout, "Plain answer.\n");
     assert_eq!(
         out.stderr,
-        format!("{HEADER}\x1b[90mAnysola · 2 credits · 729 left\x1b[0m\n")
+        format!("{HEADER}\x1b[90mAnysola · 5h 42% · this run 2%\x1b[0m\n")
     );
     assert_eq!(out.code, 0);
 }
@@ -113,7 +110,7 @@ fn text_thinking() {
     );
     assert_eq!(
         out.stderr,
-        format!("{HEADER}\x1b[90mAnysola · 2 credits · 729 left\x1b[0m\n")
+        format!("{HEADER}\x1b[90mAnysola · 5h 42% · this run 2%\x1b[0m\n")
     );
 }
 
@@ -135,7 +132,7 @@ fn text_shell_and_auto() {
         assert_eq!(
             out.stderr,
             format!(
-                "{HEADER}\x1b[0m$ \x1b[0mls\na.txt\n\x1b[0m\n> build · claude-sonnet-5-5\n\x1b[0m\n\x1b[90mAnysola · 4 credits · 729 left\x1b[0m\n"
+                "{HEADER}\x1b[0m$ \x1b[0mls\na.txt\n\x1b[0m\n> build · claude-sonnet-5-5\n\x1b[0m\n\x1b[90mAnysola · 5h 42% · this run 4%\x1b[0m\n"
             )
         );
         assert_eq!(out.code, 0);
@@ -154,7 +151,7 @@ fn text_permission_ask() {
     assert_eq!(
         out.stderr,
         format!(
-            "{HEADER}\x1b[93m\x1b[1m! \x1b[0mpermission requested: shell (ls); auto-rejecting\n\x1b[0m✗ \x1b[0mls failed\n\x1b[91m\x1b[1mError: \x1b[0mThis non-interactive run cannot ask the user for permission, so the request was rejected. Continue without this action.\n\x1b[0m\n> build · claude-sonnet-5-5\n\x1b[0m\n\x1b[90mAnysola · 4 credits · 729 left\x1b[0m\n"
+            "{HEADER}\x1b[93m\x1b[1m! \x1b[0mpermission requested: shell (ls); auto-rejecting\n\x1b[0m✗ \x1b[0mls failed\n\x1b[91m\x1b[1mError: \x1b[0mThis non-interactive run cannot ask the user for permission, so the request was rejected. Continue without this action.\n\x1b[0m\n> build · claude-sonnet-5-5\n\x1b[0m\n\x1b[90mAnysola · 5h 42% · this run 4%\x1b[0m\n"
         )
     );
     assert_eq!(out.code, 0);
@@ -167,22 +164,91 @@ fn text_agent_plan() {
     assert_eq!(out.stdout, "Plain answer.\n");
     assert_eq!(
         out.stderr,
-        "\x1b[0m\n> plan · claude-sonnet-5-5\n\x1b[0m\n\x1b[90mAnysola · 2 credits · 729 left\x1b[0m\n"
+        "\x1b[0m\n> plan · claude-sonnet-5-5\n\x1b[0m\n\x1b[90mAnysola · 5h 42% · this run 2%\x1b[0m\n"
+    );
+}
+
+const LIMIT: &str = "5-hour limit reached. Resets in 2 h. You have 2 banked resets.";
+
+#[test]
+fn text_usage_limit_is_not_retried() {
+    let (gateway, home) = setup();
+    let out = run_in(&home, &["run", "--standalone", "limitreached", "now"]);
+    assert_eq!(out.stdout, "");
+    assert_eq!(
+        out.stderr,
+        format!("{HEADER}\x1b[91m\x1b[1mError: \x1b[0m{LIMIT}\n")
+    );
+    assert_eq!(out.code, 1);
+    let refused = gateway
+        .messages()
+        .into_iter()
+        .filter(|r| !r.is_title())
+        .count();
+    assert_eq!(refused, 1, "a full window is not retried");
+    assert_eq!(gateway.bank(), 2, "no banked reset without the flag");
+}
+
+#[test]
+fn use_banked_reset_spends_one_and_continues() {
+    let (gateway, home) = setup();
+    let out = run_in(
+        &home,
+        &[
+            "run",
+            "--standalone",
+            "--use-banked-reset",
+            "limitreached",
+            "now",
+        ],
+    );
+    assert_eq!(out.stdout, "Plain answer.\n");
+    assert_eq!(
+        out.stderr,
+        format!(
+            "{HEADER}\x1b[91m\x1b[1mError: \x1b[0m{LIMIT}\n\x1b[90mAnysola · banked reset used · 5h 0% · week 18%\x1b[0m\n{HEADER}\x1b[90mAnysola · 5h 42% · this run 2%\x1b[0m\n"
+        )
+    );
+    assert_eq!(out.code, 0);
+    assert_eq!(gateway.bank(), 1);
+    let posts: Vec<_> = gateway
+        .requests()
+        .into_iter()
+        .filter(|r| r.path.starts_with("/v1/code/limits"))
+        .map(|r| format!("{} {}", r.method, r.path))
+        .collect();
+    assert_eq!(
+        posts,
+        ["GET /v1/code/limits", "POST /v1/code/limits/redeem"]
     );
 }
 
 #[test]
-fn text_402() {
-    let (_g, home) = setup();
-    let out = run_in(&home, &["run", "--standalone", "nocredits", "now"]);
-    assert_eq!(out.stdout, "");
+fn use_banked_reset_redeems_before_a_blocked_turn() {
+    let (gateway, home) = setup();
+    gateway.set_limits(1, true);
+    let out = run_in(
+        &home,
+        &["run", "--standalone", "--use-banked-reset", "hello"],
+    );
+    assert_eq!(out.stdout, "Plain answer.\n");
     assert_eq!(
         out.stderr,
         format!(
-            "{HEADER}\x1b[91m\x1b[1mError: \x1b[0mYou've used this cycle's Anysola credits. They renew on 23 Nov. account.anysola.com/billing\n"
+            "\x1b[90mAnysola · banked reset used · 5h 0% · week 18%\x1b[0m\n{HEADER}\x1b[90mAnysola · 5h 42% · this run 2%\x1b[0m\n"
         )
     );
+    assert_eq!(gateway.bank(), 0);
+    // An empty bank: the refusal stands.
+    let out = run_in(
+        &home,
+        &["run", "--standalone", "--use-banked-reset", "limitreached"],
+    );
     assert_eq!(out.code, 1);
+    assert_eq!(
+        out.stderr,
+        format!("{HEADER}\x1b[91m\x1b[1mError: \x1b[0m{LIMIT}\n")
+    );
 }
 
 #[test]
@@ -207,7 +273,7 @@ fn text_budget_websearch_and_already_reached() {
     assert_eq!(
         out.stderr,
         format!(
-            "{HEADER}\x1b[0m◈ \x1b[0mWeb Search via Anysola \"latest bun\" \n\x1b[91m\x1b[1mError: \x1b[0mBudget reached: 4/1 credits. Continue with `anysola run -s {session} --budget <credits>`.\n\x1b[90mAnysola · 4 credits · 729 left\x1b[0m\n"
+            "{HEADER}\x1b[0m◈ \x1b[0mWeb Search via Anysola \"latest bun\" \n\x1b[91m\x1b[1mError: \x1b[0mBudget reached: 2%/1% of the 5-hour window. Continue with `anysola run -s {session} --budget <percent>`.\n\x1b[90mAnysola · 5h 42% · this run 2%\x1b[0m\n"
         )
     );
     assert_eq!(out.code, 1);
@@ -218,7 +284,7 @@ fn text_budget_websearch_and_already_reached() {
     assert_eq!(
         again.stderr,
         format!(
-            "\x1b[91m\x1b[1mError: \x1b[0mBudget reached: 4/1 credits. Continue with `anysola run -s {session} --budget <credits>`.\n"
+            "\x1b[91m\x1b[1mError: \x1b[0mBudget reached: 2%/1% of the 5-hour window. Continue with `anysola run -s {session} --budget <percent>`.\n"
         )
     );
     assert_eq!(again.code, 1);
@@ -318,7 +384,7 @@ fn json_matches_captures() {
 }
 
 #[test]
-fn json_402_without_doubled_url() {
+fn json_usage_limit() {
     let (_g, home) = setup();
     let (lines, out) = json_run(
         &home,
@@ -327,19 +393,19 @@ fn json_402_without_doubled_url() {
             "--standalone",
             "--format",
             "json",
-            "nocredits",
+            "limitreached",
             "now",
         ],
     );
-    let mut expected = json_capture("json-402");
-    let message = "You've used this cycle's Anysola credits. They renew on 23 Nov. account.anysola.com/billing";
-    expected[1]["error"]["message"] = json!(message);
-    expected[1]["error"]["response"]["body"] = json!(
-        json!({"type": "error", "error": {"type": "billing_error", "message": message}})
-            .to_string()
-    );
-    assert_eq!(lines, expected);
     assert_eq!(out.code, 1);
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["type"], "step_start");
+    let body = json!({"type": "error", "error": {"type": "rate_limit_error", "message": LIMIT}});
+    assert_eq!(
+        lines[1]["error"],
+        json!({"type": "provider.usage-limit", "message": LIMIT, "status": 429,
+            "response": {"body": body.to_string()}})
+    );
 }
 
 #[test]
@@ -371,7 +437,7 @@ fn json_budget() {
     let session = session_of(&gateway);
     assert_eq!(
         lines[3]["error"],
-        json!({"type": "unknown", "message": "Budget reached: 4/1 credits. Continue with `anysola run -s ses_<0> --budget <credits>`."})
+        json!({"type": "unknown", "message": "Budget reached: 2%/1% of the 5-hour window. Continue with `anysola run -s ses_<0> --budget <percent>`."})
     );
     let (again, out) = json_run(
         &home,
@@ -381,7 +447,7 @@ fn json_budget() {
     );
     let mut expected = json_capture("json-budget-already-reached");
     expected[0]["error"]["message"] = json!(
-        "Budget reached: 4/1 credits. Continue with `anysola run -s ses_<0> --budget <credits>`."
+        "Budget reached: 2%/1% of the 5-hour window. Continue with `anysola run -s ses_<0> --budget <percent>`."
     );
     assert_eq!(again, expected);
     assert_eq!(out.code, 1);
@@ -415,7 +481,6 @@ fn text_tool_lines() {
         };
         Reply::Sse {
             body: stream.finish(&model, None),
-            before: None,
         }
     });
     let home = TestHome::new(&gateway.url);
@@ -471,7 +536,6 @@ fn formatters_run_after_edits() {
         };
         Reply::Sse {
             body: stream.finish(&model, None),
-            before: None,
         }
     });
     let mut home = TestHome::new(&gateway.url);

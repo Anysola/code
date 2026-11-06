@@ -36,4 +36,4 @@
   ┃
   ┃  Build · Claude Sonnet 5.5
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-  ~/my-app:master                                                      731 credits · session 12/50  1.3K (0%)  ctrl+p commands    ~/my-app:master
+  ~/my-app:master                                                         5h 42% · session 12%/20%  1.3K (0%)  ctrl+p commands    ~/my-app:master

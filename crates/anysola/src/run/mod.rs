@@ -10,11 +10,14 @@ use std::time::Duration;
 
 use anysola_core::api::{Core, Prompt, Target};
 use anysola_core::events::{Event, InterruptReason};
-use anysola_core::gateway::error::SessionError;
+use anysola_core::gateway::account::Method;
+use anysola_core::gateway::error::{SessionError, USAGE_LIMIT_KIND};
+use anysola_core::gateway::limits::Limits;
 use anysola_core::model::ModelRef;
 use anysola_core::session::gate::Reply;
 use anysola_core::session::{Outcome, TurnOptions};
 use anysola_core::tool::question::QuestionReply;
+use anysola_core::usage::{percent, windows_text};
 use serde_json::json;
 
 use crate::cli::{Format, RunArgs};
@@ -36,10 +39,47 @@ fn report(mode: Mode, message: &str, session_id: &str) -> i32 {
     1
 }
 
-fn budget_message(total: u64, limit: u64, session_id: &str) -> String {
+fn budget_message(total: f64, limit: u64, session_id: &str) -> String {
     format!(
-        "Budget reached: {total}/{limit} credits. Continue with `anysola run -s {session_id} --budget <credits>`."
+        "Budget reached: {}/{limit}% of the 5-hour window. Continue with `anysola run -s {session_id} --budget <percent>`.",
+        percent(total)
     )
+}
+
+/// `--use-banked-reset`: spends the banked reset that expires first when the account's limits
+/// refuse requests (`force`: a request was just refused) and the bank holds one. `Ok(true)` once
+/// spent; the error is the line to print.
+async fn redeem_if_blocked(core: &Core, mode: Mode, force: bool) -> Result<bool, String> {
+    if !force {
+        let reply = core.account(Method::GET, "/limits").await?;
+        let limits = reply.ok().then(|| Limits::from_wire(&reply.body)).flatten();
+        let Some(limits) = limits else {
+            return Ok(false);
+        };
+        let now = anysola_core::time::now_ms();
+        if limits.allowed || limits.bank_at(now).is_empty() {
+            return Ok(false);
+        }
+    }
+    let reply = core.account(Method::POST, "/limits/redeem").await?;
+    match reply.status {
+        200..=299 => {
+            if mode == Mode::Text {
+                let windows = Limits::from_wire(&reply.body)
+                    .map(|l| format!(" · {}", windows_text(l.five_hour, l.weekly)))
+                    .unwrap_or_default();
+                ui::println(&format!(
+                    "{}Anysola · banked reset used{windows}{}",
+                    ui::DIM,
+                    ui::NORMAL
+                ));
+            }
+            Ok(true)
+        }
+        // The bank emptied in the meantime: the refusal stands.
+        409 => Ok(false),
+        _ => Err(format!("Could not use a banked reset: {}", reply.error().1)),
+    }
 }
 
 pub async fn run(args: RunArgs) -> i32 {
@@ -118,49 +158,68 @@ pub async fn run(args: RunArgs) -> i32 {
         let _ = core.set_title(&session_id, &title);
     }
     if let Some(limit) = args.budget {
-        let credits = match core.set_budget(&session_id, Some(limit)) {
-            Ok(credits) => credits,
+        let usage = match core.set_budget(&session_id, Some(limit)) {
+            Ok(usage) => usage,
             Err(error) => {
                 let message = format!("Cannot set the budget ({error}).");
                 return report(mode, &message, &session_id);
             }
         };
-        if credits.total >= limit {
+        if usage.total >= limit as f64 {
             return report(
                 mode,
-                &budget_message(credits.total, limit, &session_id),
+                &budget_message(usage.total, limit, &session_id),
                 &session_id,
             );
         }
     }
-    let start = core.credits(&session_id);
+    let mut redeemed = false;
+    if args.use_banked_reset {
+        match redeem_if_blocked(&core, mode, false).await {
+            Ok(spent) => redeemed = spent,
+            Err(error) => return report(mode, &error, &session_id),
+        }
+    }
+    let start = core.usage(&session_id);
     let auto = args.auto || args.yolo || args.dangerously_skip_permissions;
-    let code = drive(
-        &core,
-        &session_id,
-        Prompt {
-            text,
-            files,
-            skills: Vec::new(),
-        },
+    let options = Options {
         mode,
-        args.thinking,
+        thinking: args.thinking,
         auto,
-        args.budget,
-    )
-    .await;
-    let end = core.credits(&session_id);
-    let spent = end.total.saturating_sub(start.total);
-    if mode == Mode::Text && spent > 0 {
-        let left = end
-            .remaining
-            .or(start.remaining)
-            .map(|r| format!(" · {r} left"))
-            .unwrap_or_default();
-        let plural = if spent == 1 { "" } else { "s" };
+        budget: args.budget,
+    };
+    let prompt = Prompt {
+        text,
+        files,
+        skills: Vec::new(),
+    };
+    let (mut code, limited) = drive(&core, &session_id, prompt, &options).await;
+    // A window filled up during the turn: spend one banked reset and let the model go on.
+    if limited && args.use_banked_reset && !redeemed {
+        match redeem_if_blocked(&core, mode, true).await {
+            Ok(true) => {
+                let prompt = Prompt {
+                    text: "Continue.".into(),
+                    files: Vec::new(),
+                    skills: Vec::new(),
+                };
+                code = drive(&core, &session_id, prompt, &options).await.0;
+            }
+            Ok(false) => {}
+            Err(error) => code = report(mode, &error, &session_id),
+        }
+    }
+    let end = core.usage(&session_id);
+    let spent = (end.total - start.total).max(0.0);
+    if mode == Mode::Text
+        && spent > 0.0
+        && let Some(latest) = end.latest
+    {
         ui::println(&format!(
-            "{}Anysola · {spent} credit{plural}{left}{}",
+            "{}Anysola · {} · this run {}{}",
             ui::DIM,
+            windows_text(latest.five_hour, latest.weekly),
+            percent(spent),
             ui::NORMAL
         ));
     }
@@ -169,15 +228,21 @@ pub async fn run(args: RunArgs) -> i32 {
     code
 }
 
-async fn drive(
-    core: &Core,
-    session_id: &str,
-    prompt: Prompt,
+struct Options {
     mode: Mode,
     thinking: bool,
     auto: bool,
     budget: Option<u64>,
-) -> i32 {
+}
+
+/// Runs one turn; the exit code, and whether a full usage window refused it.
+async fn drive(core: &Core, session_id: &str, prompt: Prompt, options: &Options) -> (i32, bool) {
+    let Options {
+        mode,
+        thinking,
+        auto,
+        budget,
+    } = *options;
     let directory = std::env::current_dir().unwrap_or_default();
     let renderer = Renderer::new(mode, thinking, session_id.to_string(), directory);
     let user_interrupt = renderer.user_interrupt.clone();
@@ -198,37 +263,41 @@ async fn drive(
         exit.clone(),
     ));
 
-    let options = TurnOptions {
+    let turn = TurnOptions {
         stop_at_budget: budget.is_some(),
     };
-    let outcome = match core.prompt(session_id, prompt, options).await {
+    let outcome = match core.prompt(session_id, prompt, turn).await {
         Ok(outcome) => outcome,
         Err(error) => {
             consumer.abort();
             signals.abort();
-            return report(mode, &error.to_string(), session_id);
+            return (report(mode, &error.to_string(), session_id), false);
         }
     };
     let mut renderer = consumer.await.expect("the event consumer does not panic");
     signals.abort();
     let mut code = i32::from(renderer.emitted_error);
+    let mut limited = false;
     match outcome {
         Outcome::Interrupted(InterruptReason::Budget) => {
-            let credits = core.credits(session_id);
-            let message = budget_message(credits.total, budget.unwrap_or_default(), session_id);
+            let usage = core.usage(session_id);
+            let message = budget_message(usage.total, budget.unwrap_or_default(), session_id);
             renderer.error(&SessionError::new("unknown", message));
             code = 1;
         }
         Outcome::Interrupted(InterruptReason::User) => code = 130,
-        Outcome::Failed(_) => code = 1,
+        Outcome::Failed(error) => {
+            limited = error.kind == USAGE_LIMIT_KIND;
+            code = 1;
+        }
         Outcome::Succeeded | Outcome::Interrupted(InterruptReason::Declined) => {}
     }
     if cancelled_form.load(Ordering::Relaxed) {
         code = code.max(1);
     }
     match exit.load(Ordering::Relaxed) {
-        0 => code,
-        signal => signal,
+        0 => (code, limited),
+        signal => (signal, false),
     }
 }
 

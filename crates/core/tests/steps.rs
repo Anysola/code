@@ -30,7 +30,6 @@ fn sse(request: &anysola_testkit::Recorded, stream: Stream) -> anysola_testkit::
         .to_string();
     anysola_testkit::Reply::Sse {
         body: stream.finish(&model, Some(1)),
-        before: Some(100),
     }
 }
 
@@ -411,14 +410,14 @@ fn compaction_uses_the_compaction_agent_model_and_records_usage() {
     runtime
         .block_on(core.prompt(&session.id, prompt("first"), TurnOptions::default()))
         .unwrap();
-    let before = core.credits(&session.id).total;
+    let before = core.usage(&session.id).total;
     assert_eq!(
         runtime.block_on(core.compact(&session.id)).unwrap(),
         Outcome::Succeeded
     );
     let compaction = gateway.messages().into_iter().find(summarize).unwrap();
     assert_eq!(compaction.json()["model"], "claude-haiku-5-5");
-    assert_eq!(core.credits(&session.id).total, before + 1);
+    assert_eq!(core.usage(&session.id).total, before + 1.0);
 }
 
 #[test]

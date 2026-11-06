@@ -217,9 +217,7 @@ async fn ask(
     let mut assembly = super::stream::Assembly::default();
     while let Some(item) = stream.next().await {
         match item.ok()? {
-            StreamItem::Credits { charged, remaining } => {
-                shared.credits.record(&session.id, charged, remaining)
-            }
+            StreamItem::Usage(usage) => shared.usage.record(&session.id, &usage),
             StreamItem::Event(event) => {
                 assembly.on_event(&event).ok()?;
             }

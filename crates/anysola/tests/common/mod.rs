@@ -129,7 +129,6 @@ pub fn logger(request: &Recorded, _index: usize, read_file: &str) -> Reply {
     let _ = text(&last);
     Reply::Sse {
         body: stream.finish(&model, Some(charged)),
-        before: Some(731),
     }
 }
 
@@ -312,7 +311,7 @@ const COMPARED_HEADERS: &[&str] = &[
     "anthropic-beta",
     "anthropic-version",
     "x-anysola-client",
-    "x-anysola-credits-event",
+    "x-anysola-usage-event",
     "x-anysola-version",
     "x-anysola-variant",
     "x-api-key",
@@ -334,6 +333,11 @@ pub fn normalize_headers(headers: &[(String, String)]) -> Map<String, Value> {
     let version = Regex::new(r"\+anysola\.[^/]+/").unwrap();
     let mut out = Map::new();
     for (name, value) in headers {
+        // 1.0 renamed 0.5.1's credits-event request header for the usage event.
+        let name = &match name.as_str() {
+            "x-anysola-credits-event" => "x-anysola-usage-event".to_string(),
+            _ => name.clone(),
+        };
         if !COMPARED_HEADERS.contains(&name.as_str()) {
             continue;
         }

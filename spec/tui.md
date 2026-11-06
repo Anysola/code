@@ -542,6 +542,11 @@ All Anysola account UI lives in the TUI plugin `anysola.account` (`feature-plugi
 `GET /v1/code/tokens`, `POST /v1/code/tokens/<id>/revoke`, plus `session`, `budget`, `budgetDefault`, `estimates`, `notes`
 and a `credits` event stream). The gateway protocol itself is in the gateway spec.
 
+> `[1.0]` Credits are replaced by usage limits (5-hour and weekly windows shared with Anysola Chat, banked resets). The
+> credit items below describe 0.5.1; 1.0's status line, banners, `/usage`, `/budget` (percent of the 5-hour window),
+> banked-reset dialog, model picker and exit summary are specified in `spec/protocol.md §4` and checked in PARITY.md
+> M4.6. `/credits` is gone.
+
 ### State and refresh
 - [ ] Account state: `me` (plan, access paid/free, credits.available/renewsAt, freeQuota, event{label,until}, usageToday, lowBalance), per-session credits (`turn`, `total`, `turns`, `budget`, `remaining`), per-model `estimates` and `notes` — `anysola/store.ts:11-77` — [0.5.1]
 - [ ] `me` refreshed on app start, on `server.connected`, every 5 min, and 1.5 s (debounced) after every `credits` event; `estimates`+`notes` on start and reconnect — `feature-plugins/system/anysola.tsx:202-248` — [0.5.1]

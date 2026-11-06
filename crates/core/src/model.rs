@@ -27,8 +27,6 @@ pub struct Model {
     pub input: Vec<String>,
     /// The model picker's note: the gateway's `description`, trimmed, at most 160 characters.
     pub note: Option<String>,
-    /// `credits_per_turn_estimate`, when the gateway sends a positive one.
-    pub credits_per_turn: Option<f64>,
     pub variants: Vec<Variant>,
 }
 
@@ -193,28 +191,8 @@ impl Model {
                     let units: Vec<u16> = d.encode_utf16().take(160).collect();
                     String::from_utf16_lossy(&units)
                 }),
-            credits_per_turn: info
-                .get("credits_per_turn_estimate")
-                .and_then(Value::as_f64)
-                .filter(|v| v.is_finite() && *v > 0.0),
             variants,
         }
-    }
-
-    /// The picker's trailing text: `~N credit(s)/turn`.
-    pub fn estimate_label(&self) -> Option<String> {
-        let estimate = self.credits_per_turn?;
-        let rounded = estimate.round() as u64;
-        let digits = rounded.to_string();
-        let mut grouped = String::new();
-        for (i, c) in digits.chars().enumerate() {
-            if i > 0 && (digits.len() - i).is_multiple_of(3) {
-                grouped.push(',');
-            }
-            grouped.push(c);
-        }
-        let plural = if estimate == 1.0 { "" } else { "s" };
-        Some(format!("~{grouped} credit{plural}/turn"))
     }
 
     pub fn variant(&self, id: &str) -> Option<&Variant> {
@@ -333,21 +311,12 @@ mod tests {
     }
 
     #[test]
-    fn picker_note_and_estimate() {
-        let info = json!({"description": format!("  {}  ", "d".repeat(200)), "credits_per_turn_estimate": 1234.4});
+    fn picker_note() {
+        let info = json!({"description": format!("  {}  ", "d".repeat(200))});
         let model = Model::from_config("m", &info);
         assert_eq!(model.note.as_deref().map(str::len), Some(160));
-        assert_eq!(
-            model.estimate_label().as_deref(),
-            Some("~1,234 credits/turn")
-        );
-        let one = Model::from_config("m", &json!({"credits_per_turn_estimate": 1}));
-        assert_eq!(one.estimate_label().as_deref(), Some("~1 credit/turn"));
-        let none = Model::from_config(
-            "m",
-            &json!({"description": " ", "credits_per_turn_estimate": 0}),
-        );
-        assert_eq!((none.note.clone(), none.estimate_label()), (None, None));
+        let none = Model::from_config("m", &json!({"description": " "}));
+        assert_eq!(none.note, None);
     }
 
     #[test]

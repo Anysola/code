@@ -382,10 +382,13 @@ fn status_shows_the_real_me_shape() {
     store_login(&home);
     let out = anysola(&home, &["status"]);
     assert_eq!(out.code, 0);
-    assert_eq!(
-        out.stdout,
-        "Plan     Team\nCredits  731 available, renews 2026-11-23\nToday    3 requests · 9 credits\nToken    asc_SSSS...SSSS\n"
-    );
+    let expected = capture("anysola status")
+        .lines()
+        .filter(|l| !l.starts_with("Token"))
+        .map(|l| format!("{l}\n"))
+        .collect::<String>()
+        + "Token          asc_SSSS...SSSS\n";
+    assert_eq!(out.stdout, expected);
     let me = &gateway.requests_to("/v1/code/me")[0];
     assert_eq!(
         me.header("authorization"),
@@ -399,14 +402,15 @@ fn status_shows_the_real_me_shape() {
     assert_eq!(me.header("user-agent"), Some("opencode/latest/2.2.5/cli"));
     assert_eq!(me.header("x-anysola-client"), None);
 
-    gateway.set_reply("/v1/code/me", json_reply(200, json!({"plan": "free", "access": "free", "credits": null,
-        "freeQuota": {"usedUsd": 0.01, "dailyUsd": 0.25, "turns": 3, "dailyTurns": 30, "resetsAt": "2026-11-05T00:00:00Z"},
-        "usageToday": {"requests": 1234, "credits": 0},
+    gateway.set_reply("/v1/code/me", json_reply(200, json!({"plan": "free", "access": null,
+        "limits": {"plan": "free", "allowed": true, "blockedBy": null, "fiveHour": {"percent": 0, "resetsAt": null},
+            "weekly": {"percent": 0, "resetsAt": null}, "bank": []},
+        "usageToday": {"requests": 1234},
         "event": {"mode": "unlimited", "label": "Launch week", "until": "2026-11-10T15:30:00Z"}})));
     let out = anysola(&home, &["status"]);
     assert_eq!(
         out.stdout,
-        "Plan        Free\nFree quota  3/30 turns today\nToday       1,234 requests · 0 credits\nEvent       Launch week until Nov 10, 03:30 PM\nToken       asc_SSSS...SSSS\n"
+        "Plan           Free\nAccess         This plan does not include Anysola Code\n5-hour         0% used\nWeekly         0% used\nBanked resets  none\nToday          1,234 requests\nEvent          Launch week until Nov 10, 03:30 PM\nToken          asc_SSSS...SSSS\n"
     );
 
     gateway.set_reply("/v1/code/me", json_reply(500, json!({})));
@@ -428,12 +432,48 @@ fn status_shows_the_real_me_shape() {
 }
 
 #[test]
+fn limits_and_redeem() {
+    if !clock_is_utc() {
+        return;
+    }
+    let (gateway, home) = setup();
+    store_login(&home);
+    let out = anysola(&home, &["limits"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(out.stdout, capture("anysola limits"));
+    let out = anysola(&home, &["limits", "redeem"]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(out.stdout, capture("anysola limits redeem"));
+    assert_eq!(gateway.bank(), 1);
+    let redeem = &gateway.requests_to("/v1/code/limits/redeem")[0];
+    assert_eq!(redeem.method, "POST");
+    assert_eq!(
+        redeem.header("authorization"),
+        Some(&*format!("Bearer {STORED}"))
+    );
+    anysola(&home, &["limits", "redeem"]);
+    let out = anysola(&home, &["limits", "redeem"]);
+    assert_eq!(
+        (out.code, out.stdout.as_str(), out.stderr.as_str()),
+        (1, "", "No banked resets to spend.\n")
+    );
+    let out = anysola(&home, &["limits", "--format", "json"]);
+    let body: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    assert_eq!(body["bank"], json!([]));
+    assert_eq!(body["fiveHour"]["percent"], 42);
+}
+
+#[test]
 fn env_token_wins_with_a_stored_login() {
     let (gateway, mut home) = setup();
     store_login(&home);
     home.set_env("ANYSOLA_TOKEN", "x");
     let out = anysola(&home, &["status"]);
-    assert!(out.stdout.ends_with("Token    x...x\n"), "{}", out.stdout);
+    assert!(
+        out.stdout.ends_with("Token          x...x\n"),
+        "{}",
+        out.stdout
+    );
     let me = &gateway.requests_to("/v1/code/me")[0];
     assert_eq!(me.header("authorization"), Some("Bearer x"));
 }
@@ -447,15 +487,21 @@ fn usage_tables_and_json() {
     store_login(&home);
     let out = anysola(&home, &["usage"]);
     assert_eq!(out.code, 0, "{}", out.stderr);
-    let expected = capture("anysola usage").replace("Nov 23, 03:00 AM", "Nov 23, 12:00 AM");
-    assert_eq!(out.stdout, expected);
+    assert_eq!(out.stdout, capture("anysola usage"));
     assert_eq!(gateway.requests_to("/v1/code/usage")[0].query, "days=7");
 
     let out = anysola(&home, &["usage", "--days", "30", "--format", "json"]);
     assert_eq!(gateway.requests_to("/v1/code/usage")[1].query, "days=30");
+    // The reset times count from the reply, so they are left out of the comparison.
+    let without_resets = |mut body: serde_json::Value| {
+        for window in ["fiveHour", "weekly"] {
+            body["limits"][window]["resetsAt"] = json!(null);
+        }
+        body
+    };
     assert_eq!(
-        out.stdout,
-        serde_json::to_string_pretty(&anysola_testkit::default_usage()).unwrap() + "\n"
+        without_resets(serde_json::from_str(&out.stdout).unwrap()),
+        without_resets(anysola_testkit::default_usage())
     );
     assert!(
         out.stdout

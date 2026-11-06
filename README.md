@@ -49,11 +49,14 @@ Coming from 0.5.x: the first start imports your sessions, settings and sign-in f
 | `anysola` | Start the TUI in the current directory |
 | `anysola login` | Sign in with the device flow |
 | `anysola logout` | Sign out |
-| `anysola status` | Show the sign-in state |
-| `anysola usage [--days 7\|30]` | Show credit usage for the last 7 or 30 days |
+| `anysola status` | Show your plan and usage limits |
+| `anysola usage [--days 7\|30]` | Show your usage limits and requests for the last 7 or 30 days |
+| `anysola limits` | Show the 5-hour and weekly windows and your banked resets |
+| `anysola limits redeem` | Spend a banked reset |
 | `anysola devices` | List signed-in devices |
 | `anysola devices revoke <id>` | Sign out a device |
-| `anysola run --budget <credits> "<message>"` | Run once; stop when the session has spent that many credits |
+| `anysola run --budget <percent> "<message>"` | Run once; stop when the session has used that percent of the 5-hour window |
+| `anysola run --use-banked-reset "<message>"` | Run once; spend a banked reset if a usage window is full |
 | `anysola models` | List the models your plan can use |
 | `anysola session list\|export\|import\|delete` | Manage stored sessions |
 | `anysola mcp list\|add\|auth\|logout` | Manage MCP servers |
@@ -61,23 +64,34 @@ Coming from 0.5.x: the first start imports your sessions, settings and sign-in f
 | `anysola update` | Install the latest release the way this copy was installed (install script or npm) |
 | `anysola uninstall` | Remove the binary and its `PATH` entry; your data and config stay |
 
-In the TUI: `/credits` (balance), `/usage` (recent usage and cache hit rate), `/devices` (signed-in devices),
+In the TUI: `/usage` (usage limits, banked resets, recent requests and cache hit rate), `/devices` (signed-in devices),
 `/budget` (session budget, below), `/account` (opens account.anysola.com), `/feedback` (opens a support ticket).
 
-## Credits and billing
+## Usage limits
 
-Usage is billed to the credits of your Anysola subscription (Pro or Team); free accounts get a daily quota. The
-status line shows the credits remaining, the cost of the current turn and the total for the session.
+Anysola Code and Anysola Chat share two usage windows per account, like Claude and Codex: a **5-hour window** that
+starts with your first request and lasts five hours, and a **weekly window** that works the same way over seven
+days. How much of each your plan includes is set per plan; you see percentages and reset times, never money. The
+status line shows the 5-hour window (`5h 42%`), adds the weekly one when it is the fuller of the two or past 80%
+(`5h 30% · week 85%`), and hovering it shows when the 5-hour window resets. At 80% of either window a warning
+appears once; `/usage` and `anysola usage` show both windows with their reset times.
+
+When a window is full you can wait for it to reset or spend a **banked reset**. Banked resets are rights Anysola puts
+in your bank; each has an expiry date and you hold at most 3 at a time. When a request is refused, the TUI asks
+"Use a banked reset?" if you have one, and on "Use banked reset" clears the window and sends your prompt again.
+`anysola limits` lists your bank, `anysola limits redeem` spends the reset that expires first, and
+`anysola run --use-banked-reset` spends one on its own when a run would otherwise stop.
 
 ### Session budget
 
-`/budget 50` caps the session at 50 credits and the status line shows `session 12/50`. Once the session has spent
-its budget, the next prompt asks first: continue once, add the same amount again, remove the budget, or stop. A
-turn already running is never cut. `/budget` shows the budget, `/budget off` removes it, and `/budget default 50`
-gives every new session a 50 credit budget (`/budget default off` to stop). The budget and the session's total
-survive restarts, so `anysola -s <id>` resumes against the same budget.
+A budget is a share of the 5-hour window. `/budget 20` lets the session use 20% of the window and the status line
+shows `session 12%/20%`. Once the session has used its budget, the next prompt asks first: continue once, add the
+same amount again, remove the budget, or stop. A turn already running is never cut. `/budget` shows the budget,
+`/budget off` removes it, and `/budget default 20` gives every new session a 20% budget (`/budget default off` to
+stop). The budget and the session's use survive restarts, so `anysola -s <id>` resumes against the same budget.
+Budgets set in credits by 0.5.x are not carried over.
 
-`anysola run --budget 50` sets the same budget for a run. A run cannot ask, so it stops as the next model request
+`anysola run --budget 20` sets the same budget for a run. A run cannot ask, so it stops as the next model request
 starts after the budget is reached, exits with code 1 and prints how to continue.
 
 ## Models

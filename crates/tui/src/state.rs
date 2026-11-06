@@ -3,7 +3,8 @@
 
 use std::collections::HashMap;
 
-use anysola_core::events::CreditsSnapshot;
+use anysola_core::events::UsageSnapshot;
+use anysola_core::gateway::limits::{Limits, UsageEvent, Window, WindowId};
 use anysola_core::tool::question::Question as Asked;
 use serde_json::Value;
 
@@ -31,12 +32,8 @@ pub struct Tab {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Account {
     pub plan: Option<String>,
-    pub renews: Option<u64>,
-    pub available: Option<f64>,
-    /// `(used, daily)` turns of a free account.
-    pub free: Option<(u64, u64)>,
-    /// The server asks to warn about the balance.
-    pub low: bool,
+    /// `/me`'s usage limits, with the windows of later usage events.
+    pub limits: Option<Limits>,
     /// The whole `/me` reply.
     pub me: Option<Value>,
     /// Why `/me` failed.
@@ -59,39 +56,26 @@ impl State {
 
 impl Account {
     pub fn from_me(me: Value) -> Account {
-        let credits = me.get("credits");
-        let quota = me.get("freeQuota").filter(|q| q.is_object());
-        let free = (me.get("access").and_then(Value::as_str) == Some("free"))
-            .then_some(quota)
-            .flatten()
-            .map(|q| {
-                // [fix] §B4: `/me` sends `turns`.
-                let used = q
-                    .get("turns")
-                    .or_else(|| q.get("usedTurns"))
-                    .and_then(Value::as_u64);
-                (
-                    used.unwrap_or(0),
-                    q.get("dailyTurns").and_then(Value::as_u64).unwrap_or(0),
-                )
-            });
         Account {
             plan: me.get("plan").and_then(Value::as_str).map(str::to_string),
-            renews: credits
-                .and_then(|c| c.get("renewsAt"))
-                .and_then(Value::as_str)
-                .and_then(crate::text::parse_iso),
-            available: credits
-                .and_then(|c| c.get("available"))
-                .and_then(Value::as_f64),
-            free,
-            low: me.get("lowBalance") == Some(&Value::Bool(true)),
+            limits: me.get("limits").and_then(Limits::from_wire),
             signed_out: false,
             error: None,
             me: Some(me),
         }
     }
+
+    /// Takes the windows of a usage event; before `/me` answered they are all there is.
+    pub fn apply(&mut self, event: &UsageEvent) {
+        let limits = self.limits.get_or_insert_with(|| Limits {
+            allowed: true,
+            ..Limits::default()
+        });
+        limits.apply(event);
+    }
 }
+
+pub use anysola_core::usage::WARN_PERCENT;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ModelChoice {
@@ -166,7 +150,7 @@ pub struct Session {
     pub scroll: usize,
     pub permission: Option<Permission>,
     pub question: Option<Question>,
-    pub credits: Option<CreditsSnapshot>,
+    pub usage: Option<UsageSnapshot>,
     /// Ids of prompts admitted while a turn ran, not yet taken.
     pub queued: Vec<String>,
     /// A revert is staged (`/redo` is available).
@@ -488,7 +472,7 @@ pub struct State {
     pub shell_example: usize,
     /// When the first Esc of a running session was pressed.
     pub interrupt_armed: Option<u64>,
-    /// The pointer rests on the credit status line (it then shows the renewal date).
+    /// The pointer rests on the usage status line (it then shows when the window resets).
     pub status_hover: bool,
     pub settings: Settings,
     pub hints: Hints,
@@ -606,77 +590,57 @@ impl State {
         }
     }
 
-    /// The balance shown in the status line: this process's latest gateway figure, else `/me`.
-    pub fn remaining(&self) -> Option<f64> {
-        let session = self
-            .session()
-            .and_then(|s| s.credits.as_ref())
-            .and_then(|c| c.remaining);
-        let latest = self
-            .sessions
-            .values()
-            .find_map(|s| s.credits.as_ref().and_then(|c| c.remaining));
-        session
-            .or(latest)
-            .map(|r| r as f64)
-            .or(self.account.available)
+    /// Both windows as they stand now (a window that ended reads as empty).
+    pub fn windows(&self) -> Option<(Window, Window)> {
+        let limits = self.account.limits.as_ref()?;
+        Some((limits.five_hour.at(self.now), limits.weekly.at(self.now)))
     }
 
-    /// `835 credits · this turn 12 · session 40[/50]`, or `today 3/20` for free accounts.
+    /// `5h 42%`, then `week 81%` when the weekly window is the fuller one or near its limit, then
+    /// `session 12%/20%` under a budget; on hover the 5-hour reset time.
     pub fn status_text(&self) -> Option<String> {
-        if let Some((used, daily)) = self.account.free {
-            return Some(format!("today {used}/{daily}"));
-        }
-        let mut parts = vec![format!(
-            "{} credits",
-            crate::text::credits(self.remaining()?)
-        )];
-        if let Some(c) = self.session().and_then(|s| s.credits.as_ref()) {
-            if c.turn > 0 {
-                parts.push(format!("this turn {}", crate::text::credits(c.turn as f64)));
-            }
-            if c.total > 0 || c.budget.is_some() {
-                let budget = c.budget.map_or(String::new(), |b| {
-                    format!("/{}", crate::text::credits(b as f64))
-                });
-                parts.push(format!(
-                    "session {}{budget}",
-                    crate::text::credits(c.total as f64)
-                ));
-            }
-        }
-        if self.status_hover
-            && let Some(renews) = self.account.renews
+        let (five, week) = self.windows()?;
+        let mut parts = vec![anysola_core::usage::windows_text(five, week)];
+        if let Some(c) = self.session().and_then(|s| s.usage.as_ref())
+            && let Some(budget) = c.budget
         {
             parts.push(format!(
-                "renews {}",
-                crate::text::short_date(renews, self.now)
+                "session {}/{budget}%",
+                anysola_core::usage::percent(c.total)
+            ));
+        }
+        if self.status_hover
+            && let Some(at) = five.resets_at
+        {
+            parts.push(format!(
+                "resets {}",
+                anysola_core::gateway::limits::resets_in(Some(at), self.now)
             ));
         }
         Some(parts.join(" · "))
     }
 
-    /// The balance when it is low: not free, and the server says so or fewer than 100 remain.
-    pub fn low_balance(&self) -> Option<f64> {
-        let remaining = self.remaining()?;
-        let free = self.account.free.is_some()
-            || self
-                .account
-                .me
-                .as_ref()
-                .and_then(|m| m.get("access"))
-                .and_then(Value::as_str)
-                == Some("free");
-        (!free && (self.account.low || remaining < 100.0)).then_some(remaining)
+    /// The windows at or over [`WARN_PERCENT`], fuller first.
+    pub fn limit_warnings(&self) -> Vec<(WindowId, Window)> {
+        let Some((five, week)) = self.windows() else {
+            return Vec::new();
+        };
+        let mut out: Vec<(WindowId, Window)> =
+            [(WindowId::FiveHour, five), (WindowId::Weekly, week)]
+                .into_iter()
+                .filter(|(_, w)| w.percent >= WARN_PERCENT)
+                .collect();
+        out.sort_by_key(|(_, w)| std::cmp::Reverse(w.percent));
+        out
     }
 
-    /// Low balance or a spent budget colours the status line.
+    /// A window near its limit or a spent budget colours the status line.
     pub fn status_warning(&self) -> bool {
         let over = self
             .session()
-            .and_then(|s| s.credits.as_ref())
-            .is_some_and(|c| c.budget.is_some_and(|b| c.total >= b));
-        over || self.low_balance().is_some()
+            .and_then(|s| s.usage.as_ref())
+            .is_some_and(|c| c.budget.is_some_and(|b| c.total >= b as f64));
+        over || !self.limit_warnings().is_empty()
     }
 
     pub fn agent_index(&self, agent: &str) -> usize {

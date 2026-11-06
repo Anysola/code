@@ -1,5 +1,5 @@
 //! Server-sent events from `/v1/code/messages`: Anthropic's stream plus the gateway's
-//! `anysola_credits` block. Blocks are split on blank lines after dropping `\r`; comment lines
+//! `anysola_usage` block. Blocks are split on blank lines after dropping `\r`; comment lines
 //! (`: keepalive`) carry nothing.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,8 +11,8 @@ pub struct SseEvent {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {
     Event(SseEvent),
-    /// The gateway's closing `anysola_credits` event with its `charged` value, if it parsed.
-    Credits(Option<u64>),
+    /// The gateway's closing `anysola_usage` event, if it parsed.
+    Usage(Option<super::limits::UsageEvent>),
 }
 
 #[derive(Default)]
@@ -43,15 +43,13 @@ impl Decoder {
 }
 
 fn parse_block(text: &str) -> Option<Block> {
-    if text.starts_with("event: anysola_credits") {
-        let charged = text
+    if text.starts_with("event: anysola_usage") {
+        let usage = text
             .lines()
             .find_map(|line| line.strip_prefix("data:"))
             .and_then(|data| serde_json::from_str::<serde_json::Value>(data.trim()).ok())
-            .and_then(|value| value.get("charged").and_then(serde_json::Value::as_f64))
-            .filter(|n| n.is_finite() && *n >= 0.0)
-            .map(|n| n as u64);
-        return Some(Block::Credits(charged));
+            .and_then(|value| super::limits::UsageEvent::from_wire(&value));
+        return Some(Block::Usage(usage));
     }
     let mut event = None;
     let mut data: Vec<&str> = Vec::new();
@@ -81,12 +79,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn splits_events_and_strips_credits() {
+    fn splits_events_and_strips_usage() {
         let mut decoder = Decoder::default();
         let mut blocks = decoder.push(
-            b": keepalive\n\nevent: message_start\r\ndata: {\"a\":1}\r\n\r\nevent: anysola_cr",
+            b": keepalive\n\nevent: message_start\r\ndata: {\"a\":1}\r\n\r\nevent: anysola_us",
         );
-        blocks.extend(decoder.push(b"edits\ndata: {\"type\":\"anysola_credits\",\"charged\":7}\n\nevent: message_stop\ndata: {}"));
+        blocks.extend(decoder.push(b"age\ndata: {\"type\":\"anysola_usage\",\"fiveHourPercentUsed\":0.5,\"fiveHour\":{\"percent\":42,\"resetsAt\":null},\"weekly\":{\"percent\":18,\"resetsAt\":null}}\n\nevent: anysola_usage\ndata: {}\n\nevent: message_stop\ndata: {}"));
         blocks.extend(decoder.finish());
         assert_eq!(
             blocks,
@@ -95,7 +93,18 @@ mod tests {
                     event: Some("message_start".into()),
                     data: "{\"a\":1}".into()
                 }),
-                Block::Credits(Some(7)),
+                Block::Usage(Some(super::super::limits::UsageEvent {
+                    five_hour_percent_used: 0.5,
+                    five_hour: super::super::limits::Window {
+                        percent: 42,
+                        resets_at: None
+                    },
+                    weekly: super::super::limits::Window {
+                        percent: 18,
+                        resets_at: None
+                    },
+                })),
+                Block::Usage(None),
                 Block::Event(SseEvent {
                     event: Some("message_stop".into()),
                     data: "{}".into()

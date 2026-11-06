@@ -51,6 +51,8 @@ fn every_kept_command_prints_its_captured_help() {
         (&["logout", "--help"], "root_logout.txt"),
         (&["status", "--help"], "root_status.txt"),
         (&["usage", "--help"], "root_usage.txt"),
+        (&["limits", "--help"], "root_limits.txt"),
+        (&["limits", "redeem", "--help"], "root_limits_redeem.txt"),
         (&["devices", "--help"], "root_devices.txt"),
         (&["devices", "revoke", "--help"], "root_devices_revoke.txt"),
         (&["update", "--help"], "root_update.txt"),

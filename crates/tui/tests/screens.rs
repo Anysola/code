@@ -2,8 +2,9 @@
 
 use std::path::PathBuf;
 
-use anysola_core::events::CreditsSnapshot;
+use anysola_core::events::UsageSnapshot;
 use anysola_core::gateway::account::Reply;
+use anysola_core::gateway::limits::{Limits, UsageEvent, Window};
 use anysola_tui::composer::{AtomKind, Mode};
 use anysola_tui::dialog::{Dialog, Select};
 use anysola_tui::menus::{anysola, lists, palette, settings};
@@ -104,8 +105,36 @@ fn render(state: &State) -> String {
 
 /// Compares row by row, ignoring trailing spaces; prints both screens on a mismatch.
 fn assert_screen(state: &State, name: &str) {
+    if std::env::var_os("ANYSOLA_BLESS_SCREENS").is_some() {
+        bless(state, name);
+    }
     let diff = screen_diff(state, name);
     assert!(diff.is_empty(), "{name} differs:\n{}", diff.join("\n"));
+}
+
+/// `ANYSOLA_BLESS_SCREENS=1`: rewrites the rows of a capture that differ.
+fn bless(state: &State, name: &str) {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../spec/verbatim/tui/screens")
+        .join(format!("{name}.txt"));
+    let actual: Vec<String> = render(state)
+        .split('\n')
+        .map(|l| l.trim_end().to_string())
+        .collect();
+    let old = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut lines: Vec<String> = old.split('\n').map(str::to_string).collect();
+    for (i, row) in actual.iter().enumerate() {
+        match lines.get_mut(i) {
+            Some(line) if line.trim_end() != row => *line = row.clone(),
+            Some(_) => {}
+            None if row.is_empty() => {}
+            None => {
+                lines.resize(i, String::new());
+                lines.push(row.clone());
+            }
+        }
+    }
+    std::fs::write(&path, lines.join("\n")).unwrap();
 }
 
 fn screen_diff(state: &State, name: &str) -> Vec<String> {
@@ -132,6 +161,25 @@ fn now() -> u64 {
     parse_iso("2026-11-05T12:00:00Z").unwrap()
 }
 
+const HOUR: u64 = 3_600_000;
+
+/// The 5-hour window resets in 2 h, the weekly one in 3 d 4 h.
+fn limits(five_hour: u32, weekly: u32) -> Limits {
+    Limits {
+        plan: Some("team".into()),
+        allowed: five_hour < 100,
+        five_hour: Window {
+            percent: five_hour,
+            resets_at: Some(now() + 2 * HOUR),
+        },
+        weekly: Window {
+            percent: weekly,
+            resets_at: Some(now() + 76 * HOUR),
+        },
+        ..Limits::default()
+    }
+}
+
 fn base(width: u16, height: u16) -> State {
     let mut state = State::new("0.5.1");
     state.width = width;
@@ -142,8 +190,7 @@ fn base(width: u16, height: u16) -> State {
     state.directory = "/home/user/my-app".into();
     state.account = Account {
         plan: Some("team".into()),
-        renews: parse_iso("2026-11-23T00:00:00Z"),
-        available: Some(731.0),
+        limits: Some(limits(42, 18)),
         ..Account::default()
     };
     state.model = Some(ModelChoice {
@@ -241,7 +288,6 @@ fn slash_rows() -> Vec<PopupRow> {
         ("/clear", "Clear session"),
         ("/connect", "Connect an integration"),
         ("/continue", "Switch session"),
-        ("/credits", "Credits and plan"),
         ("/debug", "View debug info"),
         ("/worktrees", "Manage workspaces"),
     ];
@@ -439,10 +485,14 @@ fn session(width: u16, height: u16, items: Vec<Item>) -> State {
     state
 }
 
-fn credits(turn: u64, total: u64, budget: Option<u64>, remaining: u64) -> Option<CreditsSnapshot> {
-    Some(CreditsSnapshot {
+fn usage(turn: f64, total: f64, budget: Option<u64>) -> Option<UsageSnapshot> {
+    Some(UsageSnapshot {
         session_id: "ses_b".into(),
-        remaining: Some(remaining),
+        latest: Some(UsageEvent {
+            five_hour_percent_used: turn,
+            five_hour: limits(42, 18).five_hour,
+            weekly: limits(42, 18).weekly,
+        }),
         turn,
         total,
         turns: 1,
@@ -453,14 +503,14 @@ fn credits(turn: u64, total: u64, budget: Option<u64>, remaining: u64) -> Option
 #[test]
 fn session_tools_edit_diff_markdown() {
     let mut state = session(120, 50, turn(true, true));
-    state.sessions.get_mut("ses_b").unwrap().credits = credits(12, 12, None, 728);
+    state.sessions.get_mut("ses_b").unwrap().usage = usage(12.0, 12.0, None);
     assert_screen(&state, "session-tools-edit-diff-markdown");
 }
 
 #[test]
 fn session_170x40_sidebar() {
     let mut state = session(170, 40, turn(true, true));
-    state.sessions.get_mut("ses_b").unwrap().credits = credits(0, 12, Some(50), 731);
+    state.sessions.get_mut("ses_b").unwrap().usage = usage(0.0, 12.0, Some(20));
     assert_screen(&state, "session-170x40-sidebar");
 }
 
@@ -554,41 +604,32 @@ fn me() -> serde_json::Value {
     json!({
         "plan": "team",
         "access": "paid",
-        "credits": {"available": 731, "renewsAt": "2026-11-23T00:00:00Z"},
-        "usageToday": {"requests": 3, "credits": 9},
+        "limits": {"plan": "team", "allowed": true, "blockedBy": null,
+            "fiveHour": {"percent": 42, "resetsAt": "2026-11-05T14:00:00Z"},
+            "weekly": {"percent": 18, "resetsAt": "2026-11-08T16:00:00Z"}, "bank": []},
+        "usageToday": {"requests": 3},
     })
-}
-
-#[test]
-fn credits_dialog() {
-    let me = me();
-    let view = anysola::CreditsView {
-        me: Ok(&me),
-        balance: Some(731.0),
-        session: None,
-        low: false,
-        zone: under(1).zone,
-        now: now(),
-    };
-    let state = dialog(under(1), Dialog::Body(anysola::credits_dialog(&view)));
-    assert_screen(&state, "credits");
 }
 
 fn usage_reply() -> Result<Reply, String> {
     Ok(Reply {
         status: 200,
         body: json!({
-            "totals": {"requests": 42, "credits": 318, "cacheHitRate": 0.64},
+            "totals": {"requests": 42, "cacheHitRate": 0.64},
             "byDay": [
-                {"date": "2026-11-02", "requests": 20, "credits": 150},
-                {"date": "2026-11-03", "requests": 22, "credits": 168},
+                {"date": "2026-11-02", "requests": 20},
+                {"date": "2026-11-03", "requests": 22},
             ],
             "byModel": [
-                {"model": "claude-sonnet-5-5", "requests": 30, "credits": 290},
-                {"model": "claude-haiku-5-5", "requests": 12, "credits": 28},
+                {"model": "claude-sonnet-5-5", "requests": 30},
+                {"model": "claude-haiku-5-5", "requests": 12},
             ],
-            "creditsAvailable": 731,
-            "renewsAt": "2026-11-23T00:00:00Z",
+            "plan": "team",
+            "limits": {"plan": "team", "allowed": true, "blockedBy": null,
+                "fiveHour": {"percent": 42, "resetsAt": "2026-11-05T14:00:00Z"},
+                "weekly": {"percent": 18, "resetsAt": "2026-11-08T16:00:00Z"},
+                "bank": [{"id": "b1", "expiresAt": "2026-11-20T00:00:00Z", "scope": "five_hour"},
+                         {"id": "b2", "expiresAt": "2026-12-01T00:00:00Z", "scope": "both"}]},
         }),
     })
 }
@@ -596,7 +637,13 @@ fn usage_reply() -> Result<Reply, String> {
 #[test]
 fn usage_7_and_30_days() {
     for (days, name) in [(7, "usage-7d"), (30, "usage-30d")] {
-        let body = anysola::usage_dialog(days, Some(&usage_reply()), under(1).zone);
+        let view = anysola::UsageView {
+            days,
+            session: None,
+            zone: under(1).zone,
+            now: now(),
+        };
+        let body = anysola::usage_dialog(&view, Some(&usage_reply()));
         let state = dialog(under(1), Dialog::Body(body));
         assert_screen(&state, name);
     }
@@ -618,7 +665,7 @@ fn devices() {
 #[test]
 fn status_in_session() {
     let mut state = session(120, 36, turn(true, true));
-    state.sessions.get_mut("ses_b").unwrap().credits = credits(0, 12, None, 731);
+    state.sessions.get_mut("ses_b").unwrap().usage = usage(0.0, 12.0, None);
     let state = dialog(state, Dialog::Body(lists::status(&[])));
     assert_screen(&state, "status-in-session");
 }
@@ -669,22 +716,16 @@ fn agent_picker() {
 
 #[test]
 fn model_picker() {
-    let row = |id: &str, name: &str, note: &str, estimate: Option<f64>| lists::ModelRow {
+    let row = |id: &str, name: &str, note: &str| lists::ModelRow {
         provider: "anysola".into(),
         id: id.into(),
         name: name.into(),
         note: Some(note.into()),
-        estimate,
     };
     let rows = vec![
-        row("auto", "Auto", "Picks Haiku or Sonnet per turn", None),
-        row(
-            "claude-sonnet-5-5",
-            "Claude Sonnet 5.5",
-            "Default",
-            Some(6.0),
-        ),
-        row("claude-haiku-5-5", "Claude Haiku 5.5", "Fastest", Some(1.0)),
+        row("auto", "Auto", "Picks Haiku or Sonnet per turn"),
+        row("claude-sonnet-5-5", "Claude Sonnet 5.5", "Default"),
+        row("claude-haiku-5-5", "Claude Haiku 5.5", "Fastest"),
     ];
     let mut state = under(1);
     state.composer.set("Ask");
@@ -753,7 +794,7 @@ fn worktrees() {
 #[test]
 fn timeline() {
     let mut state = session(120, 36, turn(true, true));
-    state.sessions.get_mut("ses_b").unwrap().credits = credits(0, 12, None, 731);
+    state.sessions.get_mut("ses_b").unwrap().usage = usage(0.0, 12.0, None);
     let messages = vec![(
         "msg_u".to_string(),
         "fix the typo in hello.txt".to_string(),
@@ -784,7 +825,8 @@ fn exit_summary() {
         title: "Fix typo in hello.txt".into(),
         id: "ses_e59221e89ffevUnouuY8RLvFMr".into(),
         turns: 1,
-        spent: 12,
+        spent: 12.0,
+        limits: Some("5h 42%".into()),
         updated: None,
     };
     let text = anysola::exit_summary(&summary);
@@ -816,10 +858,10 @@ fn exit_summary() {
 #[test]
 fn budget_toasts() {
     let mut state = session(120, 36, turn(true, true));
-    state.sessions.get_mut("ses_b").unwrap().credits = credits(0, 12, Some(50), 731);
+    state.sessions.get_mut("ses_b").unwrap().usage = usage(0.0, 12.0, Some(20));
     state.toast = Some(Toast {
         title: None,
-        message: anysola::budget_text(12, Some(50)),
+        message: anysola::budget_text(12.0, Some(20)),
         variant: Variant::Success,
         until: u64::MAX,
         action: None,
@@ -828,7 +870,7 @@ fn budget_toasts() {
     let mut home = under(1);
     home.toast = Some(Toast {
         title: None,
-        message: "Open a session first, or set one for new sessions: /budget default <credits>"
+        message: "Open a session first, or set one for new sessions: /budget default <percent>"
             .into(),
         variant: Variant::Warning,
         until: u64::MAX,
@@ -838,16 +880,16 @@ fn budget_toasts() {
 }
 
 #[test]
-fn home_low_balance_event_banner() {
+fn home_limit_event_banner() {
     let mut state = home(120, 36);
     state.example = 1;
     let mut me = me();
-    me["credits"]["available"] = json!(64);
-    me["event"] = json!({"label": "Double credits weekend", "until": "2026-11-09T21:00:00Z"});
+    me["limits"]["fiveHour"]["percent"] = json!(84);
+    me["event"] = json!({"label": "Launch week", "until": "2026-11-09T21:00:00Z"});
     state.account = Account::from_me(me);
     state.recent[0].updated = now() - 70_000;
     state.recent[1].updated = now() - 130_000;
-    assert_screen(&state, "home-low-balance-event-banner");
+    assert_screen(&state, "home-limit-event-banner");
 }
 
 #[test]
@@ -911,7 +953,7 @@ fn session_120x36_after_turn() {
     }
     let mut state = session(120, 36, items);
     state.tabs.remove(0);
-    state.sessions.get_mut("ses_b").unwrap().credits = credits(12, 12, None, 728);
+    state.sessions.get_mut("ses_b").unwrap().usage = usage(12.0, 12.0, None);
     assert_screen(&state, "session-120x36-after-turn");
 }
 
@@ -1042,6 +1084,18 @@ fn command_palette_scroll_series() {
         let mut state = under(1);
         state.height = 60;
         state.composer.set("Ask");
+        if std::env::var_os("ANYSOLA_BLESS_SCREENS").is_some() {
+            let best = (0..200)
+                .min_by_key(|&offset| {
+                    let mut list = list();
+                    list.offset = offset;
+                    screen_diff(&dialog(state.clone(), select(list)), &name).len()
+                })
+                .unwrap();
+            let mut list = list();
+            list.offset = best;
+            bless(&dialog(state.clone(), select(list)), &name);
+        }
         let found = (0..200).any(|offset| {
             let mut list = list();
             list.offset = offset;
@@ -1102,30 +1156,87 @@ fn open() {
 fn session_banners_sit_above_the_composer() {
     let mut state = session(120, 36, turn(true, true));
     let mut me = me();
-    me["credits"]["available"] = json!(64);
-    me["event"] = json!({"label": "Double credits weekend", "until": "2026-11-09T21:00:00Z"});
+    me["limits"]["fiveHour"]["percent"] = json!(84);
+    me["event"] = json!({"label": "Launch week", "until": "2026-11-09T21:00:00Z"});
     state.account = Account::from_me(me);
     let screen = render(&state);
     let lines: Vec<&str> = screen.lines().collect();
     let low = lines
         .iter()
-        .position(|l| l.trim() == "Low balance: 64 credits left · /credits")
-        .expect("low balance banner");
+        .position(|l| l.trim() == "5-hour limit 84% used · resets in 2 h · /usage")
+        .expect("limit banner");
     assert!(
         lines[low - 1]
             .trim()
-            .starts_with("Double credits weekend · until Nov 10")
+            .starts_with("Launch week · until Nov 10")
     );
     assert!(lines[low + 1].trim_start().starts_with('┃'));
 }
 
 #[test]
-fn status_line_hover_shows_renewal() {
+fn status_line_hover_shows_the_reset() {
     let mut state = session(120, 36, turn(true, true));
-    state.sessions.get_mut("ses_b").unwrap().credits = credits(12, 12, None, 728);
+    state.sessions.get_mut("ses_b").unwrap().usage = usage(1.5, 12.0, Some(20));
+    let screen = render(&state);
+    assert!(screen.contains("5h 42% · session 12%/20%  "));
     state.status_hover = true;
     let screen = render(&state);
-    assert!(screen.contains("728 credits · this turn 12 · session 12 · renews 23 Nov"));
+    assert!(screen.contains("5h 42% · session 12%/20% · resets in 2 h"));
+}
+
+#[test]
+fn status_line_names_the_weekly_window_when_it_matters() {
+    let mut state = session(120, 36, turn(true, true));
+    state.account.limits = Some(limits(30, 85));
+    let screen = render(&state);
+    assert!(screen.contains("5h 30% · week 85%"));
+    state.account.limits = Some(limits(42, 18));
+    assert!(!render(&state).contains("week"));
+}
+
+#[test]
+fn banked_reset_offer() {
+    let mut limits = limits(100, 18);
+    limits.bank = vec![
+        anysola_core::gateway::limits::Banked {
+            id: "b1".into(),
+            expires_at: parse_iso("2026-11-20T00:00:00Z"),
+            both: false,
+        },
+        anysola_core::gateway::limits::Banked {
+            id: "b2".into(),
+            expires_at: parse_iso("2026-12-01T00:00:00Z"),
+            both: true,
+        },
+    ];
+    let zone = under(1).zone;
+    let message = "5-hour limit reached. Resets in 2 h. You have 2 banked resets.";
+    let text = anysola::banked_reset_message(message, &limits, now(), zone).unwrap();
+    assert_eq!(
+        text,
+        "5-hour limit reached. Resets in 2 h. You have 2 banked resets. The next one expires Nov 20, 03:00 AM. Using one clears the window and sends your prompt again."
+    );
+    let state = dialog(
+        session(120, 36, turn(true, true)),
+        Dialog::Confirm(anysola_tui::dialog::Confirm {
+            kind: anysola_tui::dialog::ConfirmKind::BankedReset {
+                session: "ses_b".into(),
+            },
+            title: "Use a banked reset?".into(),
+            message: text,
+            button: "Use banked reset".into(),
+            yes: true,
+        }),
+    );
+    let screen = render(&state);
+    assert!(screen.contains("Use a banked reset?"), "{screen}");
+    assert!(screen.contains("Wait"), "{screen}");
+    assert!(screen.contains("Use banked reset"), "{screen}");
+    limits.bank.clear();
+    assert_eq!(
+        anysola::banked_reset_message(message, &limits, now(), zone),
+        None
+    );
 }
 
 #[test]
@@ -1600,14 +1711,14 @@ fn execute_dialog_frame() {
 #[test]
 fn sidebar_overlay_below_121_columns() {
     let mut state = session(100, 40, turn(true, true));
-    state.sessions.get_mut("ses_b").unwrap().credits = credits(0, 12, Some(50), 731);
+    state.sessions.get_mut("ses_b").unwrap().usage = usage(0.0, 12.0, Some(20));
     let closed = render(&state);
     assert!(!anysola_tui::view::sidebar_overlay(&state));
     state.sidebar_open = true;
     assert!(anysola_tui::view::sidebar_overlay(&state));
     let wide = {
         let mut wide = session(170, 40, turn(true, true));
-        wide.sessions.get_mut("ses_b").unwrap().credits = credits(0, 12, Some(50), 731);
+        wide.sessions.get_mut("ses_b").unwrap().usage = usage(0.0, 12.0, Some(20));
         render(&wide)
     };
     let open = render(&state);

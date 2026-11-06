@@ -380,7 +380,6 @@ impl Select {
 /// What a plain dialog is, for its keys.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BodyKind {
-    Credits,
     Usage {
         days: u32,
     },
@@ -478,8 +477,16 @@ pub struct Prompt {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConfirmKind {
-    Revoke { id: String },
-    DeleteWorktree { directory: String },
+    Revoke {
+        id: String,
+    },
+    DeleteWorktree {
+        directory: String,
+    },
+    /// A full usage window refused the session's turn: spend a banked reset and send it again.
+    BankedReset {
+        session: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

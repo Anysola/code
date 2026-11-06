@@ -22,7 +22,7 @@
                                                 ┃
                                                 ┃  Build · Claude Sonnet 5.5
                                                 ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-                                                ~/my-app:master              731 credits  shift+tab agents  ctrl+p commands
+                                                ~/my-app:master                   5h 42%  shift+tab agents  ctrl+p commands
 
                                                 Recent                                                ctrl+x l all sessions
                                                 Fix typo in hello.txt                                                   now
@@ -36,4 +36,4 @@
 
 
 
-  Team · renews 23 Nov                                                                                                                                             0.5.1
+  Team · 5h resets in 2 h                                                                                                                                          0.5.1

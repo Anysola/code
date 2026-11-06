@@ -413,6 +413,8 @@ Therefore, to keep thinking replayable after migration the importer must preserv
 | `anysola:config` | last good body of `GET /v1/code/config` (model, small_model, agents, providers.anysola incl. models, `credits_per_turn_estimate`, notes; `apiKey` is the literal `{env:ANYSOLA_TOKEN}` template, not a token) | `packages/core/src/plugin/provider/anysola.ts:27` | [0.5.1] [observed] |
 | `anysola:session:<sessionID>` | `{"total":<credits spent>,"turns":<turns>,"budget":<int ≥1>\|null}` | `packages/core/src/plugin/provider/anysola-account.ts:27,80-83` | [0.5.1] [observed]; never deleted when the session is deleted |
 | `anysola:budget:default` | integer credits (`/budget default <n>`); removed by `/budget default off` | `anysola-account.ts:28,128-134` | [0.5.1] |
+| `anysola:usage:<sessionID>` | `{"used":<percent of the 5-hour window>,"turns":<turns>,"budget":<1..100>\|null}` | 1.0 `crates/core/src/usage.rs` | [1.0]; replaces `anysola:session:<id>`, which 1.0 neither reads nor imports |
+| `anysola:budget:five-hour` | whole percent 1..100 (`/budget default <n>`); `null` after `/budget default off` | 1.0 `crates/core/src/usage.rs` | [1.0]; replaces `anysola:budget:default` (credit budgets are dropped, not converted) |
 | `models-dev:v2:catalog`, `models-dev:v2:catalog:meta`, `models-dev:v2:catalog:<sha1(source)>` | cached models.dev catalog body / `{updatedAt,digest,etag}`; old `models-dev:*` keys removed | `packages/core/src/models-dev.ts:521-557` | [0.5.1] [observed: written with a live etag in an isolated run; see §1] |
 | `websearch:provider` | selected web-search provider | `packages/core/src/websearch.ts:31` | [0.5.1] |
 | `wellknown:sources`, `wellknown:manifest:<origin>`, `wellknown:config:<origin>` | remote/well-known config sources | `packages/core/src/wellknown.ts:105-108` | see §3 |
@@ -617,7 +619,7 @@ tables in §2.3.
 |---|---|---|
 | Database | `~/.local/share/opencode/opencode.db` (+wal/shm) | `%USERPROFILE%\.local\share\opencode\opencode.db` |
 | Anysola token | `credential` row (`integration_id='anysola'`, `value.access`) in that db | same |
-| Budgets / per-session credit totals | KV `anysola:budget:default`, `anysola:session:<id>` | same |
+| Budgets / per-session credit totals | KV `anysola:budget:default`, `anysola:session:<id>` | `[1.0]` not imported: credits are no percentage (see §2.8) |
 | Always-allow permissions | `permission` table | same |
 | TUI prefs (theme, keybinds, TUI settings) | `~/.config/opencode/cli.json` | `%USERPROFILE%\.config\opencode\cli.json` |
 | Core config | `~/.config/opencode/opencode.json[c]` + project `opencode.json[c]` / `.opencode/` | same under `%USERPROFILE%` |

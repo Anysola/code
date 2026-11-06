@@ -15,7 +15,6 @@ use ratatui::buffer::Buffer;
 use tokio::sync::{broadcast, mpsc};
 
 use crate::composer::History;
-use crate::dialog::{BodyKind, Dialog};
 use crate::keymap::{Keymap, Stroke};
 use crate::settings::Tui;
 use crate::state::{Account, ModelChoice, Recent, Route, Session, State, Toast, Variant};
@@ -109,8 +108,10 @@ pub struct App {
     /// `/update` installed this version; `restart` re-executes after leaving.
     installed: Option<String>,
     restart: bool,
-    /// Debounces `/me` after credits events.
+    /// Debounces `/me` after usage events.
     account_generation: u64,
+    /// Windows already warned about near their limit: `(window, its reset time)`.
+    limit_warned: Vec<(anysola_core::gateway::limits::WindowId, Option<u64>)>,
     /// Terminals of the pane; `shown` is the one on screen.
     terminals: Vec<crate::terminal::Terminal>,
     shown: Option<usize>,
@@ -303,6 +304,7 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
         installed: None,
         restart: false,
         account_generation: 0,
+        limit_warned: Vec::new(),
         terminals: Vec::new(),
         shown: None,
         focused: None,
@@ -652,12 +654,17 @@ impl App {
         if session.is_none() && self.installed.is_none() {
             return None;
         }
-        let credits = session.map(|s| self.core.credits(&s.id));
+        let usage = session.map(|s| self.core.usage(&s.id));
+        let limits = self
+            .state
+            .windows()
+            .map(|(five, week)| anysola_core::usage::windows_text(five, week));
         Some(crate::menus::anysola::Summary {
             title: session.map(|s| s.title.clone()).unwrap_or_default(),
             id: session.map(|s| s.id.clone()).unwrap_or_default(),
-            turns: credits.as_ref().map_or(0, |c| c.turns),
-            spent: credits.as_ref().map_or(0, |c| c.total),
+            turns: usage.as_ref().map_or(0, |c| c.turns),
+            spent: usage.as_ref().map_or(0.0, |c| c.total),
+            limits,
             updated: self.installed.clone(),
         })
     }
@@ -710,13 +717,7 @@ impl App {
             Msg::Account(account) => {
                 if account.me.is_some() || self.state.account.me.is_none() {
                     self.state.account = account;
-                }
-                if let Some(Dialog::Body(b)) = self.state.dialogs.last()
-                    && b.kind == BodyKind::Credits
-                {
-                    let body = self.credits_body();
-                    self.state.dialogs.pop();
-                    self.state.dialogs.push(Dialog::Body(body));
+                    self.warn_limits();
                 }
             }
             Msg::Done { session_id, error } => {
@@ -807,7 +808,7 @@ impl App {
         }
     }
 
-    /// `/me` again 1.5 s after the last credits event.
+    /// `/me` again 1.5 s after the last usage event.
     fn account_soon(&mut self) {
         let generation = self.account_generation.wrapping_add(1);
         self.account_generation = generation;
@@ -847,7 +848,7 @@ impl App {
                 id: row.id.clone(),
                 title: row.title.clone(),
                 directory: row.directory.clone(),
-                credits: Some(self.core.credits(id)),
+                usage: Some(self.core.usage(id)),
                 goal: self.core.goal(id),
                 ..Session::default()
             };

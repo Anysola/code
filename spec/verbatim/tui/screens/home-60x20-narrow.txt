@@ -14,6 +14,6 @@
   ┃
   ┃  Build · Claude Sonnet 5.5
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-  …/my-ap…  731 credits  shift+tab agents  ctrl+p commands
+  …/my-app:mas…  5h 42%  shift+tab agents  ctrl+p commands
 
-  Team · renews 23 Nov
+  Team · 5h resets in 2 h

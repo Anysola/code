@@ -35,7 +35,6 @@ fn reply(request: &Recorded, _: usize) -> Reply {
         body: Stream::new()
             .tool("toolu_1", "execute", json!({"code": CODE}))
             .finish(&model, Some(1)),
-        before: Some(100),
     }
 }
 

@@ -51,7 +51,6 @@ pub fn text(request: &Recorded, text: &str) -> Reply {
             .usage(json!({"input_tokens": 10, "output_tokens": 1}))
             .text(text)
             .finish(&model, Some(1)),
-        before: Some(100),
     }
 }
 

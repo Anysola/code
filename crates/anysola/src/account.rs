@@ -1,10 +1,11 @@
-//! Account commands: `login`, `logout`, `status`, `usage`, `devices`, and the sign-in before the
-//! first interactive start.
+//! Account commands: `login`, `logout`, `status`, `usage`, `limits`, `devices`, and the sign-in
+//! before the first interactive start.
 
 use std::io::IsTerminal;
 
 use anysola_core::gateway::account::{Method, Reply};
-use anysola_core::gateway::format::{credits, usage_lines};
+use anysola_core::gateway::format::{grouped, limits_lines, usage_lines};
+use anysola_core::gateway::limits::{Limits, Window, resets_in};
 use anysola_core::gateway::{Gateway, Token, env_token};
 use anysola_core::paths::Paths;
 use anysola_core::storage::Db;
@@ -12,7 +13,7 @@ use anysola_core::time::short_local;
 use serde_json::Value;
 
 use crate::clack;
-use crate::cli::{DevicesCommand, UsageArgs, UsageFormat};
+use crate::cli::{DevicesCommand, LimitsArgs, LimitsCommand, UsageArgs, UsageFormat};
 
 const APPS_URL: &str = "https://account.anysola.com/apps";
 const NOT_SIGNED_IN: &str = "Not signed in. Run `anysola login`.";
@@ -220,37 +221,42 @@ fn status_lines(me: &Value) -> Vec<(&'static str, String)> {
             format!("{}{}", first.unwrap_or_default(), chars.as_str()),
         ));
     }
-    let balance = me.get("credits");
-    if let Some(available) = number(balance.and_then(|c| c.get("available"))) {
-        let renews = text(balance.and_then(|c| c.get("renewsAt")))
-            .map(|at| format!(", renews {}", at.chars().take(10).collect::<String>()))
-            .unwrap_or_default();
-        lines.push((
-            "Credits",
-            format!("{} available{renews}", credits(available)),
-        ));
+    if me.get("access").is_some_and(Value::is_null) {
+        lines.push(("Access", "This plan does not include Anysola Code".into()));
     }
-    let free = me.get("freeQuota").filter(|f| f.is_object());
-    if let Some(daily) = number(free.and_then(|f| f.get("dailyTurns"))) {
-        let free = free.expect("dailyTurns came from it");
-        let used = number(free.get("turns"))
-            .or_else(|| number(free.get("usedTurns")))
-            .unwrap_or(0.0);
-        lines.push((
-            "Free quota",
-            format!("{}/{} turns today", credits(used), credits(daily)),
-        ));
+    if let Some(limits) = me.get("limits").and_then(Limits::from_wire) {
+        let now = anysola_core::time::now_ms();
+        let window = |w: Window| {
+            let w = w.at(now);
+            match w.resets_at {
+                Some(at) => format!("{}% used · resets {}", w.percent, resets_in(Some(at), now)),
+                None => format!("{}% used", w.percent),
+            }
+        };
+        lines.push(("5-hour", window(limits.five_hour)));
+        lines.push(("Weekly", window(limits.weekly)));
+        let bank = limits.bank_at(now);
+        let banked = match bank.first() {
+            None => "none".to_string(),
+            Some(first) => {
+                let expires = first
+                    .expires_at
+                    .and_then(|at| short_local(&anysola_core::time::iso(at)))
+                    .map(|at| format!(" · next expires {at}"))
+                    .unwrap_or_default();
+                format!("{}{expires}", bank.len())
+            }
+        };
+        lines.push(("Banked resets", banked));
     }
     if let Some(today) = me.get("usageToday").filter(|t| t.is_object()) {
-        let count = |key| credits(number(today.get(key)).unwrap_or(0.0));
-        lines.push((
-            "Today",
-            format!(
-                "{} requests · {} credits",
-                count("requests"),
-                count("credits")
-            ),
-        ));
+        let requests = number(today.get("requests")).unwrap_or(0.0);
+        let unit = if requests == 1.0 {
+            "request"
+        } else {
+            "requests"
+        };
+        lines.push(("Today", format!("{} {unit}", grouped(requests))));
     }
     let event = me.get("event");
     if let Some(label) = text(event.and_then(|e| e.get("label"))) {
@@ -304,10 +310,45 @@ pub async fn usage(args: UsageArgs) -> i32 {
             ),
             UsageFormat::Default => {
                 let mut lines = vec![format!("Usage, last {} days", args.days), String::new()];
-                lines.extend(usage_lines(&reply.body, &chrono::Local));
+                let now = anysola_core::time::now_ms();
+                lines.extend(usage_lines(&reply.body, now, &chrono::Local));
                 lines.iter().map(|l| format!("{l}\n")).collect()
             }
         });
+    report(result)
+}
+
+/// `anysola limits` and `anysola limits redeem`.
+pub async fn limits(args: LimitsArgs) -> i32 {
+    let (method, route) = match args.command {
+        None => (Method::GET, "/limits"),
+        Some(LimitsCommand::Redeem) => (Method::POST, "/limits/redeem"),
+    };
+    let redeem = method == Method::POST;
+    let result = match account_call(method, route).await {
+        Err(error) if redeem && error.contains("banked reset") => Err(error),
+        Err(error) if redeem && error.starts_with("Request failed (HTTP 409)") => {
+            Err("No banked resets to spend.".into())
+        }
+        other => other,
+    };
+    let result = result.and_then(|reply| match args.format {
+        UsageFormat::Json => Ok(format!(
+            "{}\n",
+            serde_json::to_string_pretty(&reply.body).unwrap_or_default()
+        )),
+        UsageFormat::Default => {
+            let limits =
+                Limits::from_wire(&reply.body).ok_or("Anysola returned an unexpected response.")?;
+            let now = anysola_core::time::now_ms();
+            let mut lines = Vec::new();
+            if redeem {
+                lines.extend(["Banked reset used.".to_string(), String::new()]);
+            }
+            lines.extend(limits_lines(&limits, now, &chrono::Local));
+            Ok(lines.iter().map(|l| format!("{l}\n")).collect())
+        }
+    });
     report(result)
 }
 
@@ -410,25 +451,23 @@ mod tests {
     }
 
     #[test]
-    fn free_quota_reads_turns_then_used_turns() {
-        let line = |me: Value| {
-            status_lines(&me)
-                .into_iter()
-                .find(|(k, _)| *k == "Free quota")
-        };
+    fn status_reads_the_limits() {
+        let lines = status_lines(&json!({
+            "plan": "pro", "access": "paid",
+            "limits": {"plan": "pro", "allowed": true, "blockedBy": null,
+                "fiveHour": {"percent": 42, "resetsAt": null}, "weekly": {"percent": 18, "resetsAt": null}, "bank": []},
+            "usageToday": {"requests": 1}
+        }));
         assert_eq!(
-            line(json!({"freeQuota": {"turns": 3, "dailyTurns": 30}}))
-                .unwrap()
-                .1,
-            "3/30 turns today"
+            lines,
+            vec![
+                ("Plan", "Pro".to_string()),
+                ("5-hour", "42% used".into()),
+                ("Weekly", "18% used".into()),
+                ("Banked resets", "none".into()),
+                ("Today", "1 request".into()),
+            ]
         );
-        assert_eq!(
-            line(json!({"freeQuota": {"usedTurns": 4, "dailyTurns": 30}}))
-                .unwrap()
-                .1,
-            "4/30 turns today"
-        );
-        assert!(line(json!({"freeQuota": null})).is_none());
     }
 
     #[test]

@@ -25,7 +25,7 @@
                        ┃ /themes      Switch theme                                               ┃
                        ┃ /thinking    Switch model variant                                       ┃
                        ┃ /update      Update Anysola Code                                        ┃
-                       ┃ /usage       Usage                                                      ┃
+                       ┃ /usage       Usage and limits                                           ┃
                        ┃ /variants    Switch model variant                                       ┃
                        ┃ /worktrees   Manage workspaces                                          ┃
                        ┃
@@ -33,7 +33,7 @@
                        ┃
                        ┃  Build · Claude Sonnet 5.5
                        ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-                       ~/my-app:master              731 credits  shift+tab agents  ctrl+p commands
+                       ~/my-app:master                   5h 42%  shift+tab agents  ctrl+p commands
 
 
 
@@ -56,4 +56,4 @@
 
 
 
-  Team · renews 23 Nov                                                                                           0.5.1
+  Team · 5h resets in 2 h                                                                                        0.5.1

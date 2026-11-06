@@ -138,16 +138,20 @@ fn home_footer(c: &mut Canvas, state: &State, y: u16) {
     }
     if let Some(plan) = &state.account.plan {
         let mut line = text::title_case(plan);
-        if let Some(renews) = state.account.renews {
+        if let Some(at) = state.windows().and_then(|(five, _)| five.resets_at) {
             line.push_str(&format!(
-                " · renews {}",
-                text::short_date(renews, state.now)
+                " · 5h resets {}",
+                anysola_core::gateway::limits::resets_in(Some(at), state.now)
             ));
         }
         x = c.put(x, y, &line, c.style("text.faint"), max) + 2;
     }
-    let banners =
-        crate::menus::anysola::banners(state.account.me.as_ref(), state.low_balance(), state.zone);
+    let banners = crate::menus::anysola::banners(
+        state.account.me.as_ref(),
+        &state.limit_warnings(),
+        state.now,
+        state.zone,
+    );
     for (banner, tone) in banners {
         let path = match tone {
             crate::dialog::Tone::Warning => "text.feedback.warning.base",

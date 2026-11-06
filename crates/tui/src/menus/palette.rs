@@ -136,7 +136,6 @@ const ENTRIES: &[(&str, &str, &str, When)] = &[
     ("prompt.stash.list", "Stash list", "Prompt", When::Stash),
     ("session.aside", "", "", When::Always),
     ("diff.open", "", "", When::Always),
-    ("anysola.credits", "", "", When::Always),
     ("anysola.usage", "", "", When::Always),
     ("anysola.budget", "", "", When::Always),
     ("anysola.devices", "", "", When::Always),

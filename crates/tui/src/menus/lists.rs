@@ -34,18 +34,6 @@ pub struct ModelRow {
     pub id: String,
     pub name: String,
     pub note: Option<String>,
-    pub estimate: Option<f64>,
-}
-
-fn per_turn(estimate: Option<f64>) -> String {
-    match estimate {
-        Some(1.0) => "~1 credit/turn".into(),
-        Some(n) => format!(
-            "~{} credits/turn",
-            anysola_core::gateway::format::credits(n)
-        ),
-        None => String::new(),
-    }
 }
 
 /// `Select model`: favourites, recent, then the Anysola models.
@@ -60,7 +48,6 @@ pub fn models(
         Opt::new(&m.name, format!("{}/{}", m.provider, m.id))
             .category(category)
             .description(description)
-            .footer(per_turn(m.estimate))
             .current(Some(m.id.as_str()) == current)
     };
     for (category, ids) in [("Favorites", favorites), ("Recent", recent)] {

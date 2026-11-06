@@ -270,7 +270,7 @@ fn settle_stale(shared: &Shared, session_id: &str) {
 
 fn finish(shared: &Arc<Shared>, session_id: &str, outcome: &Outcome) {
     goal::ended(shared, session_id, outcome);
-    shared.credits.close_turn(session_id);
+    shared.usage.close_turn(session_id);
     let (outcome_label, event) = match outcome {
         Outcome::Succeeded => (
             "succeeded",

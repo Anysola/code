@@ -127,8 +127,9 @@ impl Stream {
         self
     }
 
-    /// The complete stream; `credits` appends the gateway's closing credits event.
-    pub fn finish(self, model: &str, credits: Option<u64>) -> String {
+    /// The complete stream; `used` appends the gateway's closing usage event, this call taking
+    /// `used` percent of the 5-hour window.
+    pub fn finish(self, model: &str, used: Option<u64>) -> String {
         let usage = self
             .usage
             .unwrap_or_else(|| json!({"input_tokens": 10, "output_tokens": 1}));
@@ -142,13 +143,13 @@ impl Stream {
             json!({"delta": {"stop_reason": self.stop_reason.unwrap_or("end_turn")}, "usage": {"output_tokens": self.output_tokens}}),
         ));
         out.push_str(&event("message_stop", json!({})));
-        if let Some(charged) = credits {
-            out.push_str(&event("anysola_credits", json!({"charged": charged})));
+        if let Some(used) = used {
+            out.push_str(&event("anysola_usage", usage_event(used as f64)));
         }
         out
     }
 
-    /// A stream cut before `message_stop` (no credits event), ending with a gateway error event.
+    /// A stream cut before `message_stop` (no usage event), ending with a gateway error event.
     pub fn interrupted(self, model: &str) -> String {
         let mut out = event(
             "message_start",
@@ -158,4 +159,11 @@ impl Stream {
         out.push_str(&event("error", json!({"error": {"type": "api_error", "message": "The model's stream was interrupted."}})));
         out
     }
+}
+
+/// An `anysola_usage` event's data: `used` percent of the 5-hour window, which then stands at 42%.
+pub fn usage_event(used: f64) -> serde_json::Value {
+    json!({"type": "anysola_usage", "fiveHourPercentUsed": used,
+        "fiveHour": {"percent": 42, "resetsAt": crate::gateway::five_hour_reset()},
+        "weekly": {"percent": 18, "resetsAt": crate::gateway::weekly_reset()}})
 }

@@ -408,7 +408,7 @@ impl Renderer {
             | Event::PermissionAsked { .. }
             | Event::QuestionAsked { .. }
             | Event::PermissionReplied { .. }
-            | Event::Credits(_)
+            | Event::Usage(_)
             | Event::TitleChanged { .. }
             | Event::GoalChanged { .. }
             | Event::FormAsked { .. }

@@ -12,6 +12,12 @@ each feature and how it was checked.
 - One small binary: about 10 MB instead of 196 MB, `anysola --version` in about 3 ms instead of 80 ms, and the TUI
   runs as one process with no background service.
 - The first start imports your 0.5.x sessions, settings and sign-in. The old files are left as they were.
+- Usage limits replace credits: a 5-hour and a weekly window shared with Anysola Chat, shown as percentages with
+  their reset times in the status line, `/usage`, `anysola usage` and `anysola status`, with a warning at 80%. When
+  a window is full, the TUI offers a banked reset and sends your prompt again; `anysola limits`, `anysola limits
+  redeem` and `anysola run --use-banked-reset` do the same from the command line. `/budget` and `run --budget` now
+  take a percent of the 5-hour window (budgets set in credits are not carried over), `/credits` is gone, and the
+  model picker no longer shows a per-turn estimate.
 - The mouse works across the TUI: tabs (click, middle-click or ✕ to close, `+` for a new session), dialogs, permission
   and question prompts, the dock, toasts and collapsible blocks. Clicking outside a dialog closes it.
 - Inline image previews in the composer, in your messages and under tool results (turn them on in `/settings`), and

@@ -409,7 +409,11 @@ fn confirm(c: &mut Canvas, k: &Confirm) {
             .map(|l| vec![(l, Tone::Muted)])
             .collect(),
     );
-    b.buttons = vec!["Cancel".into(), k.button.clone()];
+    let cancel = match k.kind {
+        crate::dialog::ConfirmKind::BankedReset { .. } => "Wait",
+        _ => "Cancel",
+    };
+    b.buttons = vec![cancel.into(), k.button.clone()];
     b.active = usize::from(k.yes);
     body(c, &b);
 }

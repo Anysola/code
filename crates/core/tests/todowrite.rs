@@ -38,7 +38,6 @@ fn reply(request: &Recorded, _: usize) -> Reply {
         body: Stream::new()
             .tool("toolu_1", "todowrite", json!({"todos": todos}))
             .finish(&model, Some(1)),
-        before: Some(100),
     }
 }
 

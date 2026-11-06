@@ -205,8 +205,12 @@ pub fn overlay(c: &mut Canvas, state: &State, session: &Session) {
 
 /// The account banners (event, low balance) stacked right above the composer; their rows.
 fn banners(c: &mut Canvas, state: &State, x: u16, composer: u16, w: u16) -> u16 {
-    let banners =
-        crate::menus::anysola::banners(state.account.me.as_ref(), state.low_balance(), state.zone);
+    let banners = crate::menus::anysola::banners(
+        state.account.me.as_ref(),
+        &state.limit_warnings(),
+        state.now,
+        state.zone,
+    );
     let count = banners.len() as u16;
     for (i, (banner, tone)) in banners.into_iter().enumerate() {
         let path = match tone {
@@ -357,7 +361,7 @@ fn sidebar(c: &mut Canvas, state: &State, session: &Session, x: u16, top: u16) {
         c.put(
             tx,
             y + 1,
-            &format!("{} tokens", text::credits(tokens as f64)),
+            &format!("{} tokens", text::grouped(tokens as f64)),
             muted,
             room,
         );

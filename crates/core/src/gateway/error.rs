@@ -1,14 +1,17 @@
 //! Gateway failures: classification (as 0.5.1's provider-error.ts), retry eligibility, the session
-//! error shape stored and printed, and the 402 rewrite.
+//! error shape stored and printed, and the usage-limit refusal.
 
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
-pub const BILLING_URL: &str = "https://account.anysola.com/billing";
+use super::limits::WindowId;
+
+/// The session error kind of a request refused because a usage window is full.
+pub const USAGE_LIMIT_KIND: &str = "provider.usage-limit";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reason {
@@ -27,6 +30,9 @@ pub enum Reason {
     },
     /// The stream ended without `message_stop`.
     IncompleteStream,
+    /// A 429 with `x-anysola-limit`: the account's 5-hour or weekly window is full. Never retried;
+    /// the person waits or spends a banked reset.
+    UsageLimit(WindowId),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -87,18 +93,13 @@ impl ApiError {
         }
     }
 
-    /// A non-2xx response. 402 bodies are rewritten first (see [`rewrite_402`]).
+    /// A non-2xx response.
     pub fn http(
         status: u16,
         body: String,
         retry_after: Option<Duration>,
         should_retry: Option<bool>,
     ) -> Self {
-        let body = if status == 402 {
-            rewrite_402(&body)
-        } else {
-            body
-        };
         let message = provider_message(&body).unwrap_or_else(|| format!("HTTP {status}"));
         let reason = classify(Some(status), &message, &body);
         ApiError {
@@ -125,7 +126,19 @@ impl ApiError {
         }
     }
 
+    /// The gateway named a full usage window: that wins over classification.
+    pub fn usage_limit(self, window: WindowId) -> Self {
+        ApiError {
+            reason: Reason::UsageLimit(window),
+            should_retry: Some(false),
+            ..self
+        }
+    }
+
     pub fn retryable(&self) -> bool {
+        if matches!(self.reason, Reason::UsageLimit(_)) {
+            return false;
+        }
         if let Some(verdict) = self.should_retry {
             return verdict;
         }
@@ -141,6 +154,9 @@ impl ApiError {
 
     /// One-shot generations (title) retry only failures where the request did not run.
     pub fn not_run(&self) -> bool {
+        if matches!(self.reason, Reason::UsageLimit(_)) {
+            return false;
+        }
         if let Some(verdict) = self.should_retry {
             return verdict;
         }
@@ -165,6 +181,7 @@ impl ApiError {
                 "provider.invalid-request"
             }
             Reason::Unknown => "provider.unknown",
+            Reason::UsageLimit(_) => USAGE_LIMIT_KIND,
         };
         SessionError {
             kind: kind.into(),
@@ -173,24 +190,6 @@ impl ApiError {
             response: self.body.clone().map(|body| ErrorResponse { body }),
         }
     }
-}
-
-/// Replaces a 402 body with a billing error that says where to top up. The URL is appended only
-/// when the gateway's message does not already name it.
-pub fn rewrite_402(body: &str) -> String {
-    let message = serde_json::from_str::<Value>(body)
-        .ok()
-        .and_then(|value| error_of(&value))
-        .filter(|m| m != "HTTP 402")
-        .unwrap_or_else(|| "Out of Anysola credits.".to_string());
-    let message = if message.contains("account.anysola.com/billing") {
-        message
-    } else {
-        format!("{message}\nUpgrade: {BILLING_URL}")
-    };
-    crate::json::compact(
-        &json!({"type": "error", "error": {"type": "billing_error", "message": message}}),
-    )
 }
 
 /// `error_description`, else `error.message`, else `message`, else the error code.
@@ -477,27 +476,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rewrite_dedupes_billing_url() {
-        let gateway = r#"{"type":"error","error":{"type":"insufficient_credits","message":"You've used this cycle's Anysola credits. They renew on 23 Nov. account.anysola.com/billing"}}"#;
-        let rewritten: Value = serde_json::from_str(&rewrite_402(gateway)).unwrap();
-        assert_eq!(
-            rewritten["error"]["message"],
-            "You've used this cycle's Anysola credits. They renew on 23 Nov. account.anysola.com/billing"
-        );
-        let plain: Value =
-            serde_json::from_str(&rewrite_402(r#"{"error":{"message":"No credits."}}"#)).unwrap();
-        assert_eq!(
-            plain["error"]["message"],
-            "No credits.\nUpgrade: https://account.anysola.com/billing"
-        );
-        let empty: Value = serde_json::from_str(&rewrite_402("<html>")).unwrap();
-        assert_eq!(
-            empty["error"]["message"],
-            "Out of Anysola credits.\nUpgrade: https://account.anysola.com/billing"
-        );
-    }
-
-    #[test]
     fn classification() {
         let http = |status, body: &str| ApiError::http(status, body.to_string(), None, None).reason;
         assert_eq!(http(402, "{}"), Reason::Quota);
@@ -545,7 +523,7 @@ mod tests {
     fn session_error_shape() {
         let error = ApiError::http(
             402,
-            r#"{"error":{"message":"x account.anysola.com/billing"}}"#.into(),
+            r#"{"error":{"type":"billing_error","message":"x"}}"#.into(),
             None,
             None,
         );
@@ -557,6 +535,23 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("billing_error")
+        );
+    }
+
+    #[test]
+    fn a_full_window_is_never_retried() {
+        let body = r#"{"type":"error","error":{"type":"rate_limit_error","message":"5-hour limit reached. Resets in 2 h. You have 1 banked reset."}}"#;
+        let plain = ApiError::http(429, body.into(), None, None);
+        assert_eq!(plain.reason, Reason::RateLimit);
+        let error = plain.usage_limit(WindowId::FiveHour);
+        assert_eq!(error.reason, Reason::UsageLimit(WindowId::FiveHour));
+        assert!(!error.retryable());
+        assert!(!error.not_run());
+        let session = error.to_session_error();
+        assert_eq!(session.kind, USAGE_LIMIT_KIND);
+        assert_eq!(
+            session.message,
+            "5-hour limit reached. Resets in 2 h. You have 1 banked reset."
         );
     }
 }

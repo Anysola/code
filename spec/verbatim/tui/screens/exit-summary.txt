@@ -4,7 +4,8 @@
                                                           Code
 
   Session   Fix typo in hello.txt
-  Spent     1 turn · 12 credits
+  Used      1 turn · 12% of the 5-hour window
+  Limits    5h 42%
   Continue  anysola -s ses_e59221e89ffevUnouuY8RLvFMr
 
 

@@ -41,7 +41,6 @@ fn steer_and_queue() {
                 body: Stream::new()
                     .tool("toolu_1", "glob", json!({"pattern": "*.none"}))
                     .finish(&model, Some(1)),
-                before: Some(100),
             };
         }
         text(request, "ok")

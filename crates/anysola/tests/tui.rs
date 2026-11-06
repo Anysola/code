@@ -1,6 +1,7 @@
 //! The interactive UI under a real pseudo-terminal (`script`), against the fake gateway: home
 //! draws, a prompt runs a shell tool behind a permission prompt, the answer streams in,
-//! `/credits`, `/usage`, `/budget 5` and `/undo` work, `exit` leaves with the exit summary.
+//! `/usage` works, a full 5-hour window offers a banked reset that sends the prompt again,
+//! `/budget 5` and `/undo` work, `exit` leaves with the exit summary.
 #![cfg(target_os = "linux")]
 
 mod common;
@@ -51,13 +52,25 @@ fn prompt_permission_answer_exit() {
     if Command::new("script").arg("--version").output().is_err() {
         return;
     }
-    let gateway = FakeGateway::start(|request, _| {
+    let limited = std::sync::atomic::AtomicBool::new(false);
+    let gateway = FakeGateway::start(move |request, _| {
         let model = request.json()["model"]
             .as_str()
             .unwrap_or_default()
             .to_string();
+        // The first "limit check" prompt finds the 5-hour window full.
+        if !request.is_title()
+            && request.body.contains("limit check")
+            && !limited.swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return anysola_testkit::limit_reply(2);
+        }
         let body = if request.is_title() {
             Stream::new().text("Smoke title").finish(&model, Some(0))
+        } else if request.body.contains("limit check") {
+            Stream::new()
+                .text("Window cleared.")
+                .finish(&model, Some(1))
         } else if request.body.contains("tool_result") {
             Stream::new().text("All done here.").finish(&model, Some(2))
         } else {
@@ -70,10 +83,7 @@ fn prompt_permission_answer_exit() {
                 .stop("tool_use")
                 .finish(&model, Some(3))
         };
-        Reply::Sse {
-            body,
-            before: Some(731),
-        }
+        Reply::Sse { body }
     });
     let home = anysola_testkit::TestHome::new(&gateway.url);
     let dir = my_app(&home);
@@ -121,7 +131,7 @@ fn prompt_permission_answer_exit() {
         panic!("never saw {needle:?}:\n{}", plain(&seen));
     };
     wait_for("Ask anything");
-    wait_for("731 credits");
+    wait_for("5h 42%");
     stdin.write_all(b"run the smoke check").unwrap();
     std::thread::sleep(Duration::from_millis(300));
     stdin.write_all(b"\r").unwrap();
@@ -135,16 +145,20 @@ fn prompt_permission_answer_exit() {
         std::thread::sleep(Duration::from_millis(300));
         stdin.write_all(b"\r").unwrap();
     };
-    command("/credits");
-    wait_for("Upgrade or top up");
-    command("\x1b");
     command("/usage");
     wait_for("Usage · last 7 days");
+    wait_for("Banked resets  2");
     command("\x1b");
+    command("limit check");
+    wait_for("Use a banked reset?");
+    wait_for("Wait");
+    command("");
+    wait_for("Window cleared.");
+    assert_eq!(gateway.bank(), 1);
     command("/budget 5");
     wait_for("Session budget");
     command("/undo");
-    wait_for("run the smoke check");
+    wait_for("limit check");
     std::thread::sleep(Duration::from_millis(300));
     stdin.write_all(b"\x03").unwrap();
     std::thread::sleep(Duration::from_millis(300));
@@ -166,6 +180,15 @@ fn prompt_permission_answer_exit() {
         .into_iter()
         .filter(|r| !r.is_title())
         .collect();
-    assert_eq!(main.len(), 2);
+    assert_eq!(main.len(), 4);
     assert!(main[1].body.contains("tool_result"));
+    // The refused prompt went again as it was, not as a second copy.
+    let retried = main[3].json();
+    let users = retried["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["role"] == "user" && m.to_string().contains("limit check"))
+        .count();
+    assert_eq!(users, 1, "{retried}");
 }

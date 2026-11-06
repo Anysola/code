@@ -1,6 +1,6 @@
 $ anysola status --help
 DESCRIPTION
-  Show your Anysola plan and credits
+  Show your Anysola plan and usage limits
 
 USAGE
   anysola status [flags]

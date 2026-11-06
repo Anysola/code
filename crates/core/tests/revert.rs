@@ -41,7 +41,6 @@ fn revert_unrevert_commit() {
                     json!({"path": format!("{path}/a.txt"), "content": "two\n"}),
                 )
                 .finish(&model, Some(1)),
-            before: Some(100),
         }
     });
     let env = env(&gateway.url);

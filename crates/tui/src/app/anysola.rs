@@ -1,22 +1,19 @@
-//! The Anysola account commands: `/credits`, `/usage`, `/devices`, `/budget`, `/account`,
-//! `/feedback`, and the budget gate before a prompt.
+//! The Anysola account commands: `/usage`, `/devices`, `/budget`, `/account`, `/feedback`, the
+//! budget gate before a prompt and the banked-reset offer after a full usage window.
 
 use anysola_core::gateway::account::Method;
+use anysola_core::gateway::limits::{Limits, resets_in};
 
 use super::{App, Msg};
-use crate::dialog::{Dialog, Opt};
-use crate::menus::anysola::{self as account, Budget, CreditsView};
+use crate::dialog::{Confirm, ConfirmKind, Dialog, Opt};
+use crate::menus::anysola::{self as account, Budget, UsageView};
 use crate::state::Variant;
+use crate::transcript::model::{Item, Part};
 
 impl App {
     /// Account commands; false when `id` is not one.
     pub(super) fn account_command(&mut self, id: &str, arguments: Option<&str>) -> bool {
         match id {
-            "anysola.credits" => {
-                self.fetch_account();
-                let body = self.credits_body();
-                self.push(Dialog::Body(body));
-            }
             "anysola.usage" => self.open_usage(7),
             "anysola.devices" => self.open_devices(),
             "anysola.budget" => self.budget(arguments.unwrap_or_default()),
@@ -27,31 +24,23 @@ impl App {
         true
     }
 
-    pub(super) fn credits_body(&self) -> crate::dialog::Body {
-        let session = self
-            .state
-            .session()
-            .and_then(|s| s.credits.as_ref())
-            .map(|c| (c.turns, c.total));
-        let me = match (&self.state.account.me, &self.state.account.error) {
-            (Some(me), _) => Ok(me),
-            (None, error) => Err(error.as_deref()),
-        };
-        account::credits_dialog(&CreditsView {
-            me,
-            balance: self.state.remaining(),
-            session,
-            low: self.state.low_balance().is_some(),
+    fn usage_view(&self, days: u32) -> UsageView {
+        UsageView {
+            days,
+            session: self
+                .state
+                .session()
+                .and_then(|s| s.usage.as_ref())
+                .map(|c| (c.turns, c.total)),
             zone: self.state.zone,
             now: self.state.now.max(super::now()),
-        })
+        }
     }
 
     pub(super) fn open_usage(&mut self, days: u32) {
         self.push(Dialog::Body(account::usage_dialog(
-            days,
+            &self.usage_view(days),
             None,
-            self.state.zone,
         )));
         let (core, tx) = (self.core.clone(), self.tx.clone());
         tokio::spawn(async move {
@@ -59,7 +48,13 @@ impl App {
                 .account(Method::GET, &format!("/usage?days={days}"))
                 .await;
             let _ = tx.send(Msg::Apply(Box::new(move |app: &mut App| {
-                let body = account::usage_dialog(days, Some(&reply), app.state.zone);
+                if let Ok(r) = &reply
+                    && r.ok()
+                    && let Some(limits) = r.body.get("limits").and_then(Limits::from_wire)
+                {
+                    app.set_limits(limits);
+                }
+                let body = account::usage_dialog(&app.usage_view(days), Some(&reply));
                 if let Some(Dialog::Body(b)) = app.state.dialogs.last_mut()
                     && b.kind == body.kind
                 {
@@ -149,13 +144,13 @@ impl App {
             (_, None) => {
                 return self.toast(
                     None,
-                    "Open a session first, or set one for new sessions: /budget default <credits>"
+                    "Open a session first, or set one for new sessions: /budget default <percent>"
                         .into(),
                     Variant::Warning,
                 );
             }
             (Budget::Show, Some(id)) => {
-                let c = self.core.credits(&id);
+                let c = self.core.usage(&id);
                 return self.toast(None, account::budget_text(c.total, c.budget), Variant::Info);
             }
             (Budget::Set(n), Some(id)) => self
@@ -170,7 +165,7 @@ impl App {
         match result {
             Ok(text) => {
                 if let Some(s) = self.state.session_mut() {
-                    s.credits = Some(self.core.credits(&s.id));
+                    s.usage = Some(self.core.usage(&s.id));
                 }
                 self.toast(None, text, Variant::Success)
             }
@@ -187,9 +182,9 @@ impl App {
         if std::mem::take(&mut self.gate_passed) {
             return true;
         }
-        let c = self.core.credits(session);
+        let c = self.core.usage(session);
         match c.budget {
-            Some(budget) if c.total >= budget => {
+            Some(budget) if c.total >= budget as f64 => {
                 let select = account::budget_gate(c.total, budget, prompt.to_string());
                 self.push(Dialog::Select(select));
                 false
@@ -202,11 +197,11 @@ impl App {
         let Some(id) = self.state.session().map(|s| s.id.clone()) else {
             return;
         };
-        let c = self.core.credits(&id);
+        let c = self.core.usage(&id);
         let changed = match (choice, c.budget) {
             ("raise", Some(b)) => self
                 .core
-                .set_budget(&id, Some(c.total.max(b) + b))
+                .set_budget(&id, Some(account::raised_budget(c.total, b)))
                 .map(drop),
             ("remove", _) => self.core.set_budget(&id, None).map(drop),
             ("stop", _) => {
@@ -223,10 +218,135 @@ impl App {
             );
         }
         if let Some(s) = self.state.session_mut() {
-            s.credits = Some(self.core.credits(&id));
+            s.usage = Some(self.core.usage(&id));
         }
         self.gate_passed = true;
         self.state.composer.set(&prompt);
+        self.submit(false);
+    }
+}
+
+impl App {
+    /// New limits from `/limits`, `/usage` or a redeem; warns once per window near its end.
+    pub(super) fn set_limits(&mut self, limits: Limits) {
+        self.state.account.plan = limits.plan.clone().or(self.state.account.plan.take());
+        self.state.account.limits = Some(limits);
+        self.warn_limits();
+    }
+
+    /// A toast the first time a window reaches 80% (once per window, keyed on its reset time).
+    pub(super) fn warn_limits(&mut self) {
+        let now = self.state.now.max(super::now());
+        for (window, w) in self.state.limit_warnings() {
+            let key = (window, w.resets_at);
+            if self.limit_warned.contains(&key) {
+                continue;
+            }
+            self.limit_warned.push(key);
+            let text = if w.percent >= 100 {
+                format!("{} limit reached.", window.label())
+            } else {
+                format!(
+                    "{}% of the {} limit used.",
+                    w.percent,
+                    window.label().to_lowercase()
+                )
+            };
+            let resets = format!(" Resets {}.", resets_in(w.resets_at, now));
+            self.toast(None, format!("{text}{resets} /usage"), Variant::Warning);
+        }
+    }
+
+    /// The session's turn was refused for a full usage window: show the gateway's message, and
+    /// offer a banked reset when the bank holds one.
+    pub(super) fn usage_limit(&mut self, session_id: &str, message: String) {
+        self.alert(session_id, &message, crate::sound::Sound::Error);
+        let shown = self.state.session().is_some_and(|s| s.id == session_id);
+        let (core, tx) = (self.core.clone(), self.tx.clone());
+        let session = session_id.to_string();
+        tokio::spawn(async move {
+            let reply = core.account(Method::GET, "/limits").await;
+            let limits = match &reply {
+                Ok(r) if r.ok() => Limits::from_wire(&r.body),
+                _ => None,
+            };
+            let _ = tx.send(Msg::Apply(Box::new(move |app: &mut App| {
+                let now = app.state.now.max(super::now());
+                let offer = limits.as_ref().filter(|_| shown).and_then(|limits| {
+                    account::banked_reset_message(&message, limits, now, app.state.zone)
+                });
+                if let Some(limits) = limits {
+                    app.set_limits(limits);
+                }
+                match offer {
+                    Some(text) => app.push(Dialog::Confirm(Confirm {
+                        kind: ConfirmKind::BankedReset { session },
+                        title: "Use a banked reset?".into(),
+                        message: text,
+                        button: "Use banked reset".into(),
+                        yes: true,
+                    })),
+                    None => app.toast(Some("Usage limit".into()), message, Variant::Error),
+                }
+            })));
+        });
+    }
+
+    /// Spends the banked reset that expires first, then sends the refused turn again.
+    pub(super) fn redeem_and_retry(&mut self, session: String) {
+        let (core, tx) = (self.core.clone(), self.tx.clone());
+        tokio::spawn(async move {
+            let reply = core.account(Method::POST, "/limits/redeem").await;
+            let _ = tx.send(Msg::Apply(Box::new(move |app: &mut App| match &reply {
+                Ok(r) if r.ok() => {
+                    if let Some(limits) = Limits::from_wire(&r.body) {
+                        app.limit_warned.clear();
+                        app.set_limits(limits);
+                    }
+                    app.toast(None, "Banked reset used".into(), Variant::Success);
+                    app.retry_turn(&session);
+                }
+                other => app.toast(
+                    Some("Banked reset".into()),
+                    account::error_text(other),
+                    Variant::Error,
+                ),
+            })));
+        });
+    }
+
+    /// Sends the last prompt of `session` again. A turn refused before anything ran is undone and
+    /// resubmitted as it was; one that already ran tools continues with `Continue.`, so their work
+    /// is kept.
+    fn retry_turn(&mut self, session: &str) {
+        if self.state.session().is_none_or(|s| s.id != session) {
+            return;
+        }
+        let Some(items) = self.state.sessions.get(session).map(|s| &s.items) else {
+            return;
+        };
+        let Some(at) = items.iter().rposition(|i| matches!(i, Item::User { .. })) else {
+            return;
+        };
+        let ran = items[at + 1..].iter().any(|item| match item {
+            Item::Assistant(a) => a.parts.iter().any(|p| matches!(p, Part::Tool(_))),
+            _ => false,
+        });
+        let Item::User { id, text, .. } = &items[at] else {
+            return;
+        };
+        let (id, text) = (id.clone(), text.clone());
+        if ran {
+            self.state.composer.set("Continue.");
+        } else {
+            match self.core.revert(session, &id) {
+                Ok(_) => {
+                    self.reload(session);
+                    self.state.composer.set(&text);
+                }
+                Err(error) => return self.toast(None, error.to_string(), Variant::Error),
+            }
+        }
         self.submit(false);
     }
 }

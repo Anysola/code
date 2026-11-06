@@ -29,7 +29,6 @@ fn sse(request: &Recorded, text: &str) -> Reply {
             .usage(json!({"input_tokens": 10, "output_tokens": 1}))
             .text(text)
             .finish(&model, Some(1)),
-        before: Some(100),
     }
 }
 
@@ -124,7 +123,6 @@ fn auto_compaction_at_the_ceiling() {
                 .usage(json!({"input_tokens": 850_001, "output_tokens": 1}))
                 .text("Big answer.")
                 .finish(&model, Some(1)),
-            before: Some(100),
         }
     });
     let home = anysola_testkit::TestHome::new(&gateway.url);

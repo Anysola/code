@@ -21,7 +21,6 @@ fn answer(text: &str) -> impl Fn(&Recorded, usize) -> Reply + Send + Sync + use<
             .to_string();
         Reply::Sse {
             body: Stream::new().text(&text).finish(&model, Some(1)),
-            before: Some(100),
         }
     }
 }
@@ -295,7 +294,6 @@ fn multi_tool_turn() {
         if request.is_title() {
             return Reply::Sse {
                 body: Stream::new().text("Title").finish(&model, Some(0)),
-                before: None,
             };
         }
         let stream = match request.json()["messages"].as_array().unwrap().len() {
@@ -314,7 +312,6 @@ fn multi_tool_turn() {
         };
         Reply::Sse {
             body: stream.finish(&model, Some(1)),
-            before: Some(50),
         }
     });
     let home = TestHome::new(&gateway.url);
@@ -383,7 +380,6 @@ fn retries_honour_retry_after() {
         }
         Reply::Sse {
             body: Stream::new().text("ok").finish(&model, Some(1)),
-            before: None,
         }
     });
     let home = TestHome::new(&gateway.url);
@@ -408,7 +404,6 @@ fn final_errors_are_not_retried() {
         if request.is_title() {
             return Reply::Sse {
                 body: Stream::new().text("t").finish(&model, None),
-                before: None,
             };
         }
         Reply::Json {
@@ -439,14 +434,12 @@ fn busy_session_in_another_process() {
         if request.is_title() {
             return Reply::Sse {
                 body: Stream::new().text("t").finish(&model, None),
-                before: None,
             };
         }
         Reply::Sse {
             body: Stream::new()
                 .tool("s1", "shell", json!({"command": "sleep 3"}))
                 .finish(&model, None),
-            before: None,
         }
     });
     let home = TestHome::new(&gateway.url);
@@ -511,7 +504,6 @@ fn code_action_review_and_issue_modes() {
         };
         Reply::Sse {
             body: stream.finish(&model, Some(1)),
-            before: Some(10),
         }
     });
     let mut home = TestHome::new(&gateway.url);
@@ -592,14 +584,12 @@ fn sleeping_run() -> (FakeGateway, TestHome, std::process::Child) {
         if request.is_title() {
             return Reply::Sse {
                 body: Stream::new().text("t").finish(&model, None),
-                before: None,
             };
         }
         Reply::Sse {
             body: Stream::new()
                 .tool("s1", "shell", json!({"command": "sleep 20"}))
                 .finish(&model, None),
-            before: None,
         }
     });
     let home = TestHome::new(&gateway.url);
@@ -692,7 +682,6 @@ fn shell_permissions_policies_and_scanner() {
         };
         Reply::Sse {
             body: stream.finish(&model, Some(1)),
-            before: None,
         }
     });
     let home = TestHome::new(&gateway.url);

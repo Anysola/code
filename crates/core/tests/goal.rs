@@ -34,7 +34,6 @@ fn tool_call(request: &Recorded) -> Reply {
             .usage(json!({"input_tokens": 10, "output_tokens": 1}))
             .tool("toolu_1", "glob", json!({"pattern": "*.md"}))
             .finish(&model, Some(1)),
-        before: Some(100),
     }
 }
 

@@ -46,7 +46,6 @@ pub fn sse(request: &Recorded, stream: Stream) -> Reply {
         body: stream
             .usage(json!({"input_tokens": 10, "output_tokens": 1}))
             .finish(&model, Some(1)),
-        before: Some(100),
     }
 }
 

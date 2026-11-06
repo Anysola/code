@@ -1,7 +1,7 @@
    Fix typo in hello.txt           Fix typo in hello.txt         +
-  ┃                                                                              ┃                                   ┃
-  ┃  ← Edit hello.txt                                                            ┃  Session budget 12/50 credits  x  ┃
-  ┃                                                                              ┃                                   ┃
+  ┃                                                               ┃                                                  ┃
+  ┃  ← Edit hello.txt                                             ┃  Session budget 12%/20% of the 5-hour window  x  ┃
+  ┃                                                               ┃                                                  ┃
   ┃    1 - Helo wrold
   ┃    1 + Hello world
   ┃
@@ -32,4 +32,4 @@
   ┃
   ┃  Build · Claude Sonnet 5.5
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-  ~/my-app:master                                              731 credits · session 12/50  1.3K (0%)  ctrl+p commands
+  ~/my-app:master                                                 5h 42% · session 12%/20%  1.3K (0%)  ctrl+p commands

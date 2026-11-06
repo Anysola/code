@@ -1,6 +1,6 @@
 $ anysola usage --help
 DESCRIPTION
-  Show Anysola usage: totals, by day and by model
+  Show Anysola usage: limits, requests by day and by model
 
 USAGE
   anysola usage [flags]

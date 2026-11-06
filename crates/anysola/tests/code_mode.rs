@@ -33,7 +33,6 @@ fn programs_run_through_execute() {
         if request.is_title() {
             return Reply::Sse {
                 body: Stream::new().text("Title").finish(&model, Some(0)),
-                before: None,
             };
         }
         let done = tool_results(request).len();
@@ -43,7 +42,6 @@ fn programs_run_through_execute() {
         };
         Reply::Sse {
             body: stream.finish(&model, Some(1)),
-            before: None,
         }
     });
     let home = TestHome::new(&gateway.url);

@@ -31,7 +31,6 @@ fn reply(request: &Recorded, stream: Stream) -> Reply {
         .to_string();
     Reply::Sse {
         body: stream.finish(&model, Some(1)),
-        before: None,
     }
 }
 

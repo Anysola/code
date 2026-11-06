@@ -21,7 +21,7 @@
                        ┃
                        ┃  Shell
                        ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-                       ~/my-app:master                            731 credits  esc exit shell mode
+                       ~/my-app:master                                 5h 42%  esc exit shell mode
 
 
 
@@ -32,4 +32,4 @@
 
 
 
-  Team · renews 23 Nov                                                                                           0.5.1
+  Team · 5h resets in 2 h                                                                                        0.5.1

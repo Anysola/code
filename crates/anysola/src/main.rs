@@ -119,6 +119,7 @@ fn main() {
             | Command::Logout
             | Command::Status
             | Command::Usage(_)
+            | Command::Limits(_)
             | Command::Devices(_)
             | Command::Acp(_)
             | Command::Mcp(_)
@@ -151,6 +152,7 @@ fn main() {
             Some(Command::Logout) => account::logout().await,
             Some(Command::Status) => account::status().await,
             Some(Command::Usage(args)) => account::usage(args).await,
+            Some(Command::Limits(args)) => account::limits(args).await,
             Some(Command::Devices(args)) => account::devices(args.command).await,
             Some(Command::Update(args)) => update::update(args).await,
             Some(Command::Uninstall(args)) => uninstall::uninstall(args).await,

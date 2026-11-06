@@ -1,12 +1,15 @@
 # Source: packages/cli/src/commands/handlers/anysola/*.ts, packages/tui/src/anysola/format.ts
 # Clack output (non-TTY rendering shown; symbols ┌ │ ● ◇ ◆ ▲ ■ └). Captured from 0.5.1.
 
-## anysola status (stdout; keys padded to longest key + 2). Optional lines: Account, Plan, Credits, Free quota, Model, Event; Token always.
-Account  dev@example.com
-Plan     team
-Credits  731 available, renews 2026-11-23
-Token    asc_FFFF...FFFF
-# Free quota line: "Free quota  <used>/<daily> turns today"; credits use toLocaleString("en-US").
+## anysola status (stdout; keys padded to longest key + 2). [1.0] Optional lines: Plan, Access, 5-hour, Weekly, Banked resets, Today, Event; Token always.
+Plan           Team
+5-hour         42% used · resets in 2 h
+Weekly         18% used · resets in 3 d 4 h
+Banked resets  2 · next expires Dec 1, 12:00 AM
+Today          3 requests
+Token          asc_FFFF...FFFF
+# [1.0] Usage limits replace credits: no Credits or Free quota line. A window that has not started reads "<n>% used" without a reset.
+# Access line only when /me.access is null: "Access  This plan does not include Anysola Code".
 # Token mask: first 8 chars + "..." + last 4 (ANYSOLA_TOKEN=x -> "x...x").
 # stderr errors (exit 1): "Not signed in. Run `anysola login`." / "The token was revoked or expired. Run `anysola login --force`." / "Could not load status: HTTP <n>" (then still prints Token line, exit 0)
 
@@ -20,23 +23,47 @@ Cannot reach <ANYSOLA_API_URL>
 ## anysola usage (default --days 7)
 Usage, last 7 days
 
+Limits
+  5-hour  ████░░░░░░   42%  resets in 2 h
+  Weekly  █░░░░░░░░░   18%  resets in 3 d 4 h
+  Banked resets  2 · next expires Dec 1, 12:00 AM
+
 Totals
-        requests   credits
-  all         42     1,234
+        requests
+  all         42
   Cache hit rate 61%
 
 By day
-  date         requests   credits
-  2026-11-03         30     1,000
-  2026-11-04         12       234
+  date         requests
+  2026-11-03         30
+  2026-11-04         12
 
 By model
-  model               requests   credits
-  claude-sonnet-5-5         40     1,200
-  claude-haiku-5-5           2        34
-
-Balance 731 credits · renews Nov 23, 03:00 AM
+  model               requests
+  claude-sonnet-5-5         40
+  claude-haiku-5-5           2
 # --format json: the /v1/code/usage body, JSON.stringify(body, null, 2) + EOL.
+
+## anysola limits [1.0]
+Limits
+  5-hour  ████░░░░░░   42%  resets in 2 h
+  Weekly  █░░░░░░░░░   18%  resets in 3 d 4 h
+
+Banked resets: 2
+  5-hour · expires Dec 1, 12:00 AM
+  5-hour · expires Dec 2, 12:00 AM
+# A full window adds "  5-hour limit reached. Resets in 2 h." under the windows. --format json: the /v1/code/limits body.
+
+## anysola limits redeem [1.0]
+Banked reset used.
+
+Limits
+  5-hour  ░░░░░░░░░░    0%
+  Weekly  █░░░░░░░░░   18%  resets in 3 d 4 h
+
+Banked resets: 1
+  5-hour · expires Dec 2, 12:00 AM
+# An empty bank (409): stderr "No banked resets to spend.", exit 1.
 
 ## anysola devices
   id      name             client               last used         expires

@@ -142,7 +142,6 @@ fn sse(
         } else {
             stream.finish(&model, Some(1))
         },
-        before: Some(100),
     }
 }
 

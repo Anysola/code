@@ -266,7 +266,6 @@ impl App {
                 id: m.id.clone(),
                 name: m.name.clone(),
                 note: m.note.clone(),
-                estimate: m.credits_per_turn,
             })
             .collect();
         let current = self.state.model.as_ref().map(|m| m.id.as_str());
@@ -1104,6 +1103,7 @@ impl App {
             ConfirmKind::DeleteWorktree { directory } => {
                 self.delete_worktree(directory.into(), true)
             }
+            ConfirmKind::BankedReset { session } => self.redeem_and_retry(session),
         }
     }
 

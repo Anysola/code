@@ -212,7 +212,7 @@ Verbatim: `verbatim/tools/{grep,glob,webfetch,websearch}.md` (all captured from 
 - [0.5.1] Permission `websearch`, resource = query, save `["*"]`, metadata = input (TUI title `Web Search via Anysola "<query>"`). Default allowed. Config v1 `permission.websearch` accepts only a plain action string. `websearch.ts:50-58`, `core/src/v1/config/permission.ts:27`.
 - [0.5.1] `"websearch": false` in config removes the tool from requests (context/compaction/generate hooks). `websearch.ts:188-198`.
 - [0.5.1] Token: active Anysola connection (oauth access or key); none -> `Web search needs an Anysola sign-in. Run `anysola login`.` Headers: authorization Bearer, `x-anysola-client: opencode`, `x-anysola-version: 0.5.1`, accept json; 30 s timeout; 1 MiB response limit. Captured. `anysola.ts:80-125`.
-- [0.5.1] `credits` in the response is charged to the session that searched (`AnysolaSearchCredits.note`, shown in run output as `Anysola · 2 credits`). Captured.
+- `[1.0]` The response carries no `credits`; nothing is recorded per search (the next usage event or `/limits` poll shows it). 0.5.1: `credits` in the response is charged to the session that searched (`AnysolaSearchCredits.note`, shown in run output as `Anysola · 2 credits`). Captured.
 - [0.5.1] Output format, no-results text and all error texts: verbatim file (captured 401/402/429/500/bad JSON/empty/multi).
 - [0.5.1] Description year = process-start year (`new Date().getFullYear()`), local time.
 

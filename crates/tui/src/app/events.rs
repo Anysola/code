@@ -7,6 +7,7 @@ use super::{App, now};
 use crate::sound::Sound;
 use crate::state::{Permission, Question, Variant};
 use crate::transcript::model;
+use anysola_core::gateway::error::USAGE_LIMIT_KIND;
 
 impl App {
     /// The open session an event belongs to: its own, or, for a subagent's ask, the busy
@@ -47,7 +48,7 @@ impl App {
 
     /// A desktop notification for a session that needs attention, when enabled and the
     /// terminal reported losing focus.
-    fn alert(&self, session_id: &str, message: &str, sound: Sound) {
+    pub(super) fn alert(&self, session_id: &str, message: &str, sound: Sound) {
         if self.tui.sound() {
             let custom = self.tui.sound_file(sound.name());
             crate::sound::play(sound, custom.as_deref(), &self.sounds, self.tui.volume());
@@ -250,9 +251,13 @@ impl App {
                 self.question_waiting(&target);
                 self.alert(&target, "Input needs response", Sound::Question);
             }
-            Event::Credits(snapshot) => {
+            Event::Usage(snapshot) => {
                 if let Some(session) = self.state.sessions.get_mut(&id) {
-                    session.credits = Some(snapshot.clone());
+                    session.usage = Some(snapshot.clone());
+                }
+                if let Some(latest) = &snapshot.latest {
+                    self.state.account.apply(latest);
+                    self.warn_limits();
                 }
                 self.account_soon();
             }
@@ -284,6 +289,9 @@ impl App {
                     tab.unread = !shown;
                 }
                 match &event {
+                    Event::Failed { error, .. } if error.kind == USAGE_LIMIT_KIND => {
+                        self.usage_limit(&id, error.message.clone());
+                    }
                     Event::Failed { error, .. } => {
                         self.toast(
                             Some("Session failed".into()),

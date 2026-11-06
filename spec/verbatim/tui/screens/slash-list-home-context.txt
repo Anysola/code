@@ -6,7 +6,6 @@
 ┃ /clear       Clear session
 ┃ /connect     Connect an integration
 ┃ /continue    Switch session
-┃ /credits     Credits and plan
 ┃ /debug       View debug info
 ┃ /devices     Signed-in devices
 ┃ /diff        Open diff viewer

@@ -50,11 +50,11 @@ impl Core {
     }
 
     pub fn default_budget(&self) -> Option<u64> {
-        self.shared.credits.default_budget()
+        self.shared.usage.default_budget()
     }
 
     pub fn set_default_budget(&self, budget: Option<u64>) -> Result<(), CoreError> {
-        Ok(self.shared.credits.set_default_budget(budget)?)
+        Ok(self.shared.usage.set_default_budget(budget)?)
     }
 
     /// Admits a hidden note (editor context) that goes before the next prompt; it does not

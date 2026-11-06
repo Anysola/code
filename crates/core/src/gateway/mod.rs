@@ -5,12 +5,12 @@ pub mod account;
 pub mod config;
 pub mod error;
 pub mod format;
+pub mod limits;
 pub mod retry;
 pub mod sse;
 
 use std::time::Duration;
 
-use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -18,6 +18,11 @@ use crate::tool::websearch::SearchResult;
 use crate::version::{VERSION, model_user_agent, user_agent};
 use error::ApiError;
 use sse::{Block, Decoder, SseEvent};
+
+/// Asks the gateway to close each model stream with an `anysola_usage` event.
+pub const USAGE_EVENT_HEADER: &str = "x-anysola-usage-event";
+/// On a 429 for a full window: `five_hour` or `weekly`.
+pub const LIMIT_HEADER: &str = "x-anysola-limit";
 
 const ACCOUNT_TIMEOUT: Duration = Duration::from_secs(15);
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(30);
@@ -91,33 +96,16 @@ pub struct Gateway {
 #[derive(Debug, Clone, PartialEq)]
 pub enum StreamItem {
     Event(SseEvent),
-    /// Credits charged for this call; `remaining` is the balance after it when known.
-    Credits {
-        charged: Option<u64>,
-        remaining: Option<u64>,
-    },
+    /// The gateway's closing usage event: what this call took of the 5-hour window and both
+    /// windows after it.
+    Usage(limits::UsageEvent),
 }
 
 pub struct MessageStream {
     response: reqwest::Response,
     decoder: Decoder,
     pending: std::collections::VecDeque<StreamItem>,
-    /// `x-credits-available-before`, when the credits event is read from the stream.
-    before: Option<u64>,
-    stream_credits: bool,
     done: bool,
-}
-
-fn header_u64(headers: &HeaderMap, name: &str) -> Option<u64> {
-    headers
-        .get(name)?
-        .to_str()
-        .ok()?
-        .trim()
-        .parse::<f64>()
-        .ok()
-        .filter(|n| n.is_finite())
-        .map(|n| n.max(0.0) as u64)
 }
 
 impl MessageStream {
@@ -151,15 +139,8 @@ impl MessageStream {
         for block in blocks {
             match block {
                 Block::Event(event) => self.pending.push_back(StreamItem::Event(event)),
-                Block::Credits(charged) if self.stream_credits => {
-                    let charged = charged.unwrap_or(0);
-                    let remaining = self.before.map(|before| before.saturating_sub(charged));
-                    self.pending.push_back(StreamItem::Credits {
-                        charged: Some(charged),
-                        remaining,
-                    });
-                }
-                Block::Credits(_) => {}
+                Block::Usage(Some(usage)) => self.pending.push_back(StreamItem::Usage(usage)),
+                Block::Usage(None) => {}
             }
         }
     }
@@ -259,8 +240,8 @@ impl Gateway {
         response.text().await.ok()
     }
 
-    /// `POST /search`; errors are the model-visible texts. Returns the results and credits charged.
-    pub async fn search(&self, query: &str) -> Result<(Vec<SearchResult>, u64), String> {
+    /// `POST /search`; errors are the model-visible texts.
+    pub async fn search(&self, query: &str) -> Result<Vec<SearchResult>, String> {
         let token = self
             .token
             .as_ref()
@@ -302,11 +283,7 @@ impl Gateway {
                 401 => {
                     "Your Anysola sign-in has expired or was revoked. Run `anysola login`.".into()
                 }
-                402 => format!(
-                    "Out of Anysola credits for web search. Add credits at {}",
-                    error::BILLING_URL
-                ),
-                429 => format!("Anysola web search is rate limited: {detail}"),
+                429 => format!("Anysola web search is limited: {detail}"),
                 _ => format!("Anysola web search failed (HTTP {status}): {detail}"),
             });
         }
@@ -340,7 +317,7 @@ impl Gateway {
         }
         request = request
             .header("x-anysola-client", "opencode")
-            .header("x-anysola-credits-event", "1")
+            .header(USAGE_EVENT_HEADER, "1")
             .header("x-anysola-version", VERSION);
         request = match &self.token {
             Some(Token::Env(token)) => request.header("x-api-key", token),
@@ -366,26 +343,21 @@ impl Gateway {
                 Some("false") => Some(false),
                 _ => None,
             };
+            let limit = headers
+                .get(LIMIT_HEADER)
+                .and_then(|v| v.to_str().ok())
+                .and_then(limits::WindowId::parse);
             let body = response.text().await.unwrap_or_default();
-            return Err(ApiError::http(status, body, retry_after, should_retry));
-        }
-        let charged = header_u64(&headers, "x-credits-charged");
-        let remaining = header_u64(&headers, "x-credits-remaining");
-        let is_sse = headers
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v.contains("text/event-stream"));
-        let mut pending = std::collections::VecDeque::new();
-        let header_credits = charged.is_some() || remaining.is_some();
-        if header_credits {
-            pending.push_back(StreamItem::Credits { charged, remaining });
+            let error = ApiError::http(status, body, retry_after, should_retry);
+            return Err(match limit {
+                Some(window) => error.usage_limit(window),
+                None => error,
+            });
         }
         Ok(MessageStream {
             response,
             decoder: Decoder::default(),
-            pending,
-            before: header_u64(&headers, "x-credits-available-before"),
-            stream_credits: !header_credits && is_sse,
+            pending: std::collections::VecDeque::new(),
             done: false,
         })
     }
@@ -395,7 +367,7 @@ fn strip_v(version: &str) -> String {
     version.strip_prefix('v').unwrap_or(version).to_string()
 }
 
-fn decode_search(body: Option<Value>) -> Option<(Vec<SearchResult>, u64)> {
+fn decode_search(body: Option<Value>) -> Option<Vec<SearchResult>> {
     let body = body?;
     let results = body.get("results")?.as_array()?;
     let mut out = Vec::new();
@@ -411,10 +383,5 @@ fn decode_search(body: Option<Value>) -> Option<(Vec<SearchResult>, u64)> {
                 .map(|n| n as u64),
         });
     }
-    let credits = body
-        .get("credits")
-        .and_then(Value::as_f64)
-        .filter(|n| *n > 0.0)
-        .map_or(0, |n| n as u64);
-    Some((out, credits))
+    Some(out)
 }

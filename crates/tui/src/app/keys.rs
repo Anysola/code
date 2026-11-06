@@ -778,7 +778,7 @@ impl App {
                 self.selection = Some((at, at));
                 if self.over_account(at) {
                     self.selection = None;
-                    return self.run_command("anysola.credits", None);
+                    return self.run_command("anysola.usage", None);
                 }
                 let busy = self.state.session().is_some_and(|s| s.busy);
                 if !busy
@@ -1074,14 +1074,14 @@ impl App {
             && x == crate::view::pane_width(&self.state)
     }
 
-    /// Whether `at` falls on the credit status line in the last frame.
+    /// Whether `at` falls on the usage status line in the last frame.
     fn over_status(&self, at: (u16, u16)) -> bool {
         self.state
             .status_text()
             .is_some_and(|text| over_text(&self.last, at, &text))
     }
 
-    /// The status line or the home plan line: both open `/credits` on click.
+    /// The status line or the home plan line: both open `/usage` on click.
     fn over_account(&self, at: (u16, u16)) -> bool {
         let plan = (self.state.route == Route::Home)
             .then(|| {
@@ -1317,10 +1317,10 @@ mod tests {
     #[test]
     fn over_text_hits_only_the_drawn_cells() {
         let mut buffer = Buffer::empty(Rect::new(0, 0, 30, 2));
-        buffer.set_string(10, 1, "731 credits", ratatui::style::Style::new());
-        assert!(super::over_text(&buffer, (10, 1), "731 credits"));
-        assert!(super::over_text(&buffer, (20, 1), "731 credits"));
-        assert!(!super::over_text(&buffer, (21, 1), "731 credits"));
-        assert!(!super::over_text(&buffer, (12, 0), "731 credits"));
+        buffer.set_string(10, 1, "5h 42% · we", ratatui::style::Style::new());
+        assert!(super::over_text(&buffer, (10, 1), "5h 42% · we"));
+        assert!(super::over_text(&buffer, (20, 1), "5h 42% · we"));
+        assert!(!super::over_text(&buffer, (21, 1), "5h 42% · we"));
+        assert!(!super::over_text(&buffer, (12, 0), "5h 42% · we"));
     }
 }

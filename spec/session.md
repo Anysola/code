@@ -20,7 +20,7 @@ Verbatim artifacts: `spec/verbatim/session/` — see the index at the end of thi
   `${ANYSOLA_API_URL or https://api.anysola.com}/v1/code`; POST `/v1/code/messages` (non-`anthropic` provider id ⇒ no
   `?beta=true` suffix). `core/src/plugin/provider/anysola.ts:192-206`, `ai/src/protocols/anthropic-messages.ts:1691-1702`.
 - [0.5.1] Always `stream: true`; SSE parse of standard Anthropic events plus the gateway's extra
-  `anysola_credits` event (gateway area). `anthropic-messages.ts:1060-1131`.
+  `anysola_credits` event (gateway area; `[1.0]` `anysola_usage`, `spec/protocol.md §2.2`). `anthropic-messages.ts:1060-1131`.
 - [0.5.1] Headers on every model request (captured, `requests/primary-hello-sonnet.json`):
   - `anthropic-version: 2023-06-01` (route default).
   - `anthropic-beta`: always `interleaved-thinking-2025-05-14`; plus `thinking-binding-controls-2026-08-01` whenever the
@@ -31,7 +31,7 @@ Verbatim artifacts: `spec/verbatim/session/` — see the index at the end of thi
     `anthropic-messages.ts:1667-1689`.
   - `x-api-key: <token>` when the credential is a key (the `ANYSOLA_TOKEN` env method); a device-login OAuth credential
     is sent as `Authorization: Bearer` instead (gateway area; code, not captured). `ai/src/providers/anthropic-compatible.ts:34-37,65-82`.
-  - `x-anysola-client: opencode`, `x-anysola-version: 0.5.1`, `x-anysola-credits-event: 1`
+  - `x-anysola-client: opencode`, `x-anysola-version: 0.5.1`, `x-anysola-credits-event: 1` (`[1.0]` `x-anysola-usage-event: 1`)
     (`plugin/provider/anysola.ts:199-204`); `x-anysola-variant: economy` only when the economy variant is selected
     (comes from the variant's `headers` in `/v1/code/config`).
   - Session headers from `core/src/session/model-request.ts:291-305`: `x-opencode-session-id: <ses_…>`,
@@ -229,7 +229,8 @@ edit them in plugin registration order (`core/src/plugin/internal.ts:225-265`). 
   InvalidRequest; else Unknown. `x-should-retry: true|false` header overrides.
 - [0.5.1] Retryable: RateLimit, ProviderInternal (incl. 529 overloaded), transport failures not rejected,
   incomplete streams, Unknown. Not retryable: auth, quota (402 = out of credits), content policy, invalid request,
-  timeout-class. `provider-error.ts:89-121`.
+  timeout-class. `provider-error.ts:89-121`. `[1.0]` Also never retried: a 429 with `x-anysola-limit` (a full usage
+  window, session error `provider.usage-limit`, `spec/protocol.md §2.4`).
 - [0.5.1] Schedule: exponential from 2 s, each gap capped at 10 s, max 10 retries, jittered; `retry-after` honoured as a
   minimum (capped 15 min); at most 3 transport-timeout retries. `core/src/model-retry.ts:89-138`.
 - [0.5.1] Each scheduled retry publishes `session.retry.scheduled {attempt, at, error}` (TUI shows a retry notice);

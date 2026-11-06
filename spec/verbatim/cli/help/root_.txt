@@ -27,8 +27,9 @@ GLOBAL FLAGS
 SUBCOMMANDS
   login              Sign in with your Anysola account
   logout             Revoke the Anysola token and remove it from this machine
-  status             Show your Anysola plan and credits
-  usage              Show Anysola usage: totals, by day and by model
+  status             Show your Anysola plan and usage limits
+  usage              Show Anysola usage: limits, requests by day and by model
+  limits             Show your 5-hour and weekly usage limits and banked resets
   devices            List the devices signed in to your Anysola account
   update, upgrade    Update Anysola Code the way it was installed (install script or npm)
   uninstall          Uninstall Anysola Code, keeping session data, configuration, and state

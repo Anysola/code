@@ -633,10 +633,7 @@ pub(crate) fn unattended(
         limits: selection.sources.config.tool_output(),
         locks: shared.locks.clone(),
         notifier: shared.notifier.clone(),
-        web_search: Arc::new(crate::search::GatewaySearch::new(
-            shared.gateway.clone(),
-            shared.credits.clone(),
-        )),
+        web_search: Arc::new(crate::search::GatewaySearch::new(shared.gateway.clone())),
         host: shared.clone(),
         session: Arc::new(crate::session::host::Host {
             shared: shared.clone(),

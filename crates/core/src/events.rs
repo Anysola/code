@@ -7,13 +7,17 @@ use crate::session::message::Tokens;
 use crate::tool::ToolContent;
 use crate::tool::question::Question;
 
+/// A session's share of the account's 5-hour window, in percent.
 #[derive(Debug, Clone, PartialEq)]
-pub struct CreditsSnapshot {
+pub struct UsageSnapshot {
     pub session_id: String,
-    pub remaining: Option<u64>,
-    pub turn: u64,
-    pub total: u64,
+    /// The last usage event this process saw for the session: both windows after it.
+    pub latest: Option<crate::gateway::limits::UsageEvent>,
+    /// This turn, so far.
+    pub turn: f64,
+    pub total: f64,
     pub turns: u64,
+    /// Percent of the 5-hour window, 1 to 100.
     pub budget: Option<u64>,
 }
 
@@ -21,7 +25,7 @@ pub struct CreditsSnapshot {
 pub enum InterruptReason {
     /// The user (or the run's SIGINT) interrupted.
     User,
-    /// The session reached its credit budget.
+    /// The session reached its budget (a share of the 5-hour window).
     Budget,
     /// The user declined a tool call.
     Declined,
@@ -152,7 +156,7 @@ pub enum Event {
         request_id: String,
         questions: Vec<Question>,
     },
-    Credits(CreditsSnapshot),
+    Usage(UsageSnapshot),
     TitleChanged {
         session_id: String,
         title: String,
@@ -243,7 +247,7 @@ impl Event {
             | Event::CompactionStarted { session_id, .. }
             | Event::CompactionEnded { session_id, .. }
             | Event::CompactionFailed { session_id, .. } => session_id,
-            Event::Credits(snapshot) => &snapshot.session_id,
+            Event::Usage(snapshot) => &snapshot.session_id,
             Event::FormAsked { .. } | Event::McpStatusChanged { .. } => crate::mcp::GLOBAL,
         }
     }

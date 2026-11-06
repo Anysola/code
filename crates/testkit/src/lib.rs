@@ -7,8 +7,8 @@ mod legacy;
 pub mod sse;
 
 pub use gateway::{
-    DEVICE_TOKEN, DevicePoll, FakeGateway, Recorded, Reply, Script, default_config, default_tokens,
-    default_usage,
+    DEVICE_TOKEN, DevicePoll, FakeGateway, Recorded, Reply, Script, default_config, default_me,
+    default_tokens, default_usage, five_hour_reset, limit_reply, limits, weekly_reset,
 };
 pub use home::{Output, TestHome};
 pub use legacy::Legacy;

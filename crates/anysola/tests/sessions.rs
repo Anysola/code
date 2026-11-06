@@ -21,7 +21,6 @@ fn answer(request: &Recorded, _: usize) -> Reply {
     };
     Reply::Sse {
         body: Stream::new().text(text).finish(&model, Some(1)),
-        before: Some(100),
     }
 }
 

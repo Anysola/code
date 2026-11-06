@@ -46,4 +46,4 @@
   ┃
   ┃  Build · Claude Sonnet 5.5
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-  ~/my-app:master                                  728 credits · this turn 12 · session 12  1.3K (0%)  ctrl+p commands
+  ~/my-app:master                                                                   5h 42%  1.3K (0%)  ctrl+p commands

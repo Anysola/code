@@ -1,4 +1,4 @@
-# Anysola Code client ↔ gateway contract (parity inventory, 0.5.1)
+# Anysola Code client ↔ gateway contract (parity inventory, 0.5.1; usage limits `[1.0]`)
 
 Scope: everything the client sends to or reads from `https://api.anysola.com/v1/code/*` (and the few other Anysola
 URLs it opens). Rust rewrite must match the client side; the gateway stays.
@@ -6,7 +6,7 @@ URLs it opens). Rust rewrite must match the client side; the gateway stays.
 Paths: **C** = `/home/ubuntu/anysola-code/build/fork/` (branch `anysola`, 0.5.1). **G** = `/home/ubuntu/web/anysola/services/cloud/src/` (gateway, PM2 `code-index.ts`, :3520). **K** = `/home/ubuntu/web/anysola/packages/contracts/src/code/` (shared contracts).
 Verbatim copies: `spec/verbatim/protocol/` (`client/`, `contracts/`, `gateway/`, `captures/requests-0.5.1.jsonl` (wire captures from the real 0.5.1 binary), `captures/sse-gateway-examples.txt`, `user-strings.txt` (every user-facing string with file:line)).
 
-Status tags: `[0.5.1]` = live behaviour to reproduce. `[dead]` = code path that never fires against the real gateway. `[bug]` = 0.5.1 behaviour that looks wrong. Reproduce it or fix it deliberately, and say which.
+Status tags: `[1.0]` = the 1.0 protocol, which replaces the 0.5.1 text it sits next to (usage limits instead of credits; source of truth: K `client-api.ts` and `packages/contracts/src/account/usage-limits-core.ts`, minimum client version 1.0.0, no credit compatibility). `[0.5.1]` = live behaviour to reproduce. `[dead]` = code path that never fires against the real gateway. `[bug]` = 0.5.1 behaviour that looks wrong. Reproduce it or fix it deliberately, and say which.
 
 Method: source reading on both sides plus runs of the shipped binary `rust/testing/bin/anysola-0.5.1` against a logging copy of the fake gateway (headers below are **observed**, not inferred).
 
@@ -100,36 +100,45 @@ Timeout 15 s (`AbortSignal.timeout(15_000)`). No `x-anysola-client`. Body is par
    "claude-opus-5-5":{"name":"Claude Opus 5.5","description":"Most capable","limit":{"context":1000000,"output":32000}, …}}}}}
 ```
   - `auto` is first and present only while Auto is on and both of its models are open to the plan. Economy variants appear only on `economy.models` targets. `limit.output = caps.maxOutputTokens` (32000 default). Contexts: haiku 200K, others 1M. `model`/`small_model`/`agents` are omitted if the plan has no models.
-  - **`credits_per_turn_estimate`**: the client reads it (anysola-account.ts:251-261, picker `~N credit(s)/turn`), but the real gateway **never sends it** (only `rust/testing/fake-*.mjs` do). `[dead on gateway]`
+  - `[1.0]` `credits_per_turn_estimate` is gone; the picker shows only the note. 0.5.1: **`credits_per_turn_estimate`**: the client reads it (anysola-account.ts:251-261, picker `~N credit(s)/turn`), but the real gateway **never sends it** (only `rust/testing/fake-*.mjs` do). `[dead on gateway]`
   - `description` → picker note (trimmed, ≤160 chars, anysola-account.ts:239-249). `[0.5.1]`
   - `small_model` is the legacy key. V2 reads `agents.title.model`. `[0.5.1]`
   - `settings.apiKey:"{env:ANYSOLA_TOKEN}"` resolves to the env token. When set, model calls carry `x-api-key` (§1.7).
 
-### 1.4 `GET /me` `[0.5.1]`
-- Client: proxied by RPC `anysola.account.me` (anysola-account.ts:135) for the TUI, direct in `anysola status` (C status.ts:50). TUI refresh: on mount, on `server.connected`, every **5 min**, and **1.5 s after each `credits` event** (debounced) (anysola.tsx:202-248). `/credits` dialog refreshes on open.
-- Server G app.ts:120-153 → shape:
+### 1.4 `GET /me` `[1.0]`
+- Client: the TUI on start, on reconnect, every 5 min and **1.5 s after each usage event** (debounced); `anysola status`.
+- Shape (`CodeMeResponse`): `access` is null when the plan can't use Code; `event` is an admin promotion (`unlimited` meters nothing, `multiplier` counts each request at a multiple).
 ```json
 {"plan":"free|pro|team","access":"paid|free|null",
- "credits":{"available":731,"renewsAt":"<ISO cycle end>"} | null,      // paid only
- "lowBalance":false,                                                    // paid && available < caps.lowBalanceCredits (50)
- "freeQuota":{"usedUsd":0.01,"dailyUsd":0.25,"turns":3,"dailyTurns":30,"resetsAt":"<ISO>"} | null,  // free only
- "usageToday":{"requests":3,"credits":9},
+ "limits":<UsageLimitsWire, §1.5a>,
+ "usageToday":{"requests":3},
  "event":{"mode":"unlimited|multiplier","label":"…","until":"<ISO>|null"} | null}
 ```
-- **[bug]** The client reads `freeQuota.usedTurns` (TUI store.ts:15,85, anysola.tsx:429, status.ts:28) but `/me` sends `turns`, so "used" always shows 0. `/usage.freeQuota` uses `usedTurns` (K client-api.ts:170-176).
-- `[dead]` status.ts reads `email`, `user.email`, `plan.name`, numeric `credits`, `freeTier`, `turnsUsed`, `turnsLimit`, `defaultModel`, `model`. `/me` sends none of these.
+- 0.5.1 sent `credits`, `lowBalance` and `freeQuota` instead of `limits`; 1.0 reads none of them.
 
-### 1.5 `GET /usage?days=7|30` `[0.5.1]`
-- Client: RPC `usage({days})` sends `days=30` only when 30, else 7 (anysola-account.ts:136). CLI `--days 7|30` (default 7), `--format default|json` (json prints the body pretty-printed with 2 spaces).
-- Server G app.ts:155-187, usage.ts: `days` `^\d{1,6}$`, ≥1, capped at 90. Else 400 "days must be a whole number from 1 to 90." Default 30 when absent.
+### 1.5 `GET /usage?days=7|30` `[1.0]`
+- Client: TUI `/usage` (key `t` toggles 7/30), CLI `anysola usage --days 7|30` (default 7), `--format default|json` (json prints the body pretty-printed with 2 spaces).
+- Server: `days` 1..90, default 30. Days are UTC. Usage is shown as a share of the limits, never as money.
 ```json
-{"days":7,"totals":{"requests":3,"credits":9,"costUsd":0.0512,"cacheHitRate":0.734},
- "byDay":[{"date":"2026-11-04","requests":3,"credits":9}],          // every UTC day of the window, oldest first
- "byModel":[{"model":"claude-sonnet-5-5","requests":3,"credits":9}],  // searches as model "web_search"; sorted credits desc, requests desc, model
- "today":{"requests":3,"credits":9},"freeQuota":null,"plan":"team",
- "creditsAvailable":731,"renewsAt":"<ISO>"}                          // both null unless paid
+{"days":7,"totals":{"requests":42,"cacheHitRate":0.734},
+ "byDay":[{"date":"2026-11-04","requests":3}],          // every UTC day of the window, oldest first
+ "byModel":[{"model":"claude-sonnet-5-5","requests":3}],
+ "today":{"requests":3},"plan":"team",
+ "limits":<UsageLimitsWire>}
 ```
-- `cacheHitRate` = `cache_read / (input + cache_write_5m + cache_write_1h + cache_read)`, rounded to 3 places, null when there are no prompt tokens (G usage.ts:56-65). The client shows `Cache hit rate ${Math.round(rate*100)}%`. `costUsd` = micros/1e6 rounded to 4 places.
+- `cacheHitRate` = prompt tokens read from the cache over all prompt tokens, 0 to 1, null with none. The client shows `Cache hit rate ${round(rate*100)}%`.
+- Display (`anysola usage`, `/usage`): `Limits`, one line per window `  5-hour  ████░░░░░░   42%  resets in 2 h` (10-cell bar, percent right-aligned, `resets in` only while the window runs), `  Banked resets  2 · next expires Dec 1, 12:00 AM` (or `none`), then `Totals` (requests, cache hit rate), `By day`, `By model` with a `requests` column. The TUI adds `  This session   N turns · X% of the 5-hour window` under the bank line.
+
+### 1.5a `GET /limits`, `POST /limits/redeem` `[1.0]`
+- `UsageLimitsWire` (`usageLimitsWireSchema`): one meter per account shared by Chat and Code, two windows. A window starts with the first request after the previous one ended and lasts 5 hours (`five_hour`) or 7 days (`weekly`). Percent is 0 to 100 rounded down; a request already running is never cut.
+```json
+{"plan":"free|pro|team","allowed":true,"blockedBy":"five_hour|weekly|null",
+ "fiveHour":{"percent":42,"resetsAt":"<ISO>|null"},      // null while the window hasn't started
+ "weekly":{"percent":18,"resetsAt":"<ISO>|null"},
+ "bank":[{"id":"…","expiresAt":"<ISO>","scope":"five_hour|both"}]}   // banked resets, at most 3 by default
+```
+- `POST /limits/redeem` spends the banked reset that expires first and answers the new `UsageLimitsWire`; 409 `invalid_request_error` when the bank is empty. `scope: both` also clears the weekly window.
+- Client: `anysola limits [--format json]` prints the windows (as §1.5), `  5-hour limit reached. Resets in 2 h.` when blocked, and `Banked resets: N` with one `  5-hour[ and weekly] · expires <date>` line each (`Banked resets: none` when empty). `anysola limits redeem` prints `Banked reset used.`, a blank line and the new limits; an empty bank prints `No banked resets to spend.` on stderr, exit 1. The TUI polls `/limits` after a refused turn (§2.4) and `run --use-banked-reset` before the turn (§4.3).
 
 ### 1.6 `GET /tokens`, `POST /tokens/:id/revoke`, `POST /tokens/self/revoke` `[0.5.1]`
 - `GET /tokens` (G app.ts:243-261) → `{"tokens":[{"id":"<uuid>","name":"<deviceName>","client":"anysola-code/0.5.1","kind":"device|ci","createdAt":"…","lastUsedAt":"…|null","expiresAt":"…|null","current":true}]}`. `client` is rewritten to `anysola-code/<x-anysola-version>` whenever a request carries a valid version header (G tokens.ts:35-43,103-113).
@@ -144,7 +153,7 @@ user-agent: opencode/latest/2.2.5+anysola.0.5.1/cli     (App.useragent: opencode
 anthropic-version: 2023-06-01
 anthropic-beta: interleaved-thinking-2025-05-14,thinking-binding-controls-2026-08-01
 x-anysola-client: opencode
-x-anysola-credits-event: 1
+x-anysola-usage-event: 1                                 ([1.0]; 0.5.1 sent x-anysola-credits-event: 1)
 x-anysola-version: 0.5.1
 x-anysola-variant: economy                               (only with the economy variant: from config variants[].headers)
 authorization: Bearer asc_…    ← token from `anysola login` (OAuth credential)
@@ -164,8 +173,8 @@ accept: */*
 
 ### 1.8 `POST /search`: web search `[0.5.1]`
 - Client: C websearch/anysola.ts:76-129. Default and only websearch provider (`"websearch": false` in config disables the tool). Body `{"query":<string>}`. Response limit 1 MiB ("…returned too much data"), timeout 30 s ("Anysola web search timed out"), other transport failures → "Cannot reach <api>". Non-2xx → `failure()` (anysola.ts:42-53): 401/402/429/other texts in user-strings.txt.
-- 200 `{"results":[{"url","title?","content?","published?":ms}],"credits":<int>}` (K search-core.ts:48-59). The client maps results to `{url,title?,content?,time:{published?}}`. A decode failure → "Anysola web search returned an unexpected response".
-- Credits: `credits > 0` → `AnysolaSearchCredits.note(query, credits)` (FIFO per query string, map capped at 64 queries). Then the websearch tool `execute.after` (completed) `take(query)` → `record(sessionID, credits, remaining=undefined)` (anysola-account.ts:214-221). Search credits therefore count toward the turn/session total but never update `remaining`.
+- 200 `{"results":[{"url","title?","content?","published?":ms}]}` (K search-core.ts:48-59). The client maps results to `{url,title?,content?,time:{published?}}`. A decode failure → "Anysola web search returned an unexpected response".
+- `[1.0]` No `credits` field and no search bookkeeping: what a search takes of the windows shows in the next usage event or `/limits` poll. A 429 reads "Anysola web search is limited: <message>"; there is no 402 text. (0.5.1 added `credits` to the session's turn/session totals.)
 - Server: G search.ts. Same `gate()` as /messages with +2 extra concurrency. 403 when `settings.search.enabled` is false ("Web search is not available on Anysola Code right now."). Body ≤4 KB, query trimmed 1..500. Paid reserve `searchWorstCaseReserve`. Haiku 5.5 runs `web_search_20250305` with `max_uses` 1..2, non-stream. Response headers `x-credits-charged`, `x-anysola-model: claude-haiku-5-5`, `cache-control: no-store`. Free tier: credits 0, counts toward daily USD but not turns.
 
 ### 1.9 `GET /version` `[0.5.1]`
@@ -198,31 +207,28 @@ No traffic to opencode.ai or models.dev (commits `7f00c5395b`, `8ee8951f4d`). Th
 
 ---
 
-## 2. Responses, SSE, credits, errors, retries
+## 2. Responses, SSE, usage, errors, retries
 
 ### 2.1 Success headers (G proxy.ts:384-388, 421-424, 459-482)
 | | stream | non-stream |
 |---|---|---|
 | `x-request-id`, `x-anysola-model` (model actually run), `x-upstream-request-id?` | yes | yes |
-| `x-credits-available-before` (paid only) | yes | yes |
-| `x-credits-charged` | **no** (SSE event instead) | yes |
-| `x-credits-remaining` | **never** | **never** |
+| `x-credits-*` | `[1.0]` gone (0.5.1: `x-credits-available-before`, `x-credits-charged` non-stream) | gone |
 | `cache-control: no-cache, no-transform`, `x-accel-buffering: no` | yes | no |
 
 ### 2.2 SSE (exact bytes in `verbatim/protocol/captures/sse-gateway-examples.txt`)
 - A pure pass-through of Anthropic's SSE, byte for byte (proxy.ts:748-751). The gateway adds:
   1. `: keepalive\n\n` after 15 s without sending, only at an event boundary (runtime.ts:28, proxy.ts:716-723).
-  2. `event: anysola_credits\ndata: {"type":"anysola_credits","charged":N}\n\n` after upstream EOF, only if the request had `x-anysola-credits-event: 1` **exactly**, upstream sent `message_stop`, and the stream ended at an event boundary (proxy.ts:204-210, 532, 736-737). `charged` is an integer, 0 on the free tier.
-  3. `event: error\ndata: {"type":"error","error":{"type":"api_error","message":"The model's stream was interrupted."}}` on upstream idle (300 s) or cut, or "Anysola Code is restarting. Try again in a moment." on shutdown, at an event boundary (proxy.ts:641-651, 700-708, 752-760). No credits event then.
-- Client strip (C anysola-credits-stream.ts): buffer text, split on `\n\n`, remove `\r` before testing. A block starting `event: anysola_credits` is dropped, its first `data:` line is JSON-parsed, and `charged` (finite ≥0) is reported. Everything else is re-emitted as received. At flush, the remainder is emitted unless it is the credits event. Installed only when the response is `ok`, has a body, has neither `x-credits-charged` nor `x-credits-remaining`, and `content-type` includes `text/event-stream` (anysola-account.ts:174-195).
+  2. `[1.0]` `event: anysola_usage\ndata: {"type":"anysola_usage","fiveHourPercentUsed":<float>,"fiveHour":{"percent":<int>,"resetsAt":<ISO|null>},"weekly":{…}}\n\n` after upstream EOF, only if the request had `x-anysola-usage-event: 1` **exactly**, upstream sent `message_stop`, and the stream ended at an event boundary (same rules as 0.5.1's `anysola_credits` event, which it replaces). `fiveHourPercentUsed` is what this request took of the 5-hour window, a float so a session budget can add small turns up; the windows are the account's after it.
+  3. `event: error\ndata: {"type":"error","error":{"type":"api_error","message":"The model's stream was interrupted."}}` on upstream idle (300 s) or cut, or "Anysola Code is restarting. Try again in a moment." on shutdown, at an event boundary (proxy.ts:641-651, 700-708, 752-760). No usage event then.
+- `[1.0]` Client strip: buffer text, split on `\n\n`, remove `\r` before testing. A block starting `event: anysola_usage` is dropped, its first `data:` line is JSON-parsed, and a usage event with a finite `fiveHourPercentUsed ≥ 0` is reported (a malformed one is dropped silently). Everything else is passed to the SSE parser as received, including the trailing partial block at end of stream. (0.5.1 stripped `event: anysola_credits` the same way.)
 
-### 2.3 Credits accounting in the client (C anysola-account.ts:157-235) `[0.5.1]`
-- State per session: `{remaining:null|n, turn, total, turns, open, budget}`. One process-wide map. Persisted in KV `anysola:session:<sessionID>` = `{total, turns, budget}` (on each charge, on idle with turn>0, on budget change). Fresh session budget = KV `anysola:budget:default` (a positive integer) or null.
-- `record(sessionID, charged, remaining)`: if `!open`: `turn = 0`. `open = true`. `turn += charged ?? 0`. `total += charged ?? 0`. `remaining` updated if defined. Save if charged≠0. Then emit RPC event `credits` with the snapshot `{sessionID, remaining, turn, total, turns, budget}`.
-- Header path: `x-credits-charged` and/or `x-credits-remaining` parsed with `Number()` (empty → undefined) → `record(charged, remaining)`. On the real gateway this fires only for non-stream answers, and `remaining` then stays as it was (no remaining header). `x-credits-remaining` reading is `[dead on gateway]`.
-- Stream path: on the credits event → `record(charged, before === undefined ? undefined : max(0, before - charged))` with `before = x-credits-available-before`. Concurrent requests (main + title) each report `before - own charge`, so the **last finished request wins** (observed "· 731 left" after a 1-credit turn when the 0-credit title finished last). `[0.5.1]`
-- Turn end: hook `experimental.idle` → if open: `open = false`. If `turn > 0` then `turns += 1` and save. Emit.
-- Search credits: §1.8.
+### 2.3 Usage accounting in the client `[1.0]`
+- State per session: `{latest, turn, total, turns, open, budget}`; `turn`/`total` are percent of the 5-hour window (floats). Persisted in KV `anysola:usage:<sessionID>` = `{used, turns, budget}` (on each usage event with `fiveHourPercentUsed > 0`, on idle with turn > 0, on budget change). A fresh session's budget = KV `anysola:budget:five-hour` (whole percent 1..100) or none.
+- `record(sessionID, event)`: if `!open`: `turn = 0`. `open = true`. `turn += fiveHourPercentUsed`, `total += fiveHourPercentUsed`, `latest = event`. Emit the snapshot to the front ends, which also take the event's windows as the account's (the bank stays) and refresh `/me` 1.5 s later.
+- Turn end (session idle): if open: `open = false`; if `turn > 0` then `turns += 1` and save. Emit.
+- Every model call of the session counts: the main loop, titles, compaction, subagents (their own sessions).
+- 0.5.1 credit state (`anysola:session:<id>` = `{total, turns, budget}` in credits, `anysola:budget:default`) is neither read nor imported: a credit count is no percentage, so credit budgets are dropped, not converted.
 
 ### 2.4 Error envelope and client display
 Gateway errors: `{"type":"error","error":{"type":T,"message":M},"request_id":"…"}` + `x-request-id`, plus `x-should-retry: false` when final (G admission.ts:46-61, K wire-core.ts:18-51). Types → status: invalid_request_error 400, authentication_error 401, billing_error 402, permission_error 403, not_found_error 404, request_too_large 413, rate_limit_error 429, api_error 500 (also 499/503/504), overloaded_error 529.
@@ -231,11 +237,12 @@ Gateway errors: `{"type":"error","error":{"type":T,"message":M},"request_id":"�
 |---|---|---|---|
 | 400 | bad anthropic-version, disallowed beta, bad JSON, field not allowed, server tool, URL document, non-stream max_tokens > 4096 | yes | InvalidRequest, shown, not retried |
 | 401 | no/malformed/unknown/expired token | yes | Authentication. `anysola run` prints `Error: <message>` (observed) |
-| 402 | out of credits / too costly / free daily limit | yes | **body rewritten** to `<message>\nUpgrade: https://account.anysola.com/billing` (anysola-account.ts:197-208). Messages that already end in the URL show it twice (observed) `[0.5.1]` |
+| 402 | `[1.0]` not sent for usage (0.5.1: out of credits, body rewritten with the billing URL) | yes | Quota by classification, shown as sent; no rewrite |
 | 403 | client not allowed, plan/user, region, paused, model not in plan | yes | Authentication, not retried |
 | 404 | unknown model `model: X` | yes | |
 | 413 | body > maxBodyBytes (10 MiB) | yes | payload-too-large |
 | 429 | per-user concurrency (`retry-after: 2`), upstream 429 ("busy upstream", upstream retry-after) | no | RateLimit → retried |
+| 429 + `x-anysola-limit: five_hour\|weekly` | `[1.0]` a full usage window (`limitMessage`: "5-hour limit reached. Resets in 2 h. You have 1 banked reset."), type `rate_limit_error`, `x-should-retry: false` | yes | UsageLimit, session error kind `provider.usage-limit`, **never retried** (whatever the classification). TUI: the message as a toast, or, when `/limits` shows a non-empty bank, a dialog **Use a banked reset?** (§4.6). `run`: `Error: <message>`, exit 1, or one redeem with `--use-banked-reset` (§4.3) |
 | 499 | client closed | no | |
 | 503 | restarting/draining, account unavailable, upstream unreachable, upstream 401/402/403 (final), missing key (final) | mixed | ProviderInternal → retried unless final |
 | 504 | upstream header timeout (stream 60 s / non-stream 95 s) | no | retried |
@@ -247,7 +254,7 @@ Gateway wording avoids "usage limit"/"quota" on 429 so OpenCode keeps retrying (
 C core/src/model-retry.ts, C ai/src/provider-error.ts:87-125.
 - `x-should-retry: "true"`/`"false"` overrides every other rule.
 - Retryable: RateLimit, ProviderInternal (≥500, 408, 409), Transport (unless delivery rejected / accepted-but-not-read), incomplete stream, UnknownProvider.
-- Not retryable: Authentication (401/403), QuotaExceeded (402, `billing_error`), InvalidRequest (other 4xx), ContentPolicy.
+- Not retryable: Authentication (401/403), QuotaExceeded (402, `billing_error`), InvalidRequest (other 4xx), ContentPolicy, and `[1.0]` UsageLimit (429 with `x-anysola-limit`).
 - Schedule: exponential from 2 s, each gap capped at 10 s, at most 10 retries, jittered. Delay = max(schedule, retry-after) with retry-after capped at 15 min (RateLimit/ProviderInternal only). Timeouts: at most 3 retries.
 - One-shot calls (title etc.) retry only "not run" cases (429, 503/529, not-sent transport), at most 3.
 - Gateway side: retries upstream once, and only on ECONNREFUSED/ENOTFOUND/EAI_AGAIN (proxy.ts:48, 359-367).
@@ -273,8 +280,8 @@ Order for `/messages` and `/search` (G admission.ts:139-220 `gate`, then proxy.t
 11. Body (K request-core.ts:136-253): body ≤ `caps.maxBodyBytes` (10 MiB, checked by content-length and while streaming). Must be a JSON object with non-empty `model` string, `max_tokens` a positive int, and a `messages` array. Allowed top-level keys: `model messages system max_tokens stream tools tool_choice thinking output_config metadata stop_sequences cache_control context_management`. `temperature/top_p/top_k` are dropped silently. Anything else → 400 (`speed` → "Fast mode is not available on Anysola Code."). Tools: only custom (no `type` / `custom`), `bash_*`, `text_editor_*`. A document with `source.type:"url"` → 400.
 12. Model: `auto` (Auto on and open to the plan), `default`, `small`, admin alias, or an allowlisted enabled id open to the plan → else 404 `model: X` / 403 "X is not included in your Anysola plan.". Auto picks per turn: light model if every real user message is short (≤500 chars, no code block, no attachment, no edit/plan words) and the prompt up to the turn anchor is ≤ 32K tokens estimated as bytes/4. Otherwise heavy. The move is one-way within a session (K auto-core.ts). **A Rust client's system prompt and tool sizes shift this threshold**: OpenCode's are about 44 KB.
 13. `max_tokens` clamped to `caps.maxOutputTokens` (32000). Non-stream with clamped > 4096 → 400. `metadata.user_id` replaced by a salted hash. Economy (`x-anysola-variant: economy`, economy on, target listed): `output_config.effort` set or capped to `economy.effort` (low), and every `role:"system"` message's `output_config.effort` capped too.
-14. Billing admission (admission.ts:261-319). Paid: free = available − reserved in flight − owed. ≤0 → 402 "You've used this cycle's Anysola credits. They renew on YYYY-MM-DD. https://account.anysola.com/billing". free < worst-case reserve → 402 "This request may cost up to N credits and you have M. …". Free tier: daily USD / daily turns → 402 "Daily free limit reached. …".
-15. Charge: `credits = max(1, ceil(round(costMicros × markup × eventMultiplier) / round(creditUsd × 1e6)))` when cost > 0, else 0 (K metering-core.ts:180-187). Settled after the answer. An aborted stream after `message_start` is charged on an estimate. An upstream failure is not charged.
+14. `[1.0]` Usage admission: a request is let in while both windows of the account's meter are under their plan's limit; otherwise 429 `rate_limit_error` + `x-should-retry: false` + `x-anysola-limit` with `limitMessage` (§2.4). 0.5.1 billing admission (admission.ts:261-319): Paid: free = available − reserved in flight − owed. ≤0 → 402 "You've used this cycle's Anysola credits. They renew on YYYY-MM-DD. https://account.anysola.com/billing". free < worst-case reserve → 402 "This request may cost up to N credits and you have M. …". Free tier: daily USD / daily turns → 402 "Daily free limit reached. …".
+15. `[1.0]` Each finished request's model cost is added to both windows (percentages only reach the client). 0.5.1 charge: `credits = max(1, ceil(round(costMicros × markup × eventMultiplier) / round(creditUsd × 1e6)))` when cost > 0, else 0 (K metering-core.ts:180-187). Settled after the answer. An aborted stream after `message_start` is charged on an estimate. An upstream failure is not charged.
 
 The `/config, /me, /usage, /tokens*` gate (`authenticate`, G app.ts:58-72) refuses **only** Claude Code marks and bad tokens. UA and `x-anysola-client` are not checked there. `/version` and `/device/*` are unauthenticated.
 
@@ -286,39 +293,43 @@ The `/config, /me, /usage, /tokens*` gate (`authenticate`, G app.ts:58-72) refus
 - Exactly one token header: `authorization: Bearer asc_…` (or `x-api-key` for the env token, as 0.5.1 does).
 - `x-anysola-version: <semver>` so Admin's versions panel stays right (optional to pass).
 
-**Recommendation only (server change):** if the Rust client wants its own identity, it can keep the `opencode/` UA prefix (no change needed), or an admin can add its prefix (e.g. `anysola-code/`) to `allowedUserAgents` in Admin > Operations > Code before release. Also confirm `mid-conversation-output-config-2026-07-01` is in `allowedBetas` on live. Optionally have the gateway send `x-credits-remaining`/`credits_per_turn_estimate` if those client features should work.
+**Recommendation only (server change):** if the Rust client wants its own identity, it can keep the `opencode/` UA prefix (no change needed), or an admin can add its prefix (e.g. `anysola-code/`) to `allowedUserAgents` in Admin > Operations > Code before release. Also confirm `mid-conversation-output-config-2026-07-01` is in `allowedBetas` on live. (The `x-credits-remaining`/`credits_per_turn_estimate` note is moot in 1.0: both are gone.)
 
 ---
 
 ## 4. Client-side Anysola features (exact logic)
 
-### 4.1 Status line (TUI, `prompt.footer.status`) `[0.5.1]`
-C tui/src/anysola/store.ts:50-96, anysola.tsx:261-299.
-- `remaining(sessionID)`: this session's `remaining`, else the first session (in the map) with a numeric `remaining`, else `/me.credits.available`.
-- Text: free tier with `freeQuota` → `today ${usedTurns??0}/${dailyTurns??0}` ([bug] §1.4). Otherwise, if remaining is unknown, nothing is shown. Else `"${n} credits"` + (turn>0: `" · this turn ${turn}"`) + (total>0 or budget set: `" · session ${total}[/${budget}]"`). Hover appends `" · renews ${formatShortDate(credits.renewsAt) || formatDate(freeQuota.resetsAt)}"`. Click opens /credits.
-- Warning color when `low` or `overBudget`. `low` = not free AND (`/me.lowBalance` OR remaining < **100**). Server `lowBalance` = available < 50 by default.
-- On session open the stored state is loaded via RPC `session` (KV totals survive restarts; `remaining` does not).
+### 4.1 Status line (TUI, `prompt.footer.status`) `[1.0]`
+- The account's windows: `/me.limits`, with the windows of each later usage event (the bank stays until the next `/me`, `/limits` or `/usage`). A window whose `resetsAt` has passed reads as 0%.
+- Text: `5h ${fiveHour}%`, then `· week ${weekly}%` when the weekly window is the fuller one or at 80% or more, then `· session ${used}/${budget}%` under a session budget (`used` with one decimal under 10%, e.g. `0.4%`). Hover appends `· resets in ${humanDuration}` (the 5-hour window). Nothing before `/me` or a usage event arrives. Click opens `/usage`.
+- Examples: `5h 42%`, `5h 30% · week 85%`, `5h 42% · session 12%/20%`, `5h 42% · resets in 2 h`.
+- Warning colour when a window is at 80% or more, or the session budget is spent.
+- Home footer: `${Plan}[ · 5h resets in 2 h]`.
+- 0.5.1 showed `${n} credits · this turn N · session N[/budget]`, `today used/daily` for free accounts, and `renews <date>` on hover.
 
-### 4.2 Banners `[0.5.1]`
-`session.composer.top` and home footer: event banner `${label}[ · until ${formatDate(until)}]` when `/me.event.label` is set (info color). `Low balance: ${remaining ?? 0} credits left · /credits` when low (warning). Home footer also shows `${Plan}[ · renews 23 Nov]`.
+### 4.2 Banners and warnings `[1.0]`
+`session.composer.top` and home footer: event banner `${label}[ · until ${formatDate(until)}]` when `/me.event.label` is set (info colour). The fuller window at 80% or more: `5-hour limit 84% used · resets in 2 h · /usage`, or `5-hour limit reached · resets in 2 h · /usage` at 100% (warning colour; `Weekly limit …` for the weekly one). A toast says the same once per window (keyed on the window and its reset time): `84% of the 5-hour limit used. Resets in 2 h. /usage`. (0.5.1: `Low balance: N credits left · /credits`.)
 
-### 4.3 Budgets `[0.5.1]`
-- Value: `budgetOf(v)` = finite number ≥1 → `floor(v)`, else null. KV `anysola:budget:default` and per-session `budget` in `anysola:session:<id>`.
-- TUI `/budget` (anysola.tsx:153-200): args lower-cased and split on whitespace. `default` → show/set/`off` the default. No session → warning. No args → show `Session budget a/b credits` or `No budget · a credits spent. Set one: /budget <credits>`. `<int ≥1>` or `off` → set or clear. Anything else → usage toast.
-- Gate (prompt/index.tsx:1183-1191, anysola.tsx:131-151): before submitting a non-shell prompt, if `total ≥ budget` locally, reload from the server and ask the select: once → continue. add → budget = max(budget,total)+budget. off → clear. stop/dismiss → keep the composer. An RPC failure allows the turn. A running turn is never cut.
-- `anysola run --budget N` (Int ≥1; run.ts:140-236): sets the session budget = N via RPC. If total ≥ N already → error `Budget reached: …` and stop. Otherwise it watches `credits` events and, on each `session.step.started` with total ≥ N, interrupts the session and reports `Budget reached: ${total}/${limit} credits. Continue with \`anysola run -s ${id} --budget <credits>\`.` (exit code via reportRunError).
+### 4.3 Budgets `[1.0]`
+- Unit: **percent of the 5-hour window**, a whole number 1..100 (`20` and `20%` both parse). The session's use is the sum of `fiveHourPercentUsed` of its usage events. KV `anysola:budget:five-hour` (default) and `budget` in `anysola:usage:<id>`; 0.5.x credit budgets are dropped (§2.3).
+- TUI `/budget`: `default` → show/set/`off` the default (`New sessions start with a budget of 20% of the 5-hour window` / `No default budget` / `Default budget removed`). No session → `Open a session first, or set one for new sessions: /budget default <percent>`. No args → `Session budget 12%/20% of the 5-hour window` or `No budget · 4.5% of the 5-hour window used. Set one: /budget <percent>`. `<1..100>` or `off` → set (`Session budget …`) or clear (`Budget removed`). Anything else (0, over 100, text) → `Usage: /budget <percent of the 5-hour window> | off | default <percent>`.
+- Gate: before submitting a non-shell prompt, if `total ≥ budget`, the select `Budget reached · 21%/20%`: `Continue once`, `Add 20%` (`Budget 40% of the 5-hour window`: `min(100, max(budget, ceil(total)) + budget)`; left out when the budget is already 100), `Remove the budget`, `Stop` (keeps the composer). A running turn is never cut.
+- `anysola run --budget N` (1..100; 0 → "Expected a value greater than or equal to 1", over 100 → "Expected a value less than or equal to 100"): sets the session budget. If the session already used N% → `Budget reached: …` and stop. Otherwise before each step with total ≥ N the run stops with `Budget reached: ${used}/${N}% of the 5-hour window. Continue with \`anysola run -s ${id} --budget <percent>\`.` (exit 1).
+- `anysola run --use-banked-reset`: before the turn `GET /limits`; when `allowed` is false and the bank holds one, `POST /limits/redeem` and print `Anysola · banked reset used · 5h 0% · week 18%` (dim; the windows after the redeem, status-line rule). If a full window refuses the turn later (§2.4) and no reset was spent yet, redeem once and send `Continue.` to the same session; an empty bank (409) leaves the refusal (exit 1). Without the flag the refusal prints `Error: <message>` and exits 1.
 
-### 4.4 Run summary `[0.5.1]`
-After a non-JSON run: `Anysola · ${spent} credit(s)[ · ${remaining} left]` in dim gray, where spent = session total − total at start (printed only if >0). `remaining` = latest non-null from events, else start's. No thousands separator.
+### 4.4 Run summary `[1.0]`
+After a non-JSON run whose session used a share of the 5-hour window (`this run` > 0): `Anysola · 5h 42%[ · week 85%] · this run 2%` in dim gray (`this run` = session total − total at start; the windows are the last event's, with the status line's weekly rule). (0.5.1: `Anysola · N credit(s)[ · M left]`.)
 
-### 4.5 Exit epilogue `[0.5.1]`
-TUI exit (util/presentation.ts): wordmark, then `Session <title>`, `Spent ${turns} turn(s) · ${total} credits` (only if total > 0), `Continue anysola -s <id>`. Plus `Run anysola to use <ver>` after an update.
+### 4.5 Exit epilogue `[1.0]`
+TUI exit: wordmark, then `Session <title>`, `Used ${turns} turn(s) · ${total} of the 5-hour window` (only if total > 0), `Limits 5h 42%[ · week …]` when known, `Continue anysola -s <id>`. Plus `Run anysola to use <ver>` after an update. (0.5.1: `Spent N turn(s) · N credits`.)
 
-### 4.6 Dialogs `[0.5.1]`
-/credits (rows: Plan, Balance, Renews, Free quota, Resets, Today, This session, Event + "Upgrade or top up: <billing>"), /usage (`usageLines`, key `t` toggles 7/30), /devices (select. The current device toasts "sign out with `anysola logout`". Others confirm, then RPC revoke, then reopen). Texts in user-strings.txt. Error text: 404 → "This server does not offer it yet.", else body message, else `Request failed (HTTP n)` / "Cannot reach Anysola".
+### 4.6 Dialogs `[1.0]`
+- `/credits` is gone. `/usage` (title `Usage · last 7 days`, key `t` toggles 7/30) shows §1.5's lines plus `This session`. Clicking the status line or the home plan line opens it.
+- **Banked reset**: when the open session's turn is refused for a full window (§2.4), the client polls `/limits`. With a non-empty bank, a confirm dialog titled `Use a banked reset?` with the message `<gateway message>[ You have N banked reset(s).] The next one expires <date>. Using one clears the window and sends your prompt again.` and the buttons `Wait` / `Use banked reset` (focused). `Use banked reset` → `POST /limits/redeem` → toast `Banked reset used` → the turn goes again: a turn refused before any tool ran is undone (revert to its user message) and resubmitted as it was, so the history keeps one copy; one that already ran tools continues with `Continue.` so their work stays. A failed redeem toasts the error under `Banked reset`. An empty bank (or a session not on screen): an error toast `Usage limit` with the gateway message (it names the reset time).
+- `/devices` unchanged (select; the current device toasts "sign out with `anysola logout`"; others confirm, then revoke, then reopen). Error text: 404 → "This server does not offer it yet.", else body message, else `Request failed (HTTP n)` / "Cannot reach Anysola".
 
-### 4.7 Model picker `[0.5.1]`
-Note = `description` from /config (replaces the provider name). Trailing = `~N credit(s)/turn` from `credits_per_turn_estimate` ([dead on gateway]). Both are read from the cached KV config via RPC `estimates`/`notes` on mount and on reconnect.
+### 4.7 Model picker `[1.0]`
+Note = `description` from /config (replaces the provider name). No trailing estimate (0.5.1's `~N credit(s)/turn` from `credits_per_turn_estimate` is gone).
 
 ### 4.8 Auto and economy `[0.5.1]`
 The client has no special logic. `auto` is an ordinary model from /config. Variants come from `variants[]` (`--model anysola/auto#economy` sends `x-anysola-variant: economy`, `output_config.effort:"low"`, `thinking.display:"summarized"`. Observed). The model actually run is in response header `x-anysola-model` (the client does not read it).
@@ -340,16 +351,16 @@ The client has no special logic. `auto` is an ordinary model from /config. Varia
 
 1. Base = `env ANYSOLA_API_URL` (strip trailing `/`) or `https://api.anysola.com`. All routes are under `/v1/code`.
 2. Plain HTTP UA `opencode/latest/2.2.5/cli`. Model UA `opencode/latest/2.2.5+anysola.<ver>/cli` (must start with `opencode/`).
-3. Account calls (`GET /config`, `GET /me`, `GET /usage?days=7|30`, `GET /tokens`, `POST /tokens/{urlencoded id}/revoke`, `POST /tokens/self/revoke`): headers `accept: application/json`, `authorization: Bearer <token>`, `x-anysola-version: <ver>`. 15 s timeout. Parse JSON leniently (non-JSON → `{}`).
+3. Account calls (`GET /config`, `GET /me`, `GET /usage?days=7|30`, `[1.0]` `GET /limits`, `POST /limits/redeem`, `GET /tokens`, `POST /tokens/{urlencoded id}/revoke`, `POST /tokens/self/revoke`): headers `accept: application/json`, `authorization: Bearer <token>`, `x-anysola-version: <ver>`. 15 s timeout. Parse JSON leniently (non-JSON → `{}`).
 4. Device login: `POST /device/code {client:"anysola-code/<ver>", deviceName:hostname}` (no auth, `content-type` + `x-anysola-version`). Show `Open <verification_uri> and enter <user_code>`. Poll `POST /device/token {device_code}`: sleep first, `interval = max(1, interval||5)`, +5 per `slow_down` (ignore the server interval), deadline `min(expires_in||600, 900)` s, 3 consecutive 5xx/network failures abort. Accept only `^asc_[0-9A-Za-z]+$`. Error strings per §1.2.
 5. `GET /version` (no auth, 5 s; 3 s for the minimum gate). Gate before TUI start and `run`, for released builds only, offline passes, exit 1 with the exact message. TUI: check at start and every 10 min, notify only.
-6. `/config`: fetch at start, on credential change, and every 10 min. Cache the raw body in KV `anysola:config`. On failure use the cache. On 401 mark needs_auth. Keep only `providers.anysola`. Override `baseURL` with `<base>/v1/code`. Add headers `x-anysola-client: opencode`, `x-anysola-version`, `x-anysola-credits-event: 1`. Allow no other provider.
+6. `/config`: fetch at start, on credential change, and every 10 min. Cache the raw body in KV `anysola:config`. On failure use the cache. On 401 mark needs_auth. Keep only `providers.anysola`. Override `baseURL` with `<base>/v1/code`. Add headers `x-anysola-client: opencode`, `x-anysola-version`, `[1.0]` `x-anysola-usage-event: 1`. Allow no other provider.
 7. `/messages`: Anthropic Messages API, `stream:true`, `anthropic-version: 2023-06-01`, betas ⊆ {`interleaved-thinking-2025-05-14`, `thinking-binding-controls-2026-08-01`, and `mid-conversation-output-config-2026-07-01` only if the live allowlist has it}. Only the allowed top-level fields (§3 item 11). Token: Bearer for a login token, `x-api-key` for `ANYSOLA_TOKEN`. Send the session headers of §1.7 (at least `x-opencode-session`). Variant headers from `variants[].headers`.
-8. Stream filter: drop and parse the `event: anysola_credits` block. Pass `: keepalive` and everything else through to the SSE parser. Treat `event: error` as a stream error.
-9. Credits: on each response, `x-credits-charged`/`x-credits-remaining` → record. Else for an ok SSE response, credits event → record(charged, `max(0, x-credits-available-before − charged)` if that header exists). Turn closes on idle. Persist `{total,turns,budget}` in `anysola:session:<id>`. Emit to the UI.
-10. 402 on a model call: replace the body with `{"type":"error","error":{"type":"billing_error","message":"<gateway message or 'Out of Anysola credits.'>\nUpgrade: https://account.anysola.com/billing"}}`.
-11. Retry: honour `x-should-retry` first. Retry 429/5xx/408/409/transport with exp backoff 2 s → cap 10 s, ≤10 retries, jitter, `max(delay, retry-after ≤ 15 min)`. Never retry 400/401/402/403/404/413.
-12. `/search`: `POST {query}`, Bearer + `x-anysola-client: opencode` + version. 30 s timeout, 1 MiB cap. Map results. Add `credits` to the calling session (no remaining update). Error texts per user-strings.txt.
-13. UI numbers: low balance = `/me.lowBalance` or remaining < 100 (not on free). /me refresh every 5 min and 1.5 s after charges. Budget semantics and texts per §4.3. Run summary per §4.4. Exit summary per §4.5.
+8. `[1.0]` Stream filter: drop and parse the `event: anysola_usage` block (§2.2). Pass `: keepalive` and everything else through to the SSE parser. Treat `event: error` as a stream error.
+9. `[1.0]` Usage: each usage event → record (§2.3). Turn closes on idle. Persist `{used,turns,budget}` in `anysola:usage:<id>`. Emit to the UI. No `x-credits-*` headers.
+10. `[1.0]` A 429 with `x-anysola-limit` on a model call: session error kind `provider.usage-limit`, never retried; TUI offers a banked reset, `run` exits 1 or redeems with `--use-banked-reset` (§2.4, §4.3, §4.6). No 402 rewrite.
+11. Retry: honour `x-should-retry` first. Retry 429/5xx/408/409/transport with exp backoff 2 s → cap 10 s, ≤10 retries, jitter, `max(delay, retry-after ≤ 15 min)`. Never retry 400/401/402/403/404/413 or a usage-limit 429.
+12. `/search`: `POST {query}`, Bearer + `x-anysola-client: opencode` + version. 30 s timeout, 1 MiB cap. Map results. `[1.0]` No credits bookkeeping. Error texts per user-strings.txt.
+13. `[1.0]` UI numbers: windows from `/me.limits` and usage events; warn at 80% (§4.2). /me refresh every 5 min and 1.5 s after usage events. Budget semantics and texts per §4.3. Run summary per §4.4. Exit summary per §4.5.
 14. Logout/login --force: `POST /tokens/self/revoke` (401 = success), then delete the local credential (logout keeps it if the revoke failed).
-15. Known 0.5.1 quirks to decide on explicitly: free-tier "used" always 0 (`turns` vs `usedTurns`). 402 billing URL printed twice. Revoking an unknown id says "This Anysola server does not offer this yet.". `credits_per_turn_estimate` and `x-credits-remaining` are never sent by the real gateway. `remaining` after a turn reflects whichever request finished last.
+15. Known 0.5.1 quirks to decide on explicitly (the credit ones are moot in 1.0): free-tier "used" always 0 (`turns` vs `usedTurns`). 402 billing URL printed twice. Revoking an unknown id says "This Anysola server does not offer this yet.". `credits_per_turn_estimate` and `x-credits-remaining` are never sent by the real gateway. `remaining` after a turn reflects whichever request finished last.

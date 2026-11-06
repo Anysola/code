@@ -13,8 +13,7 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
-use crate::credits::Credits;
-use crate::events::{CreditsSnapshot, Event};
+use crate::events::{Event, UsageSnapshot};
 use crate::gateway::config::Remote;
 use crate::gateway::{Gateway, Token};
 use crate::model::{Model, ModelRef};
@@ -29,6 +28,7 @@ use crate::storage::{Db, SessionRow};
 use crate::tool::question::QuestionReply;
 use crate::tool::registry::Registry;
 use crate::tool::{PathLocks, SessionNotifier};
+use crate::usage::Usage;
 
 mod commands;
 mod front;
@@ -103,7 +103,7 @@ pub(crate) struct Shared {
     pub db: Arc<Db>,
     pub gateway: Arc<Gateway>,
     pub events: broadcast::Sender<Event>,
-    pub credits: Arc<Credits>,
+    pub usage: Arc<Usage>,
     loaded: std::sync::RwLock<Arc<Loaded>>,
     /// The last `/config` result.
     remote: Mutex<Remote>,
@@ -237,7 +237,7 @@ impl Core {
         .map(Arc::new);
         db.upsert_project(&project)?;
         let (events, _) = broadcast::channel(4096);
-        let credits = Arc::new(Credits::new(db.clone(), events.clone()));
+        let usage = Arc::new(Usage::new(db.clone(), events.clone()));
         let env = std::env::vars_os()
             .filter(|(k, _)| k != "OPENCODE_PASSWORD" && k != "OPENCODE_SERVER_PASSWORD")
             .collect();
@@ -250,7 +250,7 @@ impl Core {
             db,
             gateway,
             events,
-            credits,
+            usage,
             loaded: std::sync::RwLock::new(Arc::new(loaded)),
             remote: Mutex::new(remote),
             changes: Arc::default(),
@@ -655,16 +655,16 @@ impl Core {
         Ok(db.set_model(session_id, &model.to_json())?)
     }
 
-    pub fn credits(&self, session_id: &str) -> CreditsSnapshot {
-        self.shared.credits.snapshot(session_id)
+    pub fn usage(&self, session_id: &str) -> UsageSnapshot {
+        self.shared.usage.snapshot(session_id)
     }
 
     pub fn set_budget(
         &self,
         session_id: &str,
         budget: Option<u64>,
-    ) -> Result<CreditsSnapshot, CoreError> {
-        Ok(self.shared.credits.set_budget(session_id, budget)?)
+    ) -> Result<UsageSnapshot, CoreError> {
+        Ok(self.shared.usage.set_budget(session_id, budget)?)
     }
 
     /// Admits the prompt and runs the session until its inbox is empty. Fails fast when another

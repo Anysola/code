@@ -162,7 +162,8 @@ Captures: `V/run/*.{cmd,stdout,stderr}` (exit code at end of each `.cmd`).
   (block, body = output), `→ Read <path>`, `← Write/Edit <path>` (block with diff), `✱ Glob/Grep "<pat>"` (+ ` in
   <dir> · N matches`), `% WebFetch <url>`, `◈ Web Search via Anysola "<query>"`, `→ Skill "<name>"`, `# Todos`,
   `→ Asked N question(s)`, `✓/✗/• <description>` (+ `<Kind> Agent`) for subagents, `⚙ <name> <json>` fallback.
-- Spend summary (run.ts:178-197, 173-174): after the run, stderr `\x1b[90mAnysola · <spent> credit[s] · <remaining>
+- `[1.0]` Summary line instead: stderr `\x1b[90mAnysola · 5h <n>%[ · week <n>%] · this run <p>%\x1b[0m` when a usage
+  event arrived (`spec/protocol.md §4.4`). 0.5.1 spend summary (run.ts:178-197, 173-174): after the run, stderr `\x1b[90mAnysola · <spent> credit[s] · <remaining>
   left\x1b[0m`, spent = session credit delta from the server's `anysola.credits` RPC events; omitted when spent ≤ 0,
   in JSON mode, or when the service has no account RPC. Printed even after a budget/other error.
 
@@ -192,6 +193,9 @@ permission `!` line still goes to stderr. Captures: `V/run/json-*.stdout`, `V/ru
   cancelled and set exit 1.
 
 ### 2.5 Budget
+`[1.0]`: `--budget N` is a percent of the 5-hour window (1–100) and the message reads `Budget reached: <used>/<N>% of
+the 5-hour window. Continue with \`anysola run -s <id> --budget <percent>\`.`; `--use-banked-reset` spends one banked
+reset when a usage window is full (`spec/protocol.md §4.3`). 0.5.1:
 `--budget N` sets the session budget via `anysola.budget` RPC (persisted on the session), watches `credits` events and
 interrupts the session at the next `session.step.started` once total ≥ N (run.ts:203-236). The interrupt can cut a
 running tool (observed: websearch failed with `Tool execution interrupted`, `Step interrupted`). Then the final error
@@ -366,13 +370,13 @@ Source `/home/ubuntu/anysola-code/code-action` (`action.yml`, `scripts/{main,lib
 2. `run --format json` event lines: `type` values `step_start|text|reasoning|tool_use|step_finish|error`, top-level
    `sessionID`, `part.messageID` and `part.text` on text events, `error.message` on error events, one object per
    line on stdout, nothing else on stdout; budget error is the last error event.
-3. Budget message `Budget reached: <t>/<n> credits. Continue with \`anysola run -s <id> --budget <credits>\`.` and
+3. (`[1.0]` percent wording, §2.5) Budget message `Budget reached: <t>/<n> credits. Continue with \`anysola run -s <id> --budget <credits>\`.` and
    exit 1; `Model unavailable: anysola/<id>` text; exit status non-zero on any error, 0 on success.
 4. `run` reading the prompt from stdin when no message is given; flags `--standalone --format json -m --budget
    --agent --auto -s -c -f --title --thinking --fork`; `ANYSOLA_TOKEN`, `ANYSOLA_API_URL`, `OPENCODE_CONFIG_CONTENT`,
    `OPENCODE_DISABLE_PROJECT_CONFIG`, `OPENCODE_DISABLE_CLAUDE_CODE` env.
-5. Text-mode stream split: answer on stdout (non-TTY), everything else on stderr; spend line
-   `Anysola · N credit[s] · M left`; `Error: ` prefix.
+5. Text-mode stream split: answer on stdout (non-TTY), everything else on stderr; summary line (`[1.0]`
+   `Anysola · 5h N% · this run P%`, 0.5.1 `Anysola · N credit[s] · M left`); `Error: ` prefix.
 6. Release asset names `anysola-<target>.{tar.gz|zip}` with a single `anysola`/`anysola.exe` entry, `SHA256SUMS` GNU
    format, `install.sh`/`install.ps1` assets, tag `v<ver>`; npm `@anysola/code` with `bin.anysola = bin/anysola.exe`,
    postinstall, `@anysola/code-<target>` packages; install dir `~/.anysola/bin` and `ANYSOLA_INSTALL_DIR`.

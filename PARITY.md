@@ -67,7 +67,7 @@ Conventions
    0.5.1 exercises become native code (items in M1/M4). Code Mode (`execute`) stays, on embedded QuickJS (rquickjs).
    Native replacements (from `spec/integrations.md §6.2`), with the section that carries each: `anysola.provider`
    (remote config, provider pin, device + env credentials: M1.4, M2), `anysola.provider-lock` (M1.4, M1.13),
-   `anysola.account` (credits, budgets, 402 rewrite, account calls: M1.3, M1.4, M4.6), `anysola.websearch` (M1.8);
+   `anysola.account` (usage limits, budgets, account calls: M1.3, M1.4, M4.6), `anysola.websearch` (M1.8);
    prompt identity block and anthropic prompt append (M1.5); tool context hooks: shell OS clause, subagent list,
    websearch year, `opencode` namespace and worktree hint (M1.8); `tool.input.repair` `bash`→`shell` (M1.6); plan
    reminders and plan edit guard (M1.7); goal (M1.10); warming (M1.10); title (M1.11); config.policy (M1.9);
@@ -77,7 +77,7 @@ Conventions
 7. **Identity on the wire** (gateway unchanged):
    - `POST /v1/code/messages`: `User-Agent: opencode/latest/2.2.5+anysola.<ver>/cli` (`/acp` instead of `/cli` under
      `anysola acp`, as 0.5.1 with `OPENCODE_CLIENT=acp`), `x-anysola-client: opencode`, `x-anysola-version: <ver>`,
-     `x-anysola-credits-event: 1`, `x-opencode-client: cli` (`acp` under ACP; the TUI also sends `cli`).
+     `x-anysola-usage-event: 1` (`[1.0]`, was `x-anysola-credits-event`), `x-opencode-client: cli` (`acp` under ACP; the TUI also sends `cli`).
    - Every other HTTP request the binary makes (account calls, `/config`, `/version`, `/device/*`, `/search`,
      `webfetch` except its own UA, MCP HTTP, `instructions`/`skills` URLs): `User-Agent: opencode/latest/2.2.5/cli`.
    - `/search` additionally `x-anysola-client: opencode`; account calls and `/search` carry `x-anysola-version: <ver>`;
@@ -134,19 +134,20 @@ of those; where a fix touches them it says so.
    `No input on stdin after 3s; continuing without it.`; the result is merged as in 0.5.1
    (`message + "\n" + piped`).
 4. Free tier: client reads `freeQuota.usedTurns` but `/me` sends `turns`, so "used" is always 0
-   (`spec/protocol.md §1.4`). 1.0 reads `turns`, falling back to `usedTurns` (status line, `/credits`, `anysola status`).
+   (`spec/protocol.md §1.4`). Moot in 1.0: `/me` no longer sends `freeQuota`; free accounts have usage limits like
+   every plan.
 5. 402 rewrite appends `\nUpgrade: https://account.anysola.com/billing` even when the gateway message already contains
-   the billing URL (printed twice). 1.0 appends it only when the message does not already contain
-   `account.anysola.com/billing`. The action's grep strings (`used this cycle`, `Daily free limit`, `may cost up to`,
-   `Anysola credits`) are in the gateway text and stay.
+   the billing URL (printed twice). Moot in 1.0: there is no credit 402 and no rewrite; a full usage window is a 429
+   with `x-anysola-limit` whose message is shown as sent (`spec/protocol.md §2.4`).
 6. `anysola devices revoke <unknown id>` prints `This Anysola server does not offer this yet.` (gateway 404 "No such
    token."). 1.0 prints `No signed-in device with ID <id>. Run \`anysola devices\` to list them.` (exit 1); the TUI
    `/devices` revoke uses the same text. The generic 404 text stays for the other account routes.
 7. `anysola status` reads fields `/me` never sends (`email`, `user.email`, `plan.name`, numeric `credits`, `freeTier`,
    `turnsUsed`, `turnsLimit`, `defaultModel`, `model`) — `spec/protocol.md §1.4`. 1.0 prints from the real `/me`
-   shape, keys padded to the longest key + 2: `Plan <Plan>` (first letter upper), `Credits <n> available, renews
-   <YYYY-MM-DD>` (paid), `Free quota <turns>/<dailyTurns> turns today` (free), `Today <requests> requests · <credits>
-   credits`, `Event <label>[ until <formatDate>]` (when set), `Token <mask>`. The captured `Account <email>` line
+   shape, keys padded to the longest key + 2: `Plan <Plan>` (first letter upper), `Access This plan does not include
+   Anysola Code` (when `access` is null), `5-hour <n>% used · resets in <duration>`, `Weekly …`, `Banked resets <n> ·
+   next expires <date>` (or `none`), `Today <requests> requests`, `Event <label>[ until <formatDate>]` (when set),
+   `Token <mask>` (`[1.0]` usage limits; no credit lines). The captured `Account <email>` line
    (`V/cli/account-commands.txt`) disappears; nothing automated parses it.
 8. `--version` in any other argv position (`anysola run --version`, `-v run`) prints `anysola v2.2.5`. 1.0 prints the
    exact version line (`Anysola Code <ver> (OpenCode 2.2.5)`) for every `--version`/`-v`, exit 0.
@@ -175,8 +176,8 @@ of those; where a fix touches them it says so.
 18. `anysola mcp list` races server activation and prints `No MCP servers configured` on a cold start. 1.0 lists from
     config and waits up to the startup timeout for each server's status.
 19. `remaining` credits after a turn come from whichever concurrent request finished last (title vs main,
-    `spec/protocol.md §2.3`). 1.0: within one turn, the lowest `max(0, before - charged)` reported wins; a new turn
-    starts fresh.
+    `spec/protocol.md §2.3`). Moot in 1.0: there is no balance; each usage event carries the account's windows and
+    the last one received is shown until `/me` refreshes 1.5 s later.
 20. Without a TTY the TUI writes escape sequences to stdout and never exits (`spec/cli.md §1.1`). 1.0: `anysola` with
     stdin or stdout not a TTY prints
     `Error: The interactive UI needs a terminal. Use \`anysola run\` for non-interactive use.` and exits 1.
@@ -219,7 +220,7 @@ M1, not M5, because every captured default request advertises `execute` and the 
 - [x] `--thinking` reasoning `Thinking: <text>` (stdout non-TTY; stderr dim italic on TTY) — spec/cli.md §2.2
 - [x] stderr step header `> <agent> · <model id>` (repeated on each retry), tool lines with icons/titles from the shared tool formatter (`$`, `→ Read`, `← Write/Edit` + diff, `✱ Glob/Grep`, `% WebFetch`, `◈ Web Search via Anysola`, `→ Skill`, `# Todos`, `→ Asked N question(s)`, subagent `✓/✗/•`, `⚙` fallback), failed tool `✗ <title> failed` + `Error: <msg>`, errors `\x1b[91m\x1b[1mError: \x1b[0m<msg>` (leading `Error: ` stripped first) — spec/cli.md §2.2, V/cli/run-errors.txt, V/cli/run/text-*.stderr
 - [x] [fix] blank-line framing per §B14 — spec/cli.md §2.2
-- [x] Spend line `\x1b[90mAnysola · <spent> credit[s] · <remaining> left\x1b[0m` on stderr after the run (also after errors), only text mode and spent > 0; `· <remaining> left` omitted when unknown; no thousands separator — spec/cli.md §2.2, spec/protocol.md §4.4
+- [x] Summary line `\x1b[90mAnysola · 5h <n>%[ · week <n>%] · this run <p>%\x1b[0m` on stderr after the run (also after errors), only text mode and only when the run used a share of the window (> 0) (`[1.0]`, replaces the credit spend line) — spec/cli.md §2.2, spec/protocol.md §4.4
 - [x] JSON mode: stdout strictly one JSON object per line `{type,timestamp,sessionID,…}` with types `step_start`, `text`, `reasoning` (only with `--thinking`), `tool_use`, `step_finish`, `error`; field shapes per spec; nothing else on stdout — spec/cli.md §2.3, V/cli/run/json-*.stdout (`snapshot` omitted until snapshots exist, M1.11)
 - [x] JSON part ids: live `prt_<event id tail>`, reconciled `prt_<msg tail>_<step-finish|text-N|reasoning-N|tool-<id>>`; text emitted once per finished text part — spec/cli.md §2.3 (the last step's `step_finish` takes the reconciled form; other parts keep their live ids, no reconcile pass)
 - [x] JSON errors: server errors keep their shape (`provider.quota` with `status`, `response.body`; `aborted`); CLI errors `{type:"unknown",message}` with `sessionID:""` before a session exists — spec/cli.md §2.3, V/cli/run-errors.txt
@@ -231,7 +232,8 @@ M1, not M5, because every captured default request advertises `execute` and the 
 - [x] `--auto`: every ask answered `once` silently; deny rules still deny and denied tools are not advertised — spec/cli.md §2.4
 - [x] Question tool cancelled with the "cannot ask the user questions" feedback — spec/cli.md §2.4
 - [x] Other forms (MCP elicitation) cancelled and exit code set to 1 — spec/cli.md §2.4
-- [x] `--budget N`: sets the session budget (persisted); if total ≥ N already → budget error before any prompt; else interrupts at the next step start once total ≥ N (may cut a running tool: `Tool execution interrupted`, `Step interrupted`); final error always `Budget reached: <total>/<N> credits. Continue with \`anysola run -s <id> --budget <credits>\`.` as the last `error` event, exit 1 — spec/cli.md §2.5, spec/protocol.md §4.3 (checked at each step start before the request, so a running tool is never cut; the 0.5.1 capture's interrupted web search was a race)
+- [x] `--budget N` (`[1.0]` percent of the 5-hour window, 1–100): sets the session budget (persisted); if the session already used N% → budget error before any prompt; else stops at the next step start once the session's use ≥ N; final error `Budget reached: <used>/<N>% of the 5-hour window. Continue with \`anysola run -s <id> --budget <percent>\`.` as the last `error` event, exit 1 — spec/cli.md §2.5, spec/protocol.md §4.3 (checked at each step start before the request, so a running tool is never cut)
+- [x] `--use-banked-reset` (`[1.0]`): `GET /limits` before the turn and one `POST /limits/redeem` when a window is full and the bank holds one; a 429 limit during the turn redeems once and continues with `Continue.`; without the flag the limit error prints and exits 1 — spec/protocol.md §4.3
 - [x] [fix] budget already reached in text mode prints only the error — §B15
 - [x] `Cannot set the budget (<error>).` (without the service hint) — V/cli/run-errors.txt, §B21
 - [x] `run` does not wait for background shells/subagents; they are killed when the run ends — spec/tools.md §shell: background
@@ -241,15 +243,15 @@ M1, not M5, because every captured default request advertises `execute` and the 
 - [x] Header sets A (account), B (messages), C (version), D (search) exactly as specified, with the identity strings of decision 7; 15 s account timeout; lenient JSON (non-JSON → `{}`) — spec/protocol.md §1.0, §1.7, §6
 - [x] `GET /config` at start, on credential change and every 10 min while connected; raw body cached in KV `anysola:config`; offline/failure → cache; 401 → needs-auth state (`Run \`anysola login\` to sign in to Anysola`) and cache — spec/protocol.md §1.3 (fetched only with a credential, as in 0.5.1; the KV value is the parsed JSON object; 1.0 has no in-process login yet, so a credential change is picked up by the next start or the 10-minute refresh)
 - [x] Remote config handling: keep only `providers.anysola`, `model` only if on anysola, `agents` as is, `small_model` → `agents.title.model`; provider pinned (name `Anysola`, baseURL `<base>/v1/code` overriding the server's); headers merged; provider lock removes every other provider and restores endpoint keys — spec/protocol.md §1.3, spec/storage.md §3.3, spec/integrations.md §6.1
-- [x] Model `description` → picker note (trimmed, ≤160 chars); `credits_per_turn_estimate` read when present (`~N credit(s)/turn`) — spec/protocol.md §1.3, §4.7 (on `Model`; the picker itself is M4)
+- [x] Model `description` → picker note (trimmed, ≤160 chars); no per-turn estimate (`[1.0]`: `credits_per_turn_estimate` is gone) — spec/protocol.md §1.3, §4.7 (on `Model`; the picker itself is M4)
 - [x] `GET /version` (no auth, 5 s; 3 s for the gate), leading `v` stripped, semver compare with prerelease before release — spec/protocol.md §1.9
 - [x] Credentials: device-login credential sent as `Authorization: Bearer`; `ANYSOLA_TOKEN` per §B13 (x-api-key on `/messages` only); `ANYSOLA_TOKEN` works with no stored row — spec/protocol.md §5, spec/storage.md §2.9
-- [x] SSE parser: Anthropic events, `: keepalive` comments ignored, `event: error` = stream error, `event: anysola_credits` block stripped and its `charged` parsed (filter installed only for ok `text/event-stream` responses without `x-credits-*` headers) — spec/protocol.md §2.2, V/protocol/captures/sse-gateway-examples.txt
-- [x] Credits accounting: per-session `{remaining, turn, total, turns, open, budget}`; header path (`x-credits-charged`/`x-credits-remaining`), stream path (`max(0, x-credits-available-before − charged)`); turn closes on idle (`turns += 1` when turn > 0); persisted to KV `anysola:session:<id>` = `{total,turns,budget}`; fresh session budget = KV `anysola:budget:default` — spec/protocol.md §2.3, spec/storage.md §2.8
-- [x] [fix] `remaining` per §B19 — spec/protocol.md §2.3
-- [x] Search credits added to the searching session's turn/total (FIFO per query, map capped at 64), never update `remaining` — spec/protocol.md §1.8 (recorded when the search returns, no per-query FIFO needed in-process)
+- [x] SSE parser: Anthropic events, `: keepalive` comments ignored, `event: error` = stream error, `event: anysola_usage` block stripped and parsed into a usage event (`[1.0]`, replaces `anysola_credits`; a malformed one is dropped) — spec/protocol.md §2.2
+- [x] Usage accounting (`[1.0]`): per-session `{latest, turn, total, turns, open, budget}` in percent of the 5-hour window from `fiveHourPercentUsed`; turn closes on idle (`turns += 1` when turn > 0); persisted to KV `anysola:usage:<id>` = `{used,turns,budget}`; fresh session budget = KV `anysola:budget:five-hour`; 0.5.x credit totals and budgets are not read or imported — spec/protocol.md §2.3, spec/storage.md §2.8
+- [x] Usage-limit refusal (`[1.0]`): 429 with `x-anysola-limit` → session error `provider.usage-limit`, never retried — spec/protocol.md §2.4
+- [x] Web search carries no credits (`[1.0]`): no search bookkeeping; the next usage event or `/limits` poll shows it — spec/protocol.md §1.8
 - [x] Error envelope parsing and classification (overflow phrases, 413/payload, content policy, 402/quota text → QuotaExceeded, 401/403 → Authentication, 429 → RateLimit, 408/409/≥500 → ProviderInternal, other 4xx → InvalidRequest), `x-should-retry` overrides — spec/session.md §2.5, spec/protocol.md §2.4, §2.5
-- [x] [fix] 402 rewrite `<message or 'Out of Anysola credits.'>\nUpgrade: https://account.anysola.com/billing` with the §B5 dedupe — spec/protocol.md §6 item 10
+- [x] No 402 rewrite (`[1.0]`): a 402 is shown as the gateway sent it — spec/protocol.md §2.4
 - [x] Retry schedule: exponential from 2 s, gap cap 10 s, ≤10 retries, jitter, `max(delay, retry-after ≤ 15 min)`, ≤3 transport-timeout retries; never 400/401/402/403/404/413; one immediate full resend for `retry-full` transport errors; each retry publishes a retry event — spec/session.md §2.5, spec/protocol.md §2.5 (a transport failure before any output is retried on the same schedule; there is no separate immediate full resend)
 - [x] One-shot generations (title, goal judge, `/btw`, keep-alive) retry only "not run" failures (429, 503/529, unsent transport), ≤3 — spec/session.md §2.5
 - [x] Only allowlisted betas; never `compact-*`/`fast-mode-*`; only allowed top-level body keys; no `x-app`, no `claude-cli/` UA — spec/protocol.md §3, §3.1
@@ -486,7 +488,7 @@ screens: `V/tui/screens/*.txt`.
 - [x] Prompt box layout, colours, textarea height `max(6, floor(h/3))`, focus rules, hidden while prompts/forms/dock are active — spec/tui.md §2 "Layout of the prompt box"
 - [x] Placeholders (home examples, shell-mode examples, none in session, width cut) — spec/tui.md §2 "Placeholder", V/tui/composer-strings.md
 - [x] Metadata row (agent, `auto`, model name, blank provider for Anysola, variant), responsive fit, fade-in, shell mode `Shell` — spec/tui.md §2 "Metadata row"
-- [x] Footer row: directory label with branch and working-directory menu, running spinner + `esc interrupt` / `esc again to interrupt`, workspace-move status, `/btw` spinner, credit status line, editor-file label, right hints (`shift+tab agents`, `ctrl+p commands`), subagent/shell counts, goal status, context usage `<tokens> (<pct>%)`, shell-mode hint — spec/tui.md §2 "Footer row under the prompt" (all of it; the directory label opens `Working directory` (Copy path / Open folder / Workspaces); the IDE file label is accent while the selection waits to be sent)
+- [x] Footer row: directory label with branch and working-directory menu, running spinner + `esc interrupt` / `esc again to interrupt`, workspace-move status, `/btw` spinner, usage status line, editor-file label, right hints (`shift+tab agents`, `ctrl+p commands`), subagent/shell counts, goal status, context usage `<tokens> (<pct>%)`, shell-mode hint — spec/tui.md §2 "Footer row under the prompt" (all of it; the directory label opens `Working directory` (Copy path / Open folder / Workspaces); the IDE file label is accent while the selection waits to be sent)
 - [x] Submit/newline/editing keys, in-input undo/redo, double-submit guard, `exit`/`quit`/`:q`, empty Enter behaviour, steer vs `<leader>return` queue, queue refusals, synchronous clear and restore on failure, optimistic session creation on home, model/budget/revert checks, submit error toasts, `ctrl+c` clear with history save, `ctrl+z` suspend (not on Windows), per-tab drafts — spec/tui.md §2 "Multiline input, submit, newline, editing keys" (per-tab drafts in memory; submit clears synchronously, so overlapping submits cannot happen)
 - [x] Interrupt with double Esc (5 s), `ctrl+b` background blocking tools — spec/tui.md §2 "Interrupt / background"
 - [x] Prompt history (50 entries, up/down rules, shell entries, fall-through to subagent picker) in `~/.anysola/state/prompt-history.jsonl` — spec/tui.md §2 "Prompt history" (`composer::HISTORY_LIMIT` = 50 with its test; empty `down` falls through to the dock)
@@ -509,7 +511,7 @@ screens: `V/tui/screens/*.txt`.
 ### M4.5 Dialogs, tabs, keymap
 - [x] Dialog frame and `DialogSelect` behaviour (search, fuzzy, categories, `●` current, footer actions, empty texts), confirm/alert/prompt dialogs — spec/tui.md §4 "Shared frame", V/tui/dialogs.md §0
 - [x] Command palette (`ctrl+p`, Suggested group, categories, shortcut footer, settings entries on query) — V/tui/dialogs.md §1, V/tui/screens/command-palette*.txt
-- [x] Model picker (`Anysola` group, notes, `~N credits/turn`, favourites/recent, variant follow-up), agent picker, session list (groups, gutter markers, delete twice, rename, all projects, search debounce 150 ms, limit 50), rename, theme list, settings, status, MCP servers, error details, help, debug ([fix] §B9), timeline, message actions, fork, export, stash, skills, open (`ctrl+o`), worktrees, image preview, shell output, execute details, update, connect — V/tui/dialogs.md §2–§27, V/tui/screens/*.txt (most dialogs snapshot-tested against V/tui/screens; strings audited against V/tui/dialogs.md §2–§27; Shell output dialog (status, follow, 64 KiB tail, empty/missing texts; `Shell output` re-read every second) done; the session search runs in storage 150 ms after the last keystroke with `Searching sessions…` / `Could not search sessions. Change the search to try again.`; the other loading texts (`Loading sessions…`, `Loading skills…`, `Loading worktrees…`, `Refreshing sessions and projects…`, `Loading output…`) do not apply: 1.0 reads those lists synchronously before the dialog draws, so there is no loading state to show)
+- [x] Model picker (`Anysola` group, notes, favourites/recent, variant follow-up), agent picker, session list (groups, gutter markers, delete twice, rename, all projects, search debounce 150 ms, limit 50), rename, theme list, settings, status, MCP servers, error details, help, debug ([fix] §B9), timeline, message actions, fork, export, stash, skills, open (`ctrl+o`), worktrees, image preview, shell output, execute details, update, connect — V/tui/dialogs.md §2–§27, V/tui/screens/*.txt (most dialogs snapshot-tested against V/tui/screens; strings audited against V/tui/dialogs.md §2–§27; Shell output dialog (status, follow, 64 KiB tail, empty/missing texts; `Shell output` re-read every second) done; the session search runs in storage 150 ms after the last keystroke with `Searching sessions…` / `Could not search sessions. Change the search to try again.`; the other loading texts (`Loading sessions…`, `Loading skills…`, `Loading worktrees…`, `Refreshing sessions and projects…`, `Loading output…`) do not apply: 1.0 reads those lists synchronously before the dialog draws, so there is no loading state to show)
 - [x] `/connect`: `Connect an integration` listing only Anysola (`✓ Anysola  $ANYSOLA_TOKEN` when env-signed-in); choosing it runs the device sign-in inside a dialog — V/tui/dialogs.md §27, spec/tui.md §5 "Wordmark, version, exit summary" (the new login is stored; the running process keeps its token, so it takes effect on the next start)
 - [x] `/update` dialog: up-to-date text, `Update available`, `Updating Anysola Code`, install via the same command as `anysola update`, `Restart` re-executes the new binary — V/tui/dialogs.md §25
 - [x] Settings dialog: every row of dialogs.md §8 cycled with ←/→/Enter and written to `tui.json`; [fix] Animations default `on` (§B11) — V/tui/dialogs.md §8
@@ -518,12 +520,12 @@ screens: `V/tui/screens/*.txt`.
 - [x] Keymap: leader `ctrl+x` with 2000 ms timeout, comma alternatives, display format (`ctrl+x m`), layers/modes, every v2 default and v1 legacy name accepted from config, [fix] `<leader>q` per §B12, [win] `ctrl+z` → undo, Kitty keyboard protocol for shift/ctrl+return — V/tui/keybinds-default.md, spec/tui.md §Rust implementation notes
 
 ### M4.6 Anysola UI
-- [x] Account state refresh (`/me` at start, every 5 min, 1.5 s after credits; estimates/notes at start); balance source order; low balance = not free and (`lowBalance` or remaining < 100) — spec/tui.md §5 "State and refresh", spec/protocol.md §4.1
+- [x] Account state refresh (`/me` at start, every 5 min, 1.5 s after usage events); windows from `/me.limits` overlaid by usage events (`[1.0]`) — spec/tui.md §5 "State and refresh", spec/protocol.md §4.1
 - [x] RPC failures as inline text (`Account details are unavailable (<detail>).` without the service hint, `This server does not offer it yet.`, `Request failed (HTTP <n>)`, `Cannot reach Anysola`) — spec/tui.md §5 "State and refresh", §B21 (1.0 has no TUI↔service RPC, so only the HTTP cases apply: 404 text, server message, `Request failed (HTTP <n>)`, `Cannot reach Anysola`)
-- [x] Status line `<n> credits · this turn <t> · session <total>[/<budget>]` (en-US grouping), [fix] free `today <turns>/<daily>` (§B4), hover renews date, warning colour, click → `/credits`, stored totals loaded on session open — spec/tui.md §5 "Status line", spec/protocol.md §4.1
-- [x] Banners: event label with `until`, `Low balance: <n> credits left · /credits`; placement above the composer and on the home footer; home plan line `<Plan>[ · renews <D Mon>]`; date formats — spec/tui.md §5 "Banners", V/tui/screens/home-low-balance-event-banner.txt
-- [x] `/credits`, `/usage` (`t` toggles 7/30), `/budget` (all argument forms and texts), budget gate dialog (`Continue once`, `Add <b> credits`, `Remove the budget`, `Stop`), `/devices` (current device toast, revoke confirm, `Device signed out`), `/account`, `/feedback` — spec/tui.md §5 "Commands", spec/protocol.md §4.3, §4.6, V/protocol/user-strings.txt "TUI"
-- [x] Exit summary after leaving the alternate screen (wordmark, `Run anysola to use <version>` after an update, `Session`, `Spent N turn(s) · C credits` when > 0, `Continue  anysola -s <id>`) — spec/tui.md §5 "Wordmark, version, exit summary", V/tui/screens/exit-summary.txt
+- [x] Status line (`[1.0]`) `5h <n>%[ · week <n>%][ · session <used>/<budget>%]`, weekly shown when it is the fuller window or ≥ 80%, hover `· resets in <duration>`, warning colour at ≥ 80% or a spent budget, click → `/usage`, stored totals loaded on session open — spec/tui.md §5 "Status line", spec/protocol.md §4.1
+- [x] Banners: event label with `until`, the fuller window at ≥ 80% (`5-hour limit 84% used · resets in 2 h · /usage`) plus a once-per-window toast (`[1.0]`); placement above the composer and on the home footer; home plan line `<Plan>[ · 5h resets in <duration>]` — spec/tui.md §5 "Banners", spec/protocol.md §4.2, V/tui/screens/home-limit-event-banner.txt
+- [x] `/usage` (`t` toggles 7/30; both windows with bars and reset times, the bank, this session, requests by day/model, cache hit rate), `/budget` (percent of the 5-hour window; all argument forms and texts), budget gate dialog (`Continue once`, `Add <n>%`, `Remove the budget`, `Stop`), banked-reset dialog after a full window (`Use a banked reset?`, `Wait` / `Use banked reset`, redeem then resend the turn), `/devices` (current device toast, revoke confirm, `Device signed out`), `/account`, `/feedback`; `/credits` removed (`[1.0]`) — spec/tui.md §5 "Commands", spec/protocol.md §4.3, §4.6
+- [x] Exit summary after leaving the alternate screen (wordmark, `Run anysola to use <version>` after an update, `Session`, `Used N turn(s) · P% of the 5-hour window` when > 0, `Limits 5h <n>%…`, `Continue  anysola -s <id>`) (`[1.0]`) — spec/tui.md §5 "Wordmark, version, exit summary", V/tui/screens/exit-summary.txt
 - [x] Home recent sessions (≤3, `formatAgo`, click opens) and home version `<ver>` — spec/tui.md §5 "Wordmark, version, exit summary" (`view/home.rs`, snapshot home-120x36-recent; a click opens the session)
 
 ### M4.7 Themes and other UX
@@ -652,7 +654,7 @@ screens: `V/tui/screens/*.txt`.
 - Upstream sidebar "Modified files" and LSP sections — not in 2.2.5.
 - Dead keybind ids (`app.clear`, `app.scrap`, `server.pair`, `usage.show`, tab history, share, deprecated diff ids, `which-key.*`, `model.dialog.usage`) — accepted in config, bound to nothing.
 - OpenTUI debug overlay and console (`app.debug`, `app.console`) — OpenTUI internals; the commands are accepted and do nothing.
-- `remaining`/`credits_per_turn_estimate` gateway-side gaps — not a client feature; client keeps reading them.
+- `remaining`/`credits_per_turn_estimate` gateway-side gaps — moot in 1.0 (usage limits replace credits).
 - Identical baseline archives as a "bug" — kept deliberately (decision 8).
 
 ---
@@ -689,8 +691,8 @@ payloads, `x-anysola-version`/UA version (`0.5.1` → `<ver>`), and the fixed-bu
   normalization, except the §B1/§B2/§B14/§B15 deltas; exit codes equal.
 - stdin rule: no-arg + closed pipe, no-arg + slow pipe (5 s), arg + idle open pipe (returns after 3 s with the note),
   arg + `/dev/null`, arg + piped data.
-- Credits/budget: SSE streams with `anysola_credits`, concurrent title/main requests, `--budget` interrupt, budget
-  already reached, 402 with and without the URL in the message, retry schedule with `retry-after` (testkit clock).
+- Usage/budget (`[1.0]`): SSE streams with `anysola_usage`, concurrent title/main requests, `--budget` interrupt, budget
+  already reached, a usage-limit 429 (not retried, `--use-banked-reset`), retry schedule with `retry-after` (testkit clock).
 - Compaction: overflow path equals `compaction-overflow-request.json` then `after-compaction-checkpoint.json`;
   auto path at the ceiling; manual path.
 - Discovery bound: temp home with `~/AGENTS.md`, `~/.claude/skills`, `/tmp/x/opencode.json` above a project outside
@@ -722,7 +724,7 @@ payloads, `x-anysola-version`/UA version (`0.5.1` → `<ver>`), and the fixed-bu
 ### M4
 - ratatui test-backend text snapshots at the captured sizes equal every `V/tui/screens/*.txt` (text only, colours out of
   scope) after normalization and the §B9/§B10 deltas; the PNGs in `screens/png/` are a visual reference only.
-- pty smoke test (like `testing/tui-*.sh`): start, prompt, permission prompt, `/credits`, `/usage`, `/budget 5`,
+- pty smoke test (like `testing/tui-*.sh`): start, prompt, permission prompt, `/usage`, a full window → banked reset → resent prompt, `/budget 5`,
   `/undo`, exit summary.
 - Keymap: every default of `V/tui/keybinds-default.md` resolves to the listed command; `<leader>q` exits.
 - Theme: resolved colours of `anysola` dark/light equal `V/tui/theme-anysola.md`.

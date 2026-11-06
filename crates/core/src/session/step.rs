@@ -195,8 +195,11 @@ pub(crate) async fn drive(
             return Outcome::Interrupted(InterruptReason::User);
         }
         if options.stop_at_budget {
-            let credits = shared.credits.snapshot(&session.id);
-            if credits.budget.is_some_and(|budget| credits.total >= budget) {
+            let usage = shared.usage.snapshot(&session.id);
+            if usage
+                .budget
+                .is_some_and(|budget| usage.total >= budget as f64)
+            {
                 return Outcome::Interrupted(InterruptReason::Budget);
             }
         }
@@ -359,7 +362,7 @@ async fn triggered(
 }
 
 /// A one-shot request from the session's current context with `prompt` as the last user
-/// message; nothing is recorded but instruction updates and credits. Retries only failures that
+/// message; nothing is recorded but instruction updates and usage. Retries only failures that
 /// never reached the model.
 pub(crate) enum GenerateError {
     /// The request is larger than the model takes.
@@ -441,9 +444,7 @@ pub(crate) async fn generate(
     let mut assembly = Assembly::default();
     while let Some(item) = stream.next().await {
         match item.map_err(generate_error)? {
-            StreamItem::Credits { charged, remaining } => {
-                shared.credits.record(&session.id, charged, remaining)
-            }
+            StreamItem::Usage(usage) => shared.usage.record(&session.id, &usage),
             StreamItem::Event(event) => {
                 assembly.on_event(&event).map_err(generate_error)?;
             }
@@ -872,8 +873,8 @@ async fn run_stream(
         };
         let Some(item) = item else { break };
         let event = match item {
-            Ok(StreamItem::Credits { charged, remaining }) => {
-                shared.credits.record(&session.id, charged, remaining);
+            Ok(StreamItem::Usage(usage)) => {
+                shared.usage.record(&session.id, &usage);
                 continue;
             }
             Ok(StreamItem::Event(event)) => event,
@@ -1218,10 +1219,7 @@ fn handle(
                 limits: selection.sources.config.tool_output(),
                 locks: shared.locks.clone(),
                 notifier: shared.notifier.clone(),
-                web_search: Arc::new(crate::search::GatewaySearch::new(
-                    shared.gateway.clone(),
-                    shared.credits.clone(),
-                )),
+                web_search: Arc::new(crate::search::GatewaySearch::new(shared.gateway.clone())),
                 host: shared.clone(),
                 session: Arc::new(super::host::Host {
                     shared: shared.clone(),

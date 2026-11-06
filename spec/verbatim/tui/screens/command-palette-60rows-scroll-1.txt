@@ -36,8 +36,7 @@
                        ~/my-ap    Open diff viewer                                        commands
 
                                   Anysola
-                                  Credits and plan
-                                  Usage
+                                  Usage and limits
                                   Session budget
                                   Signed-in devices
                                   Open your Anysola account
@@ -56,4 +55,5 @@
 
 
 
-  Team · renews 23 Nov                                                                                           0.5.1
+
+  Team · 5h resets in 2 h                                                                                        0.5.1

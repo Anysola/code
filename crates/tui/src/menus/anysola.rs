@@ -1,16 +1,16 @@
-//! The Anysola account dialogs and texts: `/credits`, `/usage`, `/devices`, `/budget`, the
-//! home banners and the exit summary (`spec/tui.md §5`).
+//! The Anysola account dialogs and texts: `/usage`, `/devices`, `/budget`, the banked-reset
+//! offer, the home banners and the exit summary (`spec/tui.md §5`).
 
 use anysola_core::gateway::account::Reply;
-use anysola_core::gateway::format::{credits, usage_lines};
+use anysola_core::gateway::format::usage_lines;
+use anysola_core::gateway::limits::{Limits, Window, WindowId, resets_in};
 use anysola_core::time::short_in;
+use anysola_core::usage::{MAX_BUDGET, percent};
 use chrono::FixedOffset;
 use serde_json::Value;
 
-use crate::dialog::{Action, Body, BodyKind, Kind, Line, Opt, Select, Tone, line};
-use crate::text::{short_date, title_case};
+use crate::dialog::{Action, Body, BodyKind, Kind, Opt, Select, Tone, line};
 
-pub const BILLING_URL: &str = "https://account.anysola.com/billing";
 pub const ACCOUNT_URL: &str = "https://account.anysola.com";
 pub const FEEDBACK_URL: &str = "https://www.anysola.com/contact";
 
@@ -40,99 +40,40 @@ fn str_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
         .filter(|s| !s.is_empty())
 }
 
-fn num_at(value: &Value, path: &[&str]) -> Option<f64> {
-    path.iter()
-        .try_fold(value, |v, k| v.get(k))
-        .and_then(Value::as_f64)
-}
-
-/// What `/credits` shows besides `/me`.
-pub struct CreditsView<'a> {
-    pub me: Result<&'a Value, Option<&'a str>>,
-    pub balance: Option<f64>,
-    /// `(turns, total)` of the open session.
-    pub session: Option<(u64, u64)>,
-    pub low: bool,
+/// What `/usage` shows besides the reply.
+pub struct UsageView {
+    pub days: u32,
+    /// `(turns, percent of the 5-hour window)` of the open session.
+    pub session: Option<(u64, f64)>,
     pub zone: FixedOffset,
     pub now: u64,
 }
 
-pub fn credits_dialog(view: &CreditsView) -> Body {
-    let mut rows: Vec<(&str, String)> = Vec::new();
-    match view.me {
-        Err(error) => rows.push(("Account", error.unwrap_or("Loading…").to_string())),
-        Ok(me) => {
-            let free = me.get("access").and_then(Value::as_str) == Some("free");
-            let plan = str_at(me, &["plan"]).unwrap_or("unknown");
-            let suffix = if free { " (free)" } else { "" };
-            rows.push(("Plan", format!("{}{suffix}", title_case(plan))));
-            if me.get("credits").is_some_and(Value::is_object) {
-                let balance = view
-                    .balance
-                    .or_else(|| num_at(me, &["credits", "available"]))
-                    .unwrap_or(0.0);
-                rows.push(("Balance", format!("{} credits", credits(balance))));
-            }
-            if let Some(at) = str_at(me, &["credits", "renewsAt"]).and_then(crate::text::parse_iso)
-            {
-                rows.push(("Renews", short_date(at, view.now)));
-            }
-            if me.get("freeQuota").is_some_and(Value::is_object) {
-                // [fix] §B4: `/me` sends `turns`.
-                let used = num_at(me, &["freeQuota", "turns"])
-                    .or_else(|| num_at(me, &["freeQuota", "usedTurns"]))
-                    .unwrap_or(0.0);
-                let daily = num_at(me, &["freeQuota", "dailyTurns"]).unwrap_or(0.0);
-                rows.push(("Free quota", format!("{used}/{daily} turns today")));
-            }
-            if let Some(at) = str_at(me, &["freeQuota", "resetsAt"]) {
-                rows.push(("Resets", short_in(at, &view.zone).unwrap_or_default()));
-            }
-            if me.get("usageToday").is_some_and(Value::is_object) {
-                let requests = num_at(me, &["usageToday", "requests"]).unwrap_or(0.0);
-                let spent = num_at(me, &["usageToday", "credits"]).unwrap_or(0.0);
-                rows.push((
-                    "Today",
-                    format!("{requests} requests · {} credits", credits(spent)),
-                ));
-            }
-            if let Some((turns, total)) = view.session.filter(|(t, _)| *t > 0) {
-                rows.push((
-                    "This session",
-                    format!("{turns} turns · {} credits", credits(total as f64)),
-                ));
-            }
-            if let Some(label) = str_at(me, &["event", "label"]) {
-                let until = str_at(me, &["event", "until"])
-                    .and_then(|at| short_in(at, &view.zone))
-                    .map(|at| format!(" until {at}"))
-                    .unwrap_or_default();
-                rows.push(("Event", format!("{label}{until}")));
-            }
-        }
-    }
-    let mut lines: Vec<Line> = rows
-        .into_iter()
-        .map(|(label, value)| {
-            vec![
-                (crate::text::pad_right(label, 16), Tone::Muted),
-                (value, Tone::Base),
-            ]
-        })
-        .collect();
-    lines.push(Vec::new());
-    let tone = if view.low { Tone::Warning } else { Tone::Muted };
-    lines.push(line(format!("Upgrade or top up: {BILLING_URL}"), tone));
-    Body::new(BodyKind::Credits, "Credits", lines)
-}
-
-/// `Usage · last <days> days`; `None` while loading.
-pub fn usage_dialog(days: u32, reply: Option<&Result<Reply, String>>, zone: FixedOffset) -> Body {
-    let lines: Vec<String> = match reply {
+/// `Usage · last <days> days`: both windows, the bank, requests by day and model; `None` while
+/// loading.
+pub fn usage_dialog(view: &UsageView, reply: Option<&Result<Reply, String>>) -> Body {
+    let days = view.days;
+    let mut lines: Vec<String> = match reply {
         None => vec!["Loading…".into()],
-        Some(Ok(r)) if r.ok() => usage_lines(&r.body, &zone),
+        Some(Ok(r)) if r.ok() => usage_lines(&r.body, view.now, &view.zone),
         Some(other) => vec![error_text(other)],
     };
+    if let Some((turns, used)) = view.session.filter(|(t, _)| *t > 0)
+        && reply.is_some_and(|r| r.as_ref().is_ok_and(Reply::ok))
+    {
+        let at = lines
+            .iter()
+            .position(String::is_empty)
+            .unwrap_or(lines.len());
+        let unit = if turns == 1 { "turn" } else { "turns" };
+        lines.insert(
+            at,
+            format!(
+                "  This session   {turns} {unit} · {} of the 5-hour window",
+                percent(used)
+            ),
+        );
+    }
     let lines = lines
         .into_iter()
         .map(|l| {
@@ -204,11 +145,16 @@ pub enum Budget {
     Usage(&'static str),
 }
 
-pub const BUDGET_USAGE: &str = "Usage: /budget <credits> | off | default <credits>";
-pub const DEFAULT_USAGE: &str = "Usage: /budget default <credits> | off";
+pub const BUDGET_USAGE: &str =
+    "Usage: /budget <percent of the 5-hour window> | off | default <percent>";
+pub const DEFAULT_USAGE: &str = "Usage: /budget default <percent of the 5-hour window> | off";
 
-fn positive(text: &str) -> Option<u64> {
-    text.parse::<u64>().ok().filter(|n| *n >= 1)
+/// A whole percent from 1 to 100.
+fn percent_arg(text: &str) -> Option<u64> {
+    text.trim_end_matches('%')
+        .parse::<u64>()
+        .ok()
+        .filter(|n| (1..=MAX_BUDGET).contains(n))
 }
 
 pub fn parse_budget(arguments: &str) -> Budget {
@@ -218,61 +164,112 @@ pub fn parse_budget(arguments: &str) -> Budget {
         ["off"] => Budget::Off,
         ["default"] => Budget::ShowDefault,
         ["default", "off"] => Budget::SetDefault(None),
-        ["default", n] => positive(n).map_or(Budget::Usage(DEFAULT_USAGE), |n| {
+        ["default", n] => percent_arg(n).map_or(Budget::Usage(DEFAULT_USAGE), |n| {
             Budget::SetDefault(Some(n))
         }),
         ["default", ..] => Budget::Usage(DEFAULT_USAGE),
-        [n] => positive(n).map_or(Budget::Usage(BUDGET_USAGE), Budget::Set),
+        [n] => percent_arg(n).map_or(Budget::Usage(BUDGET_USAGE), Budget::Set),
         _ => Budget::Usage(BUDGET_USAGE),
     }
 }
 
-pub fn budget_text(spent: u64, budget: Option<u64>) -> String {
+pub fn budget_text(spent: f64, budget: Option<u64>) -> String {
     match budget {
         Some(b) => format!(
-            "Session budget {}/{} credits",
-            credits(spent as f64),
-            credits(b as f64)
+            "Session budget {}/{b}% of the 5-hour window",
+            percent(spent)
         ),
         None => format!(
-            "No budget · {} credits spent. Set one: /budget <credits>",
-            credits(spent as f64)
+            "No budget · {} of the 5-hour window used. Set one: /budget <percent>",
+            percent(spent)
         ),
     }
 }
 
 pub fn default_text(limit: Option<u64>) -> String {
     match limit {
-        Some(n) => format!(
-            "New sessions start with a {} credit budget",
-            credits(n as f64)
-        ),
+        Some(n) => format!("New sessions start with a budget of {n}% of the 5-hour window"),
         None => "No default budget".into(),
     }
 }
 
-/// `Budget reached · <total>/<budget> credits` before a turn that would go over.
-pub fn budget_gate(total: u64, budget: u64, prompt: String) -> Select {
-    let raised = total.max(budget) + budget;
-    let options = vec![
-        Opt::new("Continue once", "once").description("Ask again before the next prompt"),
-        Opt::new(format!("Add {} credits", credits(budget as f64)), "raise")
-            .description(format!("Budget {}", credits(raised as f64))),
+/// The budget `Add` raises to: one more budget's worth, at most the whole window.
+pub fn raised_budget(total: f64, budget: u64) -> u64 {
+    ((total.ceil() as u64).max(budget) + budget).min(MAX_BUDGET)
+}
+
+/// `Budget reached · <total>/<budget>%` before a turn that would go over.
+pub fn budget_gate(total: f64, budget: u64, prompt: String) -> Select {
+    let raised = raised_budget(total, budget);
+    let mut options =
+        vec![Opt::new("Continue once", "once").description("Ask again before the next prompt")];
+    if raised > budget {
+        options.push(
+            Opt::new(format!("Add {}%", raised - budget), "raise")
+                .description(format!("Budget {raised}% of the 5-hour window")),
+        );
+    }
+    options.extend([
         Opt::new("Remove the budget", "remove"),
         Opt::new("Stop", "stop").description("Keep the prompt in the composer"),
-    ];
-    let title = format!(
-        "Budget reached · {}/{} credits",
-        credits(total as f64),
-        credits(budget as f64)
-    );
+    ]);
+    let title = format!("Budget reached · {}/{budget}%", percent(total));
     let mut select = Select::new(Kind::BudgetGate { prompt }, &title, options);
     select.selected = 0;
     select
 }
 
-/// Home footer banners: the event in info colour, low balance in warning colour.
-pub fn banners(me: Option<&Value>, low: Option<f64>, zone: FixedOffset) -> Vec<(String, Tone)> {
+/// The offer after a refused request: `None` when the bank is empty.
+pub fn banked_reset_message(
+    message: &str,
+    limits: &Limits,
+    now: u64,
+    zone: FixedOffset,
+) -> Option<String> {
+    let bank = limits.bank_at(now);
+    let first = bank.first()?;
+    let expires = first
+        .expires_at
+        .and_then(|at| short_in(&anysola_core::time::iso(at), &zone))
+        .map(|at| format!(" The next one expires {at}."))
+        .unwrap_or_default();
+    let count = bank.len();
+    let plural = if count == 1 { "" } else { "s" };
+    let message = message.trim();
+    let message = if message.contains("banked reset") {
+        message.to_string()
+    } else {
+        format!("{message} You have {count} banked reset{plural}.")
+    };
+    Some(format!(
+        "{message}{expires} Using one clears the window and sends your prompt again."
+    ))
+}
+
+/// `5-hour limit 84% used · resets in 2 h · /usage`.
+pub fn limit_banner(window: WindowId, w: Window, now: u64) -> String {
+    let resets = w
+        .resets_at
+        .map(|at| format!(" · resets {}", resets_in(Some(at), now)))
+        .unwrap_or_default();
+    if w.percent >= 100 {
+        format!("{} limit reached{resets} · /usage", window.label())
+    } else {
+        format!(
+            "{} limit {}% used{resets} · /usage",
+            window.label(),
+            w.percent
+        )
+    }
+}
+
+/// Home footer banners: the event in info colour, windows near their limit in warning colour.
+pub fn banners(
+    me: Option<&Value>,
+    warnings: &[(WindowId, Window)],
+    now: u64,
+    zone: FixedOffset,
+) -> Vec<(String, Tone)> {
     let mut out = Vec::new();
     if let Some(me) = me
         && let Some(label) = str_at(me, &["event", "label"])
@@ -283,11 +280,8 @@ pub fn banners(me: Option<&Value>, low: Option<f64>, zone: FixedOffset) -> Vec<(
             .unwrap_or_default();
         out.push((format!("{label}{until}"), Tone::Info));
     }
-    if let Some(balance) = low {
-        out.push((
-            format!("Low balance: {} credits left · /credits", credits(balance)),
-            Tone::Warning,
-        ));
+    if let Some((window, w)) = warnings.first() {
+        out.push((limit_banner(*window, *w, now), Tone::Warning));
     }
     out
 }
@@ -298,7 +292,10 @@ pub struct Summary {
     /// Empty when no session was open.
     pub id: String,
     pub turns: u64,
-    pub spent: u64,
+    /// Percent of the 5-hour window the session used.
+    pub spent: f64,
+    /// The status line's windows (`5h 42% · week 18%`), when known.
+    pub limits: Option<String>,
     /// The version installed by `/update`, to run next.
     pub updated: Option<String>,
 }
@@ -319,16 +316,19 @@ pub fn exit_summary(summary: &Summary) -> String {
     let row =
         |label: &str, value: &str| format!("  \x1b[90m{label:<10}\x1b[0m\x1b[1m{value}\x1b[0m\n");
     out.push_str(&row("Session", &summary.title));
-    if summary.spent > 0 {
+    if summary.spent > 0.0 {
         let turns = if summary.turns == 1 { "turn" } else { "turns" };
         out.push_str(&row(
-            "Spent",
+            "Used",
             &format!(
-                "{} {turns} · {} credits",
+                "{} {turns} · {} of the 5-hour window",
                 summary.turns,
-                credits(summary.spent as f64)
+                percent(summary.spent)
             ),
         ));
+    }
+    if let Some(limits) = &summary.limits {
+        out.push_str(&row("Limits", limits));
     }
     out.push_str(&row("Continue", &format!("anysola -s {}", summary.id)));
     out.push('\n');
@@ -343,12 +343,21 @@ mod tests {
     fn budget_arguments() {
         assert_eq!(parse_budget(""), Budget::Show);
         assert_eq!(parse_budget("50"), Budget::Set(50));
+        assert_eq!(parse_budget("20%"), Budget::Set(20));
         assert_eq!(parse_budget("0"), Budget::Usage(BUDGET_USAGE));
+        assert_eq!(parse_budget("101"), Budget::Usage(BUDGET_USAGE));
+        assert_eq!(parse_budget("100"), Budget::Set(100));
         assert_eq!(parse_budget("off"), Budget::Off);
         assert_eq!(parse_budget("default"), Budget::ShowDefault);
         assert_eq!(parse_budget("default 20"), Budget::SetDefault(Some(20)));
         assert_eq!(parse_budget("default off"), Budget::SetDefault(None));
         assert_eq!(parse_budget("default x"), Budget::Usage(DEFAULT_USAGE));
-        assert_eq!(budget_text(12, Some(50)), "Session budget 12/50 credits");
+        assert_eq!(
+            budget_text(12.0, Some(20)),
+            "Session budget 12%/20% of the 5-hour window"
+        );
+        assert_eq!(raised_budget(21.2, 20), 42);
+        assert_eq!(raised_budget(60.0, 60), 100);
+        assert_eq!(raised_budget(100.0, 100), 100);
     }
 }

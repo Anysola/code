@@ -12,7 +12,6 @@ fn main() {
             .to_string();
         Reply::Sse {
             body: Stream::new().text("Done.").finish(&model, Some(1)),
-            before: Some(731),
         }
     });
     println!("{}", gateway.url);

@@ -18,7 +18,8 @@ FLAGS
   --file, -f string       File to attach to the message
   --title string          Session title
   --thinking              Show thinking blocks
-  --budget integer        Stop once the session has spent this many credits
+  --budget integer        Stop once the session has used this percent of the 5-hour window (1-100)
+  --use-banked-reset      Spend a banked reset when a usage window is full
   --auto                  Auto-approve permissions that are not explicitly denied
 
 GLOBAL FLAGS
