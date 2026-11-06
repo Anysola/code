@@ -4,7 +4,7 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
-## 1.0.0 (unreleased)
+## 1.0.0 (2026-11-06)
 
 Anysola Code is rewritten in Rust. Everything 0.5.1 does keeps working the same way; [PARITY.md](PARITY.md) lists
 each feature and how it was checked.
