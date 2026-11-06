@@ -72,11 +72,12 @@ fn builtins(paths: &Paths) -> Vec<Agent> {
         "Read-only agent for exploring the codebase and planning work before implementation."
             .into(),
     );
-    let plan_dir = format!("{}/*", paths.plan_dir().display()).replace('\\', "/");
+    let glob = |dir: std::path::PathBuf| format!("{}/*", dir.display()).replace('\\', "/");
     plan.permissions.extend([
         rule("question", "*", Effect::Allow),
         rule("edit", "*", Effect::Deny),
-        rule("edit", &plan_dir, Effect::Allow),
+        rule("edit", &glob(paths.legacy_plan_dir()), Effect::Allow),
+        rule("edit", &glob(paths.plan_dir()), Effect::Allow),
     ]);
 
     let mut general = Agent::new("general");
@@ -342,7 +343,7 @@ mod tests {
         let plan = all.get("plan").unwrap();
         assert_eq!(
             plan.permissions.last().unwrap().resource,
-            "/home/u/.opencode/plan/*"
+            "/home/u/.anysola/plan/*"
         );
     }
 

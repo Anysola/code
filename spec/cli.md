@@ -47,6 +47,8 @@ logout, plugin list/check/update, models, run, session *. They are accepted befo
 - `[0.5.1]` Exactly `anysola --version` or `anysola -v` → `Anysola Code 0.5.1 (OpenCode 2.2.5)` exit 0
   (index.ts:38-41). Release CI asserts this exact line (release.yml:80-84); install-test greps `^Anysola Code [0-9]`;
   code-action logs it.
+- `[1.0.1]` The line is `Anysola Code <ver>` (no OpenCode suffix); release and CI assert it, install-test still
+  greps `^Anysola Code [0-9]`.
 - `[0.5.1]` Any other argv with `--version` (`anysola run --version`, `-v run`, `--version x`) → effect/cli prints
   `anysola v2.2.5`. Quirk; recommend Rust print the Anysola line for every `--version`.
 
@@ -103,6 +105,8 @@ User-facing / contract:
   `OPENCODE_MODELS_URL/PATH`, `OPENCODE_CLIENT`, `OPENCODE_TUI_CHANNEL`, `OPENCODE_LOG_LEVEL`,
   `OPENCODE_PRINT_LOGS`, `NO_PROXY/no_proxy` (merged with `127.0.0.1,localhost,::1`, index.ts:24-33),
   `OTEL_EXPORTER_OTLP_ENDPOINT/HEADERS`, `XDG_*` (storage/config agent owns semantics).
+- `[1.0.1]` Every `OPENCODE_<NAME>` the binary reads is also read as `ANYSOLA_<NAME>`, which wins when set and
+  non-empty (`crates/core/src/env.rs`).
 - Gates: `ANYSOLA_ENABLE_WEB_UI` `[dead]` (web-ui.ts:108), `ANYSOLA_ENABLE_REMOTE_TUNNEL` `[dead]` (remote-tunnel.ts:21).
 - Internal: `OPENCODE_PTY_HANDOFF`, `OPENCODE_SIMULATE`, `OPENCODE_DRIVE*`, `OPENCODE_STORY`, `OPENCODE_ROUTE`,
   `OPENCODE_FAST_BOOT`, `OPENCODE_SSH_ASKPASS_*`, `OPENCODE_TEST_HOME`, native-binding path overrides.
@@ -113,6 +117,9 @@ CLI-process requests carry `User-Agent: opencode/latest/2.2.5/cli` (bun `--user-
 account calls, `x-anysola-version: 0.5.1`; model requests from the server carry `opencode/latest/2.2.5+anysola.0.5.1/cli`
 and `x-anysola-client: opencode`. `/v1/code/version` carries no `x-anysola-version`. release.yml notes the gateway
 allowlists the UA.
+
+`[1.0.1]` Plain requests carry `User-Agent: anysola-code/<ver>`, model requests `anysola-code/<ver>/cli` (or `/acp`)
+and `x-anysola-client: anysola-code`.
 
 ---
 
@@ -367,6 +374,7 @@ Source `/home/ubuntu/anysola-code/code-action` (`action.yml`, `scripts/{main,lib
 
 ## Contracts the Rust binary must keep byte-compatible
 1. `anysola --version` → `Anysola Code <ver> (OpenCode 2.2.5)` + LF, exit 0 (release CI, install-test, action log).
+   `[1.0.1]` `Anysola Code <ver>` + LF.
 2. `run --format json` event lines: `type` values `step_start|text|reasoning|tool_use|step_finish|error`, top-level
    `sessionID`, `part.messageID` and `part.text` on text events, `error.message` on error events, one object per
    line on stdout, nothing else on stdout; budget error is the last error event.

@@ -15,6 +15,7 @@ impl App {
     pub(super) fn account_command(&mut self, id: &str, arguments: Option<&str>) -> bool {
         match id {
             "anysola.usage" => self.open_usage(7),
+            "anysola.reset" => self.open_reset(None),
             "anysola.devices" => self.open_devices(),
             "anysola.budget" => self.budget(arguments.unwrap_or_default()),
             "anysola.account" => self.open_url(account::ACCOUNT_URL),
@@ -294,6 +295,56 @@ impl App {
 
     /// Spends the banked reset that expires first, then sends the refused turn again.
     pub(super) fn redeem_and_retry(&mut self, session: String) {
+        self.spend_banked_reset(Box::new(move |app: &mut App| app.retry_turn(&session)));
+    }
+
+    /// `/reset`: asks before spending a banked reset, with the bank as `/limits` reports it now;
+    /// `usage` is the `/usage` view to reopen afterwards.
+    pub(super) fn open_reset(&mut self, usage: Option<u32>) {
+        let (core, tx) = (self.core.clone(), self.tx.clone());
+        tokio::spawn(async move {
+            let reply = core.account(Method::GET, "/limits").await;
+            let _ = tx.send(Msg::Apply(Box::new(move |app: &mut App| {
+                let limits = match &reply {
+                    Ok(r) if r.ok() => Limits::from_wire(&r.body),
+                    _ => None,
+                };
+                let Some(limits) = limits else {
+                    app.toast(
+                        Some("Banked reset".into()),
+                        account::error_text(&reply),
+                        Variant::Error,
+                    );
+                    return;
+                };
+                let now = app.state.now.max(super::now());
+                let message = account::use_reset_message(&limits, now, app.state.zone);
+                app.set_limits(limits);
+                match message {
+                    Some(message) => app.push(Dialog::Confirm(Confirm {
+                        kind: ConfirmKind::UseBankedReset { usage },
+                        title: "Use a banked reset?".into(),
+                        message,
+                        button: "Use banked reset".into(),
+                        yes: true,
+                    })),
+                    None => app.toast(None, account::NO_BANKED_RESETS.into(), Variant::Info),
+                }
+            })));
+        });
+    }
+
+    /// Spends the banked reset that expires first, then reopens `/usage` when it came from there.
+    pub(super) fn redeem(&mut self, usage: Option<u32>) {
+        self.spend_banked_reset(Box::new(move |app: &mut App| {
+            if let Some(days) = usage {
+                app.open_usage(days);
+            }
+        }));
+    }
+
+    /// `POST /limits/redeem`; on success takes the new limits, says so and runs `then`.
+    fn spend_banked_reset(&mut self, then: Box<dyn FnOnce(&mut App) + Send>) {
         let (core, tx) = (self.core.clone(), self.tx.clone());
         tokio::spawn(async move {
             let reply = core.account(Method::POST, "/limits/redeem").await;
@@ -304,7 +355,10 @@ impl App {
                         app.set_limits(limits);
                     }
                     app.toast(None, "Banked reset used".into(), Variant::Success);
-                    app.retry_turn(&session);
+                    then(app);
+                }
+                Ok(r) if r.status == 409 => {
+                    app.toast(None, account::NO_BANKED_RESETS.into(), Variant::Info)
                 }
                 other => app.toast(
                     Some("Banked reset".into()),

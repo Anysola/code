@@ -10,6 +10,9 @@ from (`github.com/Anysola/code/releases`) and the www `/install` routes proxy (`
    `spec/verbatim/cli/release.txt` (the pack step fails otherwise); `npm` holds the 13 tarballs.
 3. Live gateway: `mid-conversation-output-config-2026-07-01` is still in the `allowedBetas` (added 2026-11-03).
 4. `CHANGELOG.md` has the version's entry (the release notes point to it).
+5. From 1.0.1: the live `code_settings.allowedUserAgents` lists `anysola-code/` next to `opencode/` (1.0.1 sends
+   `anysola-code/<ver>`; without it every model call is refused as an unknown client). The gateway deploy that
+   reads `x-anysola-session` should be live too (without it, cache affinity falls back to `x-opencode-session`).
 
 ## Release
 

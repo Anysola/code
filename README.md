@@ -64,8 +64,19 @@ Coming from 0.5.x: the first start imports your sessions, settings and sign-in f
 | `anysola update` | Install the latest release the way this copy was installed (install script or npm) |
 | `anysola uninstall` | Remove the binary and its `PATH` entry; your data and config stay |
 
-In the TUI: `/usage` (usage limits, banked resets, recent requests and cache hit rate), `/devices` (signed-in devices),
-`/budget` (session budget, below), `/account` (opens account.anysola.com), `/feedback` (opens a support ticket).
+In the TUI: `/usage` (usage limits, banked resets, recent requests and cache hit rate), `/reset` (spend a banked
+reset), `/devices` (signed-in devices), `/budget` (session budget, below), `/account` (opens account.anysola.com),
+`/feedback` (opens a support ticket).
+
+## Configuration
+
+Settings are read from `~/.anysola/config.json`, then from `anysola.json` or `anysola.jsonc` in the project and its
+parent folders, then from a project's `.anysola/` folder, which also holds `agent/`, `command/`, `skills/` and
+`themes/`. `~/.anysola/` holds the global `AGENTS.md`, agents, commands, skills and themes the same way. Environment
+settings are `ANYSOLA_*` (`ANYSOLA_CONFIG`, `ANYSOLA_CONFIG_CONTENT`, `ANYSOLA_LOG_LEVEL`, …).
+
+For compatibility, the 0.5.x names are still read: `opencode.json[c]`, `.opencode/`, `~/.config/opencode/` and each
+`OPENCODE_*` variable. Where both names exist, the `anysola` one wins.
 
 ## Usage limits
 
@@ -79,7 +90,8 @@ appears once; `/usage` and `anysola usage` show both windows with their reset ti
 When a window is full you can wait for it to reset or spend a **banked reset**. Banked resets are rights Anysola puts
 in your bank; each has an expiry date and you hold at most 3 at a time. When a request is refused, the TUI asks
 "Use a banked reset?" if you have one, and on "Use banked reset" clears the window and sends your prompt again.
-`anysola limits` lists your bank, `anysola limits redeem` spends the reset that expires first, and
+To spend one on your own, use `/reset`, or `r` in `/usage`; a reset clears the 5-hour window, or both windows when
+it was granted for both. `anysola limits` lists your bank, `anysola limits redeem` spends the reset that expires first, and
 `anysola run --use-banked-reset` spends one on its own when a run would otherwise stop.
 
 ### Session budget

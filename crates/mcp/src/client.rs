@@ -417,7 +417,7 @@ impl Connection {
     ) -> Result<Connection, Error> {
         let capabilities = json!({"elicitation": {"form": {}, "url": {}}, "roots": {}});
         let client_info =
-            json!({"name": "opencode", "version": anysola_core::version::session_version()});
+            json!({"name": "anysola-code", "version": anysola_core::version::VERSION});
         let handshake = match spec.protocol.as_deref() {
             None => Ok(None),
             Some(protocol) => {
@@ -579,7 +579,7 @@ impl Connection {
         let params = json!({
             "name": name,
             "arguments": arguments,
-            "_meta": {"ai.opencode/sessionID": session_id, "progressToken": token},
+            "_meta": {"ai.anysola/sessionID": session_id, "progressToken": token},
         });
         self.peer
             .request("tools/call", params, self.execution)

@@ -39,6 +39,8 @@ Verbatim artifacts: `spec/verbatim/session/` — see the index at the end of thi
     `x-opencode-project: <project id or "global">`, `x-opencode-client: cli` (app name; TUI sends its own name),
     `User-Agent: opencode/latest/2.2.5+anysola.0.5.1/cli`; for child sessions also `x-opencode-parent-session-id` and
     `x-parent-session-id`.
+  - `[1.0.1]` Also `x-anysola-session` (= affinity); `User-Agent: anysola-code/<ver>/cli`, `x-anysola-client:
+    anysola-code`. The `x-opencode-*` headers stay.
   - Tracing headers `traceparent` and `b3` are present (OTel propagation; values random). Not required for parity of
     behavior, but harmless to send.
 - [0.5.1] Title requests send the same header set (they are ordinary model requests).
@@ -312,6 +314,8 @@ Built-in agents (`core/src/plugin/agent.ts`, `plugin/plan.ts`); defaults from `s
   before the last user message (captured `requests/primary-plan-agent.json`: reminder as its own user turn before the
   prompt). Plan dir = `<home>/.opencode/plan`. Edit/write/patch permission blocks in plan become
   `Cannot use <tool> to modify files outside the Plan directory: <dir>`. `plugin/plan.ts`.
+- `[1.0.1]` Plan dir = `~/.anysola/plan`; plan mode may still edit `<home>/.opencode/plan/*`. Scratch dir
+  `<tmp>/anysola`.
 
 ---
 

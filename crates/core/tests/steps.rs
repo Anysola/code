@@ -297,7 +297,7 @@ fn plan_mode_reminder_survives_compaction_and_guards_edits() {
     runtime
         .block_on(core.prompt(&session.id, prompt("PLANSECOND"), TurnOptions::default()))
         .unwrap();
-    let plan_dir = env.home.home().join(".opencode").join("plan");
+    let plan_dir = env.home.home().join(".anysola").join("plan");
     let enter = format!(
         "user: <system-reminder>\nYou are in Plan mode. Discuss the plan with the user directly in the conversation. Do not create or update plan files unless the user explicitly asks you to; when they do, write them only in:\n{}\n",
         plan_dir.display()

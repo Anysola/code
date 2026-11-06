@@ -399,7 +399,10 @@ fn status_shows_the_real_me_shape() {
         me.header("x-anysola-version"),
         Some(env!("CARGO_PKG_VERSION"))
     );
-    assert_eq!(me.header("user-agent"), Some("opencode/latest/2.2.5/cli"));
+    assert_eq!(
+        me.header("user-agent"),
+        Some(concat!("anysola-code/", env!("CARGO_PKG_VERSION")))
+    );
     assert_eq!(me.header("x-anysola-client"), None);
 
     gateway.set_reply("/v1/code/me", json_reply(200, json!({"plan": "free", "access": null,

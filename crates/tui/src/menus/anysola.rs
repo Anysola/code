@@ -92,6 +92,17 @@ pub fn usage_dialog(view: &UsageView, reply: Option<&Result<Reply, String>>) -> 
     );
     let other = if days == 7 { "30 days" } else { "7 days" };
     body.actions = vec![Action::right(other, "t")];
+    let banked = match reply {
+        Some(Ok(r)) if r.ok() => r
+            .body
+            .get("limits")
+            .and_then(Limits::from_wire)
+            .is_some_and(|l| !l.bank_at(view.now).is_empty()),
+        _ => false,
+    };
+    if banked {
+        body.actions.push(Action::right("use banked reset", "r"));
+    }
     body
 }
 
@@ -243,6 +254,30 @@ pub fn banked_reset_message(
     };
     Some(format!(
         "{message}{expires} Using one clears the window and sends your prompt again."
+    ))
+}
+
+pub const NO_BANKED_RESETS: &str = "No banked resets.";
+
+/// The `/reset` confirm text: how many, when the next one expires, and what spending it clears
+/// (the one that expires first is spent); `None` when the bank is empty.
+pub fn use_reset_message(limits: &Limits, now: u64, zone: FixedOffset) -> Option<String> {
+    let bank = limits.bank_at(now);
+    let first = bank.first()?;
+    let count = bank.len();
+    let plural = if count == 1 { "" } else { "s" };
+    let expires = first
+        .expires_at
+        .and_then(|at| short_in(&anysola_core::time::iso(at), &zone))
+        .map(|at| format!(" The next one expires {at}."))
+        .unwrap_or_default();
+    let clears = if first.both {
+        "your 5-hour and weekly windows"
+    } else {
+        "your 5-hour window"
+    };
+    Some(format!(
+        "You have {count} banked reset{plural}.{expires} Using one clears {clears}."
     ))
 }
 

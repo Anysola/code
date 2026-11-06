@@ -147,7 +147,10 @@ fn codemode_retry_transient_errors_and_session_expiry() {
     let user_agent = gateway.requests_to("/mcp")[0]
         .header("user-agent")
         .map(str::to_string);
-    assert_eq!(user_agent.as_deref(), Some("opencode/latest/2.2.5/cli"));
+    assert_eq!(
+        user_agent.as_deref(),
+        Some(concat!("anysola-code/", env!("CARGO_PKG_VERSION")))
+    );
 }
 
 /// An OAuth-protected MCP server at `path` whose authorization server supports CIMD or not.
@@ -469,7 +472,7 @@ fn protocol_auto_and_pinned_negotiate_with_server_discover() {
     assert_eq!(call.header("mcp-name"), Some("echo"));
     assert_eq!(
         call.json()["params"]["_meta"]["io.modelcontextprotocol/clientInfo"]["name"],
-        "opencode"
+        "anysola-code"
     );
 
     assert_eq!(methods("/legacy")[..2], ["server/discover", "initialize"]);

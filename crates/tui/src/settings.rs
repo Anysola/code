@@ -1,5 +1,5 @@
 //! TUI settings: `~/.anysola/tui.json` (0.5.1's `cli.json` schema) with the
-//! `OPENCODE_CLI_CONFIG_CONTENT` overlay; changes are written back with temp + rename, mode 0600.
+//! `ANYSOLA_CLI_CONFIG_CONTENT` overlay; changes are written back with temp + rename, mode 0600.
 
 use std::path::PathBuf;
 
@@ -29,9 +29,7 @@ impl Tui {
             .and_then(|t| parse(&t))
             .unwrap_or_else(|| Value::Object(Map::new()));
         let mut value = file.clone();
-        if let Some(overlay) = std::env::var("OPENCODE_CLI_CONFIG_CONTENT")
-            .ok()
-            .and_then(|t| parse(&t))
+        if let Some(overlay) = anysola_core::env::var("CLI_CONFIG_CONTENT").and_then(|t| parse(&t))
         {
             merge(&mut value, &overlay);
         }

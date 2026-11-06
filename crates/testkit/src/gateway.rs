@@ -101,7 +101,7 @@ pub fn default_config(base: &str) -> Value {
         "small_model": "anysola/claude-haiku-5-5",
         "agents": {"title": {"model": "anysola/claude-haiku-5-5"}},
         "providers": {"anysola": {"name": "Anysola", "package": "@opencode/ai/providers/anthropic-compatible",
-            "settings": {"baseURL": format!("{base}/v1/code"), "apiKey": "{env:ANYSOLA_TOKEN}"}, "headers": {"x-anysola-client": "opencode"},
+            "settings": {"baseURL": format!("{base}/v1/code"), "apiKey": "{env:ANYSOLA_TOKEN}"}, "headers": {"x-anysola-client": "anysola-code"},
             "models": {
                 "auto": {"name": "Auto", "description": "Picks Haiku or Sonnet per turn", "limit": {"context": 1000000, "output": 32000},
                     "capabilities": {"reasoning": {"supported": true, "effort": efforts}},

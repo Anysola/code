@@ -26,6 +26,7 @@ stderr, exit 1. Only the first line is meaningful; Rust should print `Error: <me
 SDK: `@modelcontextprotocol/client|core|server` 2.3.1 (`packages/core/package.json:98-100`). Client identity sent in
 `initialize`: `{"name":"opencode","version":"2.2.5+anysola.0.5.1"}` (`packages/server/src/routes.ts:144-150`); HTTP
 User-Agent `opencode/latest/2.2.5/cli`. Default protocol revision offered: `2025-11-25`.
+`[1.0.1]` `clientInfo {name: "anysola-code", version: <ver>}`, User-Agent `anysola-code/<ver>`.
 
 ### 1.1 Config format [0.5.1]
 - [ ] Native (v2) shape: `"mcp": { "timeout": {startup,catalog,execution}, "servers": { "<name>": Server } }`
@@ -103,6 +104,7 @@ User-Agent `opencode/latest/2.2.5/cli`. Default protocol revision offered: `2025
 - [ ] A server connecting after the session started yields an appended `role:"system"` message "The Code Mode tool catalog
   has changed. ..." (observed; exact text in `mcp-observed-output.txt`).
 - [ ] Call: `_meta: {"ai.opencode/sessionID": <session>}` (+ SDK `progressToken`) on `tools/call` (`client.ts:432`).
+  `[1.0.1]` `ai.anysola/sessionID`: neither the gateway nor any spec relies on the old key.
 - [ ] Result mapping (`client.ts:485-504`, `tool/mcp.ts:85-163`): `isError` -> tool failure with joined text; text parts
   joined by `\n`; `structuredContent` wins as output; text starting `{`/`[` parsed as JSON when no outputSchema; images /
   audio / blobs with a read-tool media mime sent inline as files; other textual mimes inlined as
@@ -157,6 +159,8 @@ User-Agent `opencode/latest/2.2.5/cli`. Default protocol revision offered: `2025
   `jsonc-parser` `modify` (2-space indent, keeps comments) into the first existing of `opencode.json`, `opencode.jsonc`,
   `.opencode/opencode.json`, `.opencode/opencode.jsonc` in cwd (or global config dir with `--global`), creating
   `opencode.json` if none (`handlers/mcp/add.ts:40-68`). Prints `MCP server "<name>" added to <path>`.
+  `[1.0.1]` Candidates `anysola.json`, `anysola.jsonc`, `.anysola/anysola.json[c]`, then the `opencode` ones;
+  creates `anysola.json` if none.
 - [ ] `mcp auth [name]`: clack UI; without a name needs a TTY and shows a picker of OAuth-capable servers; existing
   credentials prompt "Re-authenticate?" (TTY only); runs the integration OAuth attempt, prints instructions + URL, opens
   browser on TTY, polls status every 500 ms; on success removes the previous credentials (`handlers/mcp/auth.ts`,

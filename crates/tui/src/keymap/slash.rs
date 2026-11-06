@@ -349,6 +349,16 @@ pub const SLASH: &[Slash] = &[
         arguments: false,
     },
     Slash {
+        name: "reset",
+        aliases: &[],
+        title: "Use a banked reset",
+        description: None,
+        id: "anysola.reset",
+        group: "Anysola",
+        session: false,
+        arguments: false,
+    },
+    Slash {
         name: "budget",
         aliases: &[],
         title: "Session budget",

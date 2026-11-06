@@ -70,10 +70,10 @@ fn host_like(text: &str) -> bool {
     text.contains('.') || text.contains(':') || text == "localhost"
 }
 
-/// GitHub clones go to `https://github.com/<path>.git`, or below `OPENCODE_REPO_CLONE_GITHUB_BASE_URL`.
+/// GitHub clones go to `https://github.com/<path>.git`, or below `ANYSOLA_REPO_CLONE_GITHUB_BASE_URL`.
 fn github_remote(path: &str) -> String {
-    match std::env::var("OPENCODE_REPO_CLONE_GITHUB_BASE_URL") {
-        Ok(base) if !base.is_empty() => {
+    match crate::env::var("REPO_CLONE_GITHUB_BASE_URL") {
+        Some(base) if !base.is_empty() => {
             let base = if base.ends_with('/') {
                 base
             } else {

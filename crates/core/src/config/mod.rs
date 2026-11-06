@@ -2,10 +2,14 @@
 //! Anysola provider lock, and the merge into one [`Config`].
 //!
 //! Sources, lowest precedence first: managed policies, the gateway's remote document,
-//! `~/.config/opencode` (`OPENCODE_CONFIG_DIR`), `~/.anysola/config.json`, `OPENCODE_CONFIG`,
-//! project `opencode.json[c]` files farthest first, project `.opencode/` directories farthest
-//! first, `OPENCODE_CONFIG_CONTENT`, then managed settings (the system directory, then macOS MDM
+//! `~/.config/opencode` (`ANYSOLA_CONFIG_DIR`), `~/.anysola/config.json`, `ANYSOLA_CONFIG`,
+//! project `anysola.json[c]` files farthest first, project `.anysola/` directories farthest
+//! first, `ANYSOLA_CONFIG_CONTENT`, then managed settings (the system directory, then macOS MDM
 //! preferences). Managed policies outrank all others although their settings load last.
+//!
+//! The 0.5.x names are still read: `opencode.json[c]` and `.opencode/` load just before their
+//! `anysola` counterparts in the same directory, so the new name wins a conflict, and every
+//! `ANYSOLA_*` variable falls back to its `OPENCODE_*` name ([`crate::env`]).
 
 pub mod jsonc;
 mod mcp;
@@ -23,7 +27,15 @@ use crate::tool::OutputLimits;
 
 pub use normalize::{markdown_agent, model_ref, normalize_action};
 
-const NAMES: [&str; 2] = ["opencode.json", "opencode.jsonc"];
+/// Config file names of a directory, in load order (later wins): the 0.5.x names first.
+pub const NAMES: [&str; 4] = [
+    "opencode.json",
+    "opencode.jsonc",
+    "anysola.json",
+    "anysola.jsonc",
+];
+/// Project config directories, in load order (later wins): the 0.5.x name first.
+pub const DOT_DIRS: [&str; 2] = [".opencode", ".anysola"];
 const ENDPOINT_KEYS: [&str; 4] = ["baseURL", "apiKey", "authToken", "accessToken"];
 
 /// One parsed, normalized document.
@@ -41,7 +53,7 @@ struct Document {
 pub enum Source {
     /// A directory that exists and was read for files and definitions.
     Directory(PathBuf),
-    /// A parsed document (a file path, or `OPENCODE_CONFIG_CONTENT`), after normalization.
+    /// A parsed document (a file path, or `ANYSOLA_CONFIG_CONTENT`), after normalization.
     Document {
         path: String,
         data: Map<String, Value>,
@@ -416,10 +428,6 @@ pub struct LoadOptions {
     pub api_url: String,
 }
 
-fn env_flag(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|v| !v.is_empty() && v != "0" && v != "false")
-}
-
 /// Directories walked upward from `start`: through home (inclusive) when `start` is inside home,
 /// else through the project root. Nearest first.
 pub fn upward(start: &Path, home: &Path) -> Vec<PathBuf> {
@@ -591,11 +599,11 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
     let legacy = paths.legacy_config_dir();
     loader.directory(&legacy, &NAMES);
     loader.directory(&paths.data, &["config.json"]);
-    if let Some(file) = std::env::var_os("OPENCODE_CONFIG").filter(|v| !v.is_empty()) {
+    if let Some(file) = crate::env::var_os("CONFIG").filter(|v| !v.is_empty()) {
         loader.file(Path::new(&file));
     }
     let project_disabled =
-        env_flag("OPENCODE_DISABLE_PROJECT_CONFIG") || env_flag("OPENCODE_CONFIG_PROJECT_DISABLE");
+        crate::env::flag("DISABLE_PROJECT_CONFIG") || crate::env::flag("CONFIG_PROJECT_DISABLE");
     let system = system_dir();
     let config_roots: Vec<PathBuf> = [&system, &legacy, &paths.data]
         .into_iter()
@@ -622,16 +630,24 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
             }
         }
         for dir in &walk {
-            let dot = dir.join(".opencode");
-            if !global_roots.contains(&resolve(&dot)) {
-                loader.directory(&dot, &NAMES);
+            for name in DOT_DIRS {
+                let dot = dir.join(name);
+                if !global_roots.contains(&resolve(&dot)) {
+                    loader.directory(&dot, &NAMES);
+                }
             }
         }
     }
-    if let Ok(content) = std::env::var("OPENCODE_CONFIG_CONTENT")
+    if let Some(content) = crate::env::var("CONFIG_CONTENT")
         && !content.trim().is_empty()
     {
-        loader.text(&content, directory, "OPENCODE_CONFIG_CONTENT");
+        let [new, old] = crate::env::names("CONFIG_CONTENT");
+        let name = if std::env::var_os(&new).is_some_and(|v| !v.is_empty()) {
+            new
+        } else {
+            old
+        };
+        loader.text(&content, directory, &name);
     }
     loader.managed = true;
     loader.directory(&system, &NAMES);
@@ -745,6 +761,54 @@ mod tests {
             config.entries.iter().rev().nth(1),
             Some(&Entry::Document {
                 agents: json!({"build": {"steps": 3}}).as_object().unwrap().clone(),
+                commands: Map::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn new_names_win_over_the_old_ones_still_read() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let project = home.join("proj");
+        let write = |path: PathBuf, text: &str| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write(
+            project.join("opencode.json"),
+            r#"{"shell":"zsh","instructions":["old.md"]}"#,
+        );
+        write(project.join("anysola.jsonc"), r#"{"shell":"bash"}"#);
+        let paths = Paths::isolated(home.clone());
+        let config = load(&paths, &project, &LoadOptions::default());
+        assert_eq!(config.shell(), Some("bash"));
+        assert_eq!(config.instructions, vec!["old.md"]);
+        write(
+            project.join(".opencode/opencode.json"),
+            r#"{"agents":{"build":{"steps":3}}}"#,
+        );
+        write(
+            project.join(".anysola/anysola.json"),
+            r#"{"agents":{"build":{"steps":5}}}"#,
+        );
+        let config = load(&paths, &project, &LoadOptions::default());
+        let dirs: Vec<&Entry> = config
+            .entries
+            .iter()
+            .filter(|e| matches!(e, Entry::Directory(_)))
+            .collect();
+        assert_eq!(
+            dirs,
+            [
+                &Entry::Directory(project.join(".opencode")),
+                &Entry::Directory(project.join(".anysola")),
+            ]
+        );
+        assert_eq!(
+            config.entries.iter().rev().nth(1),
+            Some(&Entry::Document {
+                agents: json!({"build": {"steps": 5}}).as_object().unwrap().clone(),
                 commands: Map::new(),
             })
         );

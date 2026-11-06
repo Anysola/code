@@ -16,10 +16,13 @@ use crate::paths::Paths;
 
 const DEBOUNCE: Duration = Duration::from_millis(100);
 /// Entries of a walked directory that change what loads.
-const ENTRIES: [&str; 6] = [
+const ENTRIES: [&str; 9] = [
+    "anysola.json",
+    "anysola.jsonc",
     "opencode.json",
     "opencode.jsonc",
     "AGENTS.md",
+    ".anysola",
     ".opencode",
     ".claude",
     ".agents",
@@ -154,6 +157,8 @@ pub fn targets(
         add(entries(
             dir,
             &[
+                "anysola.json",
+                "anysola.jsonc",
                 "opencode.json",
                 "opencode.jsonc",
                 "config.json",
@@ -176,12 +181,7 @@ pub fn targets(
 }
 
 fn disabled() -> bool {
-    [
-        "OPENCODE_DISABLE_FILEWATCHER",
-        "OPENCODE_FILEWATCHER_DISABLE",
-    ]
-    .iter()
-    .any(|name| std::env::var(name).is_ok_and(|v| !v.is_empty() && v != "0" && v != "false"))
+    crate::env::flag("DISABLE_FILEWATCHER") || crate::env::flag("FILEWATCHER_DISABLE")
 }
 
 /// The live watch; [`Watch::arm`] replaces what it covers after every reload.
@@ -243,6 +243,8 @@ mod tests {
         let entry = entries(Path::new("/p"), &ENTRIES);
         assert!(entry.covers(Path::new("/p/AGENTS.md")));
         assert!(entry.covers(Path::new("/p/.opencode")));
+        assert!(entry.covers(Path::new("/p/.anysola")));
+        assert!(entry.covers(Path::new("/p/anysola.jsonc")));
         assert!(!entry.covers(Path::new("/p/src/main.rs")));
         assert!(!entry.covers(Path::new("/p/notes.md")));
         assert!(

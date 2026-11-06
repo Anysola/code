@@ -4,6 +4,19 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.0.1 (unreleased)
+
+- `/reset` spends a banked reset whenever you choose, after a confirm that shows how many you have, when the next
+  one expires and which windows it clears. `/usage` offers the same with `r` (or a click) when your bank holds one.
+- Anysola Code speaks as itself: `anysola --version` prints `Anysola Code <version>`, and requests, MCP servers and
+  the model see Anysola Code instead of OpenCode. Version 1.0.1 needs the Anysola server to accept its new
+  identity; 1.0.0 keeps working as before.
+- New file and variable names: `anysola.json` / `anysola.jsonc` and a project `.anysola/` folder for settings,
+  agents, commands, skills and themes, `ANYSOLA_*` environment variables, plans in `~/.anysola/plan` and scratch
+  files in `<tmp>/anysola`. The old `opencode.json[c]`, `.opencode/`, `~/.config/opencode/` and `OPENCODE_*` names
+  are still read, so nothing needs to change; where both exist, the new name wins. `anysola mcp add` writes to
+  `anysola.json` unless the project already has one of the other files.
+
 ## 1.0.0 (2026-11-06)
 
 Anysola Code is rewritten in Rust. Everything 0.5.1 does keeps working the same way; [PARITY.md](PARITY.md) lists

@@ -102,7 +102,7 @@ fn palette(light: bool) -> Palette {
     }
 }
 
-/// `Anysola Code <ver> (OpenCode 2.2.5)`.
+/// `Anysola Code <ver>`.
 pub fn version_line() -> String {
     anysola_core::version::version_line()
 }
@@ -451,7 +451,7 @@ mod tests {
             "╭ Stack trace ",
             "↑↓ scroll",
             "Copy the report and open a GitHub issue to help us fix this.",
-            "(OpenCode 2.2.5)",
+            "Anysola Code ",
         ] {
             assert!(text.contains(needle), "{needle}\n{text}");
         }

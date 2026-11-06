@@ -6,17 +6,18 @@ pub const VERSION: &str = match option_env!("ANYSOLA_VERSION") {
     None => env!("CARGO_PKG_VERSION"),
 };
 
-/// The OpenCode release this product line descends from; part of the gateway's client contract.
+/// The base version of the stored session format (`<base>+anysola.<ver>`), kept so 0.5.x and 1.0.0
+/// databases read the same; not sent to any server.
 pub const OPENCODE_VERSION: &str = "2.2.5";
 
 /// `anysola --version` output.
 pub fn version_line() -> String {
-    format!("Anysola Code {VERSION} (OpenCode {OPENCODE_VERSION})")
+    format!("Anysola Code {VERSION}")
 }
 
 /// User agent of every plain HTTP request.
 pub fn user_agent() -> String {
-    format!("opencode/latest/{OPENCODE_VERSION}/cli")
+    format!("anysola-code/{VERSION}")
 }
 
 static CLIENT: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
@@ -31,12 +32,9 @@ pub fn client() -> &'static str {
     CLIENT.get().copied().unwrap_or("cli")
 }
 
-/// User agent of model calls.
+/// User agent of model calls: the plain one plus `cli` or `acp`.
 pub fn model_user_agent() -> String {
-    format!(
-        "opencode/latest/{OPENCODE_VERSION}+anysola.{VERSION}/{}",
-        client()
-    )
+    format!("anysola-code/{VERSION}/{}", client())
 }
 
 /// Stored on sessions as the writer's version.

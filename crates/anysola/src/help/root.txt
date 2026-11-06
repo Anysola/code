@@ -1,5 +1,5 @@
 DESCRIPTION
-  Anysola Code command line interface (based on OpenCode, MIT)
+  Anysola Code command line interface
 
 USAGE
   anysola <subcommand> [flags] [<directory>]

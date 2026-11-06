@@ -83,7 +83,7 @@ for target in $targets; do
 {
   "name": "@anysola/code-$target",
   "version": "$version",
-  "description": "Anysola Code binary, based on OpenCode (MIT)",
+  "description": "Anysola Code binary",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -123,7 +123,7 @@ cat > "$dir/package.json" <<EOF
     "postinstall": "node ./postinstall.mjs"
   },
   "version": "$version",
-  "description": "Anysola Code: the Anysola coding agent for your terminal, based on OpenCode (MIT)",
+  "description": "Anysola Code: the Anysola coding agent for your terminal",
   "license": "MIT",
   "repository": {
     "type": "git",

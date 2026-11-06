@@ -547,6 +547,11 @@ and a `credits` event stream). The gateway protocol itself is in the gateway spe
 > banked-reset dialog, model picker and exit summary are specified in `spec/protocol.md §4` and checked in PARITY.md
 > M4.6. `/credits` is gone.
 
+> `[1.0.1]` `/reset` ("Use a banked reset", also in the palette) fetches `/limits`: with an empty bank a toast
+> "No banked resets."; otherwise a confirm ("You have N banked reset(s). The next one expires <date>. Using one clears
+> your 5-hour window." or "…your 5-hour and weekly windows." per the soonest reset's scope) that spends it with
+> `POST /limits/redeem`. `/usage` shows `use banked reset r` (key and click) when the bank holds one.
+
 ### State and refresh
 - [ ] Account state: `me` (plan, access paid/free, credits.available/renewsAt, freeQuota, event{label,until}, usageToday, lowBalance), per-session credits (`turn`, `total`, `turns`, `budget`, `remaining`), per-model `estimates` and `notes` — `anysola/store.ts:11-77` — [0.5.1]
 - [ ] `me` refreshed on app start, on `server.connected`, every 5 min, and 1.5 s (debounced) after every `credits` event; `estimates`+`notes` on start and reconnect — `feature-plugins/system/anysola.tsx:202-248` — [0.5.1]
@@ -735,3 +740,4 @@ Paths: `packages/<pkg>/src/...` under `/home/ubuntu/anysola-code/build/fork/`. O
 - Settings shows Animations `off` when unset while animations actually run.
 - `<leader>q` is bound to both `app.exit` and `session.queued_prompts`.
 - Crash screen links to `https://github.com/Anysola/code/issues/new?template=bug-report.yml` and prints `Anysola Code <ver> (OpenCode 2.2.5)`.
+- `[1.0.1]` The version line is `Anysola Code <ver>`.

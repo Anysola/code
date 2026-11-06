@@ -239,7 +239,15 @@ impl Core {
         let (events, _) = broadcast::channel(4096);
         let usage = Arc::new(Usage::new(db.clone(), events.clone()));
         let env = std::env::vars_os()
-            .filter(|(k, _)| k != "OPENCODE_PASSWORD" && k != "OPENCODE_SERVER_PASSWORD")
+            .filter(|(k, _)| {
+                ![
+                    crate::env::names("PASSWORD"),
+                    crate::env::names("SERVER_PASSWORD"),
+                ]
+                .iter()
+                .flatten()
+                .any(|name| k == name.as_str())
+            })
             .collect();
         let asks = Arc::new(Asks::new(db.clone(), events.clone()));
         let shared = Arc::new_cyclic(|weak| Shared {

@@ -1,5 +1,6 @@
-//! Where Anysola Code keeps its files: everything lives under `~/.anysola/`. The old OpenCode XDG
-//! locations are only read (global config, import sources).
+//! Where Anysola Code keeps its files: everything lives under `~/.anysola/`, which is also the
+//! global config directory (`config.json`, `AGENTS.md`, `agent/`, `command/`, `skills/`, `themes/`).
+//! The old OpenCode XDG locations are only read (global config, import sources).
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -9,7 +10,7 @@ pub struct Paths {
     pub home: PathBuf,
     /// `~/.anysola`
     pub data: PathBuf,
-    /// The 0.5.x global config directory, still read: `OPENCODE_CONFIG_DIR`, else
+    /// The 0.5.x global config directory, still read: `ANYSOLA_CONFIG_DIR` (or `OPENCODE_…`), else
     /// `$XDG_CONFIG_HOME/opencode`, else `~/.config/opencode`.
     pub legacy_config: PathBuf,
 }
@@ -24,7 +25,7 @@ impl Paths {
     pub fn under(home: PathBuf) -> Self {
         let data = home.join(".anysola");
         let legacy_config =
-            if let Some(dir) = env::var_os("OPENCODE_CONFIG_DIR").filter(|v| !v.is_empty()) {
+            if let Some(dir) = crate::env::var_os("CONFIG_DIR").filter(|v| !v.is_empty()) {
                 PathBuf::from(dir)
             } else {
                 match env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
@@ -76,19 +77,24 @@ impl Paths {
         self.legacy_config.clone()
     }
 
-    /// Plan files stay where 0.5.1 named them in the plan-mode prompt.
     /// Checkouts of git `references`.
     pub fn repos_dir(&self) -> PathBuf {
         self.data.join("repos")
     }
 
+    /// Where plan mode writes plans: `~/.anysola/plan`.
     pub fn plan_dir(&self) -> PathBuf {
+        self.data.join("plan")
+    }
+
+    /// Where 0.5.x and 1.0.0 wrote plans; plan mode may still edit them.
+    pub fn legacy_plan_dir(&self) -> PathBuf {
         self.home.join(".opencode").join("plan")
     }
 
-    /// `<os tmp>/opencode`, named in the system prompt as approved scratch space.
+    /// `<os tmp>/anysola`, named in the system prompt as approved scratch space.
     pub fn temp_dir() -> PathBuf {
-        env::temp_dir().join("opencode")
+        env::temp_dir().join("anysola")
     }
 
     /// Expands `~` and `~/…` (and `~\…` on Windows) against home.

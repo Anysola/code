@@ -87,11 +87,7 @@ fn prompt_permission_answer_exit() {
     });
     let home = anysola_testkit::TestHome::new(&gateway.url);
     let dir = my_app(&home);
-    std::fs::write(
-        dir.join("opencode.json"),
-        r#"{"permission":{"bash":"ask"}}"#,
-    )
-    .unwrap();
+    std::fs::write(dir.join("anysola.json"), r#"{"permission":{"bash":"ask"}}"#).unwrap();
     let mut child = Command::new("script")
         .args([
             "-qfec",
@@ -118,17 +114,24 @@ fn prompt_permission_answer_exit() {
         }
     });
     let mut seen = Vec::new();
+    // Set before typing a command whose screen repeats earlier text: the next wait searches
+    // only what is drawn from then on.
+    let fresh = std::cell::Cell::new(false);
+    let mut from = 0;
     let mut wait_for = |needle: &str| {
+        if fresh.replace(false) {
+            from = seen.len();
+        }
         let deadline = Instant::now() + Duration::from_secs(20);
         while Instant::now() < deadline {
-            if plain(&seen).contains(needle) {
+            if plain(&seen[from..]).contains(needle) {
                 return true;
             }
             if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(100)) {
                 seen.extend(chunk);
             }
         }
-        panic!("never saw {needle:?}:\n{}", plain(&seen));
+        panic!("never saw {needle:?}:\n{}", plain(&seen[from..]));
     };
     wait_for("Ask anything");
     wait_for("5h 42%");
@@ -155,6 +158,20 @@ fn prompt_permission_answer_exit() {
     command("");
     wait_for("Window cleared.");
     assert_eq!(gateway.bank(), 1);
+    // `/reset` spends the last banked reset on demand, then has none left to offer.
+    fresh.set(true);
+    command("/reset");
+    wait_for("Use a banked reset?");
+    wait_for("Cancel");
+    command("");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while gateway.bank() != 0 {
+        assert!(Instant::now() < deadline, "/reset did not redeem");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    fresh.set(true);
+    command("/reset");
+    wait_for("No banked resets.");
     command("/budget 5");
     wait_for("Session budget");
     command("/undo");

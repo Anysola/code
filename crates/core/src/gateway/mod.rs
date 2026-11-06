@@ -252,7 +252,7 @@ impl Gateway {
             .header("accept", "application/json")
             .header("authorization", format!("Bearer {}", token.secret()))
             .header("content-type", "application/json")
-            .header("x-anysola-client", "opencode")
+            .header("x-anysola-client", "anysola-code")
             .header("x-anysola-version", VERSION)
             .header("user-agent", user_agent())
             .timeout(SEARCH_TIMEOUT)
@@ -316,7 +316,7 @@ impl Gateway {
             request = request.header(name.as_str(), value.as_str());
         }
         request = request
-            .header("x-anysola-client", "opencode")
+            .header("x-anysola-client", "anysola-code")
             .header(USAGE_EVENT_HEADER, "1")
             .header("x-anysola-version", VERSION);
         request = match &self.token {

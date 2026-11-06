@@ -10,6 +10,7 @@ mod common;
 
 use std::path::PathBuf;
 
+use anysola_core::paths::Paths;
 use anysola_testkit::TestHome;
 use common::*;
 use serde_json::Value;
@@ -53,8 +54,19 @@ fn continuation(capture: &str, extra_sql: Option<&str>, args: &[&str]) {
     )
     .unwrap();
     let expected = normalize_body(&captured["body"], &fixture_places(), true);
+    // 1.0.1 moved the scratch dir to `<tmp>/anysola`: a continued older session is told once.
+    let mut body = request.json();
+    let messages = body["messages"].as_array_mut().unwrap();
+    let moved = messages.iter().position(|m| {
+        m["role"] == "system"
+            && m["content"][0]["text"].as_str().is_some_and(|t| {
+                t.starts_with("The environment you are running in is now:")
+                    && t.contains(&Paths::temp_dir().display().to_string())
+            })
+    });
+    messages.remove(moved.expect("an environment update naming the new temp dir"));
     // Both sides: stored history keeps 0.5.1's argv quoting (§B1), only the new prompt differs.
-    let actual = normalize_body(&request.json(), &our_places(&home, &legacy.project), true);
+    let actual = normalize_body(&body, &our_places(&home, &legacy.project), true);
     let expected = serde_json::to_string_pretty(&expected).unwrap();
     let actual = serde_json::to_string_pretty(&actual).unwrap();
     if expected != actual {

@@ -443,7 +443,7 @@ async fn challenge(client: &reqwest::Client, server: &Value) -> (Option<String>,
         .post(server["url"].as_str().unwrap_or_default())
         .header("content-type", "application/json")
         .header("accept", "application/json, text/event-stream")
-        .body(r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"opencode"}}}"#);
+        .body(r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"anysola-code"}}}"#);
     if let Some(headers) = server["headers"].as_object() {
         for (key, value) in headers {
             if let Some(value) = value.as_str() {

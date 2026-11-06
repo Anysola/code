@@ -1104,6 +1104,7 @@ impl App {
                 self.delete_worktree(directory.into(), true)
             }
             ConfirmKind::BankedReset { session } => self.redeem_and_retry(session),
+            ConfirmKind::UseBankedReset { usage } => self.redeem(usage),
         }
     }
 
@@ -1138,6 +1139,12 @@ impl App {
                 let days = if days == 7 { 30 } else { 7 };
                 self.state.dialogs.pop();
                 self.open_usage(days);
+            }
+            (BodyKind::Usage { days }, "r") => {
+                if b.actions.iter().any(|a| a.key == "r") {
+                    self.state.dialogs.pop();
+                    self.open_reset(Some(days));
+                }
             }
             (BodyKind::ShellOutput { .. }, "end") => {
                 let rows = self.state.height.saturating_sub(10) as usize;

@@ -122,7 +122,7 @@ fn server_through_the_stack() {
         "{block2}"
     );
     let echoed = format!(
-        r#"echo: {{\"name\":\"echo\",\"arguments\":{{\"text\":\"hi\"}},\"_meta\":{{\"ai.opencode/sessionID\":\"{}\",\"progressToken\":3}}}}"#,
+        r#"echo: {{\"name\":\"echo\",\"arguments\":{{\"text\":\"hi\"}},\"_meta\":{{\"ai.anysola/sessionID\":\"{}\",\"progressToken\":3}}}}"#,
         session.id
     );
     assert!(requests[1].body.contains(&echoed), "{}", requests[1].body);

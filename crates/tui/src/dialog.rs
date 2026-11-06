@@ -487,6 +487,11 @@ pub enum ConfirmKind {
     BankedReset {
         session: String,
     },
+    /// `/reset` (or `r` in `/usage`): spend a banked reset now; `usage` reopens `/usage` for that
+    /// many days afterwards.
+    UseBankedReset {
+        usage: Option<u32>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

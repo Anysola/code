@@ -177,12 +177,16 @@ fn location(directory: &Path, home: &Path) -> String {
     }
 }
 
-/// Custom theme directories: the old global config dir, `~/.anysola`, then `.opencode/` of
-/// each ancestor up to home (outermost first).
+/// Custom theme directories: the old global config dir, `~/.anysola`, then `.opencode/` and
+/// `.anysola/` of each ancestor up to home (outermost first, the new name after the old).
 fn theme_dirs(paths: &Paths, directory: &Path) -> Vec<PathBuf> {
     let mut dirs = vec![paths.legacy_config.clone(), paths.data.clone()];
     let mut ancestors: Vec<PathBuf> = Vec::new();
     for dir in directory.ancestors() {
+        // `~/.anysola` is already listed as the global dir.
+        if dir.join(".anysola") != paths.data {
+            ancestors.push(dir.join(".anysola"));
+        }
         ancestors.push(dir.join(".opencode"));
         if dir == paths.home || !directory.starts_with(&paths.home) {
             break;

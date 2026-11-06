@@ -225,3 +225,43 @@ fn jump_to_latest() {
         Hit::Command("session.last".into()),
     );
 }
+
+#[test]
+fn usage_offers_the_banked_reset_as_a_click() {
+    let reply: Result<anysola_core::gateway::account::Reply, String> =
+        Ok(anysola_core::gateway::account::Reply {
+            status: 200,
+            body: json!({"limits": {"plan": "team", "allowed": true, "blockedBy": null,
+                "fiveHour": {"percent": 100, "resetsAt": "2099-01-01T00:00:00Z"},
+                "weekly": {"percent": 18, "resetsAt": "2099-01-02T00:00:00Z"},
+                "bank": [{"id": "b1", "expiresAt": "2099-02-01T00:00:00Z", "scope": "both"}]}}),
+        });
+    let view = anysola_tui::menus::anysola::UsageView {
+        days: 7,
+        session: None,
+        zone: chrono::FixedOffset::east_opt(0).unwrap(),
+        now: 0,
+    };
+    let mut state = base(120, 40);
+    state
+        .dialogs
+        .push(Dialog::Body(anysola_tui::menus::anysola::usage_dialog(
+            &view,
+            Some(&reply),
+        )));
+    assert_click(&state, "use banked reset r", Hit::Key("r".into()));
+    assert_click(&state, "30 days t", Hit::Key("t".into()));
+    let state = {
+        let mut state = base(120, 40);
+        state.dialogs.push(Dialog::Confirm(Confirm {
+            kind: ConfirmKind::UseBankedReset { usage: Some(7) },
+            title: "Use a banked reset?".into(),
+            message: "You have 1 banked reset.".into(),
+            button: "Use banked reset".into(),
+            yes: true,
+        }));
+        state
+    };
+    assert_click(&state, "Cancel", Hit::Button(0));
+    assert_click_at(&state, "Use banked reset", true, Hit::Button(1));
+}

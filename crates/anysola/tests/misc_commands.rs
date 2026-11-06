@@ -56,7 +56,7 @@ fn debug_paths_point_into_the_data_dir() {
             .to_string()
     };
     let d = home.home().join(".anysola").display().to_string();
-    let tmp = std::env::temp_dir().join("opencode").display().to_string();
+    let tmp = std::env::temp_dir().join("anysola").display().to_string();
     let out = anysola(&home, &home.project(), &["debug", "paths"]);
     let expected = format!(
         "home       {h}\ndata       {d}\ncache      {}\nconfig     {d}\n\
@@ -123,7 +123,7 @@ fn mcp_add_writes_the_bytes_0_5_1_wrote() {
     let cases: &[(&str, &str, &[&str])] = &[
         (
             "new-file",
-            "opencode.json",
+            "anysola.json",
             &[
                 "ctx",
                 "--",
@@ -149,13 +149,13 @@ fn mcp_add_writes_the_bytes_0_5_1_wrote() {
         ),
         (
             "empty",
-            "opencode.json",
+            "anysola.json",
             &["e", "--env", "A=1", "--env", "B=2", "--", "node", "s.js"],
         ),
-        ("compact", "opencode.json", &["e", "--", "node"]),
+        ("compact", "anysola.json", &["e", "--", "node"]),
         (
             "tabs",
-            ".opencode/opencode.json",
+            ".anysola/anysola.jsonc",
             &["e", "--url", "http://h/x"],
         ),
         ("replace", "opencode.json", &["e", "--url", "http://new/x"]),

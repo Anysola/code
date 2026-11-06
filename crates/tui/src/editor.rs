@@ -116,8 +116,8 @@ fn decode_mention(params: &Value) -> Option<String> {
 /// Where to connect: the port from the environment, else the best IDE lock file for `cwd`.
 pub fn connection(home: &Path, cwd: &Path) -> Option<(u16, Option<String>)> {
     let env = std::env::var("CLAUDE_CODE_SSE_PORT")
-        .or_else(|_| std::env::var("OPENCODE_EDITOR_SSE_PORT"))
         .ok()
+        .or_else(|| anysola_core::env::var("EDITOR_SSE_PORT"))
         .and_then(|v| v.parse::<u16>().ok())
         .filter(|p| *p > 0);
     if let Some(port) = env {
@@ -250,7 +250,7 @@ pub fn in_zed() -> bool {
 /// Zed's state database (macOS and Linux paths; no Windows path, as in 0.5.1).
 pub fn zed_db(home: &Path) -> Option<PathBuf> {
     let candidates = [
-        std::env::var_os("OPENCODE_ZED_DB").map(PathBuf::from),
+        anysola_core::env::var_os("ZED_DB").map(PathBuf::from),
         Some(home.join("Library/Application Support/Zed/db/0-stable/db.sqlite")),
         Some(home.join(".local/share/zed/db/0-stable/db.sqlite")),
     ];
@@ -478,7 +478,7 @@ mod tests {
         .unwrap();
         std::fs::write(ide.join("4343.lock"), r#"{"workspaceFolders": ["/other"]}"#).unwrap();
         if std::env::var_os("CLAUDE_CODE_SSE_PORT").is_none()
-            && std::env::var_os("OPENCODE_EDITOR_SSE_PORT").is_none()
+            && anysola_core::env::var_os("EDITOR_SSE_PORT").is_none()
         {
             assert_eq!(
                 connection(home.path(), Path::new("/w/src")),

@@ -30,7 +30,7 @@ const DEFAULT_TIMEOUT_SECONDS: f64 = 30.0;
 const MAX_REDIRECTS: usize = 10;
 const USER_AGENT: &str = "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; AnysolaCode-User/1.0; +https://www.anysola.com/code";
 /// Retried once with this agent when Cloudflare answers with a challenge.
-const CHALLENGE_USER_AGENT: &str = "opencode";
+const CHALLENGE_USER_AGENT: &str = "anysola-code";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]

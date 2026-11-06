@@ -46,9 +46,14 @@ fn pairs(items: &[(String, String)]) -> Value {
     )
 }
 
-/// The first existing config file of `directory`, else its `opencode.json`.
+/// The first existing config file of `directory` (the new names first, as they win), else its
+/// `anysola.json`.
 fn project_file(directory: &Path) -> PathBuf {
     let candidates = [
+        directory.join("anysola.json"),
+        directory.join("anysola.jsonc"),
+        directory.join(".anysola").join("anysola.json"),
+        directory.join(".anysola").join("anysola.jsonc"),
         directory.join("opencode.json"),
         directory.join("opencode.jsonc"),
         directory.join(".opencode").join("opencode.json"),
@@ -207,7 +212,7 @@ async fn sign_in(core: &Core, runtime: &Runtime, name: Option<String>, interacti
         None if capable.is_empty() => {
             clack::warn("No OAuth-capable MCP servers configured");
             clack::info(&format!(
-                "Remote MCP servers support OAuth by default. Add one with `anysola mcp add` or in opencode.json:\n{EXAMPLE}"
+                "Remote MCP servers support OAuth by default. Add one with `anysola mcp add` or in anysola.json:\n{EXAMPLE}"
             ));
             clack::outro("Done");
             return 0;

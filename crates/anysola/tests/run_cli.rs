@@ -60,7 +60,7 @@ fn version_in_any_position() {
         let out = Command::new(BIN).args(&args).output().unwrap();
         let text = String::from_utf8_lossy(&out.stdout);
         assert!(
-            text.starts_with("Anysola Code ") && text.ends_with(" (OpenCode 2.2.5)\n"),
+            text.starts_with("Anysola Code ") && !text.contains("OpenCode") && text.ends_with('\n'),
             "{args:?}: {text}"
         );
         assert!(out.status.success());
@@ -261,6 +261,16 @@ fn sessions_continue_resume_and_fork() {
         main[3].header("x-opencode-session"),
         Some("ses_given"),
         "a fork shares its source's cache affinity"
+    );
+    assert_eq!(
+        main[3].header("x-anysola-session"),
+        main[3].header("x-opencode-session"),
+        "1.0.1 sends the affinity under its own name too"
+    );
+    assert_eq!(main[3].header("x-anysola-client"), Some("anysola-code"));
+    assert_eq!(
+        main[3].header("user-agent"),
+        Some(concat!("anysola-code/", env!("CARGO_PKG_VERSION"), "/cli"))
     );
     assert_eq!(
         main[3].json()["messages"].as_array().unwrap().len(),
@@ -847,6 +857,6 @@ fn instruction_urls_are_fetched() {
         .unwrap();
     assert_eq!(
         fetch.header("user-agent"),
-        Some("opencode/latest/2.2.5/cli")
+        Some(concat!("anysola-code/", env!("CARGO_PKG_VERSION")))
     );
 }

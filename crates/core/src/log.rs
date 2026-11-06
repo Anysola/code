@@ -20,7 +20,7 @@ pub enum Level {
 }
 
 impl Level {
-    /// `--log-level` choices and `OPENCODE_LOG_LEVEL` values.
+    /// `--log-level` choices and `ANYSOLA_LOG_LEVEL` values.
     pub fn parse(text: &str) -> Option<Level> {
         Some(match text.to_lowercase().as_str() {
             "all" | "trace" | "debug" => Level::Debug,
@@ -75,14 +75,12 @@ pub fn init(paths: &crate::paths::Paths, level: Option<&str>, print: bool) {
     let level = level
         .and_then(Level::parse)
         .or_else(|| {
-            std::env::var("OPENCODE_LOG_LEVEL")
-                .ok()
+            crate::env::var("LOG_LEVEL")
                 .as_deref()
                 .and_then(Level::parse)
         })
         .unwrap_or(Level::Info);
-    let print =
-        print || std::env::var("OPENCODE_PRINT_LOGS").is_ok_and(|v| v == "1" || v == "true");
+    let print = print || crate::env::var("PRINT_LOGS").is_some_and(|v| v == "1" || v == "true");
     let file = paths.log_file();
     if let Some(dir) = file.parent() {
         let _ = std::fs::create_dir_all(dir);

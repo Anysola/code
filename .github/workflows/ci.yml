@@ -76,7 +76,7 @@ jobs:
           [ -f "$bin" ] || bin=target/debug/anysola.exe
           out="$("$bin" --version | tr -d '\r')"
           echo "$out"
-          test "$out" = "Anysola Code $(cargo pkgid -p anysola | sed 's/.*[@#]//') (OpenCode 2.2.5)"
+          test "$out" = "Anysola Code $(cargo pkgid -p anysola | sed 's/.*[@#]//')"
           "$bin" --help | grep -q "anysola <subcommand>"
           ! "$bin" --help | grep -qi "opencode command line"
 

@@ -271,17 +271,20 @@ fn environment(ctx: &ToolContext) -> Vec<(OsString, OsString)> {
         env.insert(key.into(), value.into());
     };
     set("TERM", "xterm-256color");
-    set("OPENCODE_TERMINAL", "1");
     set("AGENT", "1");
-    set("OPENCODE", "1");
-    set("OPENCODE_SESSION_ID", &ctx.session_id);
+    // The old names stay for scripts written against 0.5.x.
+    for prefix in ["ANYSOLA", "OPENCODE"] {
+        set(&format!("{prefix}_TERMINAL"), "1");
+        set(prefix, "1");
+        set(&format!("{prefix}_SESSION_ID"), &ctx.session_id);
+    }
     env.entry("AI_AGENT".into())
         .and_modify(|value| {
             if value.is_empty() {
-                *value = "opencode".into();
+                *value = "anysola-code".into();
             }
         })
-        .or_insert_with(|| "opencode".into());
+        .or_insert_with(|| "anysola-code".into());
     env.into_iter().collect()
 }
 
@@ -639,10 +642,12 @@ mod tests {
         let _serial = SERIAL.lock().await;
         let dir = tempfile::tempdir().unwrap();
         let mut test = setup(dir.path());
-        let command =
-            "echo $TERM $OPENCODE_TERMINAL $AGENT $OPENCODE $AI_AGENT $OPENCODE_SESSION_ID";
+        let command = "echo $TERM $ANYSOLA_TERMINAL $AGENT $ANYSOLA $AI_AGENT $ANYSOLA_SESSION_ID $OPENCODE_TERMINAL $OPENCODE $OPENCODE_SESSION_ID";
         let out = run(&test, json!({"command": command})).await.unwrap();
-        assert_eq!(texts(&out), ["xterm-256color 1 1 1 opencode ses_test\n"]);
+        assert_eq!(
+            texts(&out),
+            ["xterm-256color 1 1 1 anysola-code ses_test 1 1 ses_test\n"]
+        );
         let mut env = (*test.ctx.env).clone();
         env.push(("AI_AGENT".into(), "claude".into()));
         test.ctx.env = Arc::new(env);

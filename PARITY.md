@@ -92,6 +92,11 @@ Conventions
    `windows-x64` = `windows-x64-baseline`. Static musl is required so the glibc-named and musl-named archives can be the
    same bytes (the install script picks `-musl` on Alpine).
 9. **ACP is in 1.0, implemented last (M7).**
+10. `[1.0.1]` **Own identity.** `anysola --version` = `Anysola Code <ver>`; `User-Agent: anysola-code/<ver>` (model
+    calls `anysola-code/<ver>/<cli|acp>`), `x-anysola-client: anysola-code`, model calls add `x-anysola-session`;
+    MCP clientInfo `{"name":"anysola-code","version":"<ver>"}` and `_meta` `ai.anysola/sessionID`. The stored session
+    `version` stays `2.2.5+anysola.<ver>`; the `x-opencode-*` headers, the ACP `opencode/*` `_meta` keys and method,
+    the `opencode` code-mode namespace and theme stay as they were.
 
 ### A2. Data layout and environment
 
@@ -108,6 +113,9 @@ Conventions
   `~/.anysola/tool-output/`, `~/.anysola/shell/`, `~/.anysola/repos/`, `~/.anysola/worktree/`.
 - Unchanged on purpose (model-visible or user files): plan dir `<home>/.opencode/plan`, temp dir `<os tmp>/opencode`
   named in the system prompt, project-id cache file `<git common dir>/opencode`.
+- `[1.0.1]` Plan dir `~/.anysola/plan` (the old one stays editable in plan mode), temp dir `<os tmp>/anysola`; project
+  `anysola.json[c]` and `.anysola/` load after their `opencode` counterparts (new name wins); every `OPENCODE_<NAME>`
+  below is also read as `ANYSOLA_<NAME>`, which wins. The project-id cache file keeps its name.
 - `XDG_*`, `OPENCODE_CONFIG_DIR`, `OPENCODE_DB` and `OPENCODE_DISABLE_CHANNEL_DB` are used only to locate the 0.5.x
   files to import and the old global config dir to read; they never move `~/.anysola/`.
 - Env vars still honoured: `ANYSOLA_TOKEN`, `ANYSOLA_API_URL`, `ANYSOLA_INSTALL_DIR`, `ANYSOLA_VERSION` and

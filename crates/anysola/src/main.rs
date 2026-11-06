@@ -95,8 +95,8 @@ fn main() {
         return;
     }
     if cli.server.is_some()
-        || std::env::var_os("OPENCODE_PASSWORD").is_some()
-        || std::env::var_os("OPENCODE_SERVER_PASSWORD").is_some()
+        || anysola_core::env::var_os("PASSWORD").is_some()
+        || anysola_core::env::var_os("SERVER_PASSWORD").is_some()
     {
         ui::println("--server is not supported since Anysola Code 1.0; running locally.");
     }

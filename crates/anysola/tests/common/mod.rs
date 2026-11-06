@@ -290,6 +290,13 @@ pub fn normalize_body(body: &Value, places: &Places, capture: bool) -> Value {
         s = date.replace_all(&s, "Today's date: <DATE>").into_owned();
         s = signature.replace_all(&s, "SIG_N").into_owned();
         if capture {
+            // 1.0.1 names itself to the model and moved plans under `~/.anysola`.
+            s = s
+                .replace(
+                    "You are an AI agent running in OpenCode,",
+                    "You are an AI agent running in Anysola Code,",
+                )
+                .replace("<HOME>/.opencode/plan", "<HOME>/.anysola/plan");
             s = skills.replace_all(&s, "").into_owned();
             s = quoted.replace(&s, "$1$2").into_owned();
             s = quoted_transcript.replace_all(&s, "[User]: $1").into_owned();
@@ -331,6 +338,7 @@ const COMPARED_HEADERS: &[&str] = &[
 pub fn normalize_headers(headers: &[(String, String)]) -> Map<String, Value> {
     let session = Regex::new(r"ses_[0-9A-Za-z]+").unwrap();
     let version = Regex::new(r"\+anysola\.[^/]+/").unwrap();
+    let own_agent = Regex::new(r"^anysola-code/[^/]+(?P<rest>/.*)?$").unwrap();
     let mut out = Map::new();
     for (name, value) in headers {
         // 1.0 renamed 0.5.1's credits-event request header for the usage event.
@@ -344,7 +352,16 @@ pub fn normalize_headers(headers: &[(String, String)]) -> Map<String, Value> {
         let value = match name.as_str() {
             "x-anysola-version" => "<ver>".to_string(),
             "x-api-key" => "<token>".to_string(),
-            "user-agent" => version.replace(value, "+anysola.<ver>/").into_owned(),
+            // 1.0.1 sends its own identity where 0.5.1 and 1.0.0 sent OpenCode's.
+            "x-anysola-client" if value == "opencode" => "anysola-code".to_string(),
+            "user-agent" => match version.replace(value, "+anysola.<ver>/").as_ref() {
+                "opencode/latest/2.2.5+anysola.<ver>/cli" => "anysola-code/<ver>/cli".to_string(),
+                "opencode/latest/2.2.5+anysola.<ver>/acp" => "anysola-code/<ver>/acp".to_string(),
+                "opencode/latest/2.2.5/cli" => "anysola-code/<ver>".to_string(),
+                other => own_agent
+                    .replace(other, "anysola-code/<ver>$rest")
+                    .into_owned(),
+            },
             "x-opencode-project" if value != "global" => "<project>".to_string(),
             _ => session.replace_all(value, "ses_<id>").into_owned(),
         };

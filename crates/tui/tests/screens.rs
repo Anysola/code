@@ -994,8 +994,10 @@ fn slash_list_home_context() {
         server: &server,
     };
     let (rows, pad) = anysola_tui::complete::slash_rows(&scope);
+    // `/reset` is new in 1.0.1.
     let ours: Vec<String> = rows
         .iter()
+        .filter(|r| r.display != "/reset")
         .map(|r| {
             format!("┃ {:width$}{}", r.display, r.description, width = pad + 1)
                 .trim_end()
@@ -1023,6 +1025,8 @@ fn slash_popup_scroll_series() {
         server: &server,
     };
     let (mut rows, pad) = anysola_tui::complete::slash_rows(&scope);
+    // `/reset` is new in 1.0.1, so not in the 0.5.1 captures.
+    rows.retain(|r| r.display != "/reset");
     // `/plugins` is not carried over (decision 5) but sits in the 0.5.1 captures.
     let at = rows.iter().position(|r| r.display == "/project").unwrap();
     rows.insert(
@@ -1065,6 +1069,8 @@ fn command_palette_scroll_series() {
     // `Toggle console` and `Plugins` are not carried over but sit in the 0.5.1 captures.
     let list = || {
         let mut list = palette::dialog(&keymap, &cx);
+        // New in 1.0.1, so not in the 0.5.1 captures.
+        list.options.retain(|o| o.title != "Use a banked reset");
         let at = list
             .options
             .iter()
@@ -1237,6 +1243,75 @@ fn banked_reset_offer() {
         anysola::banked_reset_message(message, &limits, now(), zone),
         None
     );
+}
+
+#[test]
+fn use_banked_reset_confirm() {
+    let banked = |id: &str, at: &str, both: bool| anysola_core::gateway::limits::Banked {
+        id: id.into(),
+        expires_at: parse_iso(at),
+        both,
+    };
+    let zone = under(1).zone;
+    let mut limits = limits(100, 18);
+    limits.bank = vec![
+        banked("b1", "2026-11-20T00:00:00Z", false),
+        banked("b2", "2026-12-01T00:00:00Z", true),
+    ];
+    let text = anysola::use_reset_message(&limits, now(), zone).unwrap();
+    assert_eq!(
+        text,
+        "You have 2 banked resets. The next one expires Nov 20, 03:00 AM. Using one clears your 5-hour window."
+    );
+    limits.bank = vec![banked("b2", "2026-12-01T00:00:00Z", true)];
+    let text = anysola::use_reset_message(&limits, now(), zone).unwrap();
+    assert_eq!(
+        text,
+        "You have 1 banked reset. The next one expires Dec 1, 03:00 AM. Using one clears your 5-hour and weekly windows."
+    );
+    let state = dialog(
+        under(1),
+        Dialog::Confirm(anysola_tui::dialog::Confirm {
+            kind: anysola_tui::dialog::ConfirmKind::UseBankedReset { usage: None },
+            title: "Use a banked reset?".into(),
+            message: text,
+            button: "Use banked reset".into(),
+            yes: true,
+        }),
+    );
+    let screen = render(&state);
+    assert!(screen.contains("Use a banked reset?"), "{screen}");
+    assert!(screen.contains("Cancel"), "{screen}");
+    assert!(screen.contains("5-hour and weekly"), "{screen}");
+    // Expired entries do not count; an empty bank has nothing to confirm.
+    limits.bank = vec![banked("b0", "2026-11-01T00:00:00Z", true)];
+    assert_eq!(anysola::use_reset_message(&limits, now(), zone), None);
+    limits.bank.clear();
+    assert_eq!(anysola::use_reset_message(&limits, now(), zone), None);
+}
+
+#[test]
+fn usage_offers_the_bank_only_when_it_holds_one() {
+    let view = anysola::UsageView {
+        days: 7,
+        session: None,
+        zone: under(1).zone,
+        now: now(),
+    };
+    let keys = |body: &anysola_tui::dialog::Body| {
+        body.actions
+            .iter()
+            .map(|a| a.key.clone())
+            .collect::<Vec<_>>()
+    };
+    let body = anysola::usage_dialog(&view, Some(&usage_reply()));
+    assert_eq!(keys(&body), ["t", "r"]);
+    let screen = render(&dialog(under(1), Dialog::Body(body)));
+    assert!(screen.contains("use banked reset r"), "{screen}");
+    let mut empty = usage_reply().unwrap();
+    empty.body["limits"]["bank"] = json!([]);
+    assert_eq!(keys(&anysola::usage_dialog(&view, Some(&Ok(empty)))), ["t"]);
+    assert_eq!(keys(&anysola::usage_dialog(&view, None)), ["t"]);
 }
 
 #[test]

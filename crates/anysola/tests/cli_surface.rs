@@ -8,7 +8,7 @@ use std::process::Command;
 use common::*;
 
 /// The 0.5.1 help capture minus what 1.0 removed: the `$ …` line, the exit marker, `--wizard`
-/// and the `service`/`serve` commands.
+/// and the `service`/`serve` commands; 1.0.1 dropped "(based on OpenCode, MIT)" from the description.
 fn expected_help(file: &str) -> String {
     let text = std::fs::read_to_string(spec(&format!("cli/help/{file}"))).unwrap();
     let mut out = String::new();
@@ -19,7 +19,7 @@ fn expected_help(file: &str) -> String {
             || line.starts_with("  service  ")
             || line.starts_with("  serve  ");
         if !removed {
-            out.push_str(line);
+            out.push_str(line.trim_end_matches(" (based on OpenCode, MIT)"));
             out.push('\n');
         }
     }
@@ -116,10 +116,7 @@ fn version_in_every_position_without_network() {
             .unwrap();
         assert_eq!(
             String::from_utf8_lossy(&out.stdout),
-            format!(
-                "Anysola Code {} (OpenCode 2.2.5)\n",
-                env!("CARGO_PKG_VERSION")
-            ),
+            format!("Anysola Code {}\n", env!("CARGO_PKG_VERSION")),
             "{args:?}"
         );
         assert!(out.stderr.is_empty() && out.status.success(), "{args:?}");

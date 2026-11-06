@@ -137,6 +137,7 @@ const ENTRIES: &[(&str, &str, &str, When)] = &[
     ("session.aside", "", "", When::Always),
     ("diff.open", "", "", When::Always),
     ("anysola.usage", "", "", When::Always),
+    ("anysola.reset", "", "", When::Always),
     ("anysola.budget", "", "", When::Always),
     ("anysola.devices", "", "", When::Always),
     ("anysola.account", "", "", When::Always),

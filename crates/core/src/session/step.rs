@@ -645,6 +645,7 @@ pub(crate) fn session_headers(shared: &Shared, session: &SessionRow) -> Vec<(Str
             crate::version::client().to_string(),
         ),
         ("x-opencode-project".to_string(), shared.project.id.clone()),
+        ("x-anysola-session".to_string(), affinity.clone()),
         ("x-opencode-session".to_string(), affinity.clone()),
         ("x-opencode-session-id".to_string(), session.id.clone()),
         ("x-session-affinity".to_string(), affinity.clone()),

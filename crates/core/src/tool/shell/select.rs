@@ -120,14 +120,12 @@ fn windows_fallback() -> String {
         .map_or_else(|| full(&comspec), |shell| full(&shell))
 }
 
-/// `OPENCODE_GIT_BASH_PATH`, 0.5.1's `gitbash` server option (Windows only).
+/// `ANYSOLA_GIT_BASH_PATH` (or `OPENCODE_…`), 0.5.1's `gitbash` server option (Windows only).
 fn git_bash_option() -> Option<String> {
     if !cfg!(windows) {
         return None;
     }
-    env::var("OPENCODE_GIT_BASH_PATH")
-        .ok()
-        .filter(|p| !p.is_empty())
+    crate::env::var("GIT_BASH_PATH").filter(|p| !p.is_empty())
 }
 
 /// Git Bash: the option, else `bash.exe` next to Git's `bin` if it is non-empty.

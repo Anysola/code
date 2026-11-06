@@ -6,6 +6,7 @@ pub mod api;
 pub mod codemode;
 pub mod command;
 pub mod config;
+pub mod env;
 pub mod events;
 pub mod formatter;
 pub mod gateway;

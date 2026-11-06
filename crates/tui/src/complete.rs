@@ -273,7 +273,12 @@ mod tests {
             .map(|l| l.split_whitespace().next().unwrap_or_default().to_string())
             .filter(|name| name != "/plugins")
             .collect();
-        let actual: Vec<String> = rows.iter().map(|r| r.display.clone()).collect();
+        // `/reset` is new in 1.0.1.
+        let actual: Vec<String> = rows
+            .iter()
+            .map(|r| r.display.clone())
+            .filter(|name| name != "/reset")
+            .collect();
         assert_eq!(actual, expected);
         assert_eq!(pad, 12);
     }

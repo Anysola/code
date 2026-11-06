@@ -287,6 +287,9 @@ The `/config, /me, /usage, /tokens*` gate (`authenticate`, G app.ts:58-72) refus
 
 ### 3.1 What a Rust client must send to pass (no server change needed)
 - `user-agent` starting `opencode/`. Recommended: identical to 0.5.1, `opencode/latest/2.2.5+anysola.<ver>/cli` for model calls and `opencode/latest/2.2.5/cli` elsewhere.
+- `[1.0.1]` `user-agent` `anysola-code/<ver>` (plain) and `anysola-code/<ver>/<cli|acp>` (model calls),
+  `x-anysola-client: anysola-code`. The gateway admits it once `allowedUserAgents` lists `anysola-code/`; `opencode/`
+  stays listed for 1.0.0. Model calls add `x-anysola-session` (= `x-opencode-session`), which the gateway reads first.
 - `x-anysola-client: opencode` on `/messages` and `/search`.
 - No `x-app`, no `claude-cli/` UA, no `claude-code-*` beta.
 - `anthropic-version: 2023-06-01`. Only allowlisted betas, and never `compact-*`/`fast-mode-*`. So: no server-side compaction, no `speed`, no `context_management` edits through this gateway.
@@ -361,6 +364,7 @@ The client has no special logic. `auto` is an ordinary model from /config. Varia
 10. `[1.0]` A 429 with `x-anysola-limit` on a model call: session error kind `provider.usage-limit`, never retried; TUI offers a banked reset, `run` exits 1 or redeems with `--use-banked-reset` (§2.4, §4.3, §4.6). No 402 rewrite.
 11. Retry: honour `x-should-retry` first. Retry 429/5xx/408/409/transport with exp backoff 2 s → cap 10 s, ≤10 retries, jitter, `max(delay, retry-after ≤ 15 min)`. Never retry 400/401/402/403/404/413 or a usage-limit 429.
 12. `/search`: `POST {query}`, Bearer + `x-anysola-client: opencode` + version. 30 s timeout, 1 MiB cap. Map results. `[1.0]` No credits bookkeeping. Error texts per user-strings.txt.
+    `[1.0.1]` `x-anysola-client: anysola-code`, user agent `anysola-code/<ver>`.
 13. `[1.0]` UI numbers: windows from `/me.limits` and usage events; warn at 80% (§4.2). /me refresh every 5 min and 1.5 s after usage events. Budget semantics and texts per §4.3. Run summary per §4.4. Exit summary per §4.5.
 14. Logout/login --force: `POST /tokens/self/revoke` (401 = success), then delete the local credential (logout keeps it if the revoke failed).
 15. Known 0.5.1 quirks to decide on explicitly (the credit ones are moot in 1.0): free-tier "used" always 0 (`turns` vs `usedTurns`). 402 billing URL printed twice. Revoking an unknown id says "This Anysola server does not offer this yet.". `credits_per_turn_estimate` and `x-credits-remaining` are never sent by the real gateway. `remaining` after a turn reflects whichever request finished last.

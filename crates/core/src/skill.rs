@@ -29,12 +29,7 @@ pub struct Skill {
     pub content: String,
 }
 
-fn truthy(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|v| {
-        let v = v.trim().to_ascii_lowercase();
-        v == "1" || v == "true"
-    })
-}
+use crate::env::truthy;
 
 fn boolean(value: &serde_json::Value) -> Option<bool> {
     match value {
@@ -67,7 +62,10 @@ fn parse(root: &Path, file: &Path, content: &str) -> Option<Skill> {
     let text = |key: &str| meta.get(key).and_then(|v| v.as_str()).map(str::to_string);
     let autoinvoke = meta
         .get("metadata")
-        .and_then(|m| m.get("opencode/autoinvoke"))
+        .and_then(|m| {
+            m.get("anysola/autoinvoke")
+                .or_else(|| m.get("opencode/autoinvoke"))
+        })
         .and_then(boolean)
         .or_else(|| {
             meta.get("disable-model-invocation")
@@ -161,10 +159,10 @@ enum Source {
 }
 
 /// The `.claude` and `.agents` roots: home first, then the project walk farthest first (nearest
-/// wins). `.claude` is skipped under `OPENCODE_DISABLE_CLAUDE_CODE[_SKILLS]`.
+/// wins). `.claude` is skipped under `ANYSOLA_DISABLE_CLAUDE_CODE[_SKILLS]`.
 fn compatibility_roots(paths: &Paths, directory: &Path) -> Vec<PathBuf> {
-    let project = !truthy("OPENCODE_CONFIG_PROJECT_DISABLE")
-        && !truthy("OPENCODE_DISABLE_PROJECT_CONFIG")
+    let project = !truthy("CONFIG_PROJECT_DISABLE")
+        && !truthy("DISABLE_PROJECT_CONFIG")
         && directory != paths.legacy_config_dir()
         && directory != paths.data;
     let walk: Vec<PathBuf> = if project {
@@ -175,8 +173,7 @@ fn compatibility_roots(paths: &Paths, directory: &Path) -> Vec<PathBuf> {
     } else {
         Vec::new()
     };
-    let claude =
-        !truthy("OPENCODE_DISABLE_CLAUDE_CODE") && !truthy("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS");
+    let claude = !truthy("DISABLE_CLAUDE_CODE") && !truthy("DISABLE_CLAUDE_CODE_SKILLS");
     let mut roots = Vec::new();
     for (name, enabled) in [(".claude", claude), (".agents", true)] {
         if !enabled {

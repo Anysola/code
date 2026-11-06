@@ -30,6 +30,6 @@
                                    claude-sonnet-5-5         30
                                    claude-haiku-5-5          12
 
-                                                                               7 days t
+                                                           7 days t  use banked reset r
 
   Team · 5h resets in 2 h                                                                                        0.5.1

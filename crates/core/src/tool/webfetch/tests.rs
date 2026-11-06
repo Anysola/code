@@ -28,7 +28,7 @@ async fn server() -> (String, Arc<Mutex<Vec<String>>>) {
                 let head = String::from_utf8_lossy(&buffer[..n]).to_string();
                 seen.lock().unwrap().push(head.clone());
                 let path = head.split(' ').nth(1).unwrap_or("/").to_string();
-                let agent_opencode = head.contains("user-agent: opencode\r\n");
+                let agent_opencode = head.contains("user-agent: anysola-code\r\n");
                 let (status, headers, body): (&str, String, Vec<u8>) = match path.as_str() {
                     "/html" => (
                         "200 OK",

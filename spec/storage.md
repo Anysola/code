@@ -497,6 +497,9 @@ Discovery: `packages/core/src/config/discovery.ts:59-145`; load order: `packages
    that starts in a global root is skipped; `OPENCODE_DISABLE_PROJECT_CONFIG` disables it.
 7. Project `.opencode/` directories (farthest first): `opencode.json[c]` inside them plus their markdown dirs.
 8. `OPENCODE_CONFIG_CONTENT` (inline JSON; `{file:}` relative to the session directory).
+   `[1.0.1]` Each directory also loads `anysola.json` / `anysola.jsonc` after its `opencode.json[c]`, and each
+   project walk step loads `.anysola/` after `.opencode/`, so the new name wins. `~/.anysola/` (with `config.json`)
+   stays the global config directory; `~/.config/opencode/` is still read before it. The watcher covers both names.
 9. Managed **settings** (last, override everything): system dir `/etc/opencode`, `/Library/Application Support/opencode`,
    `%ProgramData%\opencode` (`opencode.json[c]` + dir), then macOS MDM plist
    `/Library/Managed Preferences/<user>/ai.opencode.managed.plist` or `/Library/Managed Preferences/ai.opencode.managed.plist`
