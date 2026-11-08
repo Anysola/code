@@ -128,7 +128,6 @@ pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u1
         let cursor = prompt::draw_box(c, state, x, y, w, false);
         prompt::footer(c, state, x, y + box_h, w);
         let banners = banners(c, state, x, y, w);
-        prompt::popup(c, state, x, w, y, top);
         (box_h + 1 + banners, cursor)
     };
     let status_y = bottom.saturating_sub(block_h + 1);
@@ -178,6 +177,15 @@ pub fn draw(c: &mut Canvas, state: &State, session: &Session) -> Option<(u16, u1
             Rect::new(lx, status_y, width(label) as u16, 1),
             Hit::Command("session.last".into()),
         );
+    }
+    // The popup floats over the transcript, so it is drawn after it.
+    if session.permission.is_none()
+        && session.question.is_none()
+        && !session.location_missing()
+        && state.dock.is_none()
+    {
+        let box_h = prompt::box_height(state, w);
+        prompt::popup(c, state, x, w, bottom.saturating_sub(box_h + 1), top);
     }
     match &state.pane {
         Some(terminal) => self::terminal(c, terminal, pane, top, state.height),

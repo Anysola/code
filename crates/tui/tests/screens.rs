@@ -2012,3 +2012,34 @@ fn render_full(state: &State, width: u16) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+/// The `/` popup in a session sits on top of the transcript: the conversation behind it must not
+/// be drawn over the popup's rows (the transcript was drawn after the popup).
+#[test]
+fn slash_popup_over_transcript() {
+    let mut state = session(100, 30, turn(true, true));
+    state.composer.insert("/");
+    state.popup = Some(Popup {
+        trigger: '/',
+        start: 0,
+        rows: slash_rows(),
+        selected: 0,
+        offset: 0,
+        pad: 12,
+        area: Default::default(),
+    });
+    let screen = render(&state);
+    for row in slash_rows() {
+        let line = screen
+            .lines()
+            .find(|l| l.contains(&format!("{:<12}", row.display)))
+            .unwrap_or_else(|| panic!("{} row missing:\n{screen}", row.display));
+        let start = row.description.chars().take(20).collect::<String>();
+        assert!(
+            line.contains(&start),
+            "transcript drawn over popup row {}:\n{screen}",
+            row.display
+        );
+        assert_eq!(line.trim_start().chars().next(), Some('┃'), "{line}");
+    }
+}

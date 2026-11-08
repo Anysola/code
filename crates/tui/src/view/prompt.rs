@@ -496,7 +496,10 @@ pub fn popup(c: &mut Canvas, state: &State, x: u16, w: u16, box_y: u16, top: u16
         return;
     }
     let y = box_y - h;
-    popup.area.set(Rect::new(x, y, w, h));
+    let area = Rect::new(x, y, w, h);
+    popup.area.set(area);
+    // Whatever the popup covers is not clickable through it.
+    c.hits.retain(|(r, _)| r.intersection(area).is_empty());
     let bg = c.theme.fg("background.raised.high");
     c.fill(Rect::new(x, y, w, h), bg);
     let border = c.style("border.base").bg(bg);
