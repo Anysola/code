@@ -4,6 +4,11 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.0.2 (2026-11-08)
+
+- The `/` and `@` popup in a session is drawn on top of the conversation again. Lines of the transcript no longer
+  show through its rows, and clicks on it no longer reach what is behind it.
+
 ## 1.0.1 (2026-11-06)
 
 - `/reset` spends a banked reset whenever you choose, after a confirm that shows how many you have, when the next
