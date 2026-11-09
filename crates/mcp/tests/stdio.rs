@@ -145,7 +145,20 @@ fn server_through_the_stack() {
             error: "Connection closed: MCP server process exited with code 3: bye".into()
         }
     );
-    // No automatic retry; connecting again from /mcps brings the server back.
+    // The next request starts the exited process again, three times per process; after that
+    // the server stays failed until connected again from /mcps.
+    let call =
+        |text: &str| rt.block_on(mcp.call_tool("testsrv", "echo", json!({"text": text}), "ses_x"));
+    for restart in 1..=3 {
+        assert!(call("hi").is_ok(), "restart {restart}");
+        let status = mcp.servers().into_iter().find(|s| s.name == "testsrv");
+        assert_eq!(status.unwrap().status, Status::Connected);
+        assert!(call("quit").is_err());
+    }
+    assert_eq!(
+        call("hi"),
+        Err("MCP server \"testsrv\" is not connected: Connection closed: MCP server process exited with code 3: bye. Reconnect it from /mcps.".into())
+    );
     rt.block_on(async {
         mcp.connect("testsrv");
         mcp.settled(Duration::from_secs(20)).await

@@ -22,6 +22,10 @@ use crate::rpc::{Error, Handler};
 
 /// Tool lists arrive in bursts; one refresh after they settle.
 const TOOLS_DEBOUNCE: Duration = Duration::from_millis(100);
+/// How often a local server whose process exited is started again, per process.
+const MAX_RESTARTS: u32 = 3;
+/// The pause before a restart, multiplied by its number.
+const RESTART_BACKOFF: Duration = Duration::from_millis(500);
 
 struct Entry {
     config: Value,
@@ -35,6 +39,10 @@ struct Entry {
     settled: watch::Sender<bool>,
     /// A tool list refresh is already waiting out the debounce.
     refreshing: bool,
+    /// The local server's process exited after connecting; the next request starts it again.
+    crashed: bool,
+    /// Restarts after such exits so far.
+    restarts: u32,
 }
 
 pub struct Runtime {
@@ -144,6 +152,7 @@ impl Runtime {
     /// Closes the server's connection and takes its tools away.
     fn stop(&self, name: &str, entry: &mut Entry) {
         entry.generation += 1;
+        entry.crashed = false;
         entry.tools.clear();
         entry.prompts.clear();
         if let Some(connection) = entry.connection.take() {
@@ -153,6 +162,11 @@ impl Runtime {
     }
 
     fn start(&self, name: &str) {
+        self.start_after(name, None);
+    }
+
+    /// Starts the server, after `delay` when given; a start or stop in the meantime wins.
+    fn start_after(&self, name: &str, delay: Option<Duration>) {
         let generation = {
             let mut servers = self.lock();
             let Some(entry) = servers.get_mut(name) else {
@@ -165,10 +179,45 @@ impl Runtime {
         };
         let (me, name) = (self.me.clone(), name.to_string());
         tokio::spawn(async move {
-            if let Some(runtime) = me.upgrade() {
+            if let Some(delay) = delay {
+                tokio::time::sleep(delay).await;
+            }
+            let Some(runtime) = me.upgrade() else {
+                return;
+            };
+            let current = runtime.lock().get(&name).map(|e| e.generation);
+            if current == Some(generation) {
                 runtime.connect(&name, generation).await;
             }
         });
+    }
+
+    /// Starts a local server whose process exited again, at most [`MAX_RESTARTS`] times; once
+    /// they are used up it stays failed until connected from /mcps.
+    fn restart_crashed(&self, name: &str) {
+        let restart = {
+            let mut servers = self.lock();
+            let Some(entry) = servers.get_mut(name) else {
+                return;
+            };
+            if !entry.crashed
+                || entry.restarts >= MAX_RESTARTS
+                || !matches!(entry.status, Status::Failed { .. })
+            {
+                return;
+            }
+            entry.crashed = false;
+            entry.restarts += 1;
+            entry.restarts
+        };
+        anysola_core::log::warn(
+            "restarting MCP server after its process exited",
+            &[
+                ("server", name),
+                ("restart", &format!("{restart}/{MAX_RESTARTS}")),
+            ],
+        );
+        self.start_after(name, Some(RESTART_BACKOFF * restart));
     }
 
     async fn connect(self: Arc<Self>, name: &str, generation: u64) {
@@ -294,6 +343,7 @@ impl Runtime {
             return;
         };
         self.stop(name, entry);
+        entry.crashed = entry.config["type"] == "local";
         self.set_status(name, entry, Status::Failed { error: reason });
     }
 
@@ -339,6 +389,7 @@ impl Runtime {
         if !self.lock().contains_key(name) {
             return Err(format!("MCP server not found: {name}"));
         }
+        self.restart_crashed(name);
         self.started(name).await;
         let servers = self.lock();
         let entry = servers
@@ -477,6 +528,8 @@ impl Mcp for Runtime {
                     prompts: Vec::new(),
                     settled: watch::Sender::new(true),
                     refreshing: false,
+                    crashed: false,
+                    restarts: 0,
                 };
                 if disabled {
                     self.set_status(&name, &mut entry, Status::Disabled);
