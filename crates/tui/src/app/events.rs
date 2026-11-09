@@ -9,17 +9,44 @@ use crate::state::{Permission, Question, Variant};
 use crate::transcript::model;
 use anysola_core::gateway::error::USAGE_LIMIT_KIND;
 
-impl App {
-    /// The open session an event belongs to: its own, or, for a subagent's ask, the busy
-    /// session on screen.
-    fn target(&self, session_id: &str) -> Option<String> {
-        if self.state.sessions.contains_key(session_id) {
-            return Some(session_id.to_string());
+/// Walks a session up its parents to the nearest one that is open (`Ok`), or else the root
+/// it reached (`Err`). Stops after a few dozen steps should the parents form a loop.
+fn ask_owner(
+    session_id: &str,
+    open: impl Fn(&str) -> bool,
+    parent: impl Fn(&str) -> Option<String>,
+) -> Result<String, String> {
+    let mut current = session_id.to_string();
+    for _ in 0..32 {
+        if open(&current) {
+            return Ok(current);
         }
-        self.state
-            .session()
-            .filter(|s| s.busy)
-            .map(|s| s.id.clone())
+        match parent(&current) {
+            Some(up) => current = up,
+            None => break,
+        }
+    }
+    Err(current)
+}
+
+impl App {
+    /// The open session an ask is shown in: its own, the nearest open parent of a subagent's,
+    /// the busy session on screen, or else its root session, given a tab in the background.
+    /// `None` only when the session is unknown.
+    fn target(&mut self, session_id: &str) -> Option<String> {
+        let parent = |id: &str| self.core.session(id).ok().flatten()?.parent_id;
+        let root = match ask_owner(
+            session_id,
+            |id| self.state.sessions.contains_key(id),
+            parent,
+        ) {
+            Ok(open) => return Some(open),
+            Err(root) => root,
+        };
+        if let Some(busy) = self.state.session().filter(|s| s.busy) {
+            return Some(busy.id.clone());
+        }
+        self.attach_session(&root).map(|_| root)
     }
 
     fn attention(&mut self, session_id: &str, on: bool) {
@@ -181,6 +208,8 @@ impl App {
                     return;
                 }
                 let Some(target) = self.target(&id) else {
+                    // Nowhere to ask: refuse rather than leave the turn waiting.
+                    self.core.reply_permission(request_id, Reply::Reject(None));
                     return;
                 };
                 let session = self.state.sessions.get_mut(&target).expect("open session");
@@ -236,6 +265,10 @@ impl App {
                 ..
             } => {
                 let Some(target) = self.target(&id) else {
+                    self.core.reply_question(
+                        request_id,
+                        anysola_core::tool::question::QuestionReply::Dismissed(None),
+                    );
                     return;
                 };
                 let session = self.state.sessions.get_mut(&target).expect("open session");
@@ -328,5 +361,37 @@ impl App {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ask_owner;
+
+    #[test]
+    fn asks_go_to_the_nearest_open_parent() {
+        // ses_c → ses_b → ses_a (root).
+        let parent = |id: &str| match id {
+            "ses_c" => Some("ses_b".to_string()),
+            "ses_b" => Some("ses_a".to_string()),
+            _ => None,
+        };
+        let open = |ids: &'static [&'static str]| move |id: &str| ids.contains(&id);
+        assert_eq!(
+            ask_owner("ses_c", open(&["ses_c", "ses_a"]), parent),
+            Ok("ses_c".into())
+        );
+        assert_eq!(
+            ask_owner("ses_c", open(&["ses_b", "ses_a"]), parent),
+            Ok("ses_b".into())
+        );
+        assert_eq!(
+            ask_owner("ses_c", open(&["ses_a"]), parent),
+            Ok("ses_a".into())
+        );
+        assert_eq!(ask_owner("ses_c", open(&[]), parent), Err("ses_a".into()));
+        assert_eq!(ask_owner("ses_x", open(&[]), parent), Err("ses_x".into()));
+        let looped = |id: &str| Some(if id == "ses_1" { "ses_2" } else { "ses_1" }.to_string());
+        assert!(ask_owner("ses_1", open(&[]), looped).is_err());
     }
 }
