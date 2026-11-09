@@ -4,6 +4,36 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.0.4 (2026-11-09)
+
+The rest of the scan behind 1.0.3: the remaining hangs, races and rough edges.
+
+- The edit tool refuses a file that is not valid UTF-8 instead of silently rewriting every odd byte as `�`, and
+  edits and writes land through a temporary file and a rename, so an interrupted write cannot leave a truncated
+  file behind.
+- `anysola mcp auth` and the MCP sign-in no longer hang when the browser opens an idle connection to the callback
+  port; the sign-in gives up after five minutes, and the OAuth metadata, registration and token requests time out.
+- A local MCP server whose process died is started again when it is next needed (up to three times), instead of
+  staying failed until you reconnect it by hand.
+- Pasting from the clipboard, writing into the terminal pane and decoding a large image no longer block the UI; the
+  first keys typed into `$EDITOR` are no longer swallowed by the TUI.
+- The crash screen's Restart continues in the directory you had moved to with `/cd`, not the one you started in,
+  and no longer reopens a session whose opening crashed. A second `/cd` while one is still changing is refused, and
+  a prompt typed meanwhile waits instead of going to the old core.
+- Keys typed in the moment a permission or question appears are not taken as its answer (300 ms grace, Esc still
+  works), and a prompt can be answered from the keyboard while the terminal pane has focus.
+- The mouse wheel scrolls what is under the pointer: the diff viewer, the terminal pane's scrollback, or the
+  conversation. `G` jumps to the end of the diff. A drag no longer sticks after the window loses focus.
+- Copying a selection with CJK or emoji text no longer inserts a space after each wide character, and clicks on
+  rows with such text land on the right target.
+- `/connect` finishing after you closed its dialog no longer closes whatever dialog you had opened instead, and an
+  abandoned sign-in is not stored.
+- An interrupted turn's undo waits until the turn has stopped. After a burst of events the session's busy state is
+  re-checked, so a lost event cannot leave a tab spinning for good.
+- Starting two `anysola` processes at the same moment on a fresh install no longer fails one of them on the schema
+  migration; a huge single-line file no longer makes the read tool buffer it whole; a broken system certificate
+  store no longer makes every command panic; an `oauth.callback_port` above 65535 is reported instead of wrapped.
+
 ## 1.0.3 (2026-11-09)
 
 Fixes from a scan for anything that interrupts a session: hangs, loops, lost input and crashes.
