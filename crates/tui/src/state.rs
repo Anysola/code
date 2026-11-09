@@ -99,6 +99,8 @@ pub struct Permission {
     pub fullscreen: bool,
     /// The reason being typed for a rejection in a child session.
     pub reject: Option<String>,
+    /// When the prompt appeared (ms): keys typed just before are not taken as answers.
+    pub shown: u64,
 }
 
 impl Permission {
@@ -123,6 +125,8 @@ pub struct Question {
     pub custom: Option<String>,
     /// An MCP server's form: the `(key, type)` of each field, in question order.
     pub form: Option<Vec<(String, String)>>,
+    /// When the prompt appeared (ms): keys typed just before are not taken as answers.
+    pub shown: u64,
 }
 
 /// A staged revert: the user messages it hides and the files it changed.

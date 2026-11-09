@@ -171,10 +171,19 @@ impl App {
         }
         // A prompt takes the keys before a focused terminal pane: it could not be answered
         // from the keyboard otherwise.
-        if self.state.session().is_some_and(|s| s.permission.is_some()) {
-            return self.permission_key(&stroke);
-        }
-        if self.state.session().is_some_and(|s| s.question.is_some()) {
+        if let Some(session) = self.state.session().filter(|_| blocked) {
+            let shown = session.permission.as_ref().map_or_else(
+                || session.question.as_ref().map_or(0, |q| q.shown),
+                |p| p.shown,
+            );
+            // Keys typed as the prompt appears were meant for something else: Enter would
+            // allow once.
+            if settling(shown, now()) && stroke.key != "escape" {
+                return;
+            }
+            if session.permission.is_some() {
+                return self.permission_key(&stroke);
+            }
             return self.question_key(&stroke);
         }
         if self.pane_key(&stroke) {
@@ -1185,6 +1194,14 @@ impl App {
     }
 }
 
+/// Keys within this long of a prompt appearing are not taken as its answer.
+const PROMPT_SETTLE_MS: u64 = 300;
+
+/// The prompt shown at `shown` appeared too recently to take a key at `now`.
+fn settling(shown: u64, now: u64) -> bool {
+    now < shown.saturating_add(PROMPT_SETTLE_MS)
+}
+
 /// Whether `text` is drawn on row `at.1` of `buffer` across column `at.0`.
 fn over_text(buffer: &ratatui::buffer::Buffer, (x, y): (u16, u16), text: &str) -> bool {
     if y >= buffer.area.height {
@@ -1332,6 +1349,14 @@ mod tests {
         assert!(super::over_text(&buffer, (0, 0), "漢字"));
     }
 
+    #[test]
+    fn keys_wait_until_a_prompt_settles() {
+        assert!(super::settling(1_000, 1_000));
+        assert!(super::settling(1_000, 1_299));
+        assert!(!super::settling(1_000, 1_300));
+        assert!(!super::settling(0, 5_000));
+    }
+
     fn asked(options: usize) -> anysola_core::tool::question::Question {
         anysola_core::tool::question::Question {
             question: "Which?".into(),
@@ -1358,6 +1383,7 @@ mod tests {
             answers: vec![Vec::new(); 2],
             custom: None,
             form: None,
+            shown: 0,
         };
         let key = |q: &mut crate::state::Question, key: &str| {
             super::question_step(q, &Stroke::parse(key).expect("key"))
