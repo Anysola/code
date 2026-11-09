@@ -146,6 +146,7 @@ fn main() {
         print!("{}", cli::help(&[name.to_string()]));
         0
     };
+    let _shells = KillShellsOnPanic;
     let code = runtime.block_on(async {
         match cli.command {
             None => root::root(cli.root).await,
@@ -185,6 +186,18 @@ fn main() {
     });
     runtime.shutdown_timeout(std::time::Duration::from_millis(100));
     std::process::exit(code);
+}
+
+/// Kills the background shell commands when a command panics out of the runtime; every other way
+/// out shuts the core down, which kills them.
+struct KillShellsOnPanic;
+
+impl Drop for KillShellsOnPanic {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            anysola_core::tool::shell::kill_background_shells();
+        }
+    }
 }
 
 /// Every panic, on any thread, lands in the log with its location before the default report
