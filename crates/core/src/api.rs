@@ -738,6 +738,15 @@ impl Core {
         drain_session(&self.shared, session_id, options, CancellationToken::new()).await
     }
 
+    /// Whether this process is driving a turn of the session right now.
+    pub fn is_busy(&self, session_id: &str) -> bool {
+        self.shared
+            .turns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(session_id)
+    }
+
     /// Interrupts the session's running turn, if any.
     pub fn interrupt(&self, session_id: &str) {
         if let Some(token) = self

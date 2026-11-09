@@ -1052,8 +1052,11 @@ impl App {
         let ids: Vec<String> = self.state.sessions.keys().cloned().collect();
         for id in ids {
             let stored = self.core.db().messages(&id).ok();
-            let running =
-                self.core.child_running(&id) || stored.as_deref().is_some_and(turn_running);
+            // This process's own turns are known exactly; the stored rows cover a turn another
+            // process drives.
+            let running = self.core.is_busy(&id)
+                || self.core.child_running(&id)
+                || stored.as_deref().is_some_and(turn_running);
             let Some(session) = self.state.sessions.get_mut(&id) else {
                 continue;
             };
