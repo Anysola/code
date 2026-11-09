@@ -176,6 +176,33 @@ async fn long_lines_are_clamped() {
 }
 
 #[tokio::test]
+async fn huge_line_is_clamped_without_losing_line_numbers() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut wide = "x".repeat(3 * 1024 * 1024);
+    wide.push_str("\nsecond\n");
+    write(dir.path(), "min.js", &wide);
+    assert_eq!(
+        text(dir.path(), json!({"path": "min.js"})).await,
+        format!(
+            "Read file min.js, lines 1-2\n1: {}... (line truncated to 2000 chars)\n2: second",
+            "x".repeat(2000)
+        )
+    );
+    assert_eq!(
+        text(dir.path(), json!({"path": "min.js", "offset": 2})).await,
+        "Read file min.js, lines 2-2\n2: second"
+    );
+    // A NUL past the bytes a line keeps still marks the file binary.
+    let mut binary = "x".repeat(1024 * 1024).into_bytes();
+    binary.push(0);
+    write(dir.path(), "blob.txt", &binary);
+    assert_eq!(
+        error(dir.path(), json!({"path": "blob.txt"})).await.0,
+        "Cannot read binary file: blob.txt"
+    );
+}
+
+#[tokio::test]
 async fn binary_and_offsets() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "bin.dat", b"ab\0cd");

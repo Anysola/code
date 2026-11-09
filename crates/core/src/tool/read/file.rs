@@ -14,6 +14,10 @@ const MAX_BYTES: usize = 50 * 1024;
 pub(super) const MAX_MEDIA_BYTES: u64 = 20 * 1024 * 1024;
 const FIRST_CHUNK: u64 = 256 * 1024;
 const MAX_LINE_LENGTH: usize = 2000;
+/// Bytes of one line a page keeps: far past what [`clamp`] shows of it (2000 UTF-16 units take at
+/// most 6000 bytes), so the output is the same while a single-line file of hundreds of megabytes
+/// is never held whole.
+const MAX_LINE_BYTES: usize = MAX_BYTES;
 const BOM: &[u8] = b"\xEF\xBB\xBF";
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -162,9 +166,11 @@ fn text_page(mut reader: impl BufRead, page: Page) -> Result<Content, ReadError>
     let mut buffer = Vec::new();
     loop {
         buffer.clear();
-        if reader.read_until(b'\n', &mut buffer).map_err(io_error)? == 0 {
+        let (read, dropped_nul) = read_line(&mut reader, &mut buffer).map_err(io_error)?;
+        if read == 0 {
             break;
         }
+        binary |= dropped_nul;
         number += 1;
         if number >= offset {
             if entries.len() >= limit || size >= MAX_BYTES {
@@ -196,6 +202,35 @@ fn text_page(mut reader: impl BufRead, page: Page) -> Result<Content, ReadError>
         offset,
         next,
     })
+}
+
+/// One line into `buffer` like `read_until(b'\n')`, keeping at most [`MAX_LINE_BYTES`] of it; the
+/// rest is read past. The bytes read, and whether the part not kept held a NUL.
+fn read_line(reader: &mut impl BufRead, buffer: &mut Vec<u8>) -> std::io::Result<(usize, bool)> {
+    let (mut read, mut nul) = (0, false);
+    loop {
+        let available = match reader.fill_buf() {
+            Ok(available) => available,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        if available.is_empty() {
+            return Ok((read, nul));
+        }
+        let (line, ended) = match available.iter().position(|&b| b == b'\n') {
+            Some(end) => (&available[..=end], true),
+            None => (available, false),
+        };
+        let kept = line.len().min(MAX_LINE_BYTES.saturating_sub(buffer.len()));
+        buffer.extend_from_slice(&line[..kept]);
+        nul |= line[kept..].contains(&0);
+        let used = line.len();
+        reader.consume(used);
+        read += used;
+        if ended {
+            return Ok((read, nul));
+        }
+    }
 }
 
 /// One line without its `\n` and one trailing `\r`; the file's first line also drops a BOM.
@@ -238,4 +273,28 @@ fn list(path: &Path, page: Page) -> Result<Content, ReadError> {
     let shown = (offset - 1).saturating_add(entries.len());
     let next = (shown < total).then_some(offset + entries.len());
     Ok(Content::Listing { entries, next })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_line_keeps_a_capped_prefix() {
+        let mut input = vec![b'x'; 4 * MAX_LINE_BYTES];
+        input.push(0);
+        input.extend_from_slice(b"\nnext\n");
+        let mut reader = BufReader::with_capacity(1024, Cursor::new(input));
+        let mut buffer = Vec::new();
+        assert_eq!(
+            read_line(&mut reader, &mut buffer).unwrap(),
+            (4 * MAX_LINE_BYTES + 2, true)
+        );
+        assert_eq!(buffer.len(), MAX_LINE_BYTES);
+        buffer.clear();
+        assert_eq!(read_line(&mut reader, &mut buffer).unwrap(), (5, false));
+        assert_eq!(buffer, b"next\n");
+        buffer.clear();
+        assert_eq!(read_line(&mut reader, &mut buffer).unwrap(), (0, false));
+    }
 }
