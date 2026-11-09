@@ -568,6 +568,11 @@ impl App {
     }
 
     fn close_dialog(&mut self) {
+        if matches!(self.state.dialogs.last(), Some(Dialog::Body(b)) if is_connect(b))
+            && let Some(task) = self.connect.take()
+        {
+            task.abort();
+        }
         match self.state.dialogs.pop() {
             Some(Dialog::Select(Select {
                 kind: Kind::Themes { original },
@@ -1572,7 +1577,8 @@ impl App {
         });
     }
 
-    /// `/connect` → Anysola: the device sign-in in a dialog.
+    /// `/connect` → Anysola: the device sign-in in a dialog. Closing the dialog cancels it: the
+    /// credential is stored only while the dialog this sign-in opened is still up.
     fn connect_anysola(&mut self) {
         let mut body = Body::new(
             BodyKind::Status,
@@ -1581,13 +1587,23 @@ impl App {
         );
         body.size = crate::dialog::Size::Medium;
         self.push(Dialog::Body(body));
-        let (tx, db) = (self.tx.clone(), self.db_path.clone());
-        tokio::spawn(async move {
+        if let Some(task) = self.connect.take() {
+            task.abort();
+        }
+        self.connect_generation += 1;
+        let generation = self.connect_generation;
+        let tx = self.tx.clone();
+        let task = tokio::spawn(async move {
             let gateway = anysola_core::gateway::Gateway::new(None);
             let set = |lines: Vec<crate::dialog::Line>| {
                 let _ = tx.send(Msg::Apply(Box::new(move |app: &mut App| {
-                    if let Some(Dialog::Body(b)) = app.state.dialogs.last_mut()
-                        && b.title == line("Anysola", Tone::Bold)
+                    // Another dialog may be open over it while the browser is up.
+                    if app.connect_generation == generation
+                        && let Some(Dialog::Body(b)) = app
+                            .state
+                            .dialogs
+                            .iter_mut()
+                            .find(|d| matches!(d, Dialog::Body(b) if is_connect(b)))
                     {
                         b.lines = lines;
                     }
@@ -1604,28 +1620,49 @@ impl App {
                 Vec::new(),
                 line("Waiting for authorization…", Tone::Muted),
             ]);
-            let stored = match gateway.finish_device_login(&login).await {
-                Ok(credential) => anysola_core::storage::Db::open(&db)
-                    .and_then(|db| db.insert_anysola_login(&credential).map(drop))
-                    .map_err(|e| e.to_string()),
-                Err(error) => Err(error),
-            };
+            let credential = gateway.finish_device_login(&login).await;
             let _ = tx.send(Msg::Apply(Box::new(move |app: &mut App| {
-                app.state.dialogs.pop();
-                match stored {
-                    Ok(()) => {
-                        app.toast(None, "Connected Anysola".into(), Variant::Success);
-                        // The core holds the credential it started with; a fresh one picks up
-                        // the new sign-in without leaving the app.
-                        let directory = std::path::PathBuf::from(&app.state.directory);
-                        let session = app.state.session().map(|s| s.id.clone());
-                        app.relocate(directory, session, false);
-                    }
-                    Err(error) => app.toast(None, error, Variant::Error),
-                }
+                app.finish_connect(generation, credential);
             })));
         });
+        self.connect = Some(task.abort_handle());
     }
+
+    /// The device sign-in ended: stored and picked up only while its dialog is still open (under
+    /// another one, too); that dialog closes, the others stay.
+    fn finish_connect(&mut self, generation: u64, credential: Result<serde_json::Value, String>) {
+        let open = self
+            .state
+            .dialogs
+            .iter()
+            .position(|d| matches!(d, Dialog::Body(b) if is_connect(b)));
+        let Some(open) = open.filter(|_| self.connect_generation == generation) else {
+            return;
+        };
+        self.connect = None;
+        self.state.dialogs.remove(open);
+        let stored = credential.and_then(|credential| {
+            anysola_core::storage::Db::open(&self.db_path)
+                .and_then(|db| db.insert_anysola_login(&credential).map(drop))
+                .map_err(|e| e.to_string())
+        });
+        match stored {
+            Ok(()) => {
+                self.toast(None, "Connected Anysola".into(), Variant::Success);
+                // The core holds the credential it started with; a fresh one picks up the new
+                // sign-in without leaving the app.
+                let directory = std::path::PathBuf::from(&self.state.directory);
+                let session = self.state.session().map(|s| s.id.clone());
+                self.relocate(directory, session, false);
+            }
+            Err(error) => self.toast(None, error, Variant::Error),
+        }
+    }
+}
+
+/// The `/connect` device sign-in dialog.
+fn is_connect(body: &Body) -> bool {
+    body.kind == BodyKind::Status && body.title == line("Anysola", Tone::Bold)
 }
 
 fn rename_prompt(session: &str, title: &str) -> Prompt {

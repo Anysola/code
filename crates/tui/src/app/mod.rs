@@ -147,6 +147,10 @@ pub struct App {
     submit_after_move: bool,
     /// The new core's events, taken by the loop after a swap.
     resubscribe: Option<broadcast::Receiver<anysola_core::events::Event>>,
+    /// The `/connect` device sign-in running now, and a count that tells its results from an
+    /// earlier one's.
+    connect: Option<tokio::task::AbortHandle>,
+    connect_generation: u64,
     /// The core in use, shared with `run` so a crash restart picks up a swapped one.
     current: Arc<Mutex<Core>>,
 }
@@ -346,6 +350,8 @@ async fn run_once(core: Core, options: Options, current: Arc<Mutex<Core>>) -> Re
         relocating: None,
         submit_after_move: false,
         resubscribe: None,
+        connect: None,
+        connect_generation: 0,
         current,
     };
     app.init(&paths, &options);
