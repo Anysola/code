@@ -401,6 +401,8 @@ pub enum BodyKind {
         command: String,
         file: std::path::PathBuf,
         polled: u64,
+        /// The last read saw the shell end: the output no longer changes.
+        ended: bool,
     },
     /// An `execute` call's program and output.
     Execute {

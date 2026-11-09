@@ -225,6 +225,7 @@ impl App {
                 command: shell.command,
                 file: shell.file,
                 polled: 0,
+                ended: false,
             },
             "Shell output",
             Vec::new(),
@@ -270,6 +271,10 @@ impl App {
         let Some(session) = self.state.session_mut() else {
             return;
         };
+        // Rows whose call left the transcript stop counting as running too.
+        for view in session.shells.values_mut() {
+            view.running = false;
+        }
         for (id, call) in calls {
             let shell = live.iter().find(|s| s.id == id);
             let view = session.shells.entry(id).or_default();
@@ -302,6 +307,7 @@ impl App {
             command,
             file,
             polled,
+            ended,
         } = &mut b.kind
         else {
             return;
@@ -311,6 +317,7 @@ impl App {
         }
         *polled = now;
         let end = self.core.shell_end(id);
+        *ended = end.is_some();
         let bytes = std::fs::read(file.as_path());
         let room = crate::dialog::Size::XLarge.width().saturating_sub(6) as usize;
         let (status, lines) = shell_output_lines(command, end, bytes, room);

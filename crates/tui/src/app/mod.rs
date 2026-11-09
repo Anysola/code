@@ -521,6 +521,23 @@ impl App {
             || self.state.toast.is_some()
             || !self.pending.is_empty()
             || self.state.interrupt_armed.is_some()
+            || self.session_search.is_some()
+            || self.polling_shells()
+    }
+
+    /// `draw` still has shell output to read: the open Shell output dialog until it saw the
+    /// shell end, and the shown session's background shells until a poll saw the last one end.
+    fn polling_shells(&self) -> bool {
+        use crate::dialog::{BodyKind, Dialog};
+        let dialog = matches!(
+            self.state.dialogs.last(),
+            Some(Dialog::Body(b)) if matches!(b.kind, BodyKind::ShellOutput { ended: false, .. })
+        );
+        dialog
+            || self.state.session().is_some_and(|s| {
+                s.shells.values().any(|v| v.running)
+                    || !self.core.background_shells(&s.id).is_empty()
+            })
     }
 
     /// The metadata labels are still fading in.
