@@ -232,6 +232,7 @@ impl App {
         self.state.location = super::location(&directory, &home);
         self.state.directory = directory.display().to_string();
         self.files = None;
+        self.files_walked = false;
         self.refresh_loaded();
         self.reload_all();
         self.mcp_seen.clear();

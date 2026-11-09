@@ -292,18 +292,14 @@ fn draw_down(chart: &Chart) -> Result<Vec<String>, String> {
         match nodes[i].shape {
             Shape::Box => {
                 for (dy, row) in boxed(&nodes[i].label).iter().enumerate() {
-                    for (dx, c) in row.chars().enumerate() {
-                        canvas[y + dy][x[i] + dx] = c;
-                    }
+                    place(&mut canvas[y + dy], x[i], row);
                 }
             }
             Shape::Point => {
                 // Reached from above: the glyph takes the top row and a line runs down from it;
                 // a source only: the glyph sits on the bottom row, next to its edges.
                 let at = if has_in[i] { y } else { y + 2 };
-                for (dx, c) in nodes[i].label.chars().enumerate() {
-                    canvas[at][x[i] + dx] = c;
-                }
+                place(&mut canvas[at], x[i], &nodes[i].label);
                 if has_out[i] {
                     for row in canvas.iter_mut().take(y + 3).skip(at + 1) {
                         row[center] = '│';
@@ -392,9 +388,38 @@ pub fn render(source: &str) -> Result<Vec<String>, String> {
     draw(&parse(source)?)
 }
 
+/// Writes `text` into `row` from column `x`, one cell per column of display width: zero-width
+/// marks and joiners take no cell, so a label never writes past the width it was measured at,
+/// and anything beyond the row is dropped rather than indexed.
+fn place(row: &mut [char], x: usize, text: &str) {
+    use unicode_width::UnicodeWidthChar;
+    let mut dx = 0;
+    for c in text.chars() {
+        let w = c.width().unwrap_or(0);
+        if w == 0 {
+            continue;
+        }
+        if let Some(cell) = row.get_mut(x + dx) {
+            *cell = c;
+        }
+        dx += w;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn labels_with_zero_width_and_combining_characters_do_not_panic() {
+        // A ZWJ emoji sequence, a skin tone modifier, a decomposed accent and a Thai mark: more
+        // chars than columns, which once wrote past the measured width.
+        let rows = render(
+            "flowchart TD\n  A[👨\u{200d}💻 dev] --> B[👍\u{1f3fd} ok]\n  B --> C[e\u{301}t\u{e9}]\n  C --> D[ก\u{e31}น]",
+        )
+        .unwrap();
+        assert!(rows.iter().any(|r| r.contains("dev")));
+    }
 
     #[test]
     fn top_down_chart() {

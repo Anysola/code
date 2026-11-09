@@ -301,11 +301,7 @@ impl Builder<'_> {
                     let room = self.width.saturating_sub(self.indent()).max(1);
                     let drawn = match language.as_str() {
                         "latex" | "math" | "tex" => super::latex::render(&code).ok(),
-                        "mermaid" => {
-                            std::panic::catch_unwind(|| super::mermaid::render(&code).ok())
-                                .ok()
-                                .flatten()
-                        }
+                        "mermaid" => super::mermaid::render(&code).ok(),
                         _ => None,
                     };
                     if let Some(rows) = drawn {

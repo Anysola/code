@@ -172,6 +172,9 @@ fn send(shared: &Shared, event: Event) {
 
 enum StepEnd {
     Continue,
+    /// The stream was cut after output started; the partial message is kept and the step runs
+    /// again with a continuation prompt, `drive` deciding how often.
+    Resumed,
     Stop,
     /// Auto compaction replaced the history; the step runs again on the checkpoint.
     Compacted,
@@ -253,8 +256,29 @@ pub(crate) async fn drive(
                 }
             }
             StepEnd::Overflow(error) => return Outcome::Failed(error.to_session_error()),
-            StepEnd::Continue if capped => return Outcome::Succeeded,
-            StepEnd::Continue => {}
+            StepEnd::Continue | StepEnd::Resumed if capped => return Outcome::Succeeded,
+            StepEnd::Continue => incomplete_streams = 0,
+            StepEnd::Resumed => {
+                incomplete_streams += 1;
+                let error = ApiError::incomplete("The provider response ended unexpectedly.");
+                if incomplete_streams > INCOMPLETE_STREAM_CONTINUATIONS {
+                    return Outcome::Failed(SessionError::new(
+                        "provider.invalid-output",
+                        format!(
+                            "The model's stream was cut off {} times in a row",
+                            incomplete_streams
+                        ),
+                    ));
+                }
+                let delay = Duration::from_secs(2u64.saturating_pow(incomplete_streams))
+                    .min(Duration::from_secs(10));
+                wait_retry(shared, &session.id, incomplete_streams + 1, delay, &error);
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {}
+                    _ = cancel.cancelled() => return Outcome::Interrupted(InterruptReason::User),
+                }
+                super::synthetic(shared, &session.id, CONTINUE_AFTER_INCOMPLETE_STREAM.into());
+            }
             StepEnd::Stop => {
                 // The session goes idle, which leaves a background summary time to finish.
                 precompute_idle(shared, session, selection);
@@ -272,29 +296,6 @@ pub(crate) async fn drive(
                 Message::Assistant(a) => a.finish.clone(),
                 _ => None,
             });
-        if last_finish.as_deref() == Some("unknown") {
-            // The stream was cut after output started (`run_stream` queued the continuation).
-            incomplete_streams += 1;
-            let error = ApiError::incomplete("The provider response ended unexpectedly.");
-            if incomplete_streams > INCOMPLETE_STREAM_CONTINUATIONS {
-                return Outcome::Failed(SessionError::new(
-                    "provider.invalid-output",
-                    format!(
-                        "The model's stream was cut off {} times in a row",
-                        incomplete_streams
-                    ),
-                ));
-            }
-            let delay = Duration::from_secs(2u64.saturating_pow(incomplete_streams))
-                .min(Duration::from_secs(10));
-            wait_retry(shared, &session.id, incomplete_streams + 1, delay, &error);
-            tokio::select! {
-                _ = tokio::time::sleep(delay) => {}
-                _ = cancel.cancelled() => return Outcome::Interrupted(InterruptReason::User),
-            }
-        } else {
-            incomplete_streams = 0;
-        }
         if last_finish.as_deref() == Some("length") {
             length_finishes += 1;
             if length_finishes > OUTPUT_LIMIT_CONTINUATIONS {
@@ -978,8 +979,7 @@ async fn run_stream(
             running.data.finish = Some("unknown".into());
             running.data.time.completed = Some(now_ms());
             running.save(shared);
-            super::synthetic(shared, &session.id, CONTINUE_AFTER_INCOMPLETE_STREAM.into());
-            return StepEnd::Continue;
+            return StepEnd::Resumed;
         }
         return fail(shared, running, error.to_session_error());
     }

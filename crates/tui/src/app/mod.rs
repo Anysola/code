@@ -767,6 +767,14 @@ impl App {
                     self.toast(Some("Failed to send prompt".into()), error, Variant::Error);
                 }
                 self.reload(&session_id);
+                // Pending input the core dropped with a failed turn leaves the list too.
+                if let Ok(pending) = self.core.pending(&session_id)
+                    && let Some(session) = self.state.sessions.get_mut(&session_id)
+                {
+                    session
+                        .queued
+                        .retain(|q| pending.iter().any(|row| row.id == *q));
+                }
                 self.run_queued_compaction(&session_id);
                 self.fetch_account();
                 self.resume_relocate();

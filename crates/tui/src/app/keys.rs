@@ -1113,7 +1113,9 @@ impl App {
                     let files = crate::complete::walk(&directory, 20_000);
                     let _ = tx.send(super::Msg::Apply(Box::new(move |app: &mut super::App| {
                         app.files = Some(files);
-                        app.refresh_popup();
+                        if app.state.popup.is_some() {
+                            app.refresh_popup();
+                        }
                     })));
                 });
             }
