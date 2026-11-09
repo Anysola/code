@@ -312,6 +312,9 @@ fn storage(error: crate::storage::StorageError) -> SessionError {
     SessionError::new("unknown", error.to_string())
 }
 
+/// How long a turn waits for its auto-title before going idle without it.
+const TITLE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Removes the session's pending prompts (not control items such as a compaction).
 fn drop_pending_input(shared: &Shared, session_id: &str) {
     for row in shared.db.inbox(session_id).unwrap_or_default() {
@@ -362,9 +365,12 @@ async fn turn(
         .then(|| tokio::spawn(title::generate(shared.clone(), session.clone())));
     let outcome = step::drive(shared, session, options, cancel).await;
     if let Some(title) = title {
-        // An interrupted turn does not wait for the title; the task finishes on its own.
+        // The turn waits briefly for the title (a normal call lands within a few seconds); a
+        // slow or stalled one finishes on its own and must not keep the session busy, and an
+        // interrupted turn does not wait at all.
         tokio::select! {
             _ = title => {}
+            _ = tokio::time::sleep(TITLE_WAIT) => {}
             _ = cancel.cancelled() => {}
         }
     }
