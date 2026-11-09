@@ -397,8 +397,12 @@ impl App {
             self.toast(None, "Nothing to undo".into(), Variant::Warning);
             return;
         };
+        // The turn stops at its next checkpoint and may still store a step; the revert waits
+        // for it to end (`resume_undo`).
         if session.busy {
             self.core.interrupt(current);
+            self.undo_after_stop = Some(current.to_string());
+            return;
         }
         match self.core.revert(current, &message_id) {
             Ok(_) => {
@@ -406,6 +410,15 @@ impl App {
                 self.reload(current);
             }
             Err(error) => self.toast(None, error.to_string(), Variant::Error),
+        }
+    }
+
+    /// Runs an undo that waited for the session's interrupted turn, once the turn is over.
+    pub(super) fn resume_undo(&mut self, session: &str) {
+        let idle = self.state.sessions.get(session).is_some_and(|s| !s.busy);
+        if idle && self.undo_after_stop.as_deref() == Some(session) {
+            self.undo_after_stop = None;
+            self.undo(session);
         }
     }
 

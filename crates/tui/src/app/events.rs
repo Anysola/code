@@ -354,6 +354,7 @@ impl App {
                 }
                 self.reload(&id);
                 self.refresh_recent();
+                self.resume_undo(&id);
             }
             _ => {
                 let loaded = self.core.loaded();

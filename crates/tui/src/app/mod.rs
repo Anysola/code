@@ -145,6 +145,8 @@ pub struct App {
     records: Option<crate::status::Records>,
     /// A directory move waiting for running turns.
     relocating: Option<relocate::Pending>,
+    /// The session whose undo waits for its interrupted turn to end.
+    undo_after_stop: Option<String>,
     /// A new core is starting for a move; prompts wait for it.
     moving: bool,
     /// The prompt waiting for a deferred worktree is submitted once the move lands.
@@ -354,6 +356,7 @@ async fn run_once(core: Core, options: Options, current: Arc<Mutex<Core>>) -> Re
         records: probe.program_status.then(crate::status::Records::default),
         relocating: None,
         moving: false,
+        undo_after_stop: None,
         submit_after_move: false,
         resubscribe: None,
         connect: None,
@@ -810,6 +813,7 @@ impl App {
                         .queued
                         .retain(|q| pending.iter().any(|row| row.id == *q));
                 }
+                self.resume_undo(&session_id);
                 self.run_queued_compaction(&session_id);
                 self.fetch_account();
                 self.resume_relocate();
@@ -1061,6 +1065,7 @@ impl App {
             session.permission = None;
             session.question = None;
             self.attention(&id, false);
+            self.resume_undo(&id);
         }
         self.resume_relocate();
     }
