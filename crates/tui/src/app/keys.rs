@@ -120,7 +120,10 @@ impl App {
             }
             Event::Mouse(mouse) => self.mouse(mouse),
             Event::FocusGained => self.focused = Some(true),
-            Event::FocusLost => self.focused = Some(false),
+            Event::FocusLost => {
+                self.focused = Some(false);
+                self.end_drags();
+            }
             _ => {}
         }
     }
@@ -169,14 +172,25 @@ impl App {
             }
             return;
         }
+        // A prompt takes the keys before a focused terminal pane: it could not be answered
+        // from the keyboard otherwise.
+        if let Some(session) = self.state.session().filter(|_| blocked) {
+            let shown = session.permission.as_ref().map_or_else(
+                || session.question.as_ref().map_or(0, |q| q.shown),
+                |p| p.shown,
+            );
+            // Keys typed as the prompt appears were meant for something else: Enter would
+            // allow once.
+            if settling(shown, now()) && stroke.key != "escape" {
+                return;
+            }
+            if session.permission.is_some() {
+                return self.permission_key(&stroke);
+            }
+            return self.question_key(&stroke);
+        }
         if self.pane_key(&stroke) {
             return;
-        }
-        if self.state.session().is_some_and(|s| s.permission.is_some()) {
-            return self.permission_key(&stroke);
-        }
-        if self.state.session().is_some_and(|s| s.question.is_some()) {
-            return self.question_key(&stroke);
         }
         if self.state.session().is_some_and(|s| s.location_missing()) {
             if stroke.key == "return" {
@@ -366,6 +380,7 @@ impl App {
             return;
         }
         let count = permission.options().len();
+        permission.selected = permission.selected.min(count - 1);
         match stroke.key.as_str() {
             "left" | "h" => permission.selected = (permission.selected + count - 1) % count,
             "right" | "l" | "tab" => permission.selected = (permission.selected + 1) % count,
@@ -608,9 +623,25 @@ impl App {
         );
     }
 
-    /// `ctrl+v` and an empty bracketed paste: the clipboard's image, else its text.
+    /// `ctrl+v` and an empty bracketed paste: the clipboard's image, else its text. The paste
+    /// tools run off the loop (each may take seconds to time out) and the content lands later.
     pub(super) fn paste_clipboard(&mut self) {
-        match crate::clipboard::read() {
+        if self.pasting {
+            return;
+        }
+        self.pasting = true;
+        let tx = self.tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let read = crate::clipboard::read();
+            let _ = tx.send(super::Msg::Apply(Box::new(move |app: &mut super::App| {
+                app.pasting = false;
+                app.paste_read(read);
+            })));
+        });
+    }
+
+    fn paste_read(&mut self, read: Result<Option<crate::clipboard::Content>, String>) {
+        match read {
             Ok(Some(crate::clipboard::Content::Image(bytes))) => {
                 self.attach_bytes("image/png", bytes, "clipboard".into());
             }
@@ -625,6 +656,12 @@ impl App {
     }
 
     fn mouse(&mut self, mut mouse: crossterm::event::MouseEvent) {
+        if !matches!(
+            mouse.kind,
+            MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
+        ) {
+            self.end_drags();
+        }
         if self.tabs_mouse(mouse) {
             return;
         }
@@ -634,8 +671,8 @@ impl App {
             return;
         }
         match mouse.kind {
-            MouseEventKind::ScrollUp => self.scroll(3),
-            MouseEventKind::ScrollDown => self.scroll(-3),
+            MouseEventKind::ScrollUp => self.wheel(3, at),
+            MouseEventKind::ScrollDown => self.wheel(-3, at),
             MouseEventKind::Down(button @ (MouseButton::Left | MouseButton::Right))
                 if self.state.diff.is_some()
                     && self.state.dialogs.is_empty()
@@ -790,6 +827,25 @@ impl App {
         }
     }
 
+    /// The wheel scrolls what is under the pointer: the diff viewer, the terminal pane's
+    /// scrollback or the transcript.
+    fn wheel(&mut self, rows: isize, at: (u16, u16)) {
+        let right = at.0 >= crate::view::pane_width(&self.state);
+        if self.state.diff.is_some() && (!crate::view::diff_docked(&self.state) || right) {
+            if let Some(view) = self.state.diff.as_mut() {
+                view.scroll = view.scroll.saturating_add_signed(-rows);
+            }
+            return;
+        }
+        if self.state.pane.is_some() && right {
+            if let Some(terminal) = self.shown.and_then(|i| self.terminals.get_mut(i)) {
+                terminal.scroll(rows);
+            }
+            return;
+        }
+        self.scroll(rows);
+    }
+
     /// Clicks on the controls the last frame drew; true when the event is used up. With a
     /// dialog open the screen behind it is inert: wheel moves the list, a click outside closes.
     fn hit_mouse(&mut self, kind: MouseEventKind, at: (u16, u16)) -> bool {
@@ -861,10 +917,18 @@ impl App {
                     return;
                 };
                 // Straight to the prompt: a focused terminal pane would take the key otherwise.
+                // The index is from the last frame: a prompt since replaced may have fewer rows.
                 if let Some(p) = session.permission.as_mut() {
+                    if index >= p.options().len() {
+                        return;
+                    }
                     p.selected = index;
                     self.permission_key(&Stroke::parse("enter").expect("enter"));
                 } else if let Some(q) = session.question.as_mut() {
+                    let rows = q.questions.get(q.tab).map_or(0, |a| a.options.len() + 1);
+                    if index >= rows {
+                        return;
+                    }
                     q.selected = index;
                     let multiple = q.questions.get(q.tab).and_then(|a| a.multiple) == Some(true);
                     let key = if multiple { "space" } else { "enter" };
@@ -986,9 +1050,7 @@ impl App {
     /// A click on a home `Recent` row opens that session.
     fn click_recent(&mut self, row: u16) {
         let target = (0..self.last.area.width).find_map(|x| {
-            let line: String = (x..self.last.area.width)
-                .map(|c| self.last[(c, row)].symbol())
-                .collect();
+            let line = super::row_text(&self.last, row, x, self.last.area.width - 1);
             let line = line.trim();
             self.state
                 .recent
@@ -1169,15 +1231,20 @@ impl App {
     }
 }
 
+/// Keys within this long of a prompt appearing are not taken as its answer.
+const PROMPT_SETTLE_MS: u64 = 300;
+
+/// The prompt shown at `shown` appeared too recently to take a key at `now`.
+fn settling(shown: u64, now: u64) -> bool {
+    now < shown.saturating_add(PROMPT_SETTLE_MS)
+}
+
 /// Whether `text` is drawn on row `at.1` of `buffer` across column `at.0`.
 fn over_text(buffer: &ratatui::buffer::Buffer, (x, y): (u16, u16), text: &str) -> bool {
     if y >= buffer.area.height {
         return false;
     }
-    let row: Vec<&str> = (0..buffer.area.width)
-        .map(|c| buffer[(c, y)].symbol())
-        .collect();
-    let line: String = row.concat();
+    let line = super::row_text(buffer, y, 0, buffer.area.width.saturating_sub(1));
     let Some(byte) = line.find(text) else {
         return false;
     };
@@ -1311,6 +1378,20 @@ mod tests {
         assert!(super::over_text(&buffer, (20, 1), "5h 42% · we"));
         assert!(!super::over_text(&buffer, (21, 1), "5h 42% · we"));
         assert!(!super::over_text(&buffer, (12, 0), "5h 42% · we"));
+        // Columns after a wide symbol are not shifted by its continuation cell.
+        buffer.set_string(0, 0, "漢字 MCP", ratatui::style::Style::new());
+        assert!(super::over_text(&buffer, (5, 0), "MCP"));
+        assert!(super::over_text(&buffer, (7, 0), "MCP"));
+        assert!(!super::over_text(&buffer, (8, 0), "MCP"));
+        assert!(super::over_text(&buffer, (0, 0), "漢字"));
+    }
+
+    #[test]
+    fn keys_wait_until_a_prompt_settles() {
+        assert!(super::settling(1_000, 1_000));
+        assert!(super::settling(1_000, 1_299));
+        assert!(!super::settling(1_000, 1_300));
+        assert!(!super::settling(0, 5_000));
     }
 
     fn asked(options: usize) -> anysola_core::tool::question::Question {
@@ -1339,6 +1420,7 @@ mod tests {
             answers: vec![Vec::new(); 2],
             custom: None,
             form: None,
+            shown: 0,
         };
         let key = |q: &mut crate::state::Question, key: &str| {
             super::question_step(q, &Stroke::parse(key).expect("key"))

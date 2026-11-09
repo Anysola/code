@@ -2,6 +2,7 @@
 //! folding them into `State` and redrawing.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anysola_core::api::Core;
@@ -89,6 +90,8 @@ pub struct App {
     /// The `@` file list, walked on first use (off the loop; empty until the walk lands).
     files: Option<Vec<String>>,
     files_walked: bool,
+    /// A clipboard read is running.
+    pasting: bool,
     /// A drag selection in screen cells: anchor and current end.
     selection: Option<((u16, u16), (u16, u16))>,
     /// The last frame, for copying selections.
@@ -142,10 +145,20 @@ pub struct App {
     records: Option<crate::status::Records>,
     /// A directory move waiting for running turns.
     relocating: Option<relocate::Pending>,
+    /// The session whose undo waits for its interrupted turn to end.
+    undo_after_stop: Option<String>,
+    /// A new core is starting for a move; prompts wait for it.
+    moving: bool,
     /// The prompt waiting for a deferred worktree is submitted once the move lands.
     submit_after_move: bool,
     /// The new core's events, taken by the loop after a swap.
     resubscribe: Option<broadcast::Receiver<anysola_core::events::Event>>,
+    /// The `/connect` device sign-in running now, and a count that tells its results from an
+    /// earlier one's.
+    connect: Option<tokio::task::AbortHandle>,
+    connect_generation: u64,
+    /// The core in use, shared with `run` so a crash restart picks up a swapped one.
+    current: Arc<Mutex<Core>>,
 }
 
 fn now() -> u64 {
@@ -230,10 +243,15 @@ fn swap_draft(
 /// Runs the UI; a panic shows the crash screen, whose Restart starts the UI again.
 pub async fn run(core: Core, mut options: Options) -> Result<(), String> {
     use futures_util::FutureExt;
+    // The core in use: `/cd` and `/connect` swap in a new one and shut the old one down, so a
+    // restart after a crash continues with whatever the slot holds then.
+    let current = Arc::new(Mutex::new(core));
     loop {
-        let attempt = std::panic::AssertUnwindSafe(run_once(core.clone(), options.clone()))
-            .catch_unwind()
-            .await;
+        let core = current.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let attempt =
+            std::panic::AssertUnwindSafe(run_once(core, options.clone(), current.clone()))
+                .catch_unwind()
+                .await;
         let Err(_) = attempt else {
             return attempt.unwrap_or(Ok(()));
         };
@@ -245,16 +263,21 @@ pub async fn run(core: Core, mut options: Options) -> Result<(), String> {
         let choice = crate::crash::show(&mut terminal, message.clone(), stack, light);
         term::restore();
         match choice {
-            crate::crash::Choice::Restart => options.prompt = None,
+            crate::crash::Choice::Restart => {
+                // The session that was opening may be what panicked: start on home instead.
+                options.prompt = None;
+                options.session = None;
+                options.continue_last = false;
+            }
             crate::crash::Choice::Quit => {
-                core.shutdown();
+                current.lock().unwrap_or_else(|e| e.into_inner()).shutdown();
                 return Err(message);
             }
         }
     }
 }
 
-async fn run_once(core: Core, options: Options) -> Result<(), String> {
+async fn run_once(core: Core, options: Options, current: Arc<Mutex<Core>>) -> Result<(), String> {
     let paths = Paths::from_env();
     let tui = Tui::load(paths.data.join("tui.json"));
     let keymap = Keymap::from_config(&tui.value, cfg!(windows))?;
@@ -299,6 +322,7 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
         shells_polled: 0,
         files: None,
         files_walked: false,
+        pasting: false,
         selection: None,
         last: Buffer::empty(ratatui::layout::Rect::default()),
         hits: Vec::new(),
@@ -331,8 +355,13 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
         tab_store,
         records: probe.program_status.then(crate::status::Records::default),
         relocating: None,
+        moving: false,
+        undo_after_stop: None,
         submit_after_move: false,
         resubscribe: None,
+        connect: None,
+        connect_generation: 0,
+        current,
     };
     app.init(&paths, &options);
     if let Some((title, message)) = failure {
@@ -377,11 +406,20 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
                 for event in crate::paste::coalesce(burst) {
                     app.input(event);
                 }
-                app.run_deferred(&mut terminal);
+                if app.deferred.is_some() {
+                    // The stream's wake thread reads the terminal while it waits for input: an
+                    // editor run in the foreground would lose its first keys to it.
+                    drop(input);
+                    app.run_deferred(&mut terminal);
+                    input = EventStream::new();
+                }
             }
             event = events.recv() => match event {
                 Ok(event) => app.event(event),
-                Err(broadcast::error::RecvError::Lagged(_)) => app.reload_all(),
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    app.reload_all();
+                    app.recheck_busy();
+                }
                 Err(broadcast::error::RecvError::Closed) => {}
             },
             Some(message) = rx.recv() => app.message(message),
@@ -394,6 +432,8 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
             events = receiver;
         }
     }
+    // Before the restart below runs `anysola` in the foreground (see `run_deferred`).
+    drop(input);
     if let Some(records) = app.records.as_mut() {
         term::write_raw(&records.clear());
     }
@@ -541,6 +581,7 @@ impl App {
             || self.state.interrupt_armed.is_some()
             || self.session_search.is_some()
             || self.polling_shells()
+            || crate::preview::decoding()
     }
 
     /// `draw` still has shell output to read: the open Shell output dialog until it saw the
@@ -613,7 +654,7 @@ impl App {
             } else {
                 0
             };
-            self.state.width = size.width - self.state.left;
+            self.state.width = size.width.saturating_sub(self.state.left);
             self.state.height = size.height;
         }
         self.sync_pane();
@@ -671,14 +712,12 @@ impl App {
                 frame.buffer.clone()
             } else {
                 let area = frame.buffer.area;
-                let mut body = Buffer::empty(ratatui::layout::Rect::new(
-                    0,
-                    0,
-                    area.width - left,
-                    area.height,
-                ));
+                // The column is sized for the terminal before the frame; a resize in between
+                // can leave it wider than the frame.
+                let width = area.width.saturating_sub(left);
+                let mut body = Buffer::empty(ratatui::layout::Rect::new(0, 0, width, area.height));
                 for y in 0..area.height {
-                    for x in 0..area.width - left {
+                    for x in 0..width {
                         body[(x, y)] = frame.buffer[(x + left, y)].clone();
                     }
                 }
@@ -775,6 +814,7 @@ impl App {
                         .queued
                         .retain(|q| pending.iter().any(|row| row.id == *q));
                 }
+                self.resume_undo(&session_id);
                 self.run_queued_compaction(&session_id);
                 self.fetch_account();
                 self.resume_relocate();
@@ -1005,6 +1045,54 @@ impl App {
             self.reload(&id);
         }
     }
+
+    /// After missed events: open sessions shown busy whose turn ended (read from storage), as
+    /// the event that ends a turn may be among the missed ones.
+    fn recheck_busy(&mut self) {
+        let ids: Vec<String> = self.state.sessions.keys().cloned().collect();
+        for id in ids {
+            let stored = self.core.db().messages(&id).ok();
+            let running =
+                self.core.child_running(&id) || stored.as_deref().is_some_and(turn_running);
+            let Some(session) = self.state.sessions.get_mut(&id) else {
+                continue;
+            };
+            // Only cleared: a missed start heals with the turn's next event, a wrong busy never.
+            if stored.is_none() || !session.busy || running {
+                continue;
+            }
+            session.busy = false;
+            // No turn is left to answer a prompt shown for it.
+            session.permission = None;
+            session.question = None;
+            self.attention(&id, false);
+            self.resume_undo(&id);
+        }
+        self.resume_relocate();
+    }
+}
+
+/// Whether the stored rows end in a turn still running: a prompt or a model step stored after
+/// the last `idle` row a finished turn appends, unless that step already finished the turn.
+fn turn_running(rows: &[anysola_core::storage::MessageRow]) -> bool {
+    use anysola_core::session::message::Message;
+    let Some(last) = rows
+        .iter()
+        .rev()
+        .find(|r| matches!(r.kind.as_str(), "user" | "assistant" | "idle"))
+    else {
+        return false;
+    };
+    match last.kind.as_str() {
+        "user" => true,
+        "assistant" => match Message::decode(&last.kind, &last.data) {
+            Message::Assistant(step) => {
+                step.time.completed.is_none() || step.finish.as_deref() == Some("tool-calls")
+            }
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 /// A model's display name by id (the id itself when the catalog lacks it).
@@ -1052,17 +1140,91 @@ pub fn selected_text(buf: &Buffer, a: (u16, u16), b: (u16, u16)) -> String {
         } else {
             buf.area.right().saturating_sub(1)
         };
-        let line: String = (from..=to.min(buf.area.right().saturating_sub(1)))
-            .map(|x| buf[(x, y)].symbol())
-            .collect();
+        let line = row_text(buf, y, from, to.min(buf.area.right().saturating_sub(1)));
         lines.push(line.trim_end().to_string());
     }
     lines.join("\n")
 }
 
+/// The text drawn in cells `from..=to` of row `y`. The cell after a wide symbol (CJK, emoji)
+/// only continues it and is drawn blank, so it is left out.
+fn row_text(buf: &Buffer, y: u16, from: u16, to: u16) -> String {
+    if buf.area.is_empty() {
+        return String::new();
+    }
+    let mut x = from;
+    // A range that starts on a continuation cell starts after it.
+    if from > buf.area.left() && crate::text::width(buf[(from - 1, y)].symbol()) > 1 {
+        x += 1;
+    }
+    let mut line = String::new();
+    while x <= to {
+        let symbol = buf[(x, y)].symbol();
+        line.push_str(symbol);
+        let Some(next) = x.checked_add(crate::text::width(symbol).max(1) as u16) else {
+            break;
+        };
+        x = next;
+    }
+    line
+}
+
 #[cfg(test)]
 mod draft_tests {
     use super::*;
+
+    #[test]
+    fn wide_symbols_copy_without_their_continuation_cell() {
+        let mut buffer = Buffer::empty(ratatui::layout::Rect::new(0, 0, 12, 2));
+        buffer.set_string(0, 0, "漢字 ab", ratatui::style::Style::new());
+        buffer.set_string(0, 1, "x😀y", ratatui::style::Style::new());
+        assert_eq!(selected_text(&buffer, (0, 0), (11, 0)), "漢字 ab");
+        assert_eq!(selected_text(&buffer, (1, 0), (3, 0)), "字");
+        assert_eq!(selected_text(&buffer, (0, 0), (3, 1)), "漢字 ab\nx😀y");
+    }
+
+    #[test]
+    fn a_turn_runs_until_its_idle_row() {
+        let row = |kind: &str, data: serde_json::Value| anysola_core::storage::MessageRow {
+            id: String::new(),
+            seq: 0,
+            kind: kind.into(),
+            data,
+        };
+        let step = |completed: Option<u64>, finish: &str| {
+            row(
+                "assistant",
+                serde_json::json!({
+                    "time": {"created": 1, "completed": completed},
+                    "agent": "build",
+                    "model": {"id": "m", "providerID": "p"},
+                    "content": [],
+                    "finish": finish,
+                }),
+            )
+        };
+        let user = row(
+            "user",
+            serde_json::json!({"time": {"created": 1}, "text": "hi"}),
+        );
+        let idle = row("idle", serde_json::json!({"outcome": "succeeded"}));
+        assert!(!turn_running(&[]));
+        assert!(turn_running(std::slice::from_ref(&user)));
+        assert!(turn_running(&[user.clone(), step(None, "stop")]));
+        assert!(turn_running(&[user.clone(), step(Some(2), "tool-calls")]));
+        assert!(!turn_running(&[user.clone(), step(Some(2), "stop")]));
+        assert!(!turn_running(&[
+            user.clone(),
+            step(Some(2), "tool-calls"),
+            idle.clone()
+        ]));
+        assert!(turn_running(&[
+            user.clone(),
+            step(Some(2), "stop"),
+            idle,
+            user
+        ]));
+    }
 
     #[test]
     fn tabs_keep_their_own_drafts() {

@@ -150,8 +150,9 @@ pub enum Kind {
     PendingSteer {
         session: String,
         inbox: String,
-        /// The transcript item showing the prompt.
-        item: usize,
+        /// When the transcript item showing the prompt was added: its identity, as a reload
+        /// while the list is open moves items.
+        created: u64,
     },
     DiffSource,
     DiffBase,

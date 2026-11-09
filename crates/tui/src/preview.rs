@@ -79,6 +79,8 @@ type Decoded = Option<Arc<image::RgbaImage>>;
 struct Caches {
     decoded: HashMap<u64, Decoded>,
     grids: HashMap<(u64, u16, u16), Option<Arc<Grid>>>,
+    /// Pictures decoding on a thread.
+    loading: std::collections::HashSet<u64>,
 }
 
 fn caches() -> &'static Mutex<Caches> {
@@ -87,6 +89,7 @@ fn caches() -> &'static Mutex<Caches> {
         Mutex::new(Caches {
             decoded: HashMap::new(),
             grids: HashMap::new(),
+            loading: Default::default(),
         })
     })
 }
@@ -96,6 +99,9 @@ fn caches() -> &'static Mutex<Caches> {
 const MAX_SIDE: u32 = 1024;
 const MAX_DECODED: usize = 32;
 const MAX_GRIDS: usize = 256;
+/// Base64 up to this long decodes while the frame is drawn; a larger picture (up to 20 MiB)
+/// decodes on a thread, with `Loading…` in its place until it lands.
+const INLINE_DECODE: usize = 512 * 1024;
 
 /// A cheap identity for base64 data: its length and a hash of its ends and a sample of its
 /// middle, so a frame never hashes megabytes.
@@ -141,12 +147,42 @@ fn decoded(key: u64, data: &str) -> Decoded {
     }
     // Decode outside the lock: a large picture takes a while.
     let picture = decode(data);
-    let mut caches = lock();
+    store(&mut lock(), key, picture.clone());
+    picture
+}
+
+fn store(caches: &mut Caches, key: u64, picture: Decoded) {
     if caches.decoded.len() >= MAX_DECODED {
         caches.decoded.clear();
     }
-    caches.decoded.insert(key, picture.clone());
-    picture
+    caches.decoded.insert(key, picture);
+}
+
+/// The decoded picture for a frame: `None` while a large one decodes on a thread (started on
+/// first sight).
+fn decoded_for_frame(key: u64, data: &str) -> Option<Decoded> {
+    if data.len() <= INLINE_DECODE {
+        return Some(decoded(key, data));
+    }
+    let mut caches = lock();
+    if let Some(found) = caches.decoded.get(&key) {
+        return Some(found.clone());
+    }
+    if caches.loading.insert(key) {
+        let data = data.to_string();
+        std::thread::spawn(move || {
+            let picture = decode(&data);
+            let mut caches = lock();
+            caches.loading.remove(&key);
+            store(&mut caches, key, picture);
+        });
+    }
+    None
+}
+
+/// Pictures are decoding: the app redraws until they land.
+pub fn decoding() -> bool {
+    !lock().loading.is_empty()
 }
 
 fn lock() -> std::sync::MutexGuard<'static, Caches> {
@@ -161,20 +197,25 @@ pub fn decodes(data: &str) -> bool {
 /// The picture in `data` fitted into `w`×`h` cells (aspect kept, never empty); `None` when it
 /// does not decode.
 pub fn grid(data: &str, w: u16, h: u16) -> Option<Arc<Grid>> {
+    fitted(data, w, h).flatten()
+}
+
+/// [`grid`], or `None` while the picture decodes.
+fn fitted(data: &str, w: u16, h: u16) -> Option<Option<Arc<Grid>>> {
     if w == 0 || h == 0 {
-        return None;
+        return Some(None);
     }
     let key = fingerprint(data);
     if let Some(found) = lock().grids.get(&(key, w, h)) {
-        return found.clone();
+        return Some(found.clone());
     }
-    let grid = decoded(key, data).map(|picture| Arc::new(fit(&picture, w, h)));
+    let grid = decoded_for_frame(key, data)?.map(|picture| Arc::new(fit(&picture, w, h)));
     let mut caches = lock();
     if caches.grids.len() >= MAX_GRIDS {
         caches.grids.clear();
     }
     caches.grids.insert((key, w, h), grid.clone());
-    grid
+    Some(grid)
 }
 
 /// Scales the picture into `w` columns and `2h` pixel rows and pairs the rows into half blocks.
@@ -212,11 +253,12 @@ fn fit(picture: &image::RgbaImage, w: u16, h: u16) -> Grid {
     }
 }
 
-/// The picture centred in a `w`×`h` box, or `fallback` (`No preview`) centred when it does not
-/// decode: always `h` lines of `w` cells.
+/// The picture centred in a `w`×`h` box, or `fallback` (`No preview`, or `Loading…` while a
+/// large picture decodes) centred: always `h` lines of `w` cells.
 pub fn tile(data: &str, w: u16, h: u16, fallback: Style) -> Vec<Line> {
-    match grid(data, w, h) {
-        Some(grid) => {
+    match fitted(data, w, h) {
+        None => label_tile("Loading…", w, h, fallback),
+        Some(Some(grid)) => {
             let left = (w - grid.cols) / 2;
             let top = (h - grid.rows) / 2;
             (0..h)
@@ -234,7 +276,7 @@ pub fn tile(data: &str, w: u16, h: u16, fallback: Style) -> Vec<Line> {
                 })
                 .collect()
         }
-        None => label_tile("No preview", w, h, fallback),
+        Some(None) => label_tile("No preview", w, h, fallback),
     }
 }
 
@@ -295,7 +337,12 @@ pub fn strip(
         *x += w;
     };
     for (index, data) in images.iter().take(MAX_TILES).enumerate() {
-        add(tile(data, w, h, error), index, &mut x);
+        let style = if fitted(data, w, h).is_some() {
+            error
+        } else {
+            muted
+        };
+        add(tile(data, w, h, style), index, &mut x);
     }
     if images.len() > MAX_TILES {
         let more = format!("+{} more", images.len() - MAX_TILES);
@@ -415,6 +462,41 @@ mod tests {
             let w: usize = line.iter().map(|s| crate::text::width(&s.content)).sum();
             assert_eq!(w, 16);
         }
+    }
+
+    #[test]
+    fn large_pictures_decode_off_the_frame() {
+        use base64::Engine;
+        // Noise does not compress: the PNG is well past the inline limit.
+        let mut seed = 7u32;
+        let picture = image::RgbaImage::from_fn(400, 400, |_, _| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let [r, g, b, _] = seed.to_le_bytes();
+            image::Rgba([r, g, b, 255])
+        });
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(picture)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+        assert!(data.len() > INLINE_DECODE);
+        let text = |lines: Vec<Line>| -> String {
+            lines
+                .iter()
+                .flatten()
+                .map(|s| s.content.to_string())
+                .collect()
+        };
+        assert_eq!(text(tile(&data, 16, 8, Style::new())).trim(), "Loading…");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while decoding() {
+            assert!(std::time::Instant::now() < deadline, "still decoding");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(grid(&data, 16, 8).is_some());
     }
 
     #[test]

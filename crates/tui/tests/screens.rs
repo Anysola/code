@@ -538,6 +538,7 @@ fn permission_shell() {
             selected: 0,
             fullscreen: false,
             reject: None,
+            shown: 0,
         },
     );
     assert_screen(&state, "permission-shell");
@@ -558,6 +559,7 @@ fn permission_edit_diff() {
             selected: 0,
             fullscreen: false,
             reject: None,
+            shown: 0,
         },
     );
     assert_screen(&state, "permission-edit-diff");
@@ -1620,6 +1622,7 @@ fn permission_reject_reason() {
             selected: 1,
             fullscreen: false,
             reject: Some("use cat".into()),
+            shown: 0,
         },
     );
     let screen = render(&state);

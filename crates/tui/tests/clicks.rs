@@ -184,6 +184,7 @@ fn permission_options_and_confirm() {
         selected: 0,
         fullscreen: false,
         reject: None,
+        shown: 0,
     });
     assert_click(&state, "Allow once", Hit::Choice(0));
     assert_click(&state, "Always allow", Hit::Choice(1));

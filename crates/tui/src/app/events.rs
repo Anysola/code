@@ -49,7 +49,7 @@ impl App {
         self.attach_session(&root).map(|_| root)
     }
 
-    fn attention(&mut self, session_id: &str, on: bool) {
+    pub(super) fn attention(&mut self, session_id: &str, on: bool) {
         if let Some(tab) = self
             .state
             .tabs
@@ -114,6 +114,7 @@ impl App {
             selected: 0,
             custom: None,
             form: Some(fields),
+            shown: now(),
         });
         let id = session.id.clone();
         self.question_waiting(&id);
@@ -233,6 +234,7 @@ impl App {
                     selected: 0,
                     fullscreen: false,
                     reject: None,
+                    shown: now(),
                 });
                 self.attention(&target, true);
                 self.alert(&target, "Permission needs input", Sound::Permission);
@@ -280,6 +282,7 @@ impl App {
                     selected: 0,
                     custom: None,
                     form: None,
+                    shown: now(),
                 });
                 self.question_waiting(&target);
                 self.alert(&target, "Input needs response", Sound::Question);
@@ -351,6 +354,7 @@ impl App {
                 }
                 self.reload(&id);
                 self.refresh_recent();
+                self.resume_undo(&id);
             }
             _ => {
                 let loaded = self.core.loaded();

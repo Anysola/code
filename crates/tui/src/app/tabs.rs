@@ -121,6 +121,10 @@ impl App {
     /// Closes the tab at `index` (a middle click); the session stays in Recently closed.
     pub(super) fn close_tab(&mut self, index: usize) {
         self.state.tab_hover = None;
+        // A click target from the last frame may be past the tabs left now.
+        if index >= self.state.tabs.len() {
+            return;
+        }
         let id = self.state.tabs.remove(index).session_id;
         if matches!(&self.state.route, crate::state::Route::Session(s) if *s == id) {
             self.state.route = crate::state::Route::Home;
@@ -165,6 +169,15 @@ impl App {
     }
 
     /// A mouse event over the vertical tab column; false when it is elsewhere.
+    /// Ends the edge drags whose button release was lost (focus moved away mid-drag), keeping
+    /// the width they reached.
+    pub(super) fn end_drags(&mut self) {
+        self.pane_drag = false;
+        if std::mem::take(&mut self.tabs_drag) {
+            self.save_layout();
+        }
+    }
+
     pub(super) fn tabs_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> bool {
         use crossterm::event::{MouseButton, MouseEventKind};
         let left = self.state.left;
