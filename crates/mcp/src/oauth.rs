@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use anysola_core::mcp::SignIn;
 use anysola_core::storage::Db;
@@ -14,7 +15,7 @@ use serde_json::{Map, Value, json};
 use sha1::Digest;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::http::Auth;
 
@@ -23,6 +24,12 @@ pub const CLIENT_METADATA_URL: &str = "https://www.anysola.com/oauth/anysola-cod
 const PAGE: &str = include_str!("callback.html");
 const CLOSE_SCRIPT: &str =
     "    <script>setTimeout(function(){try{window.close()}catch(e){}},2500)</script>\n";
+/// Discovery, registration and token requests; tool calls stream and have no such limit.
+const OAUTH_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a callback connection may take to send its request.
+const CALLBACK_READ_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a sign-in waits for the browser's redirect.
+const CALLBACK_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// The integration a remote server's credentials belong to: keyed on name and URL, so two names
 /// for one URL keep separate accounts.
@@ -97,6 +104,7 @@ async fn get_json(client: &reqwest::Client, url: &str) -> Option<Value> {
     let response = client
         .get(url)
         .header("accept", "application/json")
+        .timeout(OAUTH_REQUEST_TIMEOUT)
         .send()
         .await
         .ok()?;
@@ -142,6 +150,7 @@ async fn discover(
         let response = client
             .get(metadata_url)
             .header("accept", "application/json")
+            .timeout(OAUTH_REQUEST_TIMEOUT)
             .send()
             .await
             .map_err(|e| e.to_string())?;
@@ -240,6 +249,7 @@ async fn token_request(
         .post(endpoint)
         .header("accept", "application/json")
         .form(form)
+        .timeout(OAUTH_REQUEST_TIMEOUT)
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -520,6 +530,7 @@ async fn register(
         .post(endpoint)
         .header("content-type", "application/json")
         .body(body.to_string())
+        .timeout(OAUTH_REQUEST_TIMEOUT)
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -716,63 +727,92 @@ async fn target(stream: &mut TcpStream) -> Option<url::Url> {
     url::Url::parse(&format!("http://127.0.0.1{path}")).ok()
 }
 
-/// Answers callbacks until one ends the attempt.
+/// Answers callbacks until one ends the attempt or [`CALLBACK_TIMEOUT`] passes. Each connection
+/// reads its request on its own task, so a browser's idle preconnect never holds up the redirect.
 async fn serve(
     listener: TcpListener,
     path: &str,
     state: &str,
     exchange: &Exchange,
 ) -> Result<(), String> {
-    let provider = exchange.name.as_str();
+    let (sender, mut requests) = mpsc::channel::<(TcpStream, url::Url)>(16);
+    let deadline = tokio::time::sleep(CALLBACK_TIMEOUT);
+    tokio::pin!(deadline);
     loop {
-        let Ok((mut stream, _)) = listener.accept().await else {
-            return Err("Could not determine MCP OAuth callback port".into());
-        };
-        let Some(url) = target(&mut stream).await else {
-            continue;
-        };
-        if url.path() != path {
-            respond(&mut stream, "404 Not Found", "text/plain", "Not found").await;
-            continue;
+        tokio::select! {
+            accepted = listener.accept() => {
+                let Ok((mut stream, _)) = accepted else {
+                    return Err("Could not determine MCP OAuth callback port".into());
+                };
+                let sender = sender.clone();
+                tokio::spawn(async move {
+                    if let Ok(Some(url)) = tokio::time::timeout(CALLBACK_READ_TIMEOUT, target(&mut stream)).await {
+                        let _ = sender.send((stream, url)).await;
+                    }
+                });
+            }
+            Some((mut stream, url)) = requests.recv() => {
+                if let Some(result) = callback(&mut stream, &url, path, state, exchange).await {
+                    return result;
+                }
+            }
+            () = &mut deadline => {
+                return Err("OAuth callback timeout - authorization took too long".into());
+            }
         }
-        let params: Map<String, Value> = url
-            .query_pairs()
-            .map(|(k, v)| (k.into_owned(), json!(v)))
-            .collect();
-        let text = |key: &str| params.get(key).and_then(Value::as_str);
-        let fail = |reason: &str| error_page(reason, provider);
-        if let Some(error) = text("error_description").or(text("error")) {
-            respond(&mut stream, "400 Bad Request", "text/html", &fail(error)).await;
-            return Err(error.to_string());
-        }
-        let code = text("code").filter(|c| !c.is_empty());
-        // Browsers reach the callback without parameters too (prefetches, reloads); only a
-        // redirect from the authorization server ends the attempt.
-        if text("state").is_none() && code.is_none() {
-            let page = fail("Missing authorization code");
-            respond(&mut stream, "400 Bad Request", "text/html", &page).await;
-            continue;
-        }
-        let reason = if text("state") != Some(state) {
-            "OAuth state mismatch"
-        } else if code.is_none() {
-            "Missing authorization code"
-        } else {
-            ""
-        };
-        if !reason.is_empty() {
-            respond(&mut stream, "400 Bad Request", "text/html", &fail(reason)).await;
-            return Err(reason.to_string());
-        }
-        // The page waits for the token exchange so the browser never reports success for a
-        // rejected code.
-        let result = exchange.run(code.unwrap_or_default()).await;
-        match &result {
-            Ok(()) => respond(&mut stream, "200 OK", "text/html", &success_page(provider)).await,
-            Err(error) => respond(&mut stream, "400 Bad Request", "text/html", &fail(error)).await,
-        }
-        return result;
     }
+}
+
+/// Answers one request to the callback server; `Some` when it ends the attempt.
+async fn callback(
+    stream: &mut TcpStream,
+    url: &url::Url,
+    path: &str,
+    state: &str,
+    exchange: &Exchange,
+) -> Option<Result<(), String>> {
+    let provider = exchange.name.as_str();
+    if url.path() != path {
+        respond(stream, "404 Not Found", "text/plain", "Not found").await;
+        return None;
+    }
+    let params: Map<String, Value> = url
+        .query_pairs()
+        .map(|(k, v)| (k.into_owned(), json!(v)))
+        .collect();
+    let text = |key: &str| params.get(key).and_then(Value::as_str);
+    let fail = |reason: &str| error_page(reason, provider);
+    if let Some(error) = text("error_description").or(text("error")) {
+        respond(stream, "400 Bad Request", "text/html", &fail(error)).await;
+        return Some(Err(error.to_string()));
+    }
+    let code = text("code").filter(|c| !c.is_empty());
+    // Browsers reach the callback without parameters too (prefetches, reloads); only a
+    // redirect from the authorization server ends the attempt.
+    if text("state").is_none() && code.is_none() {
+        let page = fail("Missing authorization code");
+        respond(stream, "400 Bad Request", "text/html", &page).await;
+        return None;
+    }
+    let reason = if text("state") != Some(state) {
+        "OAuth state mismatch"
+    } else if code.is_none() {
+        "Missing authorization code"
+    } else {
+        ""
+    };
+    if !reason.is_empty() {
+        respond(stream, "400 Bad Request", "text/html", &fail(reason)).await;
+        return Some(Err(reason.to_string()));
+    }
+    // The page waits for the token exchange so the browser never reports success for a
+    // rejected code.
+    let result = exchange.run(code.unwrap_or_default()).await;
+    match &result {
+        Ok(()) => respond(stream, "200 OK", "text/html", &success_page(provider)).await,
+        Err(error) => respond(stream, "400 Bad Request", "text/html", &fail(error)).await,
+    }
+    Some(result)
 }
 
 #[cfg(test)]

@@ -315,6 +315,8 @@ fn oauth_sign_in_storage_and_refresh() {
         })
     };
     let origin = redirect.trim_end_matches("/callback").to_string();
+    // A browser preconnect that never sends a request does not hold up the callbacks after it.
+    let idle = std::net::TcpStream::connect(origin.trim_start_matches("http://")).unwrap();
     assert_eq!(
         get(format!("{origin}/elsewhere")),
         (404, "Not found".into())
@@ -326,6 +328,7 @@ fn oauth_sign_in_storage_and_refresh() {
     let callback = format!("{redirect}?code=c1&state={}", param("state"));
     assert_eq!(get(callback), (200, page("oauth-callback-success.html")));
     assert_eq!(rt.block_on(attempt.done).unwrap(), Ok(()));
+    drop(idle);
 
     let integration = oauth::integration_id("oauth1", &url);
     let (_, stored) = core.db().active_credential(&integration).unwrap().unwrap();
