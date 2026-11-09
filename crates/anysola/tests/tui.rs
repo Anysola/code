@@ -140,6 +140,8 @@ fn prompt_permission_answer_exit() {
     stdin.write_all(b"\r").unwrap();
     wait_for("Permission required");
     wait_for("$ git push");
+    // Keys in the first 300 ms after a prompt appears are not taken as its answer.
+    std::thread::sleep(Duration::from_millis(400));
     stdin.write_all(b"\r").unwrap();
     wait_for("All done here.");
     let mut command = |text: &str| {
