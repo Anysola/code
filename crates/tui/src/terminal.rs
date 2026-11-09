@@ -10,7 +10,8 @@ use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 pub struct Terminal {
     pub screen: Screen,
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    /// Input for the writer thread: a program that does not read would block the loop.
+    input: std::sync::mpsc::Sender<Vec<u8>>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
 }
 
@@ -64,7 +65,19 @@ impl Terminal {
             .spawn_command(command)
             .map_err(|e| e.to_string())?;
         let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-        let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+        let mut writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+        let (input, queued) = std::sync::mpsc::channel::<Vec<u8>>();
+        std::thread::spawn(move || {
+            while let Ok(bytes) = queued.recv() {
+                if writer
+                    .write_all(&bytes)
+                    .and_then(|()| writer.flush())
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
         let screen = Screen(Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 1000))));
         let parser = screen.0.clone();
         std::thread::spawn(move || {
@@ -83,14 +96,14 @@ impl Terminal {
         Ok(Terminal {
             screen,
             master: pair.master,
-            writer,
+            input,
             child,
         })
     }
 
+    /// Queues bytes for the shell; returns at once even when it is not reading.
     pub fn write(&mut self, bytes: &[u8]) {
-        let _ = self.writer.write_all(bytes);
-        let _ = self.writer.flush();
+        let _ = self.input.send(bytes.to_vec());
     }
 
     pub fn resize(&mut self, rows: u16, cols: u16) {
@@ -171,6 +184,19 @@ mod tests {
         assert_eq!(key_bytes(&stroke("ctrl+c")), Some(vec![3]));
         assert_eq!(key_bytes(&stroke("up")), Some(b"\x1b[A".to_vec()));
         assert_eq!(key_bytes(&stroke("a")), Some(b"a".to_vec()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writes_return_while_the_program_does_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut term = Terminal::spawn(dir.path(), 10, 40, || {}).unwrap();
+        term.write(b"exec sleep 30\r");
+        let started = std::time::Instant::now();
+        // Far more than the pty buffer holds: a blocking write would never return.
+        term.write(&vec![b'x'; 1 << 20]);
+        term.write(b"more");
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 
     #[cfg(unix)]
