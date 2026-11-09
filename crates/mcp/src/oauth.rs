@@ -565,7 +565,12 @@ pub async fn authorize(db: Arc<Db>, name: &str, server: &Value) -> Result<SignIn
                 .map(u64::from)
         })
         .unwrap_or(0);
-    let listener = TcpListener::bind(("127.0.0.1", port as u16))
+    let port = u16::try_from(port).map_err(|_| {
+        format!(
+            "MCP server \"{url}\" has an invalid oauth.callback_port {port} (ports go up to 65535)"
+        )
+    })?;
+    let listener = TcpListener::bind(("127.0.0.1", port))
         .await
         .map_err(|e| e.to_string())?;
     let port = listener
@@ -830,6 +835,22 @@ mod tests {
         assert_eq!(
             error_page("Missing authorization code", "oauth1"),
             read("oauth-callback-error-missing-code.html")
+        );
+    }
+
+    #[test]
+    fn callback_port_out_of_range_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Db::open(&dir.path().join("a.db")).unwrap());
+        let server = json!({"type": "remote", "url": "http://127.0.0.1:1/mcp", "oauth": {"callback_port": 65536 + 8080}});
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let error = rt.block_on(authorize(db, "s", &server)).err().unwrap();
+        assert_eq!(
+            error,
+            "MCP server \"http://127.0.0.1:1/mcp\" has an invalid oauth.callback_port 73616 (ports go up to 65535)"
         );
     }
 
