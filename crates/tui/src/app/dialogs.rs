@@ -875,7 +875,7 @@ impl App {
             Kind::PendingSteer {
                 session,
                 inbox,
-                item,
+                created,
             } => {
                 self.state.dialogs.clear();
                 if value == "queue" {
@@ -884,8 +884,11 @@ impl App {
                     let _ = self.core.cancel_pending(&inbox);
                     if let Some(s) = self.state.sessions.get_mut(&session) {
                         s.queued.retain(|q| *q != inbox);
-                        if matches!(s.items.get(item), Some(Item::User { id, .. }) if id.is_empty())
-                        {
+                        let item = s.items.iter().position(|i| {
+                            matches!(i, Item::User { id, created: at, .. }
+                                if id.is_empty() && *at == created)
+                        });
+                        if let Some(item) = item {
                             s.items.remove(item);
                         }
                     }
@@ -1389,8 +1392,8 @@ impl App {
             .iter()
             .filter(|i| matches!(i, Item::User { id, .. } if id.is_empty()))
             .count();
-        let (id, session_id) = match session.items.get(index) {
-            Some(Item::User { id, .. }) => (id.clone(), session.id.clone()),
+        let (id, created, session_id) = match session.items.get(index) {
+            Some(Item::User { id, created, .. }) => (id.clone(), *created, session.id.clone()),
             _ => return,
         };
         if !id.is_empty() {
@@ -1413,7 +1416,7 @@ impl App {
             Kind::PendingSteer {
                 session: session_id,
                 inbox: row.id.clone(),
-                item: index,
+                created,
             },
             "Pending steer",
             options,
