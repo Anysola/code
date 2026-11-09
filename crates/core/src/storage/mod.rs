@@ -110,12 +110,13 @@ impl Db {
             std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
             options.open(path)?;
         }
-        let conn = Connection::open(path)?;
+        let mut conn = Connection::open(path)?;
+        conn.execute_batch("PRAGMA busy_timeout = 5000;")?;
+        wal(&conn)?;
         conn.execute_batch(
-            "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000; \
-             PRAGMA cache_size = -64000; PRAGMA foreign_keys = ON;",
+            "PRAGMA synchronous = NORMAL; PRAGMA cache_size = -64000; PRAGMA foreign_keys = ON;",
         )?;
-        migrate(&conn)?;
+        migrate(&mut conn)?;
         for suffix in ["", "-wal", "-shm"] {
             restrict(Path::new(&format!("{}{suffix}", path.display())));
         }
@@ -626,14 +627,44 @@ pub(crate) fn owner_alive(owner: &str) -> bool {
     }
 }
 
-fn migrate(conn: &Connection) -> rusqlite::Result<()> {
-    let version: usize =
-        conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))? as usize;
-    for (index, sql) in schema::MIGRATIONS.iter().enumerate().skip(version) {
-        conn.execute_batch(&format!(
-            "BEGIN; {sql}; PRAGMA user_version = {}; COMMIT;",
-            index + 1
-        ))?;
+/// Switches to WAL. Switching a new database needs a lock that SQLite reports busy at once,
+/// without the busy timeout, while another process opening it at the same time holds it; the
+/// switch is retried for as long as that timeout.
+fn wal(conn: &Connection) -> rusqlite::Result<()> {
+    let mut attempts = 0;
+    loop {
+        match conn.execute_batch("PRAGMA journal_mode = WAL;") {
+            Err(rusqlite::Error::SqliteFailure(error, _))
+                if error.code == rusqlite::ErrorCode::DatabaseBusy && attempts < 100 =>
+            {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            other => return other,
+        }
+    }
+}
+
+fn user_version(conn: &Connection) -> rusqlite::Result<usize> {
+    conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+        .map(|v| v as usize)
+}
+
+/// Applies the pending migrations, each in its own `BEGIN IMMEDIATE` transaction that reads the
+/// version again: of two processes opening a database at once, the second skips what the first
+/// applied.
+fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {
+    for (index, sql) in schema::MIGRATIONS.iter().enumerate() {
+        if user_version(conn)? > index {
+            continue;
+        }
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if user_version(&tx)? > index {
+            continue;
+        }
+        tx.execute_batch(sql)?;
+        tx.pragma_update(None, "user_version", index + 1)?;
+        tx.commit()?;
     }
     Ok(())
 }
@@ -658,6 +689,30 @@ mod tests {
             model: None,
             time_created: 1,
             time_updated: 1,
+        }
+    }
+
+    #[test]
+    fn concurrent_opens_migrate_once() {
+        for _ in 0..5 {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("a.db");
+            let barrier = std::sync::Barrier::new(8);
+            std::thread::scope(|scope| {
+                let opens: Vec<_> = (0..8)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            barrier.wait();
+                            Db::open(&path).map(|_| ())
+                        })
+                    })
+                    .collect();
+                for open in opens {
+                    open.join().unwrap().unwrap();
+                }
+            });
+            let conn = Connection::open(&path).unwrap();
+            assert_eq!(user_version(&conn).unwrap(), schema::MIGRATIONS.len());
         }
     }
 
