@@ -1002,9 +1002,7 @@ impl App {
     /// A click on a home `Recent` row opens that session.
     fn click_recent(&mut self, row: u16) {
         let target = (0..self.last.area.width).find_map(|x| {
-            let line: String = (x..self.last.area.width)
-                .map(|c| self.last[(c, row)].symbol())
-                .collect();
+            let line = super::row_text(&self.last, row, x, self.last.area.width - 1);
             let line = line.trim();
             self.state
                 .recent
@@ -1190,10 +1188,7 @@ fn over_text(buffer: &ratatui::buffer::Buffer, (x, y): (u16, u16), text: &str) -
     if y >= buffer.area.height {
         return false;
     }
-    let row: Vec<&str> = (0..buffer.area.width)
-        .map(|c| buffer[(c, y)].symbol())
-        .collect();
-    let line: String = row.concat();
+    let line = super::row_text(buffer, y, 0, buffer.area.width.saturating_sub(1));
     let Some(byte) = line.find(text) else {
         return false;
     };
@@ -1327,6 +1322,12 @@ mod tests {
         assert!(super::over_text(&buffer, (20, 1), "5h 42% · we"));
         assert!(!super::over_text(&buffer, (21, 1), "5h 42% · we"));
         assert!(!super::over_text(&buffer, (12, 0), "5h 42% · we"));
+        // Columns after a wide symbol are not shifted by its continuation cell.
+        buffer.set_string(0, 0, "漢字 MCP", ratatui::style::Style::new());
+        assert!(super::over_text(&buffer, (5, 0), "MCP"));
+        assert!(super::over_text(&buffer, (7, 0), "MCP"));
+        assert!(!super::over_text(&buffer, (8, 0), "MCP"));
+        assert!(super::over_text(&buffer, (0, 0), "漢字"));
     }
 
     fn asked(options: usize) -> anysola_core::tool::question::Question {

@@ -1136,17 +1136,48 @@ pub fn selected_text(buf: &Buffer, a: (u16, u16), b: (u16, u16)) -> String {
         } else {
             buf.area.right().saturating_sub(1)
         };
-        let line: String = (from..=to.min(buf.area.right().saturating_sub(1)))
-            .map(|x| buf[(x, y)].symbol())
-            .collect();
+        let line = row_text(buf, y, from, to.min(buf.area.right().saturating_sub(1)));
         lines.push(line.trim_end().to_string());
     }
     lines.join("\n")
 }
 
+/// The text drawn in cells `from..=to` of row `y`. The cell after a wide symbol (CJK, emoji)
+/// only continues it and is drawn blank, so it is left out.
+fn row_text(buf: &Buffer, y: u16, from: u16, to: u16) -> String {
+    if buf.area.is_empty() {
+        return String::new();
+    }
+    let mut x = from;
+    // A range that starts on a continuation cell starts after it.
+    if from > buf.area.left() && crate::text::width(buf[(from - 1, y)].symbol()) > 1 {
+        x += 1;
+    }
+    let mut line = String::new();
+    while x <= to {
+        let symbol = buf[(x, y)].symbol();
+        line.push_str(symbol);
+        let Some(next) = x.checked_add(crate::text::width(symbol).max(1) as u16) else {
+            break;
+        };
+        x = next;
+    }
+    line
+}
+
 #[cfg(test)]
 mod draft_tests {
     use super::*;
+
+    #[test]
+    fn wide_symbols_copy_without_their_continuation_cell() {
+        let mut buffer = Buffer::empty(ratatui::layout::Rect::new(0, 0, 12, 2));
+        buffer.set_string(0, 0, "漢字 ab", ratatui::style::Style::new());
+        buffer.set_string(0, 1, "x😀y", ratatui::style::Style::new());
+        assert_eq!(selected_text(&buffer, (0, 0), (11, 0)), "漢字 ab");
+        assert_eq!(selected_text(&buffer, (1, 0), (3, 0)), "字");
+        assert_eq!(selected_text(&buffer, (0, 0), (3, 1)), "漢字 ab\nx😀y");
+    }
 
     #[test]
     fn a_turn_runs_until_its_idle_row() {
