@@ -539,7 +539,8 @@ impl App {
         use crate::view::Hit;
         let enter = Stroke::parse("enter").expect("enter");
         match (self.state.dialogs.last_mut(), hit) {
-            (Some(Dialog::Select(_)), Hit::Option(index)) => {
+            // A row the list no longer shows (it changed since the frame) is not chosen.
+            (Some(Dialog::Select(s)), Hit::Option(index)) if s.matches().contains(&index) => {
                 self.hover_option(index);
                 self.choose_option();
             }

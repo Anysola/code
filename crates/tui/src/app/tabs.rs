@@ -121,6 +121,10 @@ impl App {
     /// Closes the tab at `index` (a middle click); the session stays in Recently closed.
     pub(super) fn close_tab(&mut self, index: usize) {
         self.state.tab_hover = None;
+        // A click target from the last frame may be past the tabs left now.
+        if index >= self.state.tabs.len() {
+            return;
+        }
         let id = self.state.tabs.remove(index).session_id;
         if matches!(&self.state.route, crate::state::Route::Session(s) if *s == id) {
             self.state.route = crate::state::Route::Home;

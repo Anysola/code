@@ -380,6 +380,7 @@ impl App {
             return;
         }
         let count = permission.options().len();
+        permission.selected = permission.selected.min(count - 1);
         match stroke.key.as_str() {
             "left" | "h" => permission.selected = (permission.selected + count - 1) % count,
             "right" | "l" | "tab" => permission.selected = (permission.selected + 1) % count,
@@ -916,10 +917,18 @@ impl App {
                     return;
                 };
                 // Straight to the prompt: a focused terminal pane would take the key otherwise.
+                // The index is from the last frame: a prompt since replaced may have fewer rows.
                 if let Some(p) = session.permission.as_mut() {
+                    if index >= p.options().len() {
+                        return;
+                    }
                     p.selected = index;
                     self.permission_key(&Stroke::parse("enter").expect("enter"));
                 } else if let Some(q) = session.question.as_mut() {
+                    let rows = q.questions.get(q.tab).map_or(0, |a| a.options.len() + 1);
+                    if index >= rows {
+                        return;
+                    }
                     q.selected = index;
                     let multiple = q.questions.get(q.tab).and_then(|a| a.multiple) == Some(true);
                     let key = if multiple { "space" } else { "enter" };
