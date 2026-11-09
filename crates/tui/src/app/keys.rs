@@ -661,8 +661,8 @@ impl App {
             return;
         }
         match mouse.kind {
-            MouseEventKind::ScrollUp => self.scroll(3),
-            MouseEventKind::ScrollDown => self.scroll(-3),
+            MouseEventKind::ScrollUp => self.wheel(3, at),
+            MouseEventKind::ScrollDown => self.wheel(-3, at),
             MouseEventKind::Down(button @ (MouseButton::Left | MouseButton::Right))
                 if self.state.diff.is_some()
                     && self.state.dialogs.is_empty()
@@ -815,6 +815,25 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// The wheel scrolls what is under the pointer: the diff viewer, the terminal pane's
+    /// scrollback or the transcript.
+    fn wheel(&mut self, rows: isize, at: (u16, u16)) {
+        let right = at.0 >= crate::view::pane_width(&self.state);
+        if self.state.diff.is_some() && (!crate::view::diff_docked(&self.state) || right) {
+            if let Some(view) = self.state.diff.as_mut() {
+                view.scroll = view.scroll.saturating_add_signed(-rows);
+            }
+            return;
+        }
+        if self.state.pane.is_some() && right {
+            if let Some(terminal) = self.shown.and_then(|i| self.terminals.get_mut(i)) {
+                terminal.scroll(rows);
+            }
+            return;
+        }
+        self.scroll(rows);
     }
 
     /// Clicks on the controls the last frame drew; true when the event is used up. With a
