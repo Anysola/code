@@ -274,8 +274,16 @@ async fn drive(core: &Core, session_id: &str, prompt: Prompt, options: &Options)
             return (report(mode, &error.to_string(), session_id), false);
         }
     };
-    let mut renderer = consumer.await.expect("the event consumer does not panic");
+    let consumed = consumer.await;
     signals.abort();
+    let mut renderer = match consumed {
+        Ok(renderer) => renderer,
+        Err(error) => {
+            let message = format!("The event consumer stopped: {error}");
+            anysola_core::log::error("run event consumer failed", &[("error", &message)]);
+            return (report(mode, &message, session_id), false);
+        }
+    };
     let mut code = i32::from(renderer.emitted_error);
     let mut limited = false;
     match outcome {
