@@ -400,7 +400,13 @@ async fn run_once(core: Core, options: Options, current: Arc<Mutex<Core>>) -> Re
                 for event in crate::paste::coalesce(burst) {
                     app.input(event);
                 }
-                app.run_deferred(&mut terminal);
+                if app.deferred.is_some() {
+                    // The stream's wake thread reads the terminal while it waits for input: an
+                    // editor run in the foreground would lose its first keys to it.
+                    drop(input);
+                    app.run_deferred(&mut terminal);
+                    input = EventStream::new();
+                }
             }
             event = events.recv() => match event {
                 Ok(event) => app.event(event),
@@ -420,6 +426,8 @@ async fn run_once(core: Core, options: Options, current: Arc<Mutex<Core>>) -> Re
             events = receiver;
         }
     }
+    // Before the restart below runs `anysola` in the foreground (see `run_deferred`).
+    drop(input);
     if let Some(records) = app.records.as_mut() {
         term::write_raw(&records.clear());
     }
