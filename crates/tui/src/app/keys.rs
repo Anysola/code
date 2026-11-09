@@ -608,9 +608,25 @@ impl App {
         );
     }
 
-    /// `ctrl+v` and an empty bracketed paste: the clipboard's image, else its text.
+    /// `ctrl+v` and an empty bracketed paste: the clipboard's image, else its text. The paste
+    /// tools run off the loop (each may take seconds to time out) and the content lands later.
     pub(super) fn paste_clipboard(&mut self) {
-        match crate::clipboard::read() {
+        if self.pasting {
+            return;
+        }
+        self.pasting = true;
+        let tx = self.tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let read = crate::clipboard::read();
+            let _ = tx.send(super::Msg::Apply(Box::new(move |app: &mut super::App| {
+                app.pasting = false;
+                app.paste_read(read);
+            })));
+        });
+    }
+
+    fn paste_read(&mut self, read: Result<Option<crate::clipboard::Content>, String>) {
+        match read {
             Ok(Some(crate::clipboard::Content::Image(bytes))) => {
                 self.attach_bytes("image/png", bytes, "clipboard".into());
             }

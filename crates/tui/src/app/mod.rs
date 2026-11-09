@@ -90,6 +90,8 @@ pub struct App {
     /// The `@` file list, walked on first use (off the loop; empty until the walk lands).
     files: Option<Vec<String>>,
     files_walked: bool,
+    /// A clipboard read is running.
+    pasting: bool,
     /// A drag selection in screen cells: anchor and current end.
     selection: Option<((u16, u16), (u16, u16))>,
     /// The last frame, for copying selections.
@@ -318,6 +320,7 @@ async fn run_once(core: Core, options: Options, current: Arc<Mutex<Core>>) -> Re
         shells_polled: 0,
         files: None,
         files_walked: false,
+        pasting: false,
         selection: None,
         last: Buffer::empty(ratatui::layout::Rect::default()),
         hits: Vec::new(),
