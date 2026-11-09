@@ -165,6 +165,15 @@ impl App {
     }
 
     /// A mouse event over the vertical tab column; false when it is elsewhere.
+    /// Ends the edge drags whose button release was lost (focus moved away mid-drag), keeping
+    /// the width they reached.
+    pub(super) fn end_drags(&mut self) {
+        self.pane_drag = false;
+        if std::mem::take(&mut self.tabs_drag) {
+            self.save_layout();
+        }
+    }
+
     pub(super) fn tabs_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> bool {
         use crossterm::event::{MouseButton, MouseEventKind};
         let left = self.state.left;

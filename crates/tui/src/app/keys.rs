@@ -120,7 +120,10 @@ impl App {
             }
             Event::Mouse(mouse) => self.mouse(mouse),
             Event::FocusGained => self.focused = Some(true),
-            Event::FocusLost => self.focused = Some(false),
+            Event::FocusLost => {
+                self.focused = Some(false);
+                self.end_drags();
+            }
             _ => {}
         }
     }
@@ -652,6 +655,12 @@ impl App {
     }
 
     fn mouse(&mut self, mut mouse: crossterm::event::MouseEvent) {
+        if !matches!(
+            mouse.kind,
+            MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
+        ) {
+            self.end_drags();
+        }
         if self.tabs_mouse(mouse) {
             return;
         }
