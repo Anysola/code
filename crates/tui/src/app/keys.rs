@@ -169,14 +169,16 @@ impl App {
             }
             return;
         }
-        if self.pane_key(&stroke) {
-            return;
-        }
+        // A prompt takes the keys before a focused terminal pane: it could not be answered
+        // from the keyboard otherwise.
         if self.state.session().is_some_and(|s| s.permission.is_some()) {
             return self.permission_key(&stroke);
         }
         if self.state.session().is_some_and(|s| s.question.is_some()) {
             return self.question_key(&stroke);
+        }
+        if self.pane_key(&stroke) {
+            return;
         }
         if self.state.session().is_some_and(|s| s.location_missing()) {
             if stroke.key == "return" {
