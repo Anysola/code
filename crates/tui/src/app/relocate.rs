@@ -224,6 +224,7 @@ impl App {
                 .touch(self.core.project_id(), core.directory(), super::now());
         }
         let old = std::mem::replace(&mut self.core, core);
+        *self.current.lock().unwrap_or_else(|e| e.into_inner()) = self.core.clone();
         old.shutdown();
         self.resubscribe = Some(self.core.subscribe());
         let directory = self.core.directory().to_path_buf();

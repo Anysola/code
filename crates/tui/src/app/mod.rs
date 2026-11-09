@@ -2,6 +2,7 @@
 //! folding them into `State` and redrawing.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anysola_core::api::Core;
@@ -146,6 +147,8 @@ pub struct App {
     submit_after_move: bool,
     /// The new core's events, taken by the loop after a swap.
     resubscribe: Option<broadcast::Receiver<anysola_core::events::Event>>,
+    /// The core in use, shared with `run` so a crash restart picks up a swapped one.
+    current: Arc<Mutex<Core>>,
 }
 
 fn now() -> u64 {
@@ -230,10 +233,15 @@ fn swap_draft(
 /// Runs the UI; a panic shows the crash screen, whose Restart starts the UI again.
 pub async fn run(core: Core, mut options: Options) -> Result<(), String> {
     use futures_util::FutureExt;
+    // The core in use: `/cd` and `/connect` swap in a new one and shut the old one down, so a
+    // restart after a crash continues with whatever the slot holds then.
+    let current = Arc::new(Mutex::new(core));
     loop {
-        let attempt = std::panic::AssertUnwindSafe(run_once(core.clone(), options.clone()))
-            .catch_unwind()
-            .await;
+        let core = current.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let attempt =
+            std::panic::AssertUnwindSafe(run_once(core, options.clone(), current.clone()))
+                .catch_unwind()
+                .await;
         let Err(_) = attempt else {
             return attempt.unwrap_or(Ok(()));
         };
@@ -245,16 +253,21 @@ pub async fn run(core: Core, mut options: Options) -> Result<(), String> {
         let choice = crate::crash::show(&mut terminal, message.clone(), stack, light);
         term::restore();
         match choice {
-            crate::crash::Choice::Restart => options.prompt = None,
+            crate::crash::Choice::Restart => {
+                // The session that was opening may be what panicked: start on home instead.
+                options.prompt = None;
+                options.session = None;
+                options.continue_last = false;
+            }
             crate::crash::Choice::Quit => {
-                core.shutdown();
+                current.lock().unwrap_or_else(|e| e.into_inner()).shutdown();
                 return Err(message);
             }
         }
     }
 }
 
-async fn run_once(core: Core, options: Options) -> Result<(), String> {
+async fn run_once(core: Core, options: Options, current: Arc<Mutex<Core>>) -> Result<(), String> {
     let paths = Paths::from_env();
     let tui = Tui::load(paths.data.join("tui.json"));
     let keymap = Keymap::from_config(&tui.value, cfg!(windows))?;
@@ -333,6 +346,7 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
         relocating: None,
         submit_after_move: false,
         resubscribe: None,
+        current,
     };
     app.init(&paths, &options);
     if let Some((title, message)) = failure {
