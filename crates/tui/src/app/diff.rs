@@ -67,8 +67,11 @@ impl App {
             ("pageup", _) | ("b", true) => view.scroll = view.scroll.saturating_sub(page),
             ("d", true) => view.scroll += page / 2,
             ("u", true) => view.scroll = view.scroll.saturating_sub(page / 2),
+            // `G` arrives as `g` with shift.
+            ("end", _) | ("g", false) if stroke.key == "end" || stroke.shift => {
+                view.scroll = view.length(width, &self.theme)
+            }
             ("home" | "g", false) => view.scroll = 0,
-            ("end" | "G", _) => view.scroll = view.length(width, &self.theme),
             ("]", false) => {
                 let starts = view.hunks(width, &self.theme);
                 if let Some(next) = starts.into_iter().find(|row| *row > view.scroll) {
