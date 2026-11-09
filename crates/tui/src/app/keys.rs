@@ -401,123 +401,9 @@ impl App {
         let Some(q) = session.question.as_mut() else {
             return;
         };
-        let total = q.questions.len();
-        let Some(current) = q.questions.get(q.tab).cloned() else {
-            match stroke.key.as_str() {
-                "return" => {
-                    let id = q.request_id.clone();
-                    let answers = q.answers.clone();
-                    answer(
-                        &self.core,
-                        q.form.as_deref(),
-                        &id,
-                        QuestionReply::Answered(answers),
-                    );
-                    session.question = None;
-                }
-                "left" | "h" => q.tab = total.saturating_sub(1),
-                "escape" => {
-                    let id = q.request_id.clone();
-                    answer(
-                        &self.core,
-                        q.form.as_deref(),
-                        &id,
-                        QuestionReply::Dismissed(None),
-                    );
-                    session.question = None;
-                }
-                _ => {}
-            }
-            return;
-        };
-        let rows = current.options.len() + 1;
-        if let Some(custom) = q.custom.as_mut() {
-            match stroke.key.as_str() {
-                "return" => {
-                    if !custom.trim().is_empty() {
-                        q.answers[q.tab] = vec![custom.trim().to_string()];
-                    }
-                    q.custom = None;
-                    q.tab += 1;
-                }
-                "escape" => q.custom = None,
-                "backspace" => {
-                    custom.pop();
-                }
-                "space" => custom.push(' '),
-                key if key.chars().count() == 1 && !stroke.ctrl => {
-                    let text = if stroke.shift {
-                        key.to_uppercase()
-                    } else {
-                        key.to_string()
-                    };
-                    custom.push_str(&text);
-                }
-                _ => {}
-            }
-        } else {
-            let multiple = current.multiple == Some(true);
-            let pick = |q: &mut crate::state::Question, index: usize| {
-                if index + 1 == rows {
-                    q.custom = Some(String::new());
-                    return;
-                }
-                let label = current.options[index].label.clone();
-                let answers = &mut q.answers[q.tab];
-                if multiple {
-                    match answers.iter().position(|a| *a == label) {
-                        Some(i) => {
-                            answers.remove(i);
-                        }
-                        None => answers.push(label),
-                    }
-                } else {
-                    *answers = vec![label];
-                    q.tab += 1;
-                }
-            };
-            match stroke.key.as_str() {
-                "up" | "k" => q.selected = (q.selected + rows - 1) % rows,
-                "down" | "j" => q.selected = (q.selected + 1) % rows,
-                "space" if multiple => pick(q, q.selected),
-                "return" if multiple && q.selected + 1 < rows => q.tab += 1,
-                "return" => pick(q, q.selected),
-                "tab" | "right" | "l" => q.tab = (q.tab + 1).min(total),
-                "left" | "h" => q.tab = q.tab.saturating_sub(1),
-                "escape" => {
-                    let id = q.request_id.clone();
-                    answer(
-                        &self.core,
-                        q.form.as_deref(),
-                        &id,
-                        QuestionReply::Dismissed(None),
-                    );
-                    session.question = None;
-                    return;
-                }
-                key => {
-                    if let Some(digit) =
-                        key.parse::<usize>().ok().filter(|d| (1..=rows).contains(d))
-                    {
-                        q.selected = digit - 1;
-                        pick(q, digit - 1);
-                    }
-                }
-            }
-        }
-        if q.tab != 0 && q.selected >= rows {
-            q.selected = 0;
-        }
-        // A single question submits as soon as it is answered.
-        if total == 1 && q.tab >= 1 {
+        if let Some(reply) = question_step(q, stroke) {
             let id = q.request_id.clone();
-            let answers = q.answers.clone();
-            answer(
-                &self.core,
-                q.form.as_deref(),
-                &id,
-                QuestionReply::Answered(answers),
-            );
+            answer(&self.core, q.form.as_deref(), &id, reply);
             session.question = None;
         }
     }
@@ -1286,6 +1172,96 @@ fn over_text(buffer: &ratatui::buffer::Buffer, (x, y): (u16, u16), text: &str) -
     (start..start + crate::text::width(text) as u16).contains(&x)
 }
 
+/// One key in a question prompt; the reply once it is answered or dismissed. Moving to another
+/// question starts at its first row.
+fn question_step(q: &mut crate::state::Question, stroke: &Stroke) -> Option<QuestionReply> {
+    let total = q.questions.len();
+    let Some(current) = q.questions.get(q.tab).cloned() else {
+        match stroke.key.as_str() {
+            "return" => return Some(QuestionReply::Answered(q.answers.clone())),
+            "left" | "h" => {
+                q.tab = total.saturating_sub(1);
+                q.selected = 0;
+            }
+            "escape" => return Some(QuestionReply::Dismissed(None)),
+            _ => {}
+        }
+        return None;
+    };
+    let rows = current.options.len() + 1;
+    if q.selected >= rows {
+        q.selected = 0;
+    }
+    let tab = q.tab;
+    if let Some(custom) = q.custom.as_mut() {
+        match stroke.key.as_str() {
+            "return" => {
+                if !custom.trim().is_empty() {
+                    q.answers[q.tab] = vec![custom.trim().to_string()];
+                }
+                q.custom = None;
+                q.tab += 1;
+            }
+            "escape" => q.custom = None,
+            "backspace" => {
+                custom.pop();
+            }
+            "space" => custom.push(' '),
+            key if key.chars().count() == 1 && !stroke.ctrl => {
+                let text = if stroke.shift {
+                    key.to_uppercase()
+                } else {
+                    key.to_string()
+                };
+                custom.push_str(&text);
+            }
+            _ => {}
+        }
+    } else {
+        let multiple = current.multiple == Some(true);
+        let pick = |q: &mut crate::state::Question, index: usize| {
+            if index + 1 == rows {
+                q.custom = Some(String::new());
+                return;
+            }
+            let label = current.options[index].label.clone();
+            let answers = &mut q.answers[q.tab];
+            if multiple {
+                match answers.iter().position(|a| *a == label) {
+                    Some(i) => {
+                        answers.remove(i);
+                    }
+                    None => answers.push(label),
+                }
+            } else {
+                *answers = vec![label];
+                q.tab += 1;
+            }
+        };
+        match stroke.key.as_str() {
+            "up" | "k" => q.selected = (q.selected + rows - 1) % rows,
+            "down" | "j" => q.selected = (q.selected + 1) % rows,
+            "space" if multiple => pick(q, q.selected),
+            "return" if multiple && q.selected + 1 < rows => q.tab += 1,
+            "return" => pick(q, q.selected),
+            "tab" | "right" | "l" => q.tab = (q.tab + 1).min(total),
+            "left" | "h" => q.tab = q.tab.saturating_sub(1),
+            "escape" => return Some(QuestionReply::Dismissed(None)),
+            key => {
+                if let Some(digit) = key.parse::<usize>().ok().filter(|d| (1..=rows).contains(d)) {
+                    q.selected = digit - 1;
+                    pick(q, digit - 1);
+                }
+            }
+        }
+    }
+    if q.tab != tab {
+        q.selected = 0;
+    }
+    // A single question submits as soon as it is answered.
+    (total == 1 && q.tab >= 1).then(|| QuestionReply::Answered(q.answers.clone()))
+}
+
 /// Replies to a question, or to the MCP form it stands for.
 fn answer(
     core: &anysola_core::api::Core,
@@ -1322,5 +1298,60 @@ mod tests {
         assert!(super::over_text(&buffer, (20, 1), "5h 42% · we"));
         assert!(!super::over_text(&buffer, (21, 1), "5h 42% · we"));
         assert!(!super::over_text(&buffer, (12, 0), "5h 42% · we"));
+    }
+
+    fn asked(options: usize) -> anysola_core::tool::question::Question {
+        anysola_core::tool::question::Question {
+            question: "Which?".into(),
+            header: "Pick".into(),
+            options: (0..options)
+                .map(|i| anysola_core::tool::question::QuestionOption {
+                    label: format!("option {i}"),
+                    description: String::new(),
+                })
+                .collect(),
+            multiple: None,
+        }
+    }
+
+    #[test]
+    fn the_next_question_starts_at_its_first_row() {
+        use crate::keymap::Stroke;
+        use anysola_core::tool::question::QuestionReply;
+        let mut q = crate::state::Question {
+            request_id: "que_1".into(),
+            questions: vec![asked(3), asked(1)],
+            tab: 0,
+            selected: 0,
+            answers: vec![Vec::new(); 2],
+            custom: None,
+            form: None,
+        };
+        let key = |q: &mut crate::state::Question, key: &str| {
+            super::question_step(q, &Stroke::parse(key).expect("key"))
+        };
+        // The third option of the first question, then Enter on the second (one option).
+        assert_eq!(key(&mut q, "down"), None);
+        assert_eq!(key(&mut q, "down"), None);
+        assert_eq!(key(&mut q, "return"), None);
+        assert_eq!(key(&mut q, "return"), None);
+        assert_eq!((q.tab, q.selected), (2, 0));
+        assert_eq!(q.answers, vec![vec!["option 2"], vec!["option 0"]]);
+        assert_eq!(
+            key(&mut q, "return"),
+            Some(QuestionReply::Answered(q.answers.clone()))
+        );
+        // A row left over from a longer question is clamped before it is used.
+        let mut q = crate::state::Question {
+            questions: vec![asked(1)],
+            selected: 5,
+            answers: vec![Vec::new()],
+            ..q
+        };
+        q.tab = 0;
+        assert_eq!(
+            key(&mut q, "return"),
+            Some(QuestionReply::Answered(vec![vec!["option 0".into()]]))
+        );
     }
 }
