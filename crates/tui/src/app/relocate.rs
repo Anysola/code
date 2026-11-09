@@ -178,11 +178,17 @@ impl App {
     /// Restarts the core for `directory`, once no turn is running.
     pub(super) fn relocate(&mut self, directory: PathBuf, session: Option<String>, adopt: bool) {
         if self.restarter.is_none() {
+            self.submit_after_move = false;
             return self.toast(
                 Some("Failed to change directory".into()),
                 "Not available in this mode".into(),
                 Variant::Error,
             );
+        }
+        // A second move while the first core starts would race it for the swap.
+        if self.moving {
+            self.submit_after_move = false;
+            return self.toast(None, "Changing directory…".into(), Variant::Warning);
         }
         self.relocating = Some(Pending {
             directory,
@@ -203,16 +209,26 @@ impl App {
         else {
             return;
         };
+        // Until the new core is in, prompts are held back: a turn started on the old core would
+        // be cut off by its shutdown.
+        self.moving = true;
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let started = restart(pending.directory.clone()).await;
-            let apply = move |app: &mut App| match started {
-                Ok(core) => app.swap_core(core, pending.session, pending.adopt),
-                Err(error) => app.toast(
-                    Some("Failed to change directory".into()),
-                    error,
-                    Variant::Error,
-                ),
+            let apply = move |app: &mut App| {
+                // Cleared first: the swap may submit the prompt that waited for the move.
+                app.moving = false;
+                match started {
+                    Ok(core) => app.swap_core(core, pending.session, pending.adopt),
+                    Err(error) => {
+                        app.submit_after_move = false;
+                        app.toast(
+                            Some("Failed to change directory".into()),
+                            error,
+                            Variant::Error,
+                        )
+                    }
+                }
             };
             let _ = tx.send(Msg::Apply(Box::new(apply)));
         });

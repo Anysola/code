@@ -494,6 +494,9 @@ impl App {
     }
 
     pub(super) fn submit(&mut self, queue: bool) {
+        if self.moving {
+            return self.toast(None, "Changing directory…".into(), Variant::Warning);
+        }
         // The gate's pass is for this submit only, whichever way it goes.
         let passed = std::mem::take(&mut self.gate_passed);
         let text = self.state.composer.expanded();

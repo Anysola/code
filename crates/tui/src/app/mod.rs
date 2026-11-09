@@ -143,6 +143,8 @@ pub struct App {
     records: Option<crate::status::Records>,
     /// A directory move waiting for running turns.
     relocating: Option<relocate::Pending>,
+    /// A new core is starting for a move; prompts wait for it.
+    moving: bool,
     /// The prompt waiting for a deferred worktree is submitted once the move lands.
     submit_after_move: bool,
     /// The new core's events, taken by the loop after a swap.
@@ -348,6 +350,7 @@ async fn run_once(core: Core, options: Options, current: Arc<Mutex<Core>>) -> Re
         tab_store,
         records: probe.program_status.then(crate::status::Records::default),
         relocating: None,
+        moving: false,
         submit_after_move: false,
         resubscribe: None,
         connect: None,
