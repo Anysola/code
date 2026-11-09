@@ -581,6 +581,7 @@ impl App {
             || self.state.interrupt_armed.is_some()
             || self.session_search.is_some()
             || self.polling_shells()
+            || crate::preview::decoding()
     }
 
     /// `draw` still has shell output to read: the open Shell output dialog until it saw the
