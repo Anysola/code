@@ -171,14 +171,26 @@ impl Gateway {
     }
 
     pub fn with_base(base: String, token: Option<Token>) -> Self {
-        let http = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(30))
-            .tcp_keepalive(Duration::from_secs(30))
-            .http2_keep_alive_interval(Duration::from_secs(30))
-            .http2_keep_alive_timeout(Duration::from_secs(20))
-            .http2_keep_alive_while_idle(true)
-            .build()
-            .expect("HTTP client with default TLS settings");
+        let builder = || {
+            reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(30))
+                .tcp_keepalive(Duration::from_secs(30))
+                .http2_keep_alive_interval(Duration::from_secs(30))
+                .http2_keep_alive_timeout(Duration::from_secs(20))
+                .http2_keep_alive_while_idle(true)
+        };
+        // An unreadable system certificate store fails the build; without its roots the program
+        // still starts and each request reports the TLS failure.
+        let http = builder().build().unwrap_or_else(|error| {
+            crate::log::error(
+                "cannot build the HTTP client with the system certificates",
+                &[("error", &format!("{error:?}"))],
+            );
+            builder()
+                .tls_built_in_root_certs(false)
+                .build()
+                .expect("HTTP client without built-in root certificates")
+        });
         Gateway { base, http, token }
     }
 
