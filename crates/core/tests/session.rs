@@ -183,6 +183,40 @@ fn incomplete_stream_continues_after_output() {
     );
 }
 
+/// A relay that cuts every stream after output gets three continuations and then a failure,
+/// not an endless loop of billed requests.
+#[test]
+fn incomplete_streams_stop_after_three_continuations() {
+    let gateway = FakeGateway::start(|request, _| {
+        if request.is_title() {
+            return text(request, "Title");
+        }
+        sse(
+            request,
+            anysola_testkit::sse::Stream::new().text("partial"),
+            true,
+        )
+    });
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    let outcome = runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    let Outcome::Failed(error) = outcome else {
+        panic!("{outcome:?}")
+    };
+    assert_eq!(error.kind, "provider.invalid-output");
+    assert_eq!(error.message, "The model's stream was cut off 4 times in a row");
+    let main = gateway
+        .messages()
+        .into_iter()
+        .filter(|r| !r.is_title())
+        .count();
+    assert_eq!(main, 4, "the first call and three continuations");
+}
+
 #[test]
 fn output_limit_continuations() {
     let gateway = FakeGateway::start(|request, _| {

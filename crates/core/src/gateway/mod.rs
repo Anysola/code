@@ -25,6 +25,11 @@ pub const USAGE_EVENT_HEADER: &str = "x-anysola-usage-event";
 pub const LIMIT_HEADER: &str = "x-anysola-limit";
 
 const ACCOUNT_TIMEOUT: Duration = Duration::from_secs(15);
+/// A model stream that sends nothing (not even a `: keepalive` comment) for this long is cut
+/// and the step retries; a dead connection otherwise waits for the kernel's TCP timeout.
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+/// `/messages` must answer with headers within this long.
+const STREAM_HEADERS_TIMEOUT: Duration = Duration::from_secs(120);
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(30);
 const SEARCH_MAX_BYTES: usize = 1024 * 1024;
 
@@ -117,7 +122,21 @@ impl MessageStream {
             if self.done {
                 return None;
             }
-            match self.response.chunk().await {
+            let chunk = match tokio::time::timeout(STREAM_IDLE_TIMEOUT, self.response.chunk()).await
+            {
+                Ok(chunk) => chunk,
+                Err(_) => {
+                    self.done = true;
+                    return Some(Err(ApiError::transport(
+                        format!(
+                            "The model's stream sent nothing for {} seconds",
+                            STREAM_IDLE_TIMEOUT.as_secs()
+                        ),
+                        true,
+                    )));
+                }
+            };
+            match chunk {
                 Ok(Some(bytes)) => {
                     let blocks = self.decoder.push(&bytes);
                     self.queue(blocks);
@@ -154,6 +173,10 @@ impl Gateway {
     pub fn with_base(base: String, token: Option<Token>) -> Self {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(30))
+            .tcp_keepalive(Duration::from_secs(30))
+            .http2_keep_alive_interval(Duration::from_secs(30))
+            .http2_keep_alive_timeout(Duration::from_secs(20))
+            .http2_keep_alive_while_idle(true)
             .build()
             .expect("HTTP client with default TLS settings");
         Gateway { base, http, token }
@@ -324,12 +347,21 @@ impl Gateway {
             Some(Token::Login(token)) => request.header("authorization", format!("Bearer {token}")),
             None => request,
         };
-        let response = request
-            .header("accept", "*/*")
-            .body(body)
-            .send()
-            .await
-            .map_err(|e| ApiError::transport(e.to_string(), !e.is_connect()))?;
+        let sent = request.header("accept", "*/*").body(body).send();
+        let response = match tokio::time::timeout(STREAM_HEADERS_TIMEOUT, sent).await {
+            Ok(result) => {
+                result.map_err(|e| ApiError::transport(e.to_string(), !e.is_connect()))?
+            }
+            Err(_) => {
+                return Err(ApiError::transport(
+                    format!(
+                        "The model did not answer within {} seconds",
+                        STREAM_HEADERS_TIMEOUT.as_secs()
+                    ),
+                    true,
+                ));
+            }
+        };
         let headers = response.headers().clone();
         let status = response.status().as_u16();
         if !(200..300).contains(&status) {
@@ -337,7 +369,8 @@ impl Gateway {
                 .get("retry-after")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.trim().parse::<f64>().ok())
-                .map(|s| Duration::from_secs_f64(s.max(0.0)));
+                .filter(|s| s.is_finite())
+                .map(|s| Duration::from_secs_f64(s.clamp(0.0, 1e9)));
             let should_retry = match headers.get("x-should-retry").and_then(|v| v.to_str().ok()) {
                 Some("true") => Some(true),
                 Some("false") => Some(false),

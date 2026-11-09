@@ -312,6 +312,15 @@ fn storage(error: crate::storage::StorageError) -> SessionError {
     SessionError::new("unknown", error.to_string())
 }
 
+/// Removes the session's pending prompts (not control items such as a compaction).
+fn drop_pending_input(shared: &Shared, session_id: &str) {
+    for row in shared.db.inbox(session_id).unwrap_or_default() {
+        if row.kind != "compaction" {
+            let _ = shared.db.inbox_remove(&row.id);
+        }
+    }
+}
+
 /// One turn: settle the context (instructions are recorded before the input that follows them),
 /// promote pending input, then run steps until the model stops.
 async fn turn(
@@ -321,12 +330,27 @@ async fn turn(
     cancel: &CancellationToken,
 ) -> Outcome {
     shared.refresh().await;
-    let prepared = select(shared, session).and_then(|selection| {
-        plan_reminders(shared, &session.id, &selection.agent.id);
-        step::settle_context(shared, session, &selection)
-    });
+    let prepare = |shared: &Arc<Shared>| {
+        select(shared, session).and_then(|selection| {
+            plan_reminders(shared, &session.id, &selection.agent.id);
+            step::settle_context(shared, session, &selection)
+        })
+    };
+    let mut prepared = prepare(shared);
+    if let Err(error) = &prepared
+        && error.kind == "provider.no-route"
+        && shared.remote().body.is_none()
+    {
+        // No remote document yet (the first fetch failed): try the gateway again right now
+        // rather than failing every prompt until the periodic refresh.
+        shared.refresh_remote().await;
+        shared.refresh().await;
+        prepared = prepare(shared);
+    }
     if let Err(error) = prepared {
-        // Pending input stays in the inbox for the next attempt.
+        // The input that could not start is dropped with the error; left in the inbox it would
+        // go out unseen, together with whatever the user types next.
+        drop_pending_input(shared, &session.id);
         return Outcome::Failed(error);
     }
     let promoted = match inbox::promote(&shared.db, &session.id, inbox::Scope::Input) {
@@ -338,7 +362,11 @@ async fn turn(
         .then(|| tokio::spawn(title::generate(shared.clone(), session.clone())));
     let outcome = step::drive(shared, session, options, cancel).await;
     if let Some(title) = title {
-        let _ = title.await;
+        // An interrupted turn does not wait for the title; the task finishes on its own.
+        tokio::select! {
+            _ = title => {}
+            _ = cancel.cancelled() => {}
+        }
     }
     outcome
 }

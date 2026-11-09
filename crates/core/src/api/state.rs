@@ -5,6 +5,7 @@
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 use crate::agent::Agents;
 use crate::command::Commands;
@@ -144,7 +145,7 @@ impl Shared {
         );
     }
 
-    pub(super) fn remote(&self) -> Remote {
+    pub(crate) fn remote(&self) -> Remote {
         self.remote
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -164,13 +165,32 @@ impl Shared {
     }
 }
 
-/// Fetches `/config` every 10 minutes while the process holds a credential and lives.
+/// Fetches `/config` every 10 minutes while the process holds a credential and lives. While
+/// there is no document at all (the first fetch failed offline, nothing cached) it retries
+/// sooner, from 15 s doubling up to the regular interval, so models appear once the network is
+/// back instead of ten minutes later.
 pub(super) async fn poll_remote(shared: Weak<Shared>) {
+    const RETRY_SOON: Duration = Duration::from_secs(15);
+    let mut backoff = RETRY_SOON;
     loop {
-        tokio::time::sleep(crate::gateway::config::REFRESH_EVERY).await;
+        let missing = match shared.upgrade() {
+            Some(shared) => shared.gateway.token().is_some() && shared.remote().body.is_none(),
+            None => return,
+        };
+        let delay = if missing {
+            backoff
+        } else {
+            crate::gateway::config::REFRESH_EVERY
+        };
+        tokio::time::sleep(delay).await;
         let Some(shared) = shared.upgrade() else {
             return;
         };
         shared.refresh_remote().await;
+        backoff = if missing {
+            (backoff * 2).min(crate::gateway::config::REFRESH_EVERY)
+        } else {
+            RETRY_SOON
+        };
     }
 }

@@ -188,6 +188,10 @@ fn candidates(shared: &Shared, session: &SessionRow) -> Vec<(Model, Option<Strin
     out
 }
 
+/// A title call that produces nothing within this long is given up (the stream has no idle
+/// timeout of its own on the title path, and the turn must not hang on it).
+const TITLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 async fn ask(
     shared: &Shared,
     session: &SessionRow,
@@ -248,7 +252,12 @@ pub(crate) async fn generate(shared: Arc<Shared>, session: SessionRow) {
         return;
     };
     for (model, variant) in candidates(&shared, &session) {
-        let Some(title) = ask(&shared, &session, &model, variant.as_deref(), &text).await else {
+        let asked = tokio::time::timeout(
+            TITLE_TIMEOUT,
+            ask(&shared, &session, &model, variant.as_deref(), &text),
+        )
+        .await;
+        let Some(title) = asked.ok().flatten() else {
             continue;
         };
         let title = truncate(&title);

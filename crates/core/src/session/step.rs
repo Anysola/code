@@ -35,6 +35,9 @@ const WORKTREE_HINT: &str = "When you create a worktree outside the current work
 const SYSTEM_TEMPLATE: &str = include_str!("../prompt/system.txt");
 const ANTHROPIC_PROMPT: &str = include_str!("../prompt/anthropic.txt");
 const OUTPUT_LIMIT_CONTINUATIONS: usize = 2;
+/// Consecutive steps whose stream was cut after output started: each one continues once, with a
+/// growing pause; the fourth cut fails the turn instead of looping against a broken relay.
+const INCOMPLETE_STREAM_CONTINUATIONS: u32 = 3;
 
 /// Tool guidance lines for the tools actually advertised.
 pub fn default_system(tools: &[&str]) -> String {
@@ -187,6 +190,7 @@ pub(crate) async fn drive(
     cancel: &CancellationToken,
 ) -> Outcome {
     let mut length_finishes = 0;
+    let mut incomplete_streams: u32 = 0;
     let mut number = 0;
     let mut overflowed = false;
     loop {
@@ -268,6 +272,29 @@ pub(crate) async fn drive(
                 Message::Assistant(a) => a.finish.clone(),
                 _ => None,
             });
+        if last_finish.as_deref() == Some("unknown") {
+            // The stream was cut after output started (`run_stream` queued the continuation).
+            incomplete_streams += 1;
+            let error = ApiError::incomplete("The provider response ended unexpectedly.");
+            if incomplete_streams > INCOMPLETE_STREAM_CONTINUATIONS {
+                return Outcome::Failed(SessionError::new(
+                    "provider.invalid-output",
+                    format!(
+                        "The model's stream was cut off {} times in a row",
+                        incomplete_streams
+                    ),
+                ));
+            }
+            let delay = Duration::from_secs(2u64.saturating_pow(incomplete_streams))
+                .min(Duration::from_secs(10));
+            wait_retry(shared, &session.id, incomplete_streams + 1, delay, &error);
+            tokio::select! {
+                _ = tokio::time::sleep(delay) => {}
+                _ = cancel.cancelled() => return Outcome::Interrupted(InterruptReason::User),
+            }
+        } else {
+            incomplete_streams = 0;
+        }
         if last_finish.as_deref() == Some("length") {
             length_finishes += 1;
             if length_finishes > OUTPUT_LIMIT_CONTINUATIONS {
@@ -930,7 +957,14 @@ async fn run_stream(
         {
             // Nothing was produced: send the whole request again.
             wait_retry(shared, &session.id, retry.attempt(), delay, &error);
-            tokio::time::sleep(delay).await;
+            tokio::select! {
+                _ = tokio::time::sleep(delay) => {}
+                _ = cancel.cancelled() => {
+                    tool_cancel.cancel();
+                    let unsettled = collect(shared, &mut running, &mut tasks).await;
+                    return interrupt(shared, running, unsettled, InterruptReason::User);
+                }
+            }
             return resend(
                 shared, session, selection, ctx, running, capped, cancel, retry, body, headers,
             )
@@ -1048,7 +1082,11 @@ fn resend<'a>(
             .db
             .update_message(&running.message_id, &encode(&running.data));
         loop {
-            match shared.gateway.messages(body.clone(), &headers).await {
+            let attempt = tokio::select! {
+                result = shared.gateway.messages(body.clone(), &headers) => result,
+                _ = cancel.cancelled() => return interrupt(shared, running, Vec::new(), InterruptReason::User),
+            };
+            match attempt {
                 Ok(stream) => {
                     return run_stream(
                         shared, session, selection, ctx, stream, running, capped, cancel, retry,
@@ -1059,7 +1097,10 @@ fn resend<'a>(
                 Err(error) => match retry.next(&error) {
                     Some(delay) => {
                         wait_retry(shared, &session.id, retry.attempt(), delay, &error);
-                        tokio::time::sleep(delay).await;
+                        tokio::select! {
+                            _ = tokio::time::sleep(delay) => {}
+                            _ = cancel.cancelled() => return interrupt(shared, running, Vec::new(), InterruptReason::User),
+                        }
                     }
                     None => return fail(shared, running, error.to_session_error()),
                 },
