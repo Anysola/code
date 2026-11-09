@@ -86,8 +86,9 @@ pub struct App {
     pending_until: u64,
     /// When background shell rows were last polled.
     shells_polled: u64,
-    /// The `@` file list, walked on first use.
+    /// The `@` file list, walked on first use (off the loop; empty until the walk lands).
     files: Option<Vec<String>>,
+    files_walked: bool,
     /// A drag selection in screen cells: anchor and current end.
     selection: Option<((u16, u16), (u16, u16))>,
     /// The last frame, for copying selections.
@@ -245,7 +246,10 @@ pub async fn run(core: Core, mut options: Options) -> Result<(), String> {
         term::restore();
         match choice {
             crate::crash::Choice::Restart => options.prompt = None,
-            crate::crash::Choice::Quit => return Err(message),
+            crate::crash::Choice::Quit => {
+                core.shutdown();
+                return Err(message);
+            }
         }
     }
 }
@@ -294,6 +298,7 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
         pending_until: 0,
         shells_polled: 0,
         files: None,
+        files_walked: false,
         selection: None,
         last: Buffer::empty(ratatui::layout::Rect::default()),
         hits: Vec::new(),
@@ -339,6 +344,17 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined2()).ok();
     #[cfg(not(unix))]
     let mut reload_signal: Option<()> = None;
+    // A closed terminal (SIGHUP) or a kill (SIGTERM) ends the UI the normal way, so the core
+    // shuts down and background shells are killed instead of outliving the window.
+    #[cfg(unix)]
+    let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()).ok();
+    #[cfg(unix)]
+    let mut terminate =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
+    #[cfg(not(unix))]
+    let mut hangup: Option<()> = None;
+    #[cfg(not(unix))]
+    let mut terminate: Option<()> = None;
     loop {
         app.draw(&mut terminal);
         if app.quit {
@@ -370,6 +386,8 @@ async fn run_once(core: Core, options: Options) -> Result<(), String> {
             },
             Some(message) = rx.recv() => app.message(message),
             Some(()) = recv_signal(&mut reload_signal) => app.reload_themes(&paths),
+            Some(()) = recv_signal(&mut hangup) => app.quit = true,
+            Some(()) = recv_signal(&mut terminate) => app.quit = true,
             _ = tokio::time::sleep(Duration::from_millis(80)), if tick => {}
         }
         if let Some(receiver) = app.resubscribe.take() {

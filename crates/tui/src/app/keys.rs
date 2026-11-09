@@ -1102,10 +1102,21 @@ impl App {
             let (rows, pad) = crate::complete::slash_rows(&scope);
             (crate::complete::filter(rows, &query, "/", 10), pad)
         } else {
-            let directory = self.core.directory().to_path_buf();
-            let files = self
-                .files
-                .get_or_insert_with(|| crate::complete::walk(&directory, 20_000));
+            let files = self.files.get_or_insert_with(Vec::new);
+            if !self.files_walked {
+                // The walk (up to 20 000 entries, slow on big trees and network disks) runs off
+                // the loop; the list fills in when it lands and the popup refreshes then.
+                self.files_walked = true;
+                let directory = self.core.directory().to_path_buf();
+                let tx = self.tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let files = crate::complete::walk(&directory, 20_000);
+                    let _ = tx.send(super::Msg::Apply(Box::new(move |app: &mut super::App| {
+                        app.files = Some(files);
+                        app.refresh_popup();
+                    })));
+                });
+            }
             let skills: Vec<(String, String)> = loaded
                 .skills
                 .iter()

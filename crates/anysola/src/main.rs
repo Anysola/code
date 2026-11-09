@@ -102,6 +102,7 @@ fn main() {
     }
     let paths = anysola_core::paths::Paths::from_env();
     anysola_core::log::init(&paths, cli.log_level.as_deref(), cli.print_logs);
+    log_panics();
     let version = anysola_core::version::VERSION;
     anysola_core::log::info(
         "cli starting",
@@ -184,4 +185,25 @@ fn main() {
     });
     runtime.shutdown_timeout(std::time::Duration::from_millis(100));
     std::process::exit(code);
+}
+
+/// Every panic, on any thread, lands in the log with its location before the default report
+/// (the TUI adds its own hook on top for the crash screen); without this a panic in a
+/// background task vanished.
+fn log_panics() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "panic".into());
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_default();
+        anysola_core::log::error("panic", &[("message", &message), ("location", &location)]);
+        previous(info);
+    }));
 }

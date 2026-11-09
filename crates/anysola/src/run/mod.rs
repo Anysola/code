@@ -395,6 +395,7 @@ async fn signals(
             };
             if deadline.is_some() {
                 if code == 130 {
+                    anysola_core::tool::shell::kill_background_shells();
                     std::process::exit(130);
                 }
                 exit_pending("received SIGTERM again during shutdown");
@@ -416,6 +417,7 @@ async fn signals(
                 }
             }
             if exit.swap(130, Ordering::Relaxed) == 130 {
+                anysola_core::tool::shell::kill_background_shells();
                 std::process::exit(130);
             }
             user_interrupt.store(true, Ordering::Relaxed);
@@ -428,5 +430,6 @@ async fn signals(
 fn exit_pending(reason: &str) -> ! {
     let pending = anysola_core::teardown::pending();
     eprint!("{}", anysola_core::teardown::report(reason, &pending));
+    anysola_core::tool::shell::kill_background_shells();
     std::process::exit(1);
 }

@@ -285,11 +285,10 @@ impl App {
             if !session.toggled.contains(&format!("shell:{call}")) {
                 continue;
             }
-            if let Some(bytes) = view.file.as_ref().and_then(|f| std::fs::read(f).ok()) {
-                const LIMIT: usize = 1024 * 1024;
-                view.truncated = bytes.len() > LIMIT;
-                view.output = String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(LIMIT)..])
-                    .into_owned();
+            const LIMIT: u64 = 1024 * 1024;
+            if let Some((bytes, truncated)) = view.file.as_ref().and_then(|f| read_tail(f, LIMIT)) {
+                view.truncated = truncated;
+                view.output = String::from_utf8_lossy(&bytes).into_owned();
             }
         }
     }
@@ -318,7 +317,10 @@ impl App {
         *polled = now;
         let end = self.core.shell_end(id);
         *ended = end.is_some();
-        let bytes = std::fs::read(file.as_path());
+        // Only the last part is shown; a multi-GB log must not be read whole every second.
+        let bytes = read_tail(file.as_path(), 1024 * 1024)
+            .map(|(bytes, _)| bytes)
+            .ok_or_else(|| std::io::Error::other("unreadable"));
         let room = crate::dialog::Size::XLarge.width().saturating_sub(6) as usize;
         let (status, lines) = shell_output_lines(command, end, bytes, room);
         let rows = (height.saturating_sub(10) as usize).min(lines.len());
@@ -460,6 +462,20 @@ pub fn shell_output_lines(
         Err(_) => lines.push(line("Shell output is no longer available.", Tone::Error)),
     }
     (status, lines)
+}
+
+/// The last `limit` bytes of a file and whether anything was left out.
+fn read_tail(path: &std::path::Path, limit: u64) -> Option<(Vec<u8>, bool)> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let truncated = len > limit;
+    if truncated {
+        file.seek(SeekFrom::Start(len - limit)).ok()?;
+    }
+    let mut bytes = Vec::with_capacity(len.min(limit) as usize);
+    file.read_to_end(&mut bytes).ok()?;
+    Some((bytes, truncated))
 }
 
 #[cfg(test)]
