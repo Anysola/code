@@ -36,13 +36,25 @@ pub struct Http {
 }
 
 /// The `reqwest` client every MCP HTTP request uses (and OAuth's), with 0.5.1's User-Agent.
+/// Like the gateway's, it goes without built-in roots when the system certificate store is
+/// unreadable (`Client::default()` would panic on the same store).
 pub fn client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .user_agent(anysola_core::version::user_agent())
-        .connect_timeout(std::time::Duration::from_secs(30))
-        .tcp_keepalive(std::time::Duration::from_secs(30))
-        .build()
-        .unwrap_or_default()
+    let builder = || {
+        reqwest::Client::builder()
+            .user_agent(anysola_core::version::user_agent())
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .tcp_keepalive(std::time::Duration::from_secs(30))
+    };
+    builder().build().unwrap_or_else(|error| {
+        anysola_core::log::error(
+            "cannot build the MCP HTTP client with the system certificates",
+            &[("error", &format!("{error:?}"))],
+        );
+        builder()
+            .tls_built_in_root_certs(false)
+            .build()
+            .expect("HTTP client without built-in root certificates")
+    })
 }
 
 /// fetch's wording for a request that never got an answer.
