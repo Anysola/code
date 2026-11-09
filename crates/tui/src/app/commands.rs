@@ -670,12 +670,15 @@ impl App {
         session.busy = true;
         let (core, tx) = (self.core.clone(), self.tx.clone());
         tokio::spawn(async move {
-            let error = core
-                .prompt(&id, prompt, TurnOptions::default())
-                .await
-                .err()
-                .map(|e| e.to_string());
-            let failed = error.is_some();
+            let result = core.prompt(&id, prompt, TurnOptions::default()).await;
+            // A turn that failed before it admitted the prompt (no model, for example) is an
+            // `Ok(Failed)`; the draft comes back for it just as for a refused send.
+            let failed = !matches!(
+                result,
+                Ok(anysola_core::session::Outcome::Succeeded
+                    | anysola_core::session::Outcome::Interrupted(_))
+            );
+            let error = result.err().map(|e| e.to_string());
             let _ = tx.send(Msg::Done {
                 session_id: id.clone(),
                 error,

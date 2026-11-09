@@ -4,6 +4,43 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.0.3 (2026-11-09)
+
+Fixes from a scan for anything that interrupts a session: hangs, loops, lost input and crashes.
+
+- A model stream that was cut after the answer had started (a dropped connection, or an `error` event from an
+  overloaded relay) was resumed again and again with no pause and no limit, dozens of requests a second, each one
+  counted against your usage, until you pressed Esc twice. It is now resumed three times with a growing pause, then
+  the turn fails with the error.
+- Turkish and other multi-byte characters were sometimes corrupted into `��` when the network split them across two
+  packets. This reached the text on screen, the saved conversation and, through the write and edit tools, your files.
+- A stalled title request kept the session spinning with the answer already on screen, and the next prompt waited
+  behind it. A turn now waits at most 5 s for its title, and never once interrupted.
+- A connection that went silent (sleep, Wi-Fi change) left the turn on "thinking" until the kernel gave up; the stream
+  now fails and retries after 120 s without a byte, and the connection carries keepalives. The pause before a retry
+  and the retry itself stop on Esc.
+- Starting offline for the first time: every prompt failed with "No model is available" for ten minutes, the typed
+  text was gone, and the hidden prompt went out with the next one once the network was back. The model list is now
+  fetched again from 15 s on and right when a prompt needs it, the prompt comes back into the composer, and nothing
+  is sent unseen. The composer is also restored when a send fails, and through the budget gate with attachments.
+- Answering the second question of a multi-question prompt could crash the UI when the first had more options.
+- A permission or question asked by a subagent while you were on the home screen or another idle tab was never
+  shown, and the turn waited forever. It is now shown in the nearest open session, or the root session's tab.
+- The session list stayed at "Searching sessions…" and the shell output view froze until the next key while no
+  session was busy.
+- A panic in a background task disabled the terminal's raw mode under the running UI; the terminal is now restored
+  only when the UI itself crashes, and every panic is written to the log with its location.
+- Closing the terminal window or `kill` left the shells the agent had started (dev servers, test runs) running;
+  the UI now shuts down the same way as on `ctrl+c`.
+- The `@` file list is built off the UI thread (big trees and network disks froze the input), and background shell
+  output reads only its last MiB instead of the whole file every second.
+- A session could stay marked busy for the rest of the process after a turn crashed; a prompt refused because another
+  process drives the session no longer goes out later from that process; a message write that raced another process
+  is no longer lost silently.
+- Importing 0.5.x data skips a row it cannot read instead of failing the whole import on every start.
+- A formatter that hangs is killed after 60 s; MCP HTTP connections time out; a mermaid diagram the renderer cannot
+  draw shows its source instead of a crash screen; a `Retry-After` header that is not a number no longer crashes.
+
 ## 1.0.2 (2026-11-08)
 
 - The `/` and `@` popup in a session is drawn on top of the conversation again. Lines of the transcript no longer
