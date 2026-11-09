@@ -49,7 +49,7 @@ impl App {
         self.attach_session(&root).map(|_| root)
     }
 
-    fn attention(&mut self, session_id: &str, on: bool) {
+    pub(super) fn attention(&mut self, session_id: &str, on: bool) {
         if let Some(tab) = self
             .state
             .tabs

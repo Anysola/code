@@ -404,7 +404,10 @@ async fn run_once(core: Core, options: Options, current: Arc<Mutex<Core>>) -> Re
             }
             event = events.recv() => match event {
                 Ok(event) => app.event(event),
-                Err(broadcast::error::RecvError::Lagged(_)) => app.reload_all(),
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    app.reload_all();
+                    app.recheck_busy();
+                }
                 Err(broadcast::error::RecvError::Closed) => {}
             },
             Some(message) = rx.recv() => app.message(message),
@@ -1028,6 +1031,53 @@ impl App {
             self.reload(&id);
         }
     }
+
+    /// After missed events: open sessions shown busy whose turn ended (read from storage), as
+    /// the event that ends a turn may be among the missed ones.
+    fn recheck_busy(&mut self) {
+        let ids: Vec<String> = self.state.sessions.keys().cloned().collect();
+        for id in ids {
+            let stored = self.core.db().messages(&id).ok();
+            let running =
+                self.core.child_running(&id) || stored.as_deref().is_some_and(turn_running);
+            let Some(session) = self.state.sessions.get_mut(&id) else {
+                continue;
+            };
+            // Only cleared: a missed start heals with the turn's next event, a wrong busy never.
+            if stored.is_none() || !session.busy || running {
+                continue;
+            }
+            session.busy = false;
+            // No turn is left to answer a prompt shown for it.
+            session.permission = None;
+            session.question = None;
+            self.attention(&id, false);
+        }
+        self.resume_relocate();
+    }
+}
+
+/// Whether the stored rows end in a turn still running: a prompt or a model step stored after
+/// the last `idle` row a finished turn appends, unless that step already finished the turn.
+fn turn_running(rows: &[anysola_core::storage::MessageRow]) -> bool {
+    use anysola_core::session::message::Message;
+    let Some(last) = rows
+        .iter()
+        .rev()
+        .find(|r| matches!(r.kind.as_str(), "user" | "assistant" | "idle"))
+    else {
+        return false;
+    };
+    match last.kind.as_str() {
+        "user" => true,
+        "assistant" => match Message::decode(&last.kind, &last.data) {
+            Message::Assistant(step) => {
+                step.time.completed.is_none() || step.finish.as_deref() == Some("tool-calls")
+            }
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 /// A model's display name by id (the id itself when the catalog lacks it).
@@ -1086,6 +1136,49 @@ pub fn selected_text(buf: &Buffer, a: (u16, u16), b: (u16, u16)) -> String {
 #[cfg(test)]
 mod draft_tests {
     use super::*;
+
+    #[test]
+    fn a_turn_runs_until_its_idle_row() {
+        let row = |kind: &str, data: serde_json::Value| anysola_core::storage::MessageRow {
+            id: String::new(),
+            seq: 0,
+            kind: kind.into(),
+            data,
+        };
+        let step = |completed: Option<u64>, finish: &str| {
+            row(
+                "assistant",
+                serde_json::json!({
+                    "time": {"created": 1, "completed": completed},
+                    "agent": "build",
+                    "model": {"id": "m", "providerID": "p"},
+                    "content": [],
+                    "finish": finish,
+                }),
+            )
+        };
+        let user = row(
+            "user",
+            serde_json::json!({"time": {"created": 1}, "text": "hi"}),
+        );
+        let idle = row("idle", serde_json::json!({"outcome": "succeeded"}));
+        assert!(!turn_running(&[]));
+        assert!(turn_running(std::slice::from_ref(&user)));
+        assert!(turn_running(&[user.clone(), step(None, "stop")]));
+        assert!(turn_running(&[user.clone(), step(Some(2), "tool-calls")]));
+        assert!(!turn_running(&[user.clone(), step(Some(2), "stop")]));
+        assert!(!turn_running(&[
+            user.clone(),
+            step(Some(2), "tool-calls"),
+            idle.clone()
+        ]));
+        assert!(turn_running(&[
+            user.clone(),
+            step(Some(2), "stop"),
+            idle,
+            user
+        ]));
+    }
 
     #[test]
     fn tabs_keep_their_own_drafts() {
