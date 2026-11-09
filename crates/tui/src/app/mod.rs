@@ -650,7 +650,7 @@ impl App {
             } else {
                 0
             };
-            self.state.width = size.width - self.state.left;
+            self.state.width = size.width.saturating_sub(self.state.left);
             self.state.height = size.height;
         }
         self.sync_pane();
@@ -708,14 +708,12 @@ impl App {
                 frame.buffer.clone()
             } else {
                 let area = frame.buffer.area;
-                let mut body = Buffer::empty(ratatui::layout::Rect::new(
-                    0,
-                    0,
-                    area.width - left,
-                    area.height,
-                ));
+                // The column is sized for the terminal before the frame; a resize in between
+                // can leave it wider than the frame.
+                let width = area.width.saturating_sub(left);
+                let mut body = Buffer::empty(ratatui::layout::Rect::new(0, 0, width, area.height));
                 for y in 0..area.height {
-                    for x in 0..area.width - left {
+                    for x in 0..width {
                         body[(x, y)] = frame.buffer[(x + left, y)].clone();
                     }
                 }
