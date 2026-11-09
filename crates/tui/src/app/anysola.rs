@@ -5,6 +5,7 @@ use anysola_core::gateway::account::Method;
 use anysola_core::gateway::limits::{Limits, resets_in};
 
 use super::{App, Msg};
+use crate::composer::Composer;
 use crate::dialog::{Confirm, ConfirmKind, Dialog, Opt};
 use crate::menus::anysola::{self as account, Budget, UsageView};
 use crate::state::Variant;
@@ -178,15 +179,17 @@ impl App {
         }
     }
 
-    /// Before a new turn: a spent budget asks first; true when the prompt may go.
-    pub(super) fn budget_allows(&mut self, session: &str, prompt: &str) -> bool {
-        if std::mem::take(&mut self.gate_passed) {
+    /// Before a new turn: a spent budget asks first, holding the composer until it closes;
+    /// true when the prompt may go (always once the gate let it through, `passed`).
+    pub(super) fn budget_allows(&mut self, session: &str, passed: bool) -> bool {
+        if passed {
             return true;
         }
         let c = self.core.usage(session);
         match c.budget {
             Some(budget) if c.total >= budget as f64 => {
-                let select = account::budget_gate(c.total, budget, prompt.to_string());
+                let composer = std::mem::take(&mut self.state.composer);
+                let select = account::budget_gate(c.total, budget, composer);
                 self.push(Dialog::Select(select));
                 false
             }
@@ -194,7 +197,8 @@ impl App {
         }
     }
 
-    pub(super) fn budget_gate_choice(&mut self, choice: &str, prompt: String) {
+    pub(super) fn budget_gate_choice(&mut self, choice: &str, composer: Composer) {
+        self.state.composer = composer;
         let Some(id) = self.state.session().map(|s| s.id.clone()) else {
             return;
         };
@@ -205,10 +209,7 @@ impl App {
                 .set_budget(&id, Some(account::raised_budget(c.total, b)))
                 .map(drop),
             ("remove", _) => self.core.set_budget(&id, None).map(drop),
-            ("stop", _) => {
-                self.state.composer.set(&prompt);
-                return;
-            }
+            ("stop", _) => return,
             _ => Ok(()),
         };
         if let Err(error) = changed {
@@ -222,7 +223,6 @@ impl App {
             s.usage = Some(self.core.usage(&id));
         }
         self.gate_passed = true;
-        self.state.composer.set(&prompt);
         self.submit(false);
     }
 }

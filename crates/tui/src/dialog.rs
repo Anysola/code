@@ -139,8 +139,9 @@ pub enum Kind {
     Worktrees,
     Connect,
     Devices,
+    /// The held-back prompt, put back in the composer however the gate closes.
     BudgetGate {
-        prompt: String,
+        composer: crate::composer::Composer,
     },
     Stash,
     Queue {
@@ -401,6 +402,8 @@ pub enum BodyKind {
         command: String,
         file: std::path::PathBuf,
         polled: u64,
+        /// The last read saw the shell end: the output no longer changes.
+        ended: bool,
     },
     /// An `execute` call's program and output.
     Execute {

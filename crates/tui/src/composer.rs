@@ -43,7 +43,7 @@ struct Snapshot {
     atoms: Vec<Atom>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Composer {
     pub text: String,
     /// Byte offset of the cursor.

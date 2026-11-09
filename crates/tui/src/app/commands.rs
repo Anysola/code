@@ -10,7 +10,7 @@ use ratatui::Terminal;
 use serde_json::Value;
 
 use super::{App, Msg, now};
-use crate::composer::{Entry, Mode};
+use crate::composer::{Composer, Entry, Mode};
 use crate::keymap::slash::SLASH;
 use crate::state::{Route, Variant};
 use crate::term::{self, Backend};
@@ -494,6 +494,8 @@ impl App {
     }
 
     pub(super) fn submit(&mut self, queue: bool) {
+        // The gate's pass is for this submit only, whichever way it goes.
+        let passed = std::mem::take(&mut self.gate_passed);
         let text = self.state.composer.expanded();
         let trimmed = text.trim().to_string();
         let shell = self.state.composer.mode == Mode::Shell;
@@ -552,7 +554,7 @@ impl App {
         if self.submit_in_new_worktree() {
             return;
         }
-        self.prompt(trimmed, queue);
+        self.prompt(trimmed, queue, passed);
     }
 
     fn server_command(&mut self, name: String, arguments: String, text: String) {
@@ -579,13 +581,12 @@ impl App {
         });
     }
 
-    fn prompt(&mut self, text: String, queue: bool) {
+    fn prompt(&mut self, text: String, queue: bool, passed: bool) {
         let Some(id) = self.ensure_session() else {
             return;
         };
         let busy = self.state.sessions.get(&id).is_some_and(|s| s.busy);
-        if !busy && !queue && !self.budget_allows(&id, &text) {
-            self.state.composer.clear();
+        if !busy && !queue && !self.budget_allows(&id, passed) {
             return;
         }
         self.commit_choice(&id);
@@ -627,6 +628,7 @@ impl App {
             shell: false,
         });
         let images = self.state.composer.images();
+        let draft = self.state.composer.clone();
         self.state.composer.clear();
         self.state.popup = None;
         let agent = self.state.agent.clone();
@@ -634,6 +636,9 @@ impl App {
             return;
         };
         session.scroll = 0;
+        // Turns the transcript had before this prompt; a failed prompt that never landed
+        // leaves it at that and gets its draft back.
+        let users = user_count(&session.items);
         session.items.push(Item::User {
             id: String::new(),
             text,
@@ -650,11 +655,15 @@ impl App {
             };
             match self.core.enqueue(&id, prompt, delivery) {
                 Ok(pending) => session.queued.push(pending),
-                Err(error) => self.toast(
-                    Some("Failed to send prompt".into()),
-                    error.to_string(),
-                    Variant::Error,
-                ),
+                Err(error) => {
+                    session.items.pop();
+                    self.state.composer = draft;
+                    self.toast(
+                        Some("Failed to send prompt".into()),
+                        error.to_string(),
+                        Variant::Error,
+                    );
+                }
             }
             return;
         }
@@ -666,11 +675,39 @@ impl App {
                 .await
                 .err()
                 .map(|e| e.to_string());
+            let failed = error.is_some();
             let _ = tx.send(Msg::Done {
-                session_id: id,
+                session_id: id.clone(),
                 error,
             });
+            if failed {
+                // After `Done` reloaded the transcript from storage.
+                let _ = tx.send(Msg::Apply(Box::new(move |app: &mut App| {
+                    app.restore_unsent(&id, users, draft);
+                })));
+            }
         });
+    }
+
+    /// Puts a failed prompt back when it never reached the session (no new turn stored, none
+    /// pending), into the composer if it is still empty, or the tab's draft.
+    fn restore_unsent(&mut self, id: &str, users: usize, draft: Composer) {
+        let stored = self
+            .state
+            .sessions
+            .get(id)
+            .is_some_and(|s| user_count(&s.items) > users);
+        let pending = self.core.pending(id).map_or(true, |p| !p.is_empty());
+        if stored || pending {
+            return;
+        }
+        if self.state.route == Route::Session(id.to_string()) {
+            if self.state.composer.is_empty() {
+                self.state.composer = draft;
+            }
+        } else {
+            self.drafts.entry(id.to_string()).or_insert(draft);
+        }
     }
 
     fn shell(&mut self, command: String) {
@@ -827,4 +864,12 @@ impl App {
             session.scroll = total.saturating_sub(row + height);
         }
     }
+}
+
+/// The user turns of a transcript.
+fn user_count(items: &[Item]) -> usize {
+    items
+        .iter()
+        .filter(|i| matches!(i, Item::User { .. }))
+        .count()
 }

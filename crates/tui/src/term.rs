@@ -34,13 +34,40 @@ pub fn restore() {
     let _ = disable_raw_mode();
 }
 
+/// The thread that runs the UI: `run` is polled on the thread that blocks on the runtime.
+static UI_THREAD: std::sync::OnceLock<std::thread::ThreadId> = std::sync::OnceLock::new();
+static PANIC_HOOK: std::sync::Once = std::sync::Once::new();
+
+/// Installs the panic hook once. A panic on the UI thread restores the terminal before the
+/// crash screen; one on any other thread (tokio tasks, the PTY reader, clipboard threads) is
+/// only logged, as the UI keeps running in raw mode on the alternate screen.
+fn hook_panics() {
+    UI_THREAD.get_or_init(|| std::thread::current().id());
+    PANIC_HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            crate::crash::record(info);
+            let thread = std::thread::current();
+            if UI_THREAD.get() == Some(&thread.id()) {
+                restore();
+                previous(info);
+                return;
+            }
+            let location = info.location().map(|l| l.to_string()).unwrap_or_default();
+            anysola_core::log::warn(
+                "panic off the UI thread",
+                &[
+                    ("message", &crate::crash::message(info)),
+                    ("location", &location),
+                    ("thread", thread.name().unwrap_or("unnamed")),
+                ],
+            );
+        }));
+    });
+}
+
 pub fn enter(mouse: bool) -> io::Result<Terminal<Backend>> {
-    let previous = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        crate::crash::record(info);
-        restore();
-        previous(info);
-    }));
+    hook_panics();
     resume(mouse)?;
     Terminal::new(Backend::new(io::stdout(), crate::hyperlink::supported()))
 }

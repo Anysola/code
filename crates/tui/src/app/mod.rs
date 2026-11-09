@@ -521,6 +521,23 @@ impl App {
             || self.state.toast.is_some()
             || !self.pending.is_empty()
             || self.state.interrupt_armed.is_some()
+            || self.session_search.is_some()
+            || self.polling_shells()
+    }
+
+    /// `draw` still has shell output to read: the open Shell output dialog until it saw the
+    /// shell end, and the shown session's background shells until a poll saw the last one end.
+    fn polling_shells(&self) -> bool {
+        use crate::dialog::{BodyKind, Dialog};
+        let dialog = matches!(
+            self.state.dialogs.last(),
+            Some(Dialog::Body(b)) if matches!(b.kind, BodyKind::ShellOutput { ended: false, .. })
+        );
+        dialog
+            || self.state.session().is_some_and(|s| {
+                s.shells.values().any(|v| v.running)
+                    || !self.core.background_shells(&s.id).is_empty()
+            })
     }
 
     /// The metadata labels are still fading in.
@@ -843,31 +860,12 @@ impl App {
 
     /// Loads a session into the state, adds its tab and shows it.
     pub(super) fn open_session(&mut self, id: &str) {
-        let Ok(Some(row)) = self.core.session(id) else {
+        let Some(row) = self.attach_session(id) else {
             self.toast(None, format!("Session not found: {id}"), Variant::Error);
             return;
         };
-        if !self.state.sessions.contains_key(id) {
-            let session = Session {
-                id: row.id.clone(),
-                title: row.title.clone(),
-                directory: row.directory.clone(),
-                usage: Some(self.core.usage(id)),
-                goal: self.core.goal(id),
-                ..Session::default()
-            };
-            self.state.sessions.insert(id.to_string(), session);
-            self.reload(id);
-        }
         if let Some(tab) = self.state.tabs.iter_mut().find(|t| t.session_id == id) {
             tab.unread = false;
-        }
-        if !self.state.tabs.iter().any(|t| t.session_id == id) {
-            self.state.tabs.push(crate::state::Tab {
-                session_id: id.to_string(),
-                title: row.title,
-                ..crate::state::Tab::default()
-            });
         }
         let child = row.parent_id.is_some();
         if let Some(agent) = row.agent {
@@ -885,6 +883,33 @@ impl App {
         if child {
             self.open_dock();
         }
+    }
+
+    /// Loads a session into the state and adds its tab, leaving the shown route as it is.
+    pub(super) fn attach_session(&mut self, id: &str) -> Option<anysola_core::storage::SessionRow> {
+        let Ok(Some(row)) = self.core.session(id) else {
+            return None;
+        };
+        if !self.state.sessions.contains_key(id) {
+            let session = Session {
+                id: row.id.clone(),
+                title: row.title.clone(),
+                directory: row.directory.clone(),
+                usage: Some(self.core.usage(id)),
+                goal: self.core.goal(id),
+                ..Session::default()
+            };
+            self.state.sessions.insert(id.to_string(), session);
+            self.reload(id);
+        }
+        if !self.state.tabs.iter().any(|t| t.session_id == id) {
+            self.state.tabs.push(crate::state::Tab {
+                session_id: id.to_string(),
+                title: row.title.clone(),
+                ..crate::state::Tab::default()
+            });
+        }
+        Some(row)
     }
 
     /// Rebuilds a session's transcript from storage (turn end, lag, revert).

@@ -13,15 +13,20 @@ const MAX_URL: usize = 6000;
 /// The last panic's message and backtrace, kept by the panic hook for the crash screen.
 static LAST: Mutex<Option<(String, String)>> = Mutex::new(None);
 
-pub fn record(info: &std::panic::PanicHookInfo<'_>) {
-    let message = match info.payload().downcast_ref::<&str>() {
+/// A panic's message, as its payload gives it.
+pub fn message(info: &std::panic::PanicHookInfo<'_>) -> String {
+    match info.payload().downcast_ref::<&str>() {
         Some(text) => text.to_string(),
         None => info
             .payload()
             .downcast_ref::<String>()
             .cloned()
             .unwrap_or_else(|| "An unknown error occurred.".into()),
-    };
+    }
+}
+
+pub fn record(info: &std::panic::PanicHookInfo<'_>) {
+    let message = message(info);
     let stack = format!(
         "{}\n{}",
         info.location().map(|l| l.to_string()).unwrap_or_default(),
