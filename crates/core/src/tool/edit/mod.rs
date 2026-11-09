@@ -85,6 +85,9 @@ async fn edit(input: &Input, ctx: &ToolContext) -> ToolResult {
                 ReadFailure::Directory => {
                     ToolError::execution(format!("Path is a directory, not a file: {path}"))
                 }
+                ReadFailure::NotUtf8 => ToolError::execution(format!(
+                    "File is not valid UTF-8: {path}. Editing it would replace every byte that is not UTF-8, so it was left unchanged."
+                )),
                 ReadFailure::Failed => failed(),
             })?;
     let source = &original.text;
@@ -369,6 +372,54 @@ mod tests {
         .0
         .unwrap();
         assert_eq!(read(&dir, "b.txt"), "\u{FEFF}bye\n");
+    }
+
+    #[tokio::test]
+    async fn non_utf8_file_is_refused_and_untouched() {
+        let dir = setup(&[]);
+        let bytes = b"caf\xE9 au lait\n";
+        std::fs::write(dir.path().join("l.txt"), bytes).unwrap();
+        assert_eq!(
+            error(
+                dir.path(),
+                json!({"path": "l.txt", "oldString": "au", "newString": "with"})
+            )
+            .await,
+            "File is not valid UTF-8: l.txt. Editing it would replace every byte that is not UTF-8, so it was left unchanged."
+        );
+        assert_eq!(std::fs::read(dir.path().join("l.txt")).unwrap(), bytes);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn replaces_atomically_through_symlinks_keeping_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = setup(&[("real.sh", "echo one\n")]);
+        let real = dir.path().join("real.sh");
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o751)).unwrap();
+        std::os::unix::fs::symlink(&real, dir.path().join("link.sh")).unwrap();
+        run(
+            dir.path(),
+            json!({"path": "link.sh", "oldString": "one", "newString": "two"}),
+        )
+        .await
+        .0
+        .unwrap();
+        assert!(
+            std::fs::symlink_metadata(dir.path().join("link.sh"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(read(&dir, "real.sh"), "echo two\n");
+        let mode = std::fs::metadata(&real).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o751);
+        let mut names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["link.sh", "real.sh"]);
     }
 
     #[tokio::test]

@@ -63,6 +63,17 @@ async fn write(input: &Input, ctx: &ToolContext) -> ToolResult {
     let current = match mutation::read_text(&target.absolute).await {
         Ok(file) => Some(file.text),
         Err(ReadFailure::Missing) => None,
+        // The whole file is replaced, so only the preview sees the old bytes, decoded lossily.
+        Err(ReadFailure::NotUtf8) => {
+            let bytes = tokio::fs::read(&target.absolute)
+                .await
+                .map_err(|_| failed())?;
+            Some(
+                mutation::split_bom(&String::from_utf8_lossy(&bytes))
+                    .1
+                    .to_string(),
+            )
+        }
         Err(_) => return Err(failed()),
     };
     let (content_bom, content) = mutation::split_bom(&input.content);
@@ -190,6 +201,19 @@ mod tests {
             (file["additions"].clone(), file["deletions"].clone()),
             (json!(1), json!(1))
         );
+    }
+
+    #[tokio::test]
+    async fn overwrites_a_file_that_is_not_utf8() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("l.txt"), b"caf\xE9\n").unwrap();
+        let (result, asked) = run(dir.path(), json!({"path": "l.txt", "content": "café\n"})).await;
+        assert_eq!(text(result.unwrap()), "Wrote file successfully: l.txt");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("l.txt")).unwrap(),
+            "café\n"
+        );
+        assert_eq!(asked[0].metadata["files"][0]["status"], "modified");
     }
 
     #[tokio::test]
