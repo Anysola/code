@@ -568,12 +568,16 @@ impl App {
     }
 
     fn close_dialog(&mut self) {
-        if let Some(Dialog::Select(Select {
-            kind: Kind::Themes { original },
-            ..
-        })) = self.state.dialogs.pop()
-        {
-            self.apply_theme(&original, false);
+        match self.state.dialogs.pop() {
+            Some(Dialog::Select(Select {
+                kind: Kind::Themes { original },
+                ..
+            })) => self.apply_theme(&original, false),
+            Some(Dialog::Select(Select {
+                kind: Kind::BudgetGate { composer },
+                ..
+            })) => self.state.composer = composer,
+            _ => {}
         }
     }
 
@@ -938,9 +942,9 @@ impl App {
                 self.connect_anysola();
             }
             Kind::Devices => self.choose_device(&opt),
-            Kind::BudgetGate { prompt } => {
+            Kind::BudgetGate { composer } => {
                 self.state.dialogs.pop();
-                self.budget_gate_choice(&value, prompt);
+                self.budget_gate_choice(&value, composer);
             }
             Kind::Queue { .. } => {
                 self.state.dialogs.pop();

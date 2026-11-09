@@ -139,8 +139,9 @@ pub enum Kind {
     Worktrees,
     Connect,
     Devices,
+    /// The held-back prompt, put back in the composer however the gate closes.
     BudgetGate {
-        prompt: String,
+        composer: crate::composer::Composer,
     },
     Stash,
     Queue {

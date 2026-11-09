@@ -210,7 +210,7 @@ pub fn raised_budget(total: f64, budget: u64) -> u64 {
 }
 
 /// `Budget reached · <total>/<budget>%` before a turn that would go over.
-pub fn budget_gate(total: f64, budget: u64, prompt: String) -> Select {
+pub fn budget_gate(total: f64, budget: u64, composer: crate::composer::Composer) -> Select {
     let raised = raised_budget(total, budget);
     let mut options =
         vec![Opt::new("Continue once", "once").description("Ask again before the next prompt")];
@@ -225,7 +225,7 @@ pub fn budget_gate(total: f64, budget: u64, prompt: String) -> Select {
         Opt::new("Stop", "stop").description("Keep the prompt in the composer"),
     ]);
     let title = format!("Budget reached · {}/{budget}%", percent(total));
-    let mut select = Select::new(Kind::BudgetGate { prompt }, &title, options);
+    let mut select = Select::new(Kind::BudgetGate { composer }, &title, options);
     select.selected = 0;
     select
 }
@@ -394,5 +394,23 @@ mod tests {
         assert_eq!(raised_budget(21.2, 20), 42);
         assert_eq!(raised_budget(60.0, 60), 100);
         assert_eq!(raised_budget(100.0, 100), 100);
+    }
+
+    #[test]
+    fn budget_gate_holds_the_whole_prompt() {
+        use crate::composer::{AtomKind, Composer};
+        let mut composer = Composer::default();
+        composer.insert("look at ");
+        composer.insert_atom(
+            "[Image 1]",
+            AtomKind::Attachment("image/png".into(), "AAAA".into(), "shot.png".into()),
+        );
+        let gate = budget_gate(21.0, 20, composer.clone());
+        let Kind::BudgetGate { composer: held } = gate.kind else {
+            panic!("not the budget gate");
+        };
+        assert_eq!(held, composer);
+        assert_eq!(held.attachments().len(), 1);
+        assert!(held.text.starts_with("look at [Image 1]"));
     }
 }
