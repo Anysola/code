@@ -447,7 +447,10 @@ impl Db {
     ) -> Result<i64> {
         let now = now_ms() as i64;
         self.with(|c| {
-            let tx = c.transaction()?;
+            // Immediate: the sequence number is read and written in one write transaction, so
+            // another process cannot slip in between (a deferred one would fail with
+            // BUSY_SNAPSHOT instead of waiting).
+            let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let seq: i64 = tx.query_row(
                 "SELECT COALESCE(MAX(seq), 0) + 1 FROM message WHERE session_id = ?1",
                 [session_id],

@@ -5,6 +5,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+
+/// How long one formatter run may take.
+const FORMAT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 use std::sync::Mutex;
 
 use serde_json::Value;
@@ -264,8 +267,19 @@ impl Formatters {
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .status()
-                .await;
+                .kill_on_drop(true)
+                .status();
+            // A hung formatter must not block the edit (and is killed when given up on).
+            let status = match tokio::time::timeout(FORMAT_TIMEOUT, status).await {
+                Ok(status) => status,
+                Err(_) => {
+                    crate::log::error(
+                        "formatter timed out",
+                        &[("file", &file), ("command", &argv.join(" "))],
+                    );
+                    continue;
+                }
+            };
             match status {
                 Ok(status) if status.success() => return true,
                 Ok(status) => crate::log::error(

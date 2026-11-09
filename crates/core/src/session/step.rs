@@ -971,8 +971,9 @@ async fn run_stream(
             .await;
         }
         // Calls already running finish; the ones the stream cut off never ran.
-        collect(shared, &mut running, &mut tasks).await;
+        let crashed = collect(shared, &mut running, &mut tasks).await;
         settle_unfinished(shared, &mut running, &assembly);
+        settle_crashed(shared, &mut running, crashed);
         if error.retryable() && assembly.has_output() {
             running.data.finish = Some("unknown".into());
             running.data.time.completed = Some(now_ms());
@@ -983,8 +984,9 @@ async fn run_stream(
         return fail(shared, running, error.to_session_error());
     }
 
-    collect(shared, &mut running, &mut tasks).await;
+    let crashed = collect(shared, &mut running, &mut tasks).await;
     settle_unfinished(shared, &mut running, &assembly);
+    settle_crashed(shared, &mut running, crashed);
     let declined = running.data.content.iter().any(|p| {
         matches!(p, Part::Tool { state: ToolState::Error { error, .. }, .. }
             if error.message == "The user declined this tool call"
@@ -1044,6 +1046,30 @@ async fn run_stream(
 fn settle_unfinished(shared: &Shared, running: &mut Running, assembly: &Assembly) {
     for (index, error) in assembly.unfinished() {
         fail_part(shared, running, index, error);
+    }
+    running.save(shared);
+}
+
+/// Parts still running once every tool task has been joined belong to tasks that panicked: they
+/// get an error result, so the next request does not carry a `tool_use` without its result.
+fn settle_crashed(shared: &Shared, running: &mut Running, indexes: Vec<usize>) {
+    for index in indexes {
+        // Parts the stream cut off or the provider ran got their own error already.
+        if !matches!(
+            running.data.content.get(index),
+            Some(Part::Tool {
+                state: ToolState::Running { .. } | ToolState::Streaming { .. },
+                ..
+            })
+        ) {
+            continue;
+        }
+        fail_part(
+            shared,
+            running,
+            index,
+            SessionError::new("unknown", "The tool crashed before it produced a result"),
+        );
     }
     running.save(shared);
 }
@@ -1118,9 +1144,17 @@ async fn collect(
     tasks: &mut JoinSet<ToolTask>,
 ) -> Vec<usize> {
     while let Some(joined) = tasks.join_next().await {
-        if let Ok((index, result)) = joined {
-            settle(shared, running, index, result, &interrupted_error());
-            running.save(shared);
+        match joined {
+            Ok((index, result)) => {
+                settle(shared, running, index, result, &interrupted_error());
+                running.save(shared);
+            }
+            // A tool task that panicked: its part would stay running and the next request
+            // would carry a tool_use without a result. The error is logged by the panic hook.
+            Err(error) if error.is_panic() => {
+                crate::log::error("tool task panicked", &[("error", &error.to_string())]);
+            }
+            Err(_) => {}
         }
     }
     running

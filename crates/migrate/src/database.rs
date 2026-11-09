@@ -119,7 +119,7 @@ pub fn import(conn: &Connection, tx: &Transaction) -> Result<Counts, Error> {
     };
     let sessions = copy_sessions(conn, tx)?;
     counts.sessions = sessions.len();
-    counts.messages = copy_messages(conn, tx, &tables)?;
+    counts.messages = copy_messages(conn, tx, &tables, &sessions)?;
     copy(
         conn,
         tx,
@@ -332,6 +332,7 @@ fn copy_messages(
     conn: &Connection,
     tx: &Transaction,
     tables: &HashSet<String>,
+    sessions: &HashSet<String>,
 ) -> Result<usize, Error> {
     let mut parts: HashMap<String, Vec<Value>> = HashMap::new();
     for row in select(
@@ -341,7 +342,10 @@ fn copy_messages(
         let (Some(message), Some(data)) = (text(&row, "message_id"), text(&row, "data")) else {
             continue;
         };
-        let mut part: Value = serde_json::from_str(&data)?;
+        // One undecodable part must not fail the whole import on every start.
+        let Ok(mut part) = serde_json::from_str::<Value>(&data) else {
+            continue;
+        };
         if let (Some(map), Some(kind)) = (part.as_object_mut(), text(&row, "type"))
             && !map.contains_key("type")
         {
@@ -369,7 +373,14 @@ fn copy_messages(
         else {
             continue;
         };
-        let mut data: Value = serde_json::from_str(&data)?;
+        // A message of a session that was not imported (orphan, or skipped) would fail the
+        // foreign key and with it the whole import; an undecodable one is skipped too.
+        if !text(&row, "session_id").is_some_and(|id| sessions.contains(&id)) {
+            continue;
+        }
+        let Ok(mut data) = serde_json::from_str::<Value>(&data) else {
+            continue;
+        };
         if kind == "compaction" && data["status"] == "running" {
             continue;
         }

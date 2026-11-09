@@ -39,6 +39,8 @@ pub struct Http {
 pub fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(anysola_core::version::user_agent())
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .tcp_keepalive(std::time::Duration::from_secs(30))
         .build()
         .unwrap_or_default()
 }

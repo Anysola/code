@@ -860,8 +860,78 @@ pub(crate) async fn prompt_session(
         .ok_or(CoreError::SessionNotFound)?;
     revert::commit(shared, session_id)?;
     let prompt = normalize(shared, prompt)?;
+    // The session is taken before the prompt is admitted: enqueued first, a prompt refused
+    // with `Busy` would still go out later from the process that drives the session.
+    let held = Held::acquire(shared, session_id, cancel)?;
     crate::session::inbox::enqueue(&shared.db, session_id, &prompt, Delivery::Steer)?;
-    drain_session(shared, session_id, options, cancel).await
+    Ok(held.drain(options).await)
+}
+
+/// A session marked busy for this process: the heartbeat task, the cancel token registered for
+/// [`Core::interrupt`] and the marker itself are released on drop, so a turn that unwinds or is
+/// dropped cannot leave the session busy for the rest of the process's life.
+struct Held<'a> {
+    shared: &'a Arc<Shared>,
+    session_id: String,
+    cancel: CancellationToken,
+    heartbeat: tokio::task::JoinHandle<()>,
+    _tracked: crate::teardown::Tracked,
+}
+
+impl<'a> Held<'a> {
+    fn acquire(
+        shared: &'a Arc<Shared>,
+        session_id: &str,
+        cancel: CancellationToken,
+    ) -> Result<Self, CoreError> {
+        if !shared.db.acquire(session_id, &shared.owner)? {
+            return Err(CoreError::Busy(session_id.to_string()));
+        }
+        shared
+            .turns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(session_id.to_string(), cancel.clone());
+        let heartbeat = {
+            let db = shared.db.clone();
+            let (id, owner) = (session_id.to_string(), shared.owner.clone());
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    let _ = db.heartbeat(&id, &owner);
+                }
+            })
+        };
+        Ok(Held {
+            shared,
+            session_id: session_id.to_string(),
+            cancel,
+            heartbeat,
+            _tracked: crate::teardown::track(format!("session {session_id} running")),
+        })
+    }
+
+    async fn drain(self, options: TurnOptions) -> Outcome {
+        crate::session::drain(
+            self.shared.clone(),
+            &self.session_id,
+            options,
+            self.cancel.clone(),
+        )
+        .await
+    }
+}
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        self.heartbeat.abort();
+        self.shared
+            .turns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.session_id);
+        let _ = self.shared.db.release(&self.session_id, &self.shared.owner);
+    }
 }
 
 /// Runs the session until its inbox is empty, registered so [`Core::interrupt`] reaches it.
@@ -872,32 +942,6 @@ async fn drain_session(
     options: TurnOptions,
     cancel: CancellationToken,
 ) -> Result<Outcome, CoreError> {
-    if !shared.db.acquire(session_id, &shared.owner)? {
-        return Err(CoreError::Busy(session_id.to_string()));
-    }
-    shared
-        .turns
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(session_id.to_string(), cancel.clone());
-    let _tracked = crate::teardown::track(format!("session {session_id} running"));
-    let heartbeat = {
-        let db = shared.db.clone();
-        let (id, owner) = (session_id.to_string(), shared.owner.clone());
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                let _ = db.heartbeat(&id, &owner);
-            }
-        })
-    };
-    let outcome = crate::session::drain(shared.clone(), session_id, options, cancel).await;
-    heartbeat.abort();
-    shared
-        .turns
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(session_id);
-    shared.db.release(session_id, &shared.owner)?;
-    Ok(outcome)
+    let held = Held::acquire(shared, session_id, cancel)?;
+    Ok(held.drain(options).await)
 }

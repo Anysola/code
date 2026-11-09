@@ -208,7 +208,10 @@ fn incomplete_streams_stop_after_three_continuations() {
         panic!("{outcome:?}")
     };
     assert_eq!(error.kind, "provider.invalid-output");
-    assert_eq!(error.message, "The model's stream was cut off 4 times in a row");
+    assert_eq!(
+        error.message,
+        "The model's stream was cut off 4 times in a row"
+    );
     let main = gateway
         .messages()
         .into_iter()
