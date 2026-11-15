@@ -55,6 +55,24 @@ pub fn default_system(tools: &[&str]) -> String {
     SYSTEM_TEMPLATE.replace("${OPENCODE_TOOL_GUIDANCE}", &lines.join("\n"))
 }
 
+/// The step-limit instruction joins the latest user turn (the tool results), ahead of any system
+/// update placed after it. As an assistant turn it would be a prefill, which current models reject.
+fn wrap_up(messages: &mut Vec<Entry>) {
+    let text = json!({"type": "text", "text": MAX_STEPS_PROMPT});
+    let last = messages.iter_mut().rev().find_map(|e| match e {
+        Entry::Turn(turn) => Some(turn),
+        _ => None,
+    });
+    if let Some(turn) = last
+        && turn["role"] == "user"
+        && let Some(content) = turn["content"].as_array_mut()
+    {
+        content.push(text);
+        return;
+    }
+    messages.push(Entry::Turn(json!({"role": "user", "content": [text]})));
+}
+
 pub fn identity(name: &str, id: &str) -> String {
     format!("# Your Model\n- Name: {name}\n- Provider ID: anysola\n- Model ID: {id}")
 }
@@ -536,9 +554,7 @@ async fn step(
     super::plan_context(shared, &session.id, &selection.agent.id, &mut messages);
     super::goal::remind(shared, &session.id, &mut messages);
     if capped {
-        messages.push(Entry::Turn(
-            json!({"role": "assistant", "content": [{"type": "text", "text": MAX_STEPS_PROMPT}]}),
-        ));
+        wrap_up(&mut messages);
     }
     let max_tokens = output_limit(
         &selection.model,
@@ -1378,4 +1394,48 @@ fn not_available(name: &str) -> ToolError {
     ToolError::execution(format!(
         "No tool named \"{name}\" is currently available. Please use a tool from the available tool list."
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn turn(role: &str, block: Value) -> Entry {
+        Entry::Turn(json!({"role": role, "content": [block]}))
+    }
+
+    #[test]
+    fn wrap_up_joins_the_tool_results_ahead_of_updates() {
+        let mut messages = vec![
+            turn(
+                "assistant",
+                json!({"type": "tool_use", "id": "t", "name": "read", "input": {}}),
+            ),
+            turn(
+                "user",
+                json!({"type": "tool_result", "tool_use_id": "t", "content": "x"}),
+            ),
+            Entry::Update {
+                text: "changed".into(),
+                cache: false,
+            },
+        ];
+        wrap_up(&mut messages);
+        assert_eq!(messages.len(), 3);
+        let Entry::Turn(results) = &messages[1] else {
+            panic!("expected the results turn")
+        };
+        assert_eq!(results["content"][1]["text"], MAX_STEPS_PROMPT);
+    }
+
+    #[test]
+    fn wrap_up_after_an_assistant_turn_is_a_user_turn() {
+        let mut messages = vec![turn("assistant", json!({"type": "text", "text": "hi"}))];
+        wrap_up(&mut messages);
+        let Some(Entry::Turn(last)) = messages.last() else {
+            panic!("expected a turn")
+        };
+        assert_eq!(last["role"], "user");
+        assert_eq!(last["content"][0]["text"], MAX_STEPS_PROMPT);
+    }
 }

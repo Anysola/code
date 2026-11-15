@@ -15,6 +15,9 @@ const BETA_INTERLEAVED: &str = "interleaved-thinking-2025-05-14";
 const BETA_BINDING: &str = "thinking-binding-controls-2026-08-01";
 const BETA_EFFORT_UPDATES: &str = "mid-conversation-output-config-2026-07-01";
 const DEFAULT_EFFORT: &str = "high";
+/// Sent after a trailing assistant turn: current models reject a conversation that ends on one
+/// (assistant prefill).
+const CONTINUE: &str = "Continue.";
 
 pub struct Request<'a> {
     pub model: &'a Model,
@@ -166,7 +169,23 @@ fn place(entries: Vec<Entry>, native: bool) -> Vec<Value> {
         }
     }
     release(&mut messages, &mut held);
+    end_on_user(&mut messages);
     messages
+}
+
+/// A request must not end on an assistant turn: models without prefill answer 400 ("The
+/// conversation must end with a user message"), and a system message that follows it counts as
+/// trailing it. The user turn goes right after that assistant turn, so system messages still end
+/// the array.
+fn end_on_user(messages: &mut Vec<Value>) {
+    if let Some(index) = messages.iter().rposition(|m| m["role"] != "system")
+        && messages[index]["role"] == "assistant"
+    {
+        messages.insert(
+            index + 1,
+            json!({"role": "user", "content": [{"type": "text", "text": CONTINUE}]}),
+        );
+    }
 }
 
 /// Serialized body plus the `anthropic-beta` and variant headers.
@@ -358,6 +377,48 @@ mod tests {
                 {"role": "system", "content": [{"type": "text", "text": "changed"}]},
             ])
         );
+    }
+
+    #[test]
+    fn a_trailing_assistant_turn_gets_a_user_turn() {
+        let m = model("claude-haiku-5-5");
+        let (body, _) = messages_of(&m, None, vec![user("hello"), assistant("hi")]);
+        let roles: Vec<_> = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["role"].clone())
+            .collect();
+        assert_eq!(roles, [json!("user"), json!("assistant"), json!("user")]);
+        assert_eq!(body["messages"][2]["content"][0]["text"], CONTINUE);
+    }
+
+    #[test]
+    fn an_effort_change_after_an_assistant_turn_still_ends_on_user() {
+        let m = model("claude-haiku-5-5");
+        let (body, _) = messages_of(
+            &m,
+            None,
+            vec![
+                user("hello"),
+                assistant("hi"),
+                effort(Some("low"), Some("high")),
+            ],
+        );
+        let messages = body["messages"].as_array().unwrap();
+        let last = messages
+            .iter()
+            .rposition(|m| m["role"] != "system")
+            .unwrap();
+        assert_eq!(messages[last]["role"], "user");
+        assert_eq!(messages[last]["content"][0]["text"], CONTINUE);
+    }
+
+    #[test]
+    fn a_conversation_ending_on_user_is_left_alone() {
+        let m = model("claude-haiku-5-5");
+        let (body, _) = messages_of(&m, None, vec![user("hello"), assistant("hi"), user("next")]);
+        assert_eq!(body["messages"].as_array().unwrap().len(), 3);
     }
 
     #[test]
