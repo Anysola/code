@@ -4,6 +4,13 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.0.5 (2026-11-15)
+
+- A turn could fail with "This model does not support assistant message prefill. The conversation must end with a
+  user message." on current models (seen with Claude Haiku 5.5). A request now never ends on an assistant turn: the
+  step-limit notice goes in with the tool results instead of as an assistant message, and any request whose history
+  ends on the model's own reply gets a short user turn after it.
+
 ## 1.0.4 (2026-11-09)
 
 The rest of the scan behind 1.0.3: the remaining hangs, races and rough edges.
