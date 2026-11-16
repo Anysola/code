@@ -1,11 +1,29 @@
-import { ArrowUp, FolderClosed, FolderOpen, Plus, X } from "lucide-react"
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-
-import type { FileDiff, SessionRow } from "./bridge"
 import {
+  ArrowUp,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Ellipsis,
+  FolderClosed,
+  FolderOpen,
+  LogOut,
+  Paperclip,
+  Pencil,
+  Plus,
+  Trash2,
+  X,
+} from "lucide-react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+
+import type { Attachment, FileDiff, SessionRow, Window as AccountWindow } from "./bridge"
+import {
+  chooseModel,
+  deleteSession,
   dismissNotice,
   newSession,
   openLoginPage,
+  renameSession,
+  signOut,
   openSession,
   reply,
   send,
@@ -18,7 +36,21 @@ import {
   type Open,
 } from "./store"
 import { EditCard, Transcript } from "./transcript"
-import { ago, btn, cn, Counts, folderName, Kbd, Mark, Spinner, TitleBar, UsageMeter } from "./ui"
+import {
+  ago,
+  btn,
+  cn,
+  Counts,
+  folderName,
+  Kbd,
+  Mark,
+  MenuItem,
+  Popover,
+  resetsIn,
+  Spinner,
+  TitleBar,
+  UsageMeter,
+} from "./ui"
 
 export function App() {
   const auth = useStore((s) => s.auth)
@@ -104,7 +136,6 @@ function SignIn() {
 
 function Sidebar() {
   const sessions = useStore((s) => s.sessions)
-  const fiveHour = useStore((s) => s.open?.info?.fiveHour ?? null)
   const groups = useMemo(() => {
     const by = new Map<string, SessionRow[]>()
     for (const s of sessions) by.set(s.directory, [...(by.get(s.directory) ?? []), s])
@@ -141,7 +172,7 @@ function Sidebar() {
           </div>
         ))}
       </nav>
-      {fiveHour !== null && <UsageMeter percent={fiveHour} className="px-4 pt-2 pb-4" />}
+      <AccountRow />
     </aside>
   )
 }
@@ -149,9 +180,40 @@ function Sidebar() {
 function SessionLink({ row }: { row: SessionRow }) {
   const active = useStore((s) => s.open?.sessionId === row.id)
   const busy = useStore((s) => s.busy.has(row.id))
-  const asking = useStore((s) => s.permissions.some((p) => p.sessionId === row.id))
+  const asking = useStore(
+    (s) => s.permissions.some((p) => p.sessionId === row.id) || s.questions.some((q) => q.sessionId === row.id)
+  )
+  const [menu, setMenu] = useState<"closed" | "open" | "confirm">("closed")
+  const [renaming, setRenaming] = useState(false)
+  const close = useCallback(() => setMenu("closed"), [])
+
+  if (renaming)
+    return (
+      <li>
+        <input
+          autoFocus
+          defaultValue={row.title}
+          aria-label="Session name"
+          onFocus={(e) => e.currentTarget.select()}
+          onBlur={(e) => {
+            setRenaming(false)
+            if (e.currentTarget.value.trim() && e.currentTarget.value !== row.title)
+              void renameSession(row, e.currentTarget.value)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur()
+            if (e.key === "Escape") {
+              e.currentTarget.value = row.title
+              e.currentTarget.blur()
+            }
+          }}
+          className="h-9 w-full rounded-lg bg-default px-2 text-sm outline-none focus-visible:status-focused-field"
+        />
+      </li>
+    )
+
   return (
-    <li>
+    <li className="group relative">
       <button
         onClick={() => void openSession(row)}
         aria-current={active ? "page" : undefined}
@@ -162,13 +224,115 @@ function SessionLink({ row }: { row: SessionRow }) {
       >
         <span className={cn("min-w-0 flex-1 truncate text-sm", !active && "text-foreground/85")}>{row.title}</span>
         {asking ? (
-          <span className="size-1.5 shrink-0 rounded-full bg-warning" aria-label="Needs approval" />
+          <span className="size-1.5 shrink-0 rounded-full bg-warning" aria-label="Needs you" />
         ) : (
           busy && <Spinner className="size-3" />
         )}
-        <span className="text-2xs shrink-0 text-muted tabular-nums">{ago(row.updated)}</span>
+        <span className="text-2xs w-12 shrink-0 text-right text-muted tabular-nums group-hover:invisible">
+          {ago(row.updated)}
+        </span>
       </button>
+      <button
+        onClick={() => setMenu(menu === "closed" ? "open" : "closed")}
+        aria-label={`Actions for ${row.title}`}
+        className={cn(
+          "absolute top-1.5 right-1.5 flex size-6 items-center justify-center rounded-md text-muted hover:bg-default-hover hover:text-foreground focus-visible:status-focused-field",
+          menu === "closed" && "invisible group-hover:visible focus-visible:visible"
+        )}
+      >
+        <Ellipsis className="size-4" />
+      </button>
+      <Popover open={menu !== "closed"} onClose={close} side="bottom" align="end" className="w-56">
+        {menu === "open" ? (
+          <>
+            <MenuItem
+              onSelect={() => {
+                close()
+                setRenaming(true)
+              }}
+            >
+              <Pencil className="size-3.5 text-muted" /> Rename
+            </MenuItem>
+            <MenuItem danger onSelect={() => setMenu("confirm")}>
+              <Trash2 className="size-3.5" /> Delete
+            </MenuItem>
+          </>
+        ) : (
+          <div className="flex flex-col gap-3 p-2">
+            <p className="text-dense">Delete this session? Its history is removed from this computer.</p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  close()
+                  void deleteSession(row)
+                }}
+                className={btn("danger-soft", "sm")}
+              >
+                Delete
+              </button>
+              <button onClick={close} className={btn("ghost", "sm")}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </Popover>
     </li>
+  )
+}
+
+function AccountRow() {
+  const account = useStore((s) => s.account)
+  const [open, setOpen] = useState(false)
+  const close = useCallback(() => setOpen(false), [])
+  if (!account || account.expired) return null
+  return (
+    <div className="relative px-2 pt-2 pb-3">
+      <button
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="flex w-full flex-col gap-2 rounded-lg px-2 py-2 text-left hover:bg-default/60 focus-visible:status-focused-field"
+      >
+        <span className="flex items-center justify-between text-sm">
+          {account.plan ? `${capitalize(account.plan)} plan` : "Anysola"}
+          <ChevronUp className="size-3.5 text-muted" />
+        </span>
+        {!account.included && <span className="text-dense text-warning">This plan doesn’t include Anysola Code.</span>}
+        <WindowMeter label="5-hour" window={account.fiveHour} />
+        <WindowMeter label="Weekly" window={account.weekly} />
+      </button>
+      <Popover open={open} onClose={close} side="top" className="w-60">
+        <MenuItem
+          onSelect={() => {
+            close()
+            void signOut()
+          }}
+        >
+          <LogOut className="size-3.5 text-muted" /> Sign out
+        </MenuItem>
+      </Popover>
+    </div>
+  )
+}
+
+function WindowMeter({ label, window: w }: { label: string; window: AccountWindow | null }) {
+  if (!w) return null
+  const resets = resetsIn(w.resetsAt)
+  return (
+    <span className="flex flex-col gap-1" title={resets ? `Starts over ${resets}` : undefined}>
+      <span className="text-2xs flex justify-between text-muted">
+        <span>{label}</span>
+        <span className="tabular-nums">
+          {w.percent}%{resets && <span className="text-muted/70"> · {resets}</span>}
+        </span>
+      </span>
+      <span className="block h-1 overflow-hidden rounded-full bg-default">
+        <span
+          className={cn("block h-full rounded-full", w.percent >= 90 ? "bg-warning" : "bg-foreground/70")}
+          style={{ width: `${Math.min(100, w.percent)}%` }}
+        />
+      </span>
+    </span>
   )
 }
 
@@ -254,6 +418,8 @@ function SessionHeader({ open, onReview }: { open: Open; onReview: () => void })
 function Conversation({ open }: { open: Open }) {
   const all = useStore((s) => s.permissions)
   const permissions = useMemo(() => all.filter((p) => p.sessionId === open.sessionId), [all, open.sessionId])
+  const asked = useStore((s) => s.questions)
+  const questions = useMemo(() => asked.filter((q) => q.sessionId === open.sessionId), [asked, open.sessionId])
   const ref = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
   // A chat opens at its latest turn and follows new output while the reader is at the bottom.
@@ -264,6 +430,16 @@ function Conversation({ open }: { open: Open }) {
   useEffect(() => {
     stick.current = true
   }, [open.sessionId])
+  // The composer grows (lines, images) and the area shrinks: stay at the bottom if there.
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const watch = new ResizeObserver(() => {
+      if (stick.current) el.scrollTop = el.scrollHeight
+    })
+    watch.observe(el)
+    return () => watch.disconnect()
+  }, [])
   return (
     <div
       ref={ref}
@@ -279,7 +455,7 @@ function Conversation({ open }: { open: Open }) {
             <Spinner />
           </div>
         ) : (
-          <Transcript open={open} permissions={permissions} />
+          <Transcript open={open} permissions={permissions} questions={questions} />
         )}
       </div>
     </div>
@@ -292,12 +468,35 @@ const modes: { id: Mode; label: string; hint: string }[] = [
   { id: "auto", label: "Auto", hint: "Run everything without asking" },
 ]
 
+/** Images only, as the model takes them; larger ones are refused before they are read. */
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+
+function readImage(file: File): Promise<Attachment> {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith("image/")) return reject(new Error(`${file.name} isn’t an image.`))
+    if (file.size > MAX_IMAGE_BYTES) return reject(new Error(`${file.name} is over 5 MB.`))
+    const reader = new FileReader()
+    reader.onload = () => {
+      const url = String(reader.result)
+      resolve({ mime: file.type, data: url.slice(url.indexOf(",") + 1), name: file.name || "image.png" })
+    }
+    reader.onerror = () => reject(new Error(`Couldn’t read ${file.name}.`))
+    reader.readAsDataURL(file)
+  })
+}
+
 function Composer({ open }: { open: Open }) {
   const mode = useStore((s) => s.mode)
   const asking = useStore((s) => s.permissions.find((p) => p.sessionId === open.sessionId) ?? null)
   const [text, setText] = useState("")
+  const [files, setFiles] = useState<Attachment[]>([])
+  const [problem, setProblem] = useState<string | null>(null)
+  const [dragging, setDragging] = useState(false)
   const area = useRef<HTMLTextAreaElement>(null)
+  const picker = useRef<HTMLInputElement>(null)
   const running = open.status.kind === "working" || open.status.kind === "retrying"
+  const model = open.info?.models.find((m) => m.id === open.info?.modelId)
+  const empty = !text.trim() && files.length === 0
 
   useEffect(() => area.current?.focus(), [open.sessionId])
   useLayoutEffect(() => {
@@ -307,23 +506,78 @@ function Composer({ open }: { open: Open }) {
     el.style.height = `${Math.min(el.scrollHeight, 240)}px`
   }, [text])
 
+  const add = async (list: Iterable<File>) => {
+    setProblem(null)
+    for (const file of list) {
+      try {
+        const image = await readImage(file)
+        setFiles((all) => [...all, image])
+      } catch (e) {
+        setProblem(e instanceof Error ? e.message : String(e))
+      }
+    }
+  }
+
   const submit = () => {
-    if (!text.trim()) return
-    void send(text)
+    if (empty) return
+    void send(text, files)
     setText("")
+    setFiles([])
+    setProblem(null)
   }
 
   return (
-    <div className="rounded-[1.25rem] bg-surface p-2">
+    <div
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes("Files")) {
+          e.preventDefault()
+          setDragging(true)
+        }
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => {
+        e.preventDefault()
+        setDragging(false)
+        void add(e.dataTransfer.files)
+      }}
+      className={cn("rounded-[1.25rem] bg-surface p-2 transition-colors", dragging && "bg-default")}
+    >
+      {files.length > 0 && (
+        <div className="flex flex-wrap gap-2 px-1.5 pt-1 pb-2">
+          {files.map((f, i) => (
+            <div key={i} className="group relative">
+              <img
+                src={`data:${f.mime};base64,${f.data}`}
+                alt={f.name}
+                className="size-14 rounded-lg object-cover"
+              />
+              <button
+                onClick={() => setFiles((all) => all.filter((_, j) => j !== i))}
+                aria-label={`Remove ${f.name}`}
+                className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full bg-popover text-muted opacity-0 group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100"
+              >
+                <X className="size-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <textarea
         ref={area}
         value={text}
         rows={2}
         onChange={(e) => setText(e.target.value)}
+        onPaste={(e) => {
+          const images = [...e.clipboardData.files].filter((f) => f.type.startsWith("image/"))
+          if (images.length) {
+            e.preventDefault()
+            void add(images)
+          }
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault()
-            if (!text.trim() && asking) void reply(asking, "once")
+            if (empty && asking) void reply(asking, "once")
             else submit()
           } else if (e.key === "Escape") {
             if (asking) void reply(asking, "reject")
@@ -334,7 +588,29 @@ function Composer({ open }: { open: Open }) {
         aria-label="Message"
         className="text-md block min-h-14 w-full resize-none bg-transparent px-2.5 pt-1.5 leading-relaxed outline-none placeholder:text-field-placeholder"
       />
+      {(problem || (files.length > 0 && model && !model.images)) && (
+        <p className="text-dense px-2.5 pb-2 text-warning">{problem ?? `${model?.name} doesn’t read images.`}</p>
+      )}
       <div className="flex items-center gap-1.5">
+        <button
+          onClick={() => picker.current?.click()}
+          className={btn("ghost", "sm", "text-muted", true)}
+          aria-label="Attach images"
+          title="Attach images"
+        >
+          <Paperclip className="size-4" strokeWidth={1.75} />
+        </button>
+        <input
+          ref={picker}
+          type="file"
+          accept="image/*"
+          multiple
+          hidden
+          onChange={(e) => {
+            if (e.target.files) void add(e.target.files)
+            e.target.value = ""
+          }}
+        />
         <div className="flex h-8 items-center rounded-full bg-default/60 p-0.5" role="radiogroup" aria-label="Permissions">
           {modes.map((m) => (
             <button
@@ -353,23 +629,85 @@ function Composer({ open }: { open: Open }) {
           ))}
         </div>
         <div className="ml-auto flex items-center gap-2">
-          {open.info?.model && (
-            <span className="text-dense px-2 text-muted">
-              {open.info.model}
-              {open.info.variant && <span className="text-muted/70"> · {capitalize(open.info.variant)}</span>}
-            </span>
-          )}
-          {running && !text.trim() ? (
+          <ModelPicker open={open} />
+          {running && empty ? (
             <button onClick={stop} className={btn("secondary", "sm", "", true)} aria-label="Stop">
               <span className="size-2.5 rounded-[2px] bg-current" />
             </button>
           ) : (
-            <button onClick={submit} disabled={!text.trim()} className={btn("primary", "sm", "", true)} aria-label="Send">
+            <button onClick={submit} disabled={empty} className={btn("primary", "sm", "", true)} aria-label="Send">
               <ArrowUp className="size-4" />
             </button>
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+const efforts: Record<string, string> = { xhigh: "Extra high" }
+
+function ModelPicker({ open }: { open: Open }) {
+  const [show, setShow] = useState(false)
+  const close = useCallback(() => setShow(false), [])
+  const info = open.info
+  if (!info?.model) return null
+  const current = info.models.find((m) => m.id === info.modelId)
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setShow(!show)}
+        aria-expanded={show}
+        className="text-dense flex h-8 items-center gap-1.5 rounded-full px-3 text-muted hover:bg-default/60 hover:text-foreground focus-visible:status-focused-field"
+      >
+        {info.model}
+        {info.variant && <span className="text-muted/70">· {efforts[info.variant] ?? capitalize(info.variant)}</span>}
+        <ChevronDown className="size-3.5" />
+      </button>
+      <Popover open={show} onClose={close} side="top" align="end" className="w-72">
+        <div role="listbox" aria-label="Model" className="flex flex-col">
+          {info.models.map((m) => (
+            <button
+              key={m.id}
+              role="option"
+              aria-selected={m.id === info.modelId}
+              onClick={() => {
+                // The effort carries over when the new model has it.
+                const variant = info.variant && m.efforts.includes(info.variant) ? info.variant : null
+                void chooseModel(m.id, variant)
+              }}
+              className="flex items-start gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-default-hover focus-visible:status-focused-field"
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm">{m.name}</span>
+                {m.note && <span className="text-2xs block text-muted">{m.note}</span>}
+              </span>
+              {m.id === info.modelId && <Check className="mt-0.5 size-3.5 shrink-0" />}
+            </button>
+          ))}
+        </div>
+        {current && current.efforts.length > 0 && (
+          <div className="mt-1 border-t border-separator px-2.5 pt-2.5 pb-1.5">
+            <div className="text-2xs pb-2 text-muted">Effort</div>
+            <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Effort">
+              {[null, ...current.efforts].map((e) => (
+                <button
+                  key={e ?? "default"}
+                  role="radio"
+                  aria-checked={info.variant === e}
+                  onClick={() => void chooseModel(current.id, e)}
+                  className={cn(
+                    "text-2xs h-7 rounded-full px-2.5 transition-colors focus-visible:status-focused-field",
+                    info.variant === e ? "bg-default-hover text-foreground" : "text-muted hover:bg-default/60"
+                  )}
+                >
+                  {e ? (efforts[e] ?? capitalize(e)) : "Default"}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </Popover>
     </div>
   )
 }

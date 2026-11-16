@@ -5,9 +5,24 @@
  */
 import { useSyncExternalStore } from "react"
 
-import { getBridge, type Bridge, type CoreEvent, type FileDiff, type Info, type Item, type PermissionReply, type SessionRow } from "./bridge"
+import {
+  getBridge,
+  type Account,
+  type Attachment,
+  type Bridge,
+  type CoreEvent,
+  type FileDiff,
+  type Info,
+  type Item,
+  type Mode,
+  type PermissionReply,
+  type Question,
+  type SessionRow,
+} from "./bridge"
 
-export type Mode = "ask" | "edits" | "auto"
+export type { Mode }
+
+export type Asked = { requestId: string; sessionId: string; directory: string; questions: Question[] }
 
 export type Permission = {
   requestId: string
@@ -47,6 +62,8 @@ export type State = {
   sessions: SessionRow[]
   busy: Set<string>
   permissions: Permission[]
+  questions: Asked[]
+  account: Account | null
   open: Open | null
   mode: Mode
   notice: string | null
@@ -72,6 +89,8 @@ let state: State = {
   sessions: [],
   busy: new Set(),
   permissions: [],
+  questions: [],
+  account: null,
   open: null,
   mode: readMode(),
   notice: null,
@@ -122,7 +141,10 @@ export async function start() {
   try {
     const { signedIn } = await bridge.authStatus()
     set({ auth: signedIn ? "signed-in" : "signed-out" })
-    if (signedIn) await loadSessions(true)
+    if (signedIn) {
+      void loadAccount()
+      await loadSessions(true)
+    }
   } catch (e) {
     set({ auth: "signed-out", loginError: message(e) })
   }
@@ -136,6 +158,7 @@ export async function signIn() {
     void bridge.openUrl(login.url)
     await bridge.loginWait()
     set({ auth: "signed-in", login: null })
+    void loadAccount()
     await loadSessions(true)
   } catch (e) {
     set({ login: null, loginError: message(e) })
@@ -144,6 +167,32 @@ export async function signIn() {
 
 export function openLoginPage() {
   if (state.login) void bridge.openUrl(state.login.url)
+}
+
+async function loadAccount() {
+  try {
+    const account = await bridge.account()
+    if (account.expired) {
+      set({ auth: "signed-out", account: null, loginError: "Your sign-in expired. Sign in again." })
+      return
+    }
+    set({ account })
+  } catch {
+    // The plan and windows stay as last read.
+  }
+}
+
+export async function signOut() {
+  try {
+    const { signedIn } = await bridge.logout()
+    if (signedIn) {
+      set({ notice: "ANYSOLA_TOKEN is set, so this computer stays signed in." })
+      return
+    }
+    set({ auth: "signed-out", account: null, sessions: [], open: null, permissions: [], questions: [] })
+  } catch (e) {
+    set({ notice: message(e) })
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -236,12 +285,21 @@ function toggle(set: Set<string>, id: string, on: boolean) {
 // Prompting
 // ---------------------------------------------------------------------------
 
-export async function send(text: string) {
+export async function send(text: string, files: Attachment[] = []) {
   const open = state.open
-  if (!open || !text.trim()) return
+  if (!open || (!text.trim() && files.length === 0)) return
   setOpen({ status: { kind: "working" } })
   try {
-    const { sessionId } = await bridge.prompt(open.directory, open.sessionId, text, state.mode)
+    const draft = !open.sessionId
+    const { sessionId } = await bridge.prompt(open.directory, {
+      sessionId: open.sessionId,
+      text,
+      mode: state.mode,
+      // A new session takes the model picked before it existed.
+      model: draft ? (open.info?.modelId ?? null) : null,
+      variant: draft ? (open.info?.variant ?? null) : null,
+      files,
+    })
     if (!open.sessionId) {
       setOpen({ sessionId }, null)
       void loadSessions()
@@ -250,6 +308,51 @@ export async function send(text: string) {
     await refresh(sessionId)
   } catch (e) {
     setOpen({ status: { kind: "failed", error: message(e) } })
+  }
+}
+
+export async function chooseModel(modelId: string, variant: string | null) {
+  const open = state.open
+  if (!open?.info) return
+  if (!open.sessionId) {
+    const model = open.info.models.find((m) => m.id === modelId)
+    setOpen({ info: { ...open.info, modelId, model: model?.name ?? modelId, variant } }, null)
+    return
+  }
+  try {
+    const info = await bridge.selectModel(open.directory, open.sessionId, modelId, variant)
+    setOpen((o) => ({ info: { ...info, fiveHour: info.fiveHour ?? o.info?.fiveHour ?? null } }), open.sessionId)
+  } catch (e) {
+    set({ notice: message(e) })
+  }
+}
+
+export async function answer(q: Asked, answers: string[][] | null) {
+  set((s) => ({ questions: s.questions.filter((x) => x.requestId !== q.requestId) }))
+  try {
+    await bridge.replyQuestion(q.directory, q.requestId, answers)
+  } catch (e) {
+    set({ notice: message(e) })
+  }
+}
+
+export async function renameSession(row: SessionRow, title: string) {
+  try {
+    await bridge.renameSession(row.id, title)
+    set((s) => ({ sessions: s.sessions.map((r) => (r.id === row.id ? { ...r, title: title.trim() } : r)) }))
+    if (state.open?.sessionId === row.id) setOpen({ title: title.trim() }, row.id)
+  } catch (e) {
+    set({ notice: message(e) })
+  }
+}
+
+export async function deleteSession(row: SessionRow) {
+  try {
+    await bridge.deleteSession(row.directory, row.id)
+    if (state.open?.sessionId === row.id) set({ open: null })
+    set((s) => ({ sessions: s.sessions.filter((r) => r.id !== row.id) }))
+  } catch (e) {
+    set({ notice: message(e) })
   }
 }
 
@@ -338,6 +441,14 @@ function onEvent(e: CoreEvent) {
       set((s) => ({ permissions: [...s.permissions.filter((x) => x.requestId !== e.requestId), p] }))
       break
     }
+    case "question":
+      set((s) => ({
+        questions: [
+          ...s.questions.filter((x) => x.requestId !== e.requestId),
+          { requestId: e.requestId, sessionId: id, directory: directoryOf(id), questions: e.questions },
+        ],
+      }))
+      break
     case "permissionReplied":
       set((s) => ({ permissions: s.permissions.filter((x) => x.requestId !== e.requestId) }))
       break
@@ -351,7 +462,9 @@ function onEvent(e: CoreEvent) {
       set((s) => ({
         busy: toggle(s.busy, id, false),
         permissions: s.permissions.filter((p) => p.sessionId !== id),
+        questions: s.questions.filter((q) => q.sessionId !== id),
       }))
+      void loadAccount()
       if (here) {
         setOpen(
           {

@@ -6,17 +6,19 @@ import {
   FileText,
   Globe,
   ListTodo,
+  MessageCircleQuestion,
   Pencil,
   Search,
   SquareTerminal,
   Wrench,
+  Check,
 } from "lucide-react"
 import { useState, type ReactNode } from "react"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 
 import { getBridge, type FileDiff, type Item } from "./bridge"
-import { reply, type Open, type Permission, type Status } from "./store"
+import { answer, reply, type Asked, type Open, type Permission, type Status } from "./store"
 import { btn, cn, Counts, DiffView, Kbd, Spinner } from "./ui"
 
 type Tool = Extract<Item, { kind: "tool" }>
@@ -40,7 +42,15 @@ function blocks(items: Item[]): Block[] {
   return out
 }
 
-export function Transcript({ open, permissions }: { open: Open; permissions: Permission[] }) {
+export function Transcript({
+  open,
+  permissions,
+  questions,
+}: {
+  open: Open
+  permissions: Permission[]
+  questions: Asked[]
+}) {
   return (
     <div className="flex flex-col gap-5">
       {blocks(open.items).map((b) =>
@@ -56,7 +66,14 @@ export function Transcript({ open, permissions }: { open: Open; permissions: Per
       {permissions.map((p) => (
         <PermissionCard key={p.requestId} permission={p} />
       ))}
-      <StatusLine status={open.status} waiting={permissions.length > 0} streaming={open.live.length > 0} />
+      {questions.map((q) => (
+        <QuestionCard key={q.requestId} asked={q} />
+      ))}
+      <StatusLine
+        status={open.status}
+        waiting={permissions.length + questions.length > 0}
+        streaming={open.live.length > 0}
+      />
     </div>
   )
 }
@@ -159,6 +176,7 @@ const icons: Record<string, typeof FileText> = {
   webfetch: Globe,
   websearch: Globe,
   todowrite: ListTodo,
+  question: MessageCircleQuestion,
 }
 
 const verbs: Record<string, string> = {
@@ -170,6 +188,8 @@ const verbs: Record<string, string> = {
   websearch: "Searched the web",
   todowrite: "Updated the plan",
   task: "Ran a subagent",
+  subagent: "Ran a subagent",
+  question: "Asked",
   skill: "Used a skill",
 }
 
@@ -354,6 +374,85 @@ function PermissionCard({ permission: p }: { permission: Permission }) {
         )}
         <button onClick={() => void reply(p, "reject")} className={btn("ghost", "sm", "ml-auto gap-2")}>
           Deny <Kbd>Esc</Kbd>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function QuestionCard({ asked }: { asked: Asked }) {
+  const [picked, setPicked] = useState<string[][]>(() => asked.questions.map(() => []))
+  const [other, setOther] = useState<string[]>(() => asked.questions.map(() => ""))
+  const answers = asked.questions.map((_, i) => [...picked[i], ...(other[i].trim() ? [other[i].trim()] : [])])
+  const complete = answers.every((a) => a.length > 0)
+  const toggle = (i: number, label: string, multiple: boolean) => {
+    // One answer to a single choice: picking an option drops a typed one.
+    if (!multiple) setOther((all) => all.map((v, j) => (j === i ? "" : v)))
+    setPicked((all) =>
+      all.map((list, j) =>
+        j !== i ? list : multiple ? (list.includes(label) ? list.filter((l) => l !== label) : [...list, label]) : [label]
+      )
+    )
+  }
+  return (
+    <div className="flex flex-col gap-5 rounded-xl bg-surface p-4">
+      {asked.questions.map((q, i) => (
+        <fieldset key={i} className="flex flex-col gap-2.5">
+          <legend className="contents">
+            <span className="text-2xs font-medium tracking-wide text-muted">{q.header}</span>
+            <span className="text-md mt-1 block leading-relaxed">{q.question}</span>
+          </legend>
+          <div className="flex flex-col gap-1">
+            {q.options.map((o) => {
+              const on = picked[i].includes(o.label)
+              return (
+                <button
+                  key={o.label}
+                  role={q.multiple ? "checkbox" : "radio"}
+                  aria-checked={on}
+                  onClick={() => toggle(i, o.label, !!q.multiple)}
+                  className={cn(
+                    "flex items-start gap-3 rounded-lg px-3 py-2 text-left transition-colors focus-visible:status-focused-field",
+                    on ? "bg-default" : "hover:bg-default/60"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "mt-0.5 flex size-4 shrink-0 items-center justify-center bg-default-hover",
+                      q.multiple ? "rounded" : "rounded-full",
+                      on && "bg-accent text-accent-foreground"
+                    )}
+                  >
+                    {on && <Check className="size-3" strokeWidth={2.5} />}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-sm">{o.label}</span>
+                    {o.description && <span className="text-dense block text-muted">{o.description}</span>}
+                  </span>
+                </button>
+              )
+            })}
+            <input
+              value={other[i]}
+              onChange={(e) => setOther((all) => all.map((v, j) => (j === i ? e.target.value : v)))}
+              onFocus={() => !q.multiple && setPicked((all) => all.map((l, j) => (j === i ? [] : l)))}
+              placeholder="Something else"
+              aria-label={`Your own answer to: ${q.question}`}
+              className="h-9 rounded-lg bg-background/60 px-3 text-sm outline-none placeholder:text-field-placeholder focus-visible:status-focused-field"
+            />
+          </div>
+        </fieldset>
+      ))}
+      <div className="flex items-center gap-2">
+        <button
+          disabled={!complete}
+          onClick={() => void answer(asked, answers)}
+          className={btn("primary", "sm")}
+        >
+          Send answers
+        </button>
+        <button onClick={() => void answer(asked, null)} className={btn("ghost", "sm", "ml-auto text-muted")}>
+          Skip
         </button>
       </div>
     </div>

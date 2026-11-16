@@ -5,6 +5,7 @@
 // No console window behind the app on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod account;
 mod events;
 mod transcript;
 
@@ -14,39 +15,52 @@ use std::sync::Arc;
 
 use anysola_core::api::{Core, Prompt, Target};
 use anysola_core::gateway::account::DeviceLogin;
-use anysola_core::gateway::{Gateway, Token};
 use anysola_core::model::{ModelRef, PROVIDER};
 use anysola_core::paths::Paths;
 use anysola_core::session::TurnOptions;
 use anysola_core::session::gate::{Floor, Reply};
 use anysola_core::session::inbox::Delivery;
 use anysola_core::storage::{Db, SessionRow};
+use anysola_core::tool::question::QuestionReply;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Mutex;
 use tokio::sync::broadcast::error::RecvError;
 
-type Answer = Result<Value, String>;
+pub(crate) type Answer = Result<Value, String>;
 
 /// Sessions of every project, newest first, for the sidebar.
 const SESSION_LIST: u64 = 200;
 
-struct App {
+pub(crate) struct App {
     db: Option<Arc<Db>>,
     /// One core per project directory, started when one of its sessions opens.
     cores: Mutex<HashMap<PathBuf, Core>>,
-    login: Mutex<Option<DeviceLogin>>,
+    pub(crate) login: Mutex<Option<DeviceLogin>>,
 }
 
 impl App {
-    fn db(&self) -> Result<&Arc<Db>, String> {
+    pub(crate) fn db(&self) -> Result<&Arc<Db>, String> {
         self.db
             .as_ref()
             .ok_or_else(|| format!("Can’t open {}.", Paths::from_env().database().display()))
     }
+
+    /// A core reads the token when it starts: after signing in or out, start them afresh.
+    pub(crate) async fn drop_cores(&self) {
+        for (_, core) in self.cores.lock().await.drain() {
+            core.shutdown();
+        }
+    }
+
+    /// The directory's core if one is running (deleting must not start one).
+    async fn running(&self, directory: &str) -> Option<Core> {
+        self.cores.lock().await.get(Path::new(directory)).cloned()
+    }
 }
 
-fn text(e: impl std::fmt::Display) -> String {
+pub(crate) fn text(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
@@ -90,12 +104,12 @@ fn session_json(row: &SessionRow) -> Value {
     json!({"id": row.id, "title": row.title, "directory": row.directory, "updated": row.time_updated})
 }
 
-/// The session's model as the composer shows it, and the 5-hour window when known.
-fn info(core: &Core, row: &SessionRow) -> Value {
+/// The session's model, its effort and every model to pick from, with the 5-hour window when
+/// known. Without a session: the folder's default model.
+fn info(core: &Core, row: Option<&SessionRow>) -> Value {
     let loaded = core.loaded();
     let reference = row
-        .model
-        .as_ref()
+        .and_then(|r| r.model.as_ref())
         .and_then(ModelRef::from_json)
         .or_else(|| loaded.config.model().and_then(ModelRef::parse))
         .or_else(|| {
@@ -105,48 +119,29 @@ fn info(core: &Core, row: &SessionRow) -> Value {
                 variant: None,
             })
         });
-    let model = reference
+    let current = reference
         .as_ref()
         .and_then(|r| loaded.models.iter().find(|m| m.id == r.id));
-    let usage = core.usage(&row.id);
+    let models: Vec<Value> = loaded
+        .models
+        .iter()
+        .map(|m| {
+            json!({
+                "id": m.id,
+                "name": m.name,
+                "note": m.note,
+                "efforts": m.variants.iter().map(|v| v.id.clone()).collect::<Vec<_>>(),
+                "images": m.input.iter().any(|i| i == "image"),
+            })
+        })
+        .collect();
     json!({
-        "model": model.map(|m| m.name.clone()),
+        "model": current.map(|m| m.name.clone()),
+        "modelId": current.map(|m| m.id.clone()),
         "variant": reference.and_then(|r| r.variant),
-        "fiveHour": usage.latest.as_ref().map(|u| u.five_hour.percent),
+        "models": models,
+        "fiveHour": row.and_then(|r| core.usage(&r.id).latest).map(|u| u.five_hour.percent),
     })
-}
-
-#[tauri::command]
-async fn auth_status(app: State<'_, App>) -> Answer {
-    let token = Token::resolve(app.db()?).map_err(text)?;
-    Ok(json!({"signedIn": token.is_some()}))
-}
-
-/// Starts the device sign-in: the window shows the code and opens the address.
-#[tauri::command]
-async fn login_start(app: State<'_, App>) -> Answer {
-    let login = Gateway::new(None).start_device_login().await?;
-    let started = json!({"url": login.url, "code": login.user_code});
-    *app.login.lock().await = Some(login);
-    Ok(started)
-}
-
-/// Waits for the browser approval and stores the token.
-#[tauri::command]
-async fn login_wait(app: State<'_, App>) -> Answer {
-    let login = app
-        .login
-        .lock()
-        .await
-        .take()
-        .ok_or("No sign-in is in progress.")?;
-    let credential = Gateway::new(None).finish_device_login(&login).await?;
-    app.db()?.insert_anysola_login(&credential).map_err(text)?;
-    // A core reads the token when it starts: drop any started before this sign-in.
-    for (_, core) in app.cores.lock().await.drain() {
-        core.shutdown();
-    }
-    Ok(json!({"signedIn": true}))
 }
 
 #[tauri::command]
@@ -171,7 +166,7 @@ async fn open_session(
     Ok(json!({
         "session": session_json(&row),
         "items": transcript::items(messages, &row.directory),
-        "info": info(&core, &row),
+        "info": info(&core, Some(&row)),
         "busy": core.is_busy(&row.id),
     }))
 }
@@ -193,14 +188,38 @@ async fn transcript(
 #[tauri::command]
 async fn folder_info(handle: AppHandle, app: State<'_, App>, directory: String) -> Answer {
     let core = core_for(&handle, &app, &directory).await?;
-    let loaded = core.loaded();
-    let model = loaded
-        .config
-        .model()
-        .and_then(ModelRef::parse)
-        .and_then(|r| loaded.models.iter().find(|m| m.id == r.id).cloned())
-        .or_else(|| loaded.models.first().cloned());
-    Ok(json!({"model": model.map(|m| m.name), "variant": null, "fiveHour": null}))
+    Ok(info(&core, None))
+}
+
+#[tauri::command]
+async fn select_model(
+    handle: AppHandle,
+    app: State<'_, App>,
+    directory: String,
+    session_id: String,
+    model: String,
+    variant: Option<String>,
+) -> Answer {
+    let core = core_for(&handle, &app, &directory).await?;
+    let reference = ModelRef {
+        provider: PROVIDER.into(),
+        id: model,
+        variant,
+    };
+    core.select_model(&session_id, &reference).map_err(text)?;
+    let row = core
+        .session(&session_id)
+        .map_err(text)?
+        .ok_or("This session no longer exists.")?;
+    Ok(info(&core, Some(&row)))
+}
+
+/// An image pasted or dropped on the composer, base64 encoded.
+#[derive(Deserialize)]
+struct Attachment {
+    mime: String,
+    data: String,
+    name: String,
 }
 
 /// The composer's mode as the session's permission floor: Ask asks before changes, Edits
@@ -228,16 +247,36 @@ async fn set_mode(
     Ok(Value::Null)
 }
 
-/// Sends a prompt; without a session it starts one. The turn runs on; its events tell the rest.
+/// What the composer sends; without a session it starts one.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Send {
+    session_id: Option<String>,
+    text: String,
+    mode: String,
+    /// A new session's composer picks a model before the session exists.
+    model: Option<String>,
+    variant: Option<String>,
+    #[serde(default)]
+    files: Vec<Attachment>,
+}
+
+/// Sends a prompt. The turn runs on; its events tell the rest.
 #[tauri::command]
 async fn prompt(
     handle: AppHandle,
     app: State<'_, App>,
     directory: String,
-    session_id: Option<String>,
-    text: String,
-    mode: String,
+    request: Send,
 ) -> Answer {
+    let Send {
+        session_id,
+        text,
+        mode,
+        model,
+        variant,
+        files,
+    } = request;
     let core = core_for(&handle, &app, &directory).await?;
     let id = match session_id {
         Some(id) => id,
@@ -245,9 +284,20 @@ async fn prompt(
     };
     core.set_permission_floor(&id, floor(&mode))
         .map_err(self::text)?;
+    if let Some(model) = model {
+        let reference = ModelRef {
+            provider: PROVIDER.into(),
+            id: model,
+            variant,
+        };
+        core.select_model(&id, &reference).map_err(self::text)?;
+    }
     let prompt = Prompt {
         text,
-        files: Vec::new(),
+        files: files
+            .into_iter()
+            .map(|f| (f.mime, f.data, f.name))
+            .collect(),
         skills: Vec::new(),
     };
     if core.is_busy(&id) {
@@ -300,6 +350,45 @@ async fn reply_permission(
     Ok(json!(answered))
 }
 
+/// The model's questions: one answer list per question, or none to dismiss them.
+#[tauri::command]
+async fn reply_question(
+    handle: AppHandle,
+    app: State<'_, App>,
+    directory: String,
+    request_id: String,
+    answers: Option<Vec<Vec<String>>>,
+) -> Answer {
+    let reply = match answers {
+        Some(answers) => QuestionReply::Answered(answers),
+        None => QuestionReply::Dismissed(None),
+    };
+    let answered = core_for(&handle, &app, &directory)
+        .await?
+        .reply_question(&request_id, reply);
+    Ok(json!(answered))
+}
+
+#[tauri::command]
+async fn rename_session(app: State<'_, App>, session_id: String, title: String) -> Answer {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("A session needs a name.".into());
+    }
+    app.db()?.set_title(&session_id, title).map_err(text)?;
+    Ok(Value::Null)
+}
+
+#[tauri::command]
+async fn delete_session(app: State<'_, App>, directory: String, session_id: String) -> Answer {
+    if let Some(core) = app.running(&directory).await
+        && core.is_busy(&session_id)
+    {
+        return Err("Stop the session before deleting it.".into());
+    }
+    Ok(json!(app.db()?.delete_session(&session_id).map_err(text)?))
+}
+
 fn main() {
     anysola_core::version::set_desktop_client();
     let db = Db::open(&Paths::from_env().database()).ok().map(Arc::new);
@@ -312,17 +401,23 @@ fn main() {
             login: Mutex::default(),
         })
         .invoke_handler(tauri::generate_handler![
-            auth_status,
-            login_start,
-            login_wait,
+            account::auth_status,
+            account::login_start,
+            account::login_wait,
+            account::account,
+            account::logout,
             sessions,
             open_session,
             transcript,
             folder_info,
+            select_model,
             prompt,
             set_mode,
             interrupt,
             reply_permission,
+            reply_question,
+            rename_session,
+            delete_session,
         ])
         .run(tauri::generate_context!())
         .expect("the Anysola Code window failed to start");

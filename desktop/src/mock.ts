@@ -1,9 +1,9 @@
 /**
  * The bridge outside Tauri: example sessions and a transcript, for working on the window in a
  * browser and for screenshots. `?state=` picks a moment: `signed-out`, `empty`, `approval`
- * (the default), `running`, `failed`.
+ * (the default), `running`, `failed`, `question`.
  */
-import type { Bridge, CoreEvent, FileDiff, Info, Item, SessionRow } from "./bridge"
+import type { Account, Bridge, CoreEvent, FileDiff, Info, Item, SessionRow } from "./bridge"
 
 const WEB = "/home/alex/code/anysola-web"
 const CODE = "/home/alex/code/anysola-code"
@@ -107,7 +107,26 @@ const pricingItems: Item[] = [
   tool("t7", "shell", "pnpm --filter @anysola/web test pricing", { status: "running" }),
 ]
 
-const info: Info = { model: "Opus 5.5", variant: "high", fiveHour: 34 }
+const efforts = ["low", "medium", "high", "xhigh", "max"]
+const info: Info = {
+  model: "Opus 5.5",
+  modelId: "claude-opus-5-5",
+  variant: "high",
+  fiveHour: 34,
+  models: [
+    { id: "claude-opus-5-5", name: "Opus 5.5", note: "Most capable", efforts, images: true },
+    { id: "claude-sonnet-5-5", name: "Sonnet 5.5", note: "Fast and capable", efforts, images: true },
+    { id: "claude-haiku-5-5", name: "Haiku 5.5", note: "Fastest", efforts: [], images: true },
+  ],
+}
+
+const account: Account = {
+  expired: false,
+  plan: "pro",
+  included: true,
+  fiveHour: { percent: 34, resetsAt: new Date(now + 2.4 * 3_600_000).toISOString() },
+  weekly: { percent: 12, resetsAt: new Date(now + 4 * 86_400_000).toISOString() },
+}
 
 export function mockBridge(): Bridge {
   const state = new URLSearchParams(location.search).get("state") ?? "approval"
@@ -156,6 +175,22 @@ export function mockBridge(): Bridge {
             }
           })()
         }
+        if (state === "question")
+          emit({
+            type: "question",
+            sessionId: session.id,
+            requestId: "que_1",
+            questions: [
+              {
+                header: "Team plan",
+                question: "The team plan has no yearly price yet. What should the card show?",
+                options: [
+                  { label: "Hide the toggle", description: "Show monthly only on the team card" },
+                  { label: "Use 10× monthly", description: "The same discount as the other plans" },
+                ],
+              },
+            ],
+          })
         if (state === "failed")
           emit({
             type: "failed",
@@ -163,22 +198,34 @@ export function mockBridge(): Bridge {
             error: "Anysola Code is temporarily unavailable. Try again shortly.",
           })
       }
-      return { session, items, info, busy: session.id === "ses_pricing" && state !== "failed" }
+      const busy = session.id === "ses_pricing" && state !== "failed"
+      return { session, items: state === "question" ? items.slice(0, -1) : items, info, busy }
     },
     async transcript(_directory, sessionId) {
       return transcripts.get(sessionId) ?? []
     },
+    async account() {
+      return account
+    },
+    async logout() {
+      signedIn = false
+      return { signedIn }
+    },
     async folderInfo() {
       return info
     },
-    async prompt(directory, sessionId, text) {
+    async selectModel(_directory, _sessionId, model, variant) {
+      const m = info.models.find((x) => x.id === model) ?? info.models[0]
+      return { ...info, model: m.name, modelId: m.id, variant }
+    },
+    async prompt(directory, { sessionId, text, files }) {
       const id = sessionId ?? `ses_${Math.random().toString(36).slice(2, 10)}`
       if (!sessionId) {
         rows.unshift({ id, title: "New session", directory, updated: Date.now() })
         emit({ type: "created", sessionId: id, title: "New session", directory })
       }
       const list = transcripts.get(id) ?? []
-      transcripts.set(id, [...list, { kind: "user", id: `u${list.length}`, text, images: 0 }])
+      transcripts.set(id, [...list, { kind: "user", id: `u${list.length}`, text, images: files.length }])
       emit({ type: "changed", sessionId: id })
       emit({ type: "started", sessionId: id })
       const words = "I’ll start by reading the files this touches, then make the change.".split(" ")
@@ -198,6 +245,19 @@ export function mockBridge(): Bridge {
     async replyPermission(_directory, requestId) {
       emit({ type: "permissionReplied", sessionId: "ses_pricing", requestId })
       return true
+    },
+    async replyQuestion(_directory, requestId) {
+      emit({ type: "permissionReplied", sessionId: "ses_pricing", requestId })
+      return true
+    },
+    async renameSession(sessionId, title) {
+      const row = rows.find((r) => r.id === sessionId)
+      if (row) row.title = title
+    },
+    async deleteSession(_directory, sessionId) {
+      const at = rows.findIndex((r) => r.id === sessionId)
+      if (at >= 0) rows.splice(at, 1)
+      return at >= 0
     },
     async pickFolder() {
       return WEB

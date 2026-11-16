@@ -71,6 +71,12 @@ pub fn to_json(event: &Event, directory: &str) -> Option<Value> {
             request_id,
             ..
         } => json!({"type": "permissionReplied", "sessionId": session_id, "requestId": request_id}),
+        Event::QuestionAsked {
+            session_id,
+            request_id,
+            questions,
+        } => json!({"type": "question", "sessionId": session_id, "requestId": request_id,
+                    "questions": questions}),
         Event::TitleChanged { session_id, title } => {
             json!({"type": "title", "sessionId": session_id, "title": title})
         }

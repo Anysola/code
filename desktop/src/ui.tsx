@@ -2,7 +2,7 @@ import { Spinner as HeroSpinner } from "@heroui/react/spinner"
 import { buttonVariants } from "@heroui/styles"
 import { clsx, type ClassValue } from "clsx"
 import { Minus, Square, X } from "lucide-react"
-import type { ReactNode } from "react"
+import { useEffect, useRef, type ReactNode } from "react"
 import { extendTailwindMerge } from "tailwind-merge"
 
 import { getBridge } from "./bridge"
@@ -171,4 +171,95 @@ export function ago(ms: number) {
 
 export function folderName(directory: string) {
   return directory.split(/[\\/]/).filter(Boolean).pop() ?? directory
+}
+
+/**
+ * A panel that opens from a control: closes on Escape and on a click outside. `side` puts it
+ * above (composer) or below (sidebar menus) its anchor.
+ */
+export function Popover({
+  open,
+  onClose,
+  side = "top",
+  align = "start",
+  className,
+  children,
+}: {
+  open: boolean
+  onClose: () => void
+  side?: "top" | "bottom"
+  align?: "start" | "end"
+  className?: string
+  children: ReactNode
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation()
+        onClose()
+      }
+    }
+    // After the click that opened it.
+    const t = setTimeout(() => document.addEventListener("mousedown", onDown))
+    document.addEventListener("keydown", onKey, true)
+    return () => {
+      clearTimeout(t)
+      document.removeEventListener("mousedown", onDown)
+      document.removeEventListener("keydown", onKey, true)
+    }
+  }, [open, onClose])
+  if (!open) return null
+  return (
+    <div
+      ref={ref}
+      role="dialog"
+      className={cn(
+        "absolute z-30 rounded-xl bg-popover p-1.5",
+        side === "top" ? "bottom-full mb-2" : "top-full mt-1.5",
+        align === "start" ? "left-0" : "right-0",
+        className
+      )}
+    >
+      {children}
+    </div>
+  )
+}
+
+export function MenuItem({
+  onSelect,
+  danger = false,
+  children,
+}: {
+  onSelect: () => void
+  danger?: boolean
+  children: ReactNode
+}) {
+  return (
+    <button
+      onClick={onSelect}
+      className={cn(
+        "text-dense flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left hover:bg-default-hover focus-visible:status-focused-field",
+        danger && "text-danger"
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
+/** "in 2h 10m", "in 3d": when a usage window starts over. */
+export function resetsIn(iso: string | null) {
+  if (!iso) return null
+  const ms = Date.parse(iso) - Date.now()
+  if (!Number.isFinite(ms) || ms <= 0) return null
+  const m = Math.round(ms / 60_000)
+  if (m < 60) return `in ${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `in ${h}h ${m % 60}m`
+  return `in ${Math.round(h / 24)}d`
 }

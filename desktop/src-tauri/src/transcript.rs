@@ -103,6 +103,11 @@ pub fn target(name: &str, input: &Value, directory: &str) -> String {
         "webfetch" => field(&["url"]),
         "websearch" => field(&["query"]),
         "task" | "subagent" => field(&["description", "prompt"]),
+        "question" => input
+            .pointer("/questions/0/question")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
         _ => field(&[
             "filePath",
             "path",

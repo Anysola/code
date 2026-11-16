@@ -31,7 +31,41 @@ export type Item =
     }
   | { kind: "error"; id: string; message: string }
 
-export type Info = { model: string | null; variant: string | null; fiveHour: number | null }
+export type ModelOption = { id: string; name: string; note: string | null; efforts: string[]; images: boolean }
+
+export type Info = {
+  model: string | null
+  modelId: string | null
+  variant: string | null
+  models: ModelOption[]
+  fiveHour: number | null
+}
+
+export type Window = { percent: number; resetsAt: string | null }
+
+export type Account =
+  | { expired: true }
+  | { expired: false; plan: string | null; included: boolean; fiveHour: Window | null; weekly: Window | null }
+
+export type Question = {
+  question: string
+  header: string
+  options: { label: string; description: string }[]
+  multiple?: boolean
+}
+
+export type Attachment = { mime: string; data: string; name: string }
+
+export type Mode = "ask" | "edits" | "auto"
+
+export type SendRequest = {
+  sessionId: string | null
+  text: string
+  mode: Mode
+  model: string | null
+  variant: string | null
+  files: Attachment[]
+}
 
 export type Opened = { session: SessionRow; items: Item[]; info: Info; busy: boolean }
 
@@ -50,6 +84,7 @@ export type CoreEvent =
       files: FileDiff[] | null
     }
   | { type: "permissionReplied"; sessionId: string; requestId: string }
+  | { type: "question"; sessionId: string; requestId: string; questions: Question[] }
   | { type: "title"; sessionId: string; title: string }
   | { type: "done"; sessionId: string }
   | { type: "failed"; sessionId: string; error: string }
@@ -67,16 +102,17 @@ export type Bridge = {
   sessions(): Promise<SessionRow[]>
   openSession(directory: string, sessionId: string): Promise<Opened>
   transcript(directory: string, sessionId: string): Promise<Item[]>
+  account(): Promise<Account>
+  logout(): Promise<{ signedIn: boolean }>
   folderInfo(directory: string): Promise<Info>
-  prompt(
-    directory: string,
-    sessionId: string | null,
-    text: string,
-    mode: "ask" | "edits" | "auto"
-  ): Promise<{ sessionId: string; queued: boolean }>
-  setMode(directory: string, sessionId: string, mode: "ask" | "edits" | "auto"): Promise<void>
+  selectModel(directory: string, sessionId: string, model: string, variant: string | null): Promise<Info>
+  prompt(directory: string, request: SendRequest): Promise<{ sessionId: string; queued: boolean }>
+  setMode(directory: string, sessionId: string, mode: Mode): Promise<void>
   interrupt(directory: string, sessionId: string): Promise<void>
   replyPermission(directory: string, requestId: string, reply: PermissionReply): Promise<boolean>
+  replyQuestion(directory: string, requestId: string, answers: string[][] | null): Promise<boolean>
+  renameSession(sessionId: string, title: string): Promise<void>
+  deleteSession(directory: string, sessionId: string): Promise<boolean>
   pickFolder(): Promise<string | null>
   openUrl(url: string): Promise<void>
   onEvent(handler: (e: CoreEvent) => void): () => void
@@ -93,8 +129,15 @@ function tauriBridge(): Bridge {
     sessions: () => invoke("sessions"),
     openSession: (directory, sessionId) => invoke("open_session", { directory, sessionId }),
     transcript: (directory, sessionId) => invoke("transcript", { directory, sessionId }),
+    account: () => invoke("account"),
+    logout: () => invoke("logout"),
     folderInfo: (directory) => invoke("folder_info", { directory }),
-    prompt: (directory, sessionId, text, mode) => invoke("prompt", { directory, sessionId, text, mode }),
+    selectModel: (directory, sessionId, model, variant) =>
+      invoke("select_model", { directory, sessionId, model, variant }),
+    prompt: (directory, request) => invoke("prompt", { directory, request }),
+    replyQuestion: (directory, requestId, answers) => invoke("reply_question", { directory, requestId, answers }),
+    renameSession: (sessionId, title) => invoke("rename_session", { sessionId, title }),
+    deleteSession: (directory, sessionId) => invoke("delete_session", { directory, sessionId }),
     setMode: (directory, sessionId, mode) => invoke("set_mode", { directory, sessionId, mode }),
     interrupt: (directory, sessionId) => invoke("interrupt", { directory, sessionId }),
     replyPermission: (directory, requestId, reply) =>
