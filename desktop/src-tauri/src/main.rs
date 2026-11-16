@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anysola_core::api::{Core, Prompt, Target};
+use anysola_core::events::Event;
 use anysola_core::gateway::account::DeviceLogin;
 use anysola_core::model::{ModelRef, PROVIDER};
 use anysola_core::paths::Paths;
@@ -25,7 +26,7 @@ use anysola_core::storage::{Db, SessionRow};
 use anysola_core::tool::question::QuestionReply;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -87,6 +88,7 @@ fn forward(handle: AppHandle, core: &Core, directory: String) {
         loop {
             match events.recv().await {
                 Ok(event) => {
+                    notify(&handle, &event);
                     if let Some(payload) = events::to_json(&event, &directory) {
                         let _ = handle.emit("core", payload);
                     }
@@ -99,6 +101,41 @@ fn forward(handle: AppHandle, core: &Core, directory: String) {
             }
         }
     });
+}
+
+/// A system notification when a session needs the user or ends while the window is in the
+/// background. Subagents' sessions stay quiet: their parent speaks for them.
+fn notify(handle: &AppHandle, event: &Event) {
+    use tauri_plugin_notification::NotificationExt;
+    let (session_id, what) = match event {
+        Event::PermissionAsked { session_id, .. } => (session_id, "Needs your approval"),
+        Event::QuestionAsked { session_id, .. } => (session_id, "Has a question for you"),
+        Event::Succeeded { session_id } => (session_id, "Done"),
+        Event::Failed { session_id, .. } => (session_id, "Stopped with an error"),
+        _ => return,
+    };
+    let focused = handle
+        .get_webview_window("main")
+        .and_then(|w| w.is_focused().ok())
+        .unwrap_or(false);
+    if focused {
+        return;
+    }
+    let Ok(db) = handle.state::<App>().db().cloned() else {
+        return;
+    };
+    let Ok(Some(row)) = db.session(session_id) else {
+        return;
+    };
+    if row.parent_id.is_some() {
+        return;
+    }
+    let _ = handle
+        .notification()
+        .builder()
+        .title(&row.title)
+        .body(what)
+        .show();
 }
 
 fn session_json(row: &SessionRow) -> Value {
@@ -394,7 +431,10 @@ fn main() {
     anysola_core::version::set_desktop_client();
     let db = Db::open(&Paths::from_env().database()).ok().map(Arc::new);
     tauri::Builder::default()
+        // Size, position and maximized state come back on the next start.
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(update::Pending::default())

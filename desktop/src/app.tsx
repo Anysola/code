@@ -11,6 +11,7 @@ import {
   Paperclip,
   Pencil,
   Plus,
+  Search,
   Trash2,
   X,
 } from "lucide-react"
@@ -138,11 +139,27 @@ function SignIn() {
 
 function Sidebar() {
   const sessions = useStore((s) => s.sessions)
+  const [query, setQuery] = useState("")
+  const search = useRef<HTMLInputElement>(null)
   const groups = useMemo(() => {
+    const q = query.trim().toLowerCase()
     const by = new Map<string, SessionRow[]>()
-    for (const s of sessions) by.set(s.directory, [...(by.get(s.directory) ?? []), s])
+    for (const s of sessions) {
+      if (q && !s.title.toLowerCase().includes(q) && !folderName(s.directory).toLowerCase().includes(q)) continue
+      by.set(s.directory, [...(by.get(s.directory) ?? []), s])
+    }
     return [...by.entries()]
-  }, [sessions])
+  }, [sessions, query])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault()
+        search.current?.focus()
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [])
   return (
     <aside className="flex w-64 shrink-0 flex-col">
       <TitleBar>
@@ -157,9 +174,32 @@ function Sidebar() {
           <span className="flex-1 text-left">New session</span>
           <Kbd>Ctrl N</Kbd>
         </button>
+        {sessions.length > 0 && (
+          <label className="mt-1 flex h-9 items-center gap-2 rounded-lg px-3 text-muted focus-within:bg-default/60 hover:bg-default/60">
+            <Search className="size-4 shrink-0" strokeWidth={1.75} />
+            <input
+              ref={search}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  setQuery("")
+                  e.currentTarget.blur()
+                }
+              }}
+              placeholder="Search"
+              aria-label="Search sessions"
+              className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted"
+            />
+            {!query && <Kbd>Ctrl K</Kbd>}
+          </label>
+        )}
       </div>
       <nav className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-2 pb-3" aria-label="Sessions">
-        {groups.length === 0 && <p className="text-dense px-2 text-muted">No sessions yet.</p>}
+        {sessions.length === 0 && <p className="text-dense px-2 text-muted">No sessions yet.</p>}
+        {sessions.length > 0 && groups.length === 0 && (
+          <p className="text-dense px-2 text-muted">No session matches “{query.trim()}”.</p>
+        )}
         {groups.map(([directory, rows]) => (
           <div key={directory}>
             <div className="text-2xs flex items-center gap-1.5 px-2 pb-1 font-medium tracking-wide text-muted" title={directory}>
