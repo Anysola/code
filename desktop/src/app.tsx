@@ -1,4 +1,5 @@
 import {
+  ArrowDownToLine,
   ArrowUp,
   Check,
   ChevronDown,
@@ -20,6 +21,7 @@ import {
   chooseModel,
   deleteSession,
   dismissNotice,
+  installUpdate,
   newSession,
   openLoginPage,
   renameSession,
@@ -172,6 +174,7 @@ function Sidebar() {
           </div>
         ))}
       </nav>
+      <UpdateRow />
       <AccountRow />
     </aside>
   )
@@ -278,6 +281,24 @@ function SessionLink({ row }: { row: SessionRow }) {
         )}
       </Popover>
     </li>
+  )
+}
+
+function UpdateRow() {
+  const update = useStore((s) => s.update)
+  if (!update?.available) return null
+  return (
+    <div className="px-2 pt-2">
+      <button
+        onClick={() => void installUpdate()}
+        disabled={update.installing}
+        className={btn("secondary", "sm", "w-full justify-start gap-2")}
+      >
+        {update.installing ? <Spinner className="size-3.5" /> : <ArrowDownToLine className="size-3.5" />}
+        {update.installing ? `Installing ${update.version}…` : `Update to ${update.version}`}
+      </button>
+      {update.error && <p className="text-2xs px-2 pt-1.5 text-danger">{update.error}</p>}
+    </div>
   )
 }
 

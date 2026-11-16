@@ -58,6 +58,10 @@ export type Attachment = { mime: string; data: string; name: string }
 
 export type Mode = "ask" | "edits" | "auto"
 
+export type UpdateCheck =
+  | { available: false }
+  | { available: true; version: string; notes?: string | null; manual?: string }
+
 export type SendRequest = {
   sessionId: string | null
   text: string
@@ -103,6 +107,8 @@ export type Bridge = {
   openSession(directory: string, sessionId: string): Promise<Opened>
   transcript(directory: string, sessionId: string): Promise<Item[]>
   account(): Promise<Account>
+  updateCheck(): Promise<UpdateCheck>
+  updateInstall(): Promise<void>
   logout(): Promise<{ signedIn: boolean }>
   folderInfo(directory: string): Promise<Info>
   selectModel(directory: string, sessionId: string, model: string, variant: string | null): Promise<Info>
@@ -130,6 +136,8 @@ function tauriBridge(): Bridge {
     openSession: (directory, sessionId) => invoke("open_session", { directory, sessionId }),
     transcript: (directory, sessionId) => invoke("transcript", { directory, sessionId }),
     account: () => invoke("account"),
+    updateCheck: () => invoke("update_check"),
+    updateInstall: () => invoke("update_install"),
     logout: () => invoke("logout"),
     folderInfo: (directory) => invoke("folder_info", { directory }),
     selectModel: (directory, sessionId, model, variant) =>

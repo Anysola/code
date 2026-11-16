@@ -18,6 +18,7 @@ import {
   type PermissionReply,
   type Question,
   type SessionRow,
+  type UpdateCheck,
 } from "./bridge"
 
 export type { Mode }
@@ -64,6 +65,7 @@ export type State = {
   permissions: Permission[]
   questions: Asked[]
   account: Account | null
+  update: (UpdateCheck & { installing?: boolean; error?: string }) | null
   open: Open | null
   mode: Mode
   notice: string | null
@@ -91,6 +93,7 @@ let state: State = {
   permissions: [],
   questions: [],
   account: null,
+  update: null,
   open: null,
   mode: readMode(),
   notice: null,
@@ -133,11 +136,41 @@ function message(e: unknown): string {
 
 let started = false
 
+/** How often a running window looks for a new version. */
+const UPDATE_EVERY = 6 * 3_600_000
+
+async function checkUpdate() {
+  if (state.update?.installing) return
+  try {
+    set({ update: await bridge.updateCheck() })
+  } catch {
+    // Offline or no release yet: the next check tries again.
+  }
+}
+
+export async function installUpdate() {
+  const update = state.update
+  if (!update?.available) return
+  if (update.manual) {
+    void bridge.openUrl(update.manual)
+    return
+  }
+  set({ update: { ...update, installing: true, error: undefined } })
+  try {
+    // Restarts into the new version when it is done.
+    await bridge.updateInstall()
+  } catch (e) {
+    set({ update: { ...update, installing: false, error: message(e) } })
+  }
+}
+
 export async function start() {
   if (started) return
   started = true
   bridge = await getBridge()
   bridge.onEvent(onEvent)
+  void checkUpdate()
+  setInterval(() => void checkUpdate(), UPDATE_EVERY)
   try {
     const { signedIn } = await bridge.authStatus()
     set({ auth: signedIn ? "signed-in" : "signed-out" })

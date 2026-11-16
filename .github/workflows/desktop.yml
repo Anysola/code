@@ -69,6 +69,10 @@ jobs:
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
       - name: Installer
+        env:
+          # Signs the updater artifacts; the key is the one tauri.conf.json's pubkey checks.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx tauri build --bundles ${{ matrix.bundles }}
       - uses: actions/upload-artifact@v4
         with:

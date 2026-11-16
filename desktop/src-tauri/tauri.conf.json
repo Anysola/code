@@ -28,12 +28,36 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "appimage", "deb"],
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico", "icons/icon.png"],
+    "targets": [
+      "nsis",
+      "appimage",
+      "deb"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
     "category": "DeveloperTool",
     "shortDescription": "Anysola Code",
     "windows": {
-      "nsis": { "installMode": "currentUser" }
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDA4REM1MEFCREJDODY0NTQKUldSVVpNamJxMURjQ0FZT0lmQVhsRkwyNTUrYk9aS29XUTZkMk9JTkZyTGRXMW1rcyt5TG1qOWcK",
+      "endpoints": [
+        "https://github.com/Anysola/code/releases/latest/download/latest-desktop.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

@@ -8,6 +8,7 @@
 mod account;
 mod events;
 mod transcript;
+mod update;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -395,6 +396,8 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(update::Pending::default())
         .manage(App {
             db,
             cores: Mutex::default(),
@@ -406,6 +409,8 @@ fn main() {
             account::login_wait,
             account::account,
             account::logout,
+            update::update_check,
+            update::update_install,
             sessions,
             open_session,
             transcript,

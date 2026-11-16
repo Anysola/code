@@ -5,7 +5,12 @@
 # are static musl, so one binary fills both the glibc and the -musl asset names (ARCHITECTURE.md "Release").
 # A manual run (workflow_dispatch) is a dry run by default: build, smoke test and pack, no publishing.
 #
-# Secrets: NPM_TOKEN (npm automation token with publish rights on the @anysola scope).
+# Secrets: NPM_TOKEN (npm automation token with publish rights on the @anysola scope); TAURI_SIGNING_PRIVATE_KEY and
+# TAURI_SIGNING_PRIVATE_KEY_PASSWORD (the desktop app's updater key, backed up with the server's files).
+#
+# The desktop app (desktop/) ships with the same tag: its Windows and Linux installers and the signed
+# latest-desktop.json the app's updater reads join the release after it exists, so a desktop failure never holds
+# up the CLI.
 # 0.5.1's upstream.yml (daily OpenCode tag merge) has no counterpart: the Rust tree does not track OpenCode.
 
 name: release
@@ -217,3 +222,92 @@ jobs:
           gh release create "v$VERSION" release/* --repo "$GITHUB_REPOSITORY" --title "Anysola Code $VERSION" \
             --notes "Install: \`curl -fsSL https://www.anysola.com/install | sh\` (macOS, Linux) or \`irm https://www.anysola.com/install.ps1 | iex\` (Windows), or \`npm i -g @anysola/code\`. Changes: CHANGELOG.md." \
             --verify-tag "${flags[@]}"
+
+  desktop:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { build: windows-x64, os: windows-2025, bundles: nsis, platform: windows-x86_64 }
+          - { build: linux-x64, os: ubuntu-24.04, bundles: "appimage,deb", platform: linux-x86_64 }
+    name: desktop (${{ matrix.build }})
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: npm ci
+      - name: Build and sign
+        env:
+          ANYSOLA_VERSION: ${{ needs.version.outputs.version }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx tauri build --bundles ${{ matrix.bundles }} --config "{\"version\":\"$ANYSOLA_VERSION\"}"
+      - name: Name the assets
+        run: |
+          set -euo pipefail
+          out=../dist-desktop; mkdir -p "$out"; b=src-tauri/target/release/bundle
+          if [ "${{ runner.os }}" = Windows ]; then
+            cp $b/nsis/*-setup.exe "$out/anysola-code-desktop-windows-x64-setup.exe"
+            cp $b/nsis/*-setup.exe.sig "$out/anysola-code-desktop-windows-x64-setup.exe.sig"
+          else
+            cp $b/appimage/*.AppImage "$out/anysola-code-desktop-linux-x64.AppImage"
+            cp $b/appimage/*.AppImage.sig "$out/anysola-code-desktop-linux-x64.AppImage.sig"
+            cp $b/deb/*.deb "$out/anysola-code-desktop-linux-x64.deb"
+          fi
+          ls -la "$out"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.build }}
+          path: dist-desktop
+          if-no-files-found: error
+
+  desktop-release:
+    needs: [version, github-release, desktop]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: desktop
+          merge-multiple: true
+      - name: Add the desktop app to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd desktop
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION"
+          # The updater's manifest: each platform's installer and its signature.
+          jq -n --arg v "$VERSION" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg base "$base" \
+            --rawfile win anysola-code-desktop-windows-x64-setup.exe.sig \
+            --rawfile linux anysola-code-desktop-linux-x64.AppImage.sig \
+            '{version: $v, pub_date: $date, notes: "Changes: CHANGELOG.md",
+              platforms: {
+                "windows-x86_64": {signature: $win, url: ($base + "/anysola-code-desktop-windows-x64-setup.exe")},
+                "linux-x86_64": {signature: $linux, url: ($base + "/anysola-code-desktop-linux-x64.AppImage")}
+              }}' > latest-desktop.json
+          cat latest-desktop.json
+          gh release upload "v$VERSION" --repo "$GITHUB_REPOSITORY" --clobber \
+            anysola-code-desktop-windows-x64-setup.exe anysola-code-desktop-linux-x64.AppImage \
+            anysola-code-desktop-linux-x64.deb latest-desktop.json

@@ -1,7 +1,7 @@
 /**
  * The bridge outside Tauri: example sessions and a transcript, for working on the window in a
  * browser and for screenshots. `?state=` picks a moment: `signed-out`, `empty`, `approval`
- * (the default), `running`, `failed`, `question`.
+ * (the default), `running`, `failed`, `question`, `update`.
  */
 import type { Account, Bridge, CoreEvent, FileDiff, Info, Item, SessionRow } from "./bridge"
 
@@ -206,6 +206,12 @@ export function mockBridge(): Bridge {
     },
     async account() {
       return account
+    },
+    async updateCheck() {
+      return state === "update" ? { available: true, version: "1.0.6" } : { available: false }
+    },
+    async updateInstall() {
+      await wait(1_000_000)
     },
     async logout() {
       signedIn = false
