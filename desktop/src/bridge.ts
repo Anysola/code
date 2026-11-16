@@ -32,6 +32,8 @@ export type Item =
       child?: string | null
     }
   | { kind: "error"; id: string; message: string }
+  /** A marker in the session, such as a compaction. */
+  | { kind: "note"; id: string; text: string; failed: boolean }
 
 export type ModelOption = { id: string; name: string; note: string | null; efforts: string[]; images: boolean }
 
@@ -87,7 +89,8 @@ export type Revert = {
 
 export type Todo = { content: string; status: "pending" | "in_progress" | "completed" | "cancelled" | string }
 
-export type View = { items: Item[]; revert: Revert | null; todos: Todo[] }
+/** `agent` wrote the last shown reply. */
+export type View = { items: Item[]; revert: Revert | null; todos: Todo[]; agent: string | null }
 
 export type Opened = { session: SessionRow; view: View; info: Info; busy: boolean }
 
@@ -135,6 +138,10 @@ export type CoreEvent =
   | { type: "title"; sessionId: string; title: string }
   | { type: "done"; sessionId: string }
   | { type: "failed"; sessionId: string; error: string }
+  /** What the user asked for didn't run; no turn failed. */
+  | { type: "refused"; sessionId: string; error: string }
+  /** A command or compaction ended with no turn left running. */
+  | { type: "settled"; sessionId: string }
   | { type: "interrupted"; sessionId: string; reason: "user" | "budget" | "declined" }
   | { type: "usage"; sessionId: string; fiveHour: number | null; weekly: number | null }
   | { type: "created"; sessionId: string; title: string; directory: string }

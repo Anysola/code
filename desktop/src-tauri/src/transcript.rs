@@ -30,7 +30,13 @@ pub fn view(core: &Core, session_id: &str, directory: &str) -> Result<Value, Str
             .count();
         json!({"turns": turns, "files": core.revert_files(session_id).unwrap_or_default()})
     });
+    // The agent of the last shown reply: a plan offers to be built only when Plan wrote it.
+    let agent = shown.iter().rev().find_map(|(_, m)| match m {
+        Message::Assistant(data) => Some(data.agent.clone()),
+        _ => None,
+    });
     Ok(json!({
+        "agent": agent,
         "items": items(shown, directory),
         "revert": revert,
         "todos": core.todos(session_id).unwrap_or_default(),
@@ -76,6 +82,20 @@ pub fn items(messages: Vec<(String, Message)>, directory: &str) -> Vec<Value> {
                 if let Some(error) = data.error {
                     out.push(json!({"kind": "error", "id": format!("{id}:error"), "message": error.message}));
                 }
+            }
+            Message::Compaction(data) => {
+                let (text, failed) = match data.status.as_str() {
+                    "completed" => ("Compacted the conversation so far".to_string(), false),
+                    "failed" => (
+                        match data.error {
+                            Some(error) => format!("Couldn’t compact: {}", error.message),
+                            None => "Couldn’t compact the conversation".to_string(),
+                        },
+                        true,
+                    ),
+                    _ => ("Compacting the conversation…".to_string(), false),
+                };
+                out.push(json!({"kind": "note", "id": id, "text": text, "failed": failed}));
             }
             _ => {}
         }

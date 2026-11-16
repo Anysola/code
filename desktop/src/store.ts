@@ -52,7 +52,8 @@ export type Status =
   | { kind: "idle" }
   | { kind: "working" }
   | { kind: "retrying"; attempt: number; until: number; error: string }
-  | { kind: "failed"; error: string }
+  /** `retry`: the latest turn failed, so sending its message again makes sense. */
+  | { kind: "failed"; error: string; retry?: boolean }
   | { kind: "stopped"; reason: "user" | "budget" | "declined" }
 
 export type Open = {
@@ -69,6 +70,8 @@ export type Open = {
   /** A staged rewind, until the next prompt makes it final or Redo puts it back. */
   revert: Revert | null
   todos: Todo[]
+  /** The agent that wrote the last reply shown. */
+  lastAgent: string | null
   /** Text for the composer to take (a rewound message); `n` tells refills apart. With
    * `replacing`, only while the composer still holds that text. */
   fill: { text: string; n: number; replacing?: string } | null
@@ -293,6 +296,7 @@ export async function openSession(row: SessionRow) {
       loading: true,
       revert: null,
       todos: [],
+      lastAgent: null,
       fill: null,
     },
   })
@@ -330,6 +334,7 @@ export async function newSession(directory?: string) {
       loading: false,
       revert: null,
       todos: [],
+      lastAgent: null,
       fill: null,
     },
   })
@@ -374,6 +379,7 @@ function viewPatch(view: View, o: Open): Partial<Open> {
     items,
     revert: view.revert,
     todos: view.todos,
+    lastAgent: view.agent,
     live: o.live.filter((l) => !items.some((i) => "text" in i && i.text === l.text)),
   }
 }
@@ -782,11 +788,26 @@ function onEvent(e: CoreEvent) {
               e.type === "done"
                 ? { kind: "idle" }
                 : e.type === "failed"
-                  ? { kind: "failed", error: e.error }
+                  ? { kind: "failed", error: e.error, retry: true }
                   : { kind: "stopped", reason: e.reason },
           },
           id
         )
+        void refresh(id)
+      }
+      void loadSessions()
+      break
+    case "refused":
+      set((s) => ({ busy: toggle(s.busy, id, false) }))
+      if (here) {
+        setOpen({ live: [], status: { kind: "failed", error: e.error } }, id)
+        void refresh(id)
+      }
+      break
+    case "settled":
+      set((s) => ({ busy: toggle(s.busy, id, false) }))
+      if (here) {
+        setOpen((o) => (o.status.kind === "working" ? { live: [], status: { kind: "idle" } } : {}), id)
         void refresh(id)
       }
       void loadSessions()

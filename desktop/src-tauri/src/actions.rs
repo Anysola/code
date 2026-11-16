@@ -5,14 +5,16 @@
 use std::time::Duration;
 
 use anysola_core::api::{Core, Prompt};
+use anysola_core::events::Event;
 use anysola_core::paths::Paths;
 use anysola_core::session::message::{InvokedSkill, Message, UserData};
 use anysola_core::session::{Outcome, TurnOptions};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
+use tokio::sync::broadcast::error::TryRecvError;
 
-use crate::{Answer, App, core_for, info, prepare, spawn_turn, text, transcript};
+use crate::{Answer, App, core_for, info, prepare, refused, settled, spawn_turn, text, transcript};
 
 /// Files listed for `@`; a larger tree is cut here (the menu filters this list as you type).
 const FILE_LIST: usize = 20_000;
@@ -190,18 +192,27 @@ pub async fn run_command(
     }
     let session = id.clone();
     tauri::async_runtime::spawn(async move {
-        let error = match core
+        // Whether a turn ran: one that failed has said so itself; a command that never got to
+        // one (a bad `/goal`, a failing template) has not.
+        let mut events = core.subscribe();
+        let outcome = core
             .command(&session, &name, &arguments, TurnOptions::default())
-            .await
-        {
-            Ok(Outcome::Failed(error)) => error.message,
-            Ok(_) => return,
-            Err(error) => error.to_string(),
-        };
-        let _ = handle.emit(
-            "core",
-            json!({"type": "failed", "sessionId": session, "error": error}),
-        );
+            .await;
+        let mut ran = false;
+        loop {
+            match events.try_recv() {
+                Ok(Event::Started { session_id }) if session_id == session => ran = true,
+                Ok(_) => {}
+                // Dropped events: that many came from a turn.
+                Err(TryRecvError::Lagged(_)) => ran = true,
+                Err(_) => break,
+            }
+        }
+        match outcome {
+            Ok(Outcome::Failed(error)) if !ran => refused(&handle, &session, error.message),
+            Ok(_) => settled(&handle, &core, &session),
+            Err(error) => refused(&handle, &session, error.to_string()),
+        }
     });
     Ok(json!({"sessionId": id}))
 }
@@ -219,15 +230,10 @@ pub async fn compact(
         return Err("Wait for the current turn to end, or stop it, before compacting.".into());
     }
     tauri::async_runtime::spawn(async move {
-        let error = match core.compact(&session_id).await {
-            Ok(Outcome::Failed(error)) => error.message,
-            Ok(_) => return,
-            Err(error) => error.to_string(),
-        };
-        let _ = handle.emit(
-            "core",
-            json!({"type": "failed", "sessionId": session_id, "error": error}),
-        );
+        match core.compact(&session_id).await {
+            Ok(_) => settled(&handle, &core, &session_id),
+            Err(error) => refused(&handle, &session_id, error.to_string()),
+        }
     });
     Ok(Value::Null)
 }

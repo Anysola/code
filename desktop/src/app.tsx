@@ -432,7 +432,7 @@ function AccountRow() {
         <WindowMeter label="5-hour" window={account.fiveHour} />
         <WindowMeter label="Weekly" window={account.weekly} />
       </button>
-      <Popover open={open} onClose={close} side="top" className="w-60">
+      <Popover open={open} onClose={close} side="top" className="left-2 w-60">
         <DefaultFolder onDone={close} />
         <div className="my-1 border-t border-separator" />
         <MenuItem
@@ -699,6 +699,7 @@ function PeekSheet() {
     loading: peek.loading,
     revert: null,
     todos: [],
+    lastAgent: null,
     fill: null,
   }
   return (

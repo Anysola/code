@@ -188,12 +188,13 @@ export function mockBridge(): Bridge {
   const view = (sessionId: string): View => {
     const items = transcripts.get(sessionId) ?? []
     if (revert && sessionId === "ses_pricing")
-      return { items: [], revert, todos: [] }
+      return { items: [], revert, todos: [], agent: null }
     const done = state === "done" || state === "plan" || state === "todos"
     return {
       items: state === "question" ? items.slice(0, -1) : done ? items.filter((i) => i.kind !== "tool" || i.status !== "running") : items,
       revert: null,
       todos: state === "todos" && sessionId === "ses_pricing" ? todos : [],
+      agent: state === "plan" ? "plan" : "build",
     }
   }
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))

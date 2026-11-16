@@ -77,14 +77,22 @@ export function Transcript({
 }) {
   const busy = useStore((s) => (open.sessionId ? s.busy.has(open.sessionId) : false))
   const last = open.items[open.items.length - 1]
+  // Plan wrote the last reply and the session is still in Plan.
   const planned =
     !readOnly &&
     !busy &&
     open.info?.agent === "plan" &&
+    open.lastAgent === "plan" &&
     open.status.kind === "idle" &&
     !open.revert &&
     last?.kind === "text" &&
     open.info.agents.some((a) => a.id === "build")
+  // The latest turn failed: as it happened, or as the session was left.
+  const retryable =
+    !readOnly &&
+    !busy &&
+    ((open.status.kind === "failed" && open.status.retry === true) ||
+      (open.status.kind === "idle" && last?.kind === "error"))
   return (
     <div className="flex flex-col gap-5">
       {blocks(open.items).map((b) =>
@@ -115,8 +123,13 @@ export function Transcript({
         status={open.status}
         waiting={permissions.length + questions.length > 0}
         streaming={open.live.length > 0}
-        canRetry={!readOnly && open.items.some((i) => i.kind === "user")}
       />
+      {retryable && open.items.some((i) => i.kind === "user") && (
+        <button onClick={() => void retry()} className={btn("secondary", "sm", "-mt-2 gap-1.5 self-start")}>
+          <RotateCcw className="size-3.5" />
+          Try again
+        </button>
+      )}
       {planned && (
         <div className="flex items-center gap-3">
           <button onClick={() => void buildPlan()} className={btn("primary", "sm", "gap-2")}>
@@ -178,7 +191,7 @@ function UserMessage({ item, actions }: { item: UserItem; actions: boolean }) {
         />
         <div className="flex items-center justify-end gap-2 pt-1">
           <span className="text-2xs mr-auto px-2 text-muted">
-            Sends again from here; later turns and their file changes are undone
+            Sends again from here, in place of this message and the turns after it
           </span>
           <button
             onClick={() => {
@@ -297,6 +310,14 @@ function Entry({ item, directory }: { item: Exclude<Item, UserItem>; directory: 
       return <Prose text={item.text} />
     case "reasoning":
       return <Thinking text={item.text} />
+    case "note":
+      return (
+        <div className={cn("text-dense flex items-center gap-3", item.failed ? "text-danger" : "text-muted")}>
+          <span className="h-px flex-1 bg-separator" />
+          {item.text}
+          <span className="h-px flex-1 bg-separator" />
+        </div>
+      )
     case "error":
       return (
         <div className="text-dense flex items-start gap-2 text-danger">
@@ -711,17 +732,7 @@ function QuestionCard({ asked }: { asked: Asked }) {
   )
 }
 
-function StatusLine({
-  status,
-  waiting,
-  streaming,
-  canRetry,
-}: {
-  status: Status
-  waiting: boolean
-  streaming: boolean
-  canRetry: boolean
-}) {
+function StatusLine({ status, waiting, streaming }: { status: Status; waiting: boolean; streaming: boolean }) {
   if (waiting) return null
   switch (status.kind) {
     case "working":
@@ -745,17 +756,9 @@ function StatusLine({
       )
     case "failed":
       return (
-        <div className="flex flex-col items-start gap-2">
-          <div className="text-dense flex items-start gap-2 text-danger">
-            <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
-            {status.error}
-          </div>
-          {canRetry && (
-            <button onClick={() => void retry()} className={btn("secondary", "sm", "ml-5.5 gap-1.5")}>
-              <RotateCcw className="size-3.5" />
-              Try again
-            </button>
-          )}
+        <div className="text-dense flex items-start gap-2 text-danger">
+          <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
+          {status.error}
         </div>
       )
     case "stopped":

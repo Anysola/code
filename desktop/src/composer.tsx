@@ -272,7 +272,8 @@ export function Composer({ open }: { open: Open }) {
   useEffect(() => {
     if (!typed) return
     if (typed.kind === "/" ) loadPalette()
-    if (typed.kind === "@" && paths === null)
+    // Read on every open: the agent may have added files (the store keeps them 30 s).
+    if (typed.kind === "@")
       void projectFiles(open.directory)
         .then(setPaths)
         .catch(() => setPaths([]))
@@ -292,7 +293,14 @@ export function Composer({ open }: { open: Open }) {
           kind: "command",
           insert: `/${c.name} `,
         }))
-      return filter([...actions(open), ...server], typed.query, (r) => r.label.slice(1), 50)
+      const skills: Row[] = (pal?.skills ?? []).map((s) => ({
+        key: `s:${s.name}`,
+        label: `/${s.name}`,
+        detail: s.description,
+        kind: "skill",
+        insert: `@${s.name} `,
+      }))
+      return filter([...actions(open), ...server, ...skills], typed.query, (r) => r.label.slice(1), 50)
     }
     const skills: Row[] = (pal?.skills ?? []).map((s) => ({
       key: `s:${s.name}`,

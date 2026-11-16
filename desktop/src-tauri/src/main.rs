@@ -405,16 +405,31 @@ pub(crate) fn prepare(
     Ok(id)
 }
 
-/// Runs a turn in the background; a failure to start it goes to the window as `failed`.
+/// Runs a turn in the background. A prompt the core refuses before any turn runs (an image it
+/// can't take, a session another process drives) comes back as `refused`: no turn failed, so
+/// the window offers no retry.
 pub(crate) fn spawn_turn(handle: AppHandle, core: Core, session: String, prompt: Prompt) {
     tauri::async_runtime::spawn(async move {
         if let Err(error) = core.prompt(&session, prompt, TurnOptions::default()).await {
-            let _ = handle.emit(
-                "core",
-                json!({"type": "failed", "sessionId": session, "error": error.to_string()}),
-            );
+            refused(&handle, &session, error.to_string());
         }
     });
+}
+
+/// Something the user asked for didn't run (as opposed to a turn that failed).
+pub(crate) fn refused(handle: &AppHandle, session: &str, error: String) {
+    let _ = handle.emit(
+        "core",
+        json!({"type": "refused", "sessionId": session, "error": error}),
+    );
+}
+
+/// A command or compaction ended: when no turn is left running, the window stops showing work
+/// (a `/goal pause` runs no turn and sends no other event).
+pub(crate) fn settled(handle: &AppHandle, core: &Core, session: &str) {
+    if !core.is_busy(session) {
+        let _ = handle.emit("core", json!({"type": "settled", "sessionId": session}));
+    }
 }
 
 /// Sends a prompt. The turn runs on; its events tell the rest.
