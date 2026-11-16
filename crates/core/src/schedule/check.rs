@@ -614,6 +614,8 @@ pub(crate) fn unattended(
             configured,
             project_id: shared.project.id.clone(),
             policies: Arc::new(selection.sources.config.policies()),
+            // Checks run unattended: nobody is there to answer a floor's asks.
+            floor: crate::session::gate::Floor::None,
         }),
         asks: shared.asks.clone(),
     });

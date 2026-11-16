@@ -27,12 +27,17 @@ pub fn set_acp_client() {
     let _ = CLIENT.set("acp");
 }
 
-/// `cli`, or `acp` under `anysola acp`.
+/// Marks this process as the desktop app, which model calls report.
+pub fn set_desktop_client() {
+    let _ = CLIENT.set("desktop");
+}
+
+/// `cli`, `acp` under `anysola acp`, or `desktop` in the desktop app.
 pub fn client() -> &'static str {
     CLIENT.get().copied().unwrap_or("cli")
 }
 
-/// User agent of model calls: the plain one plus `cli` or `acp`.
+/// User agent of model calls: the plain one plus `cli`, `acp` or `desktop`.
 pub fn model_user_agent() -> String {
     format!("anysola-code/{VERSION}/{}", client())
 }

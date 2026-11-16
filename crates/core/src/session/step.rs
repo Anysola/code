@@ -904,6 +904,7 @@ async fn run_stream(
             configured,
             project_id: shared.project.id.clone(),
             policies: Arc::new(selection.sources.config.policies()),
+            floor: crate::session::gate::Floor::of(&shared.db, &session.id),
         }),
         asks: shared.asks.clone(),
     });

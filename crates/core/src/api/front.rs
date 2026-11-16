@@ -224,6 +224,27 @@ impl Core {
             .unwrap_or_default())
     }
 
+    /// Sets what the session asks about even where its rules allow it (see [`Floor`](crate::session::gate::Floor)).
+    pub fn set_permission_floor(
+        &self,
+        session_id: &str,
+        floor: crate::session::gate::Floor,
+    ) -> Result<(), CoreError> {
+        let db = &self.shared.db;
+        let mut metadata = db.session_metadata(session_id)?;
+        let current = metadata.get(crate::session::gate::FLOOR_KEY).cloned();
+        let wanted = (floor != crate::session::gate::Floor::None).then(|| json!(floor.as_str()));
+        if current == wanted {
+            return Ok(());
+        }
+        match wanted {
+            Some(value) => metadata.insert(crate::session::gate::FLOOR_KEY.into(), value),
+            None => metadata.remove(crate::session::gate::FLOOR_KEY),
+        };
+        let rules = db.session_permissions(session_id)?;
+        Ok(db.set_session_access(session_id, &rules, &metadata)?)
+    }
+
     /// Replaces the directories outside the session's own that its tools may use without asking.
     /// The grants lead the session's rules, so its other rules keep precedence for those paths.
     pub fn grant_directories(

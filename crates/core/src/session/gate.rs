@@ -2,6 +2,10 @@
 //! any resource (saved "always" rules cannot override that), else evaluated with the project's
 //! saved rules appended: any `ask` asks, through an [`Event::PermissionAsked`] event answered with
 //! [`Asks::reply`]. Managed policies can still turn the result into a denial.
+//!
+//! A session can also carry a [`Floor`]: what its front end wants asked even where the rules
+//! allow it (the desktop app's Ask and Edits modes). It never lifts a denial, and a saved
+//! "always" rule still answers for it.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -25,12 +29,77 @@ pub enum Reply {
     Reject(Option<String>),
 }
 
+/// Actions a session asks about even where its rules allow them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Floor {
+    /// The rules alone decide.
+    #[default]
+    None,
+    /// Commands and work outside the project.
+    Commands,
+    /// Everything that changes files, runs or fetches; reading and searching never ask.
+    Changes,
+}
+
+/// Where a session's floor is kept, in its metadata.
+pub const FLOOR_KEY: &str = "anysola.permissionFloor";
+
+impl Floor {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Floor::None => "none",
+            Floor::Commands => "commands",
+            Floor::Changes => "changes",
+        }
+    }
+
+    pub fn parse(value: &str) -> Floor {
+        match value {
+            "commands" => Floor::Commands,
+            "changes" => Floor::Changes,
+            _ => Floor::None,
+        }
+    }
+
+    /// The session's floor as its metadata stores it.
+    pub fn of(db: &Db, session_id: &str) -> Floor {
+        db.session_metadata(session_id)
+            .ok()
+            .and_then(|m| m.get(FLOOR_KEY).and_then(|v| v.as_str()).map(Floor::parse))
+            .unwrap_or_default()
+    }
+
+    fn asks(self, action: &str) -> bool {
+        match self {
+            Floor::None => false,
+            Floor::Commands => matches!(action, "shell" | "external_directory"),
+            Floor::Changes => matches!(
+                action,
+                "shell" | "external_directory" | "edit" | "write" | "webfetch"
+            ),
+        }
+    }
+}
+
 /// What a session's requests are evaluated against.
 pub struct Scope {
     /// The agent's rules followed by the session's own.
     pub configured: Vec<Rule>,
     pub project_id: String,
     pub policies: Arc<Policies>,
+    pub floor: Floor,
+}
+
+/// The effect of the last rule matching both action and resource, if any does.
+fn matched(action: &str, resource: &str, rules: &[Rule]) -> Option<Effect> {
+    rules
+        .iter()
+        .rev()
+        .find(|rule| {
+            crate::permission::matches(action, &rule.action)
+                && crate::permission::matches(resource, &rule.resource)
+        })
+        .map(|rule| rule.effect)
 }
 
 struct Decision {
@@ -49,11 +118,13 @@ impl Scope {
                 reason: None,
             };
         }
+        let saved = db.saved_permissions(&self.project_id).unwrap_or_default();
         let mut rules = self.configured.clone();
-        rules.extend(db.saved_permissions(&self.project_id).unwrap_or_default());
-        let ask = resources
-            .iter()
-            .any(|r| evaluate(action, r, &rules) == Effect::Ask);
+        rules.extend(saved.iter().cloned());
+        let ask = resources.iter().any(|r| {
+            evaluate(action, r, &rules) == Effect::Ask
+                || (self.floor.asks(action) && matched(action, r, &saved) != Some(Effect::Allow))
+        });
         if let Some(reason) = self.policies.tool_denial(action, resources) {
             return Decision {
                 effect: Effect::Deny,
@@ -304,6 +375,7 @@ mod tests {
                 configured: rules,
                 project_id: "prj".into(),
                 policies: Arc::new(policies),
+                floor: Floor::None,
             }),
             asks: setup.asks.clone(),
         }
@@ -324,6 +396,53 @@ mod tests {
                 return request_id;
             }
         }
+    }
+
+    #[test]
+    fn a_floor_asks_where_rules_allow_but_keeps_denials_and_saved_allows() {
+        let setup = setup();
+        let db = &setup.asks.db;
+        let scope = |floor| Scope {
+            configured: vec![
+                Rule::new("*", "*", Effect::Allow),
+                Rule::new("shell", "rm *", Effect::Deny),
+            ],
+            project_id: "prj".into(),
+            policies: Arc::new(Policies::default()),
+            floor,
+        };
+        let effect = |scope: &Scope, action: &str, resource: &str| {
+            scope.decide(db, action, &[resource.to_string()]).effect
+        };
+        let none = scope(Floor::None);
+        assert_eq!(effect(&none, "shell", "ls"), Effect::Allow);
+        assert_eq!(effect(&none, "edit", "a.rs"), Effect::Allow);
+
+        let commands = scope(Floor::Commands);
+        assert_eq!(effect(&commands, "shell", "ls"), Effect::Ask);
+        assert_eq!(effect(&commands, "edit", "a.rs"), Effect::Allow);
+        assert_eq!(effect(&commands, "shell", "rm x"), Effect::Deny);
+
+        let changes = scope(Floor::Changes);
+        assert_eq!(effect(&changes, "edit", "a.rs"), Effect::Ask);
+        assert_eq!(effect(&changes, "write", "b.rs"), Effect::Ask);
+        assert_eq!(effect(&changes, "read", "a.rs"), Effect::Allow);
+        assert_eq!(effect(&changes, "grep", "x"), Effect::Allow);
+        assert_eq!(effect(&changes, "shell", "rm x"), Effect::Deny);
+
+        // "Always" answers for the floor.
+        db.save_permissions("prj", "shell", &["ls".into()]).unwrap();
+        assert_eq!(effect(&commands, "shell", "ls"), Effect::Allow);
+        assert_eq!(effect(&commands, "shell", "make"), Effect::Ask);
+    }
+
+    #[test]
+    fn a_floor_reads_back_from_the_session() {
+        assert_eq!(Floor::parse(Floor::Changes.as_str()), Floor::Changes);
+        assert_eq!(Floor::parse(Floor::Commands.as_str()), Floor::Commands);
+        assert_eq!(Floor::parse("anything else"), Floor::None);
+        let setup = setup();
+        assert_eq!(Floor::of(&setup.asks.db, "ses_missing"), Floor::None);
     }
 
     #[tokio::test]
