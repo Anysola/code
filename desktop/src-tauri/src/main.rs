@@ -17,6 +17,7 @@ use std::sync::Arc;
 use anysola_core::api::{Core, Prompt, Target};
 use anysola_core::events::Event;
 use anysola_core::gateway::account::DeviceLogin;
+use anysola_core::mcp::FormReply;
 use anysola_core::model::{ModelRef, PROVIDER};
 use anysola_core::paths::Paths;
 use anysola_core::session::TurnOptions;
@@ -84,9 +85,26 @@ async fn core_for(handle: &AppHandle, app: &App, directory: &str) -> Result<Core
 
 fn forward(handle: AppHandle, core: &Core, directory: String) {
     let mut events = core.subscribe();
+    let core = core.clone();
     tauri::async_runtime::spawn(async move {
         loop {
             match events.recv().await {
+                // The window has no form view yet: decline at once rather than leave the turn
+                // waiting on a form nobody sees, and say so.
+                Ok(Event::FormAsked { form }) => {
+                    core.reply_form(&form.id, FormReply::Cancelled);
+                    let server = form
+                        .metadata
+                        .get("server")
+                        .and_then(Value::as_str)
+                        .unwrap_or("An MCP server");
+                    let _ = handle.emit(
+                        "core",
+                        json!({"type": "notice", "message": format!(
+                            "{server} asked for input; the desktop app can’t show that form yet, so it was declined."
+                        )}),
+                    );
+                }
                 Ok(event) => {
                     notify(&handle, &event);
                     if let Some(mut payload) = events::to_json(&event, &directory) {

@@ -108,6 +108,7 @@ export type CoreEvent =
   | { type: "usage"; sessionId: string; fiveHour: number | null; weekly: number | null }
   | { type: "created"; sessionId: string; title: string; directory: string }
   | { type: "lagged"; directory: string }
+  | { type: "notice"; message: string }
 
 export type PermissionReply = "once" | "always" | "reject"
 

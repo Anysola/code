@@ -465,6 +465,10 @@ function directoryOf(sessionId: string) {
 }
 
 function onEvent(e: CoreEvent) {
+  if (e.type === "notice") {
+    set({ notice: e.message })
+    return
+  }
   if (e.type === "lagged") {
     if (state.open?.sessionId && state.open.directory === e.directory) void refresh(state.open.sessionId)
     return
