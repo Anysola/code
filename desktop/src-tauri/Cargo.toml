@@ -29,7 +29,6 @@ tauri-plugin-updater = "=2.14.1"
 tauri-plugin-window-state = "=2.5.0"
 tokio = { version = "1", features = ["sync"] }
 
+# Full LTO only for releases (release.yml sets it): branch builds stay quick.
 [profile.release]
-codegen-units = 1
-lto = true
 strip = true
