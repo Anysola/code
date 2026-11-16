@@ -102,6 +102,7 @@ const pricingItems: Item[] = [
   },
   tool("t4", "edit", planCard.file, { files: [planCard] }),
   tool("t5", "edit", pricing.file, { files: [pricing] }),
+  tool("t5b", "subagent", "Check the other plan cards for the same bug", { child: "ses_child" }),
   tool("t6", "write", test.file, { files: [test] }),
   {
     kind: "text",
@@ -136,7 +137,17 @@ export function mockBridge(): Bridge {
   const state = new URLSearchParams(location.search).get("state") ?? "approval"
   const handlers = new Set<(e: CoreEvent) => void>()
   const emit = (e: CoreEvent) => setTimeout(() => handlers.forEach((h) => h(e)), 0)
-  const transcripts = new Map<string, Item[]>([["ses_pricing", pricingItems]])
+  const transcripts = new Map<string, Item[]>([
+    ["ses_pricing", pricingItems],
+    [
+      "ses_child",
+      [
+        { kind: "user", id: "c1", text: "Check the other plan cards for the same bug.", images: 0 },
+        tool("c2", "grep", "plan.defaultCycle", { output: "1 match" }),
+        { kind: "text", id: "c3:0", text: "Only `PlanCard` read `defaultCycle`; the team and enterprise cards already take the cycle as a prop." },
+      ],
+    ],
+  ])
   let signedIn = state !== "signed-out"
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -163,6 +174,7 @@ export function mockBridge(): Bridge {
           emit({
             type: "permission",
             sessionId: session.id,
+            directory: session.directory,
             requestId: "per_1",
             action: "shell",
             resources: ["pnpm --filter @anysola/web test pricing"],
@@ -183,6 +195,7 @@ export function mockBridge(): Bridge {
           emit({
             type: "question",
             sessionId: session.id,
+            directory: session.directory,
             requestId: "que_1",
             questions: [
               {

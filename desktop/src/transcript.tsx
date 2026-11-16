@@ -11,6 +11,7 @@ import {
   Search,
   SquareTerminal,
   Wrench,
+  Bot,
   Check,
   Copy,
 } from "lucide-react"
@@ -19,7 +20,7 @@ import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 
 import { getBridge, type FileDiff, type Item } from "./bridge"
-import { answer, reply, type Asked, type Open, type Permission, type Status } from "./store"
+import { answer, peekAt, reply, type Asked, type Open, type Permission, type Status } from "./store"
 import { btn, cn, Counts, DiffView, Kbd, Spinner } from "./ui"
 
 type Tool = Extract<Item, { kind: "tool" }>
@@ -55,7 +56,11 @@ export function Transcript({
   return (
     <div className="flex flex-col gap-5">
       {blocks(open.items).map((b) =>
-        b.kind === "explore" ? <Explored key={b.id} tools={b.tools} /> : <Entry key={b.item.id} item={b.item} />
+        b.kind === "explore" ? (
+          <Explored key={b.id} tools={b.tools} />
+        ) : (
+          <Entry key={b.item.id} item={b.item} directory={open.directory} />
+        )
       )}
       {open.live.map((l) =>
         l.kind === "text" ? (
@@ -79,7 +84,7 @@ export function Transcript({
   )
 }
 
-function Entry({ item }: { item: Item }) {
+function Entry({ item, directory }: { item: Item; directory: string }) {
   switch (item.kind) {
     case "user":
       return (
@@ -106,6 +111,7 @@ function Entry({ item }: { item: Item }) {
     case "tool":
       if (item.files?.length) return <Edits tool={item} />
       if (item.name === "shell" || item.name === "bash") return <Command tool={item} />
+      if (item.name === "subagent" || item.name === "task") return <Subagent tool={item} directory={directory} />
       return <OtherTool tool={item} />
   }
 }
@@ -261,6 +267,29 @@ function ToolRow({ tool, verb, icon }: { tool: Tool; verb?: string; icon?: typeo
         {(tool.status === "running" || tool.status === "streaming") && <Spinner className="size-3" />}
         {tool.status === "error" && <span className="text-danger">Failed</span>}
       </span>
+    </div>
+  )
+}
+
+function Subagent({ tool, directory }: { tool: Tool; directory: string }) {
+  const running = tool.status === "running" || tool.status === "streaming"
+  const child = tool.child
+  return (
+    <div className="-mx-2">
+      <button
+        onClick={() => child && void peekAt(directory, child, tool.target || "Subagent")}
+        disabled={!child}
+        className="text-dense group flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left enabled:hover:bg-default/60 focus-visible:status-focused-field"
+      >
+        <Bot className="size-3.5 shrink-0 text-muted" strokeWidth={1.75} />
+        <span className="shrink-0 text-foreground/80">Subagent</span>
+        <span className="min-w-0 truncate text-muted">{tool.target}</span>
+        <span className="ml-auto flex shrink-0 items-center gap-2 text-2xs text-muted">
+          {running && <Spinner className="size-3" />}
+          {tool.status === "error" && <span className="text-danger">Failed</span>}
+          {child && <ChevronRight className="size-3.5 opacity-0 group-hover:opacity-100" />}
+        </span>
+      </button>
     </div>
   )
 }

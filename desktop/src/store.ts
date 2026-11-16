@@ -23,11 +23,19 @@ import {
 
 export type { Mode }
 
-export type Asked = { requestId: string; sessionId: string; directory: string; questions: Question[] }
+/** `sessionId` is where the ask came from (a subagent's session too); `rootId` where it shows. */
+export type Asked = {
+  requestId: string
+  sessionId: string
+  rootId: string
+  directory: string
+  questions: Question[]
+}
 
 export type Permission = {
   requestId: string
   sessionId: string
+  rootId: string
   directory: string
   action: string
   resources: string[]
@@ -56,6 +64,9 @@ export type Open = {
   loading: boolean
 }
 
+/** A subagent's transcript, read alongside the open session. */
+export type Peek = { directory: string; sessionId: string; title: string; items: Item[]; loading: boolean }
+
 export type State = {
   auth: "checking" | "signed-out" | "signed-in"
   login: { url: string; code: string } | null
@@ -67,6 +78,7 @@ export type State = {
   account: Account | null
   update: (UpdateCheck & { installing?: boolean; error?: string }) | null
   open: Open | null
+  peek: Peek | null
   mode: Mode
   notice: string | null
 }
@@ -95,6 +107,7 @@ let state: State = {
   account: null,
   update: null,
   open: null,
+  peek: null,
   mode: readMode(),
   notice: null,
 }
@@ -360,6 +373,26 @@ export async function chooseModel(modelId: string, variant: string | null) {
   }
 }
 
+export async function peekAt(directory: string, sessionId: string, title: string) {
+  set({ peek: { directory, sessionId, title, items: [], loading: true } })
+  await refreshPeek()
+}
+
+export function closePeek() {
+  set({ peek: null })
+}
+
+async function refreshPeek() {
+  const peek = state.peek
+  if (!peek) return
+  try {
+    const items = await bridge.transcript(peek.directory, peek.sessionId)
+    set((s) => (s.peek?.sessionId === peek.sessionId ? { peek: { ...s.peek, items, loading: false } } : {}))
+  } catch (e) {
+    set({ peek: null, notice: message(e) })
+  }
+}
+
 export async function answer(q: Asked, answers: string[][] | null) {
   set((s) => ({ questions: s.questions.filter((x) => x.requestId !== q.requestId) }))
   try {
@@ -438,6 +471,8 @@ function onEvent(e: CoreEvent) {
   }
   const id = e.sessionId
   const here = state.open?.sessionId === id
+  if (state.peek?.sessionId === id && (e.type === "changed" || e.type === "done" || e.type === "failed"))
+    void refreshPeek()
   switch (e.type) {
     case "started":
       set((s) => ({ busy: toggle(s.busy, id, true) }))
@@ -466,7 +501,7 @@ function onEvent(e: CoreEvent) {
         )
       break
     case "permission": {
-      const p: Permission = { ...e, directory: directoryOf(id) }
+      const p: Permission = { ...e, rootId: e.rootId ?? id, directory: e.directory || directoryOf(id) }
       if (allowedByMode(p)) {
         void reply(p, "once")
         break
@@ -478,7 +513,13 @@ function onEvent(e: CoreEvent) {
       set((s) => ({
         questions: [
           ...s.questions.filter((x) => x.requestId !== e.requestId),
-          { requestId: e.requestId, sessionId: id, directory: directoryOf(id), questions: e.questions },
+          {
+            requestId: e.requestId,
+            sessionId: id,
+            rootId: e.rootId ?? id,
+            directory: e.directory || directoryOf(id),
+            questions: e.questions,
+          },
         ],
       }))
       break
@@ -494,8 +535,8 @@ function onEvent(e: CoreEvent) {
     case "interrupted":
       set((s) => ({
         busy: toggle(s.busy, id, false),
-        permissions: s.permissions.filter((p) => p.sessionId !== id),
-        questions: s.questions.filter((q) => q.sessionId !== id),
+        permissions: s.permissions.filter((p) => p.sessionId !== id && p.rootId !== id),
+        questions: s.questions.filter((q) => q.sessionId !== id && q.rootId !== id),
       }))
       void loadAccount()
       if (here) {

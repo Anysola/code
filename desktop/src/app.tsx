@@ -20,6 +20,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { Attachment, FileDiff, SessionRow, Window as AccountWindow } from "./bridge"
 import {
   chooseModel,
+  closePeek,
   deleteSession,
   dismissNotice,
   installUpdate,
@@ -224,7 +225,7 @@ function SessionLink({ row }: { row: SessionRow }) {
   const active = useStore((s) => s.open?.sessionId === row.id)
   const busy = useStore((s) => s.busy.has(row.id))
   const asking = useStore(
-    (s) => s.permissions.some((p) => p.sessionId === row.id) || s.questions.some((q) => q.sessionId === row.id)
+    (s) => s.permissions.some((p) => p.rootId === row.id) || s.questions.some((q) => q.rootId === row.id)
   )
   const [menu, setMenu] = useState<"closed" | "open" | "confirm">("closed")
   const [renaming, setRenaming] = useState(false)
@@ -422,6 +423,7 @@ function Main() {
             </div>
           </div>
           {reviewing && <Review open={open} onClose={() => setReviewing(false)} />}
+          <PeekSheet />
         </>
       ) : (
         <>
@@ -478,9 +480,9 @@ function SessionHeader({ open, onReview }: { open: Open; onReview: () => void })
 
 function Conversation({ open }: { open: Open }) {
   const all = useStore((s) => s.permissions)
-  const permissions = useMemo(() => all.filter((p) => p.sessionId === open.sessionId), [all, open.sessionId])
+  const permissions = useMemo(() => all.filter((p) => p.rootId === open.sessionId), [all, open.sessionId])
   const asked = useStore((s) => s.questions)
-  const questions = useMemo(() => asked.filter((q) => q.sessionId === open.sessionId), [asked, open.sessionId])
+  const questions = useMemo(() => asked.filter((q) => q.rootId === open.sessionId), [asked, open.sessionId])
   const ref = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
   // A chat opens at its latest turn and follows new output while the reader is at the bottom.
@@ -548,7 +550,7 @@ function readImage(file: File): Promise<Attachment> {
 
 function Composer({ open }: { open: Open }) {
   const mode = useStore((s) => s.mode)
-  const asking = useStore((s) => s.permissions.find((p) => p.sessionId === open.sessionId) ?? null)
+  const asking = useStore((s) => s.permissions.find((p) => p.rootId === open.sessionId) ?? null)
   const [text, setText] = useState("")
   const [files, setFiles] = useState<Attachment[]>([])
   const [problem, setProblem] = useState<string | null>(null)
@@ -808,6 +810,54 @@ function Review({ open, onClose }: { open: Open; onClose: () => void }) {
               ))}
             </div>
           ))}
+        </div>
+      </aside>
+    </div>
+  )
+}
+
+/** A subagent's transcript, read-only, over the session that ran it. */
+function PeekSheet() {
+  const peek = useStore((s) => s.peek)
+  useEffect(() => {
+    if (!peek) return
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && closePeek()
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [peek])
+  if (!peek) return null
+  const view: Open = {
+    directory: peek.directory,
+    sessionId: peek.sessionId,
+    title: peek.title,
+    items: peek.items,
+    live: [],
+    info: null,
+    status: { kind: "idle" },
+    loading: peek.loading,
+  }
+  return (
+    <div className="absolute inset-0 z-10 flex justify-end bg-black/40" onClick={closePeek}>
+      <aside
+        className="flex h-full w-[min(44rem,92%)] flex-col bg-overlay"
+        onClick={(e) => e.stopPropagation()}
+        aria-label="Subagent"
+      >
+        <div className="flex h-12 shrink-0 items-center gap-3 px-5">
+          <span className="text-2xs text-muted">Subagent</span>
+          <span className="min-w-0 truncate text-sm font-medium">{peek.title}</span>
+          <button onClick={closePeek} className={btn("ghost", "sm", "ml-auto text-muted", true)} aria-label="Close">
+            <X className="size-4" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-8">
+          {peek.loading ? (
+            <div className="flex justify-center pt-16">
+              <Spinner />
+            </div>
+          ) : (
+            <Transcript open={view} permissions={[]} questions={[]} />
+          )}
         </div>
       </aside>
     </div>

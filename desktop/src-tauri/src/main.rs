@@ -89,7 +89,15 @@ fn forward(handle: AppHandle, core: &Core, directory: String) {
             match events.recv().await {
                 Ok(event) => {
                     notify(&handle, &event);
-                    if let Some(payload) = events::to_json(&event, &directory) {
+                    if let Some(mut payload) = events::to_json(&event, &directory) {
+                        // A subagent's ask shows in the session the user has open: its root.
+                        if matches!(
+                            event,
+                            Event::PermissionAsked { .. } | Event::QuestionAsked { .. }
+                        ) && let Some(root) = root_of(&handle, event.session_id())
+                        {
+                            payload["rootId"] = json!(root);
+                        }
                         let _ = handle.emit("core", payload);
                     }
                 }
@@ -101,6 +109,20 @@ fn forward(handle: AppHandle, core: &Core, directory: String) {
             }
         }
     });
+}
+
+/// The top session above a subagent's (itself for a root session).
+fn root_of(handle: &AppHandle, session_id: &str) -> Option<String> {
+    let db = handle.state::<App>().db().ok()?.clone();
+    let mut id = session_id.to_string();
+    // Subagents nest a few levels at most; the bound only guards a broken chain.
+    for _ in 0..16 {
+        match db.session(&id).ok()??.parent_id {
+            Some(parent) => id = parent,
+            None => return Some(id),
+        }
+    }
+    None
 }
 
 /// A system notification when a session needs the user or ends while the window is in the
@@ -124,12 +146,24 @@ fn notify(handle: &AppHandle, event: &Event) {
     let Ok(db) = handle.state::<App>().db().cloned() else {
         return;
     };
+    let asks = matches!(
+        event,
+        Event::PermissionAsked { .. } | Event::QuestionAsked { .. }
+    );
     let Ok(Some(row)) = db.session(session_id) else {
         return;
     };
-    if row.parent_id.is_some() {
-        return;
-    }
+    // A subagent's ask needs the user too, named by its root; its end does not.
+    let row = match (&row.parent_id, asks) {
+        (None, _) => row,
+        (Some(_), true) => {
+            match root_of(handle, session_id).and_then(|r| db.session(&r).ok().flatten()) {
+                Some(root) => root,
+                None => return,
+            }
+        }
+        (Some(_), false) => return,
+    };
     let _ = handle
         .notification()
         .builder()

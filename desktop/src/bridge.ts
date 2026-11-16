@@ -28,6 +28,8 @@ export type Item =
       files: FileDiff[] | null
       output: string
       error: string | null
+      /** A subagent's session. */
+      child?: string | null
     }
   | { kind: "error"; id: string; message: string }
 
@@ -81,6 +83,9 @@ export type CoreEvent =
   | {
       type: "permission"
       sessionId: string
+      /** The session the user has open above a subagent's; absent when unknown. */
+      rootId?: string
+      directory: string
       requestId: string
       action: string
       resources: string[]
@@ -88,7 +93,14 @@ export type CoreEvent =
       files: FileDiff[] | null
     }
   | { type: "permissionReplied"; sessionId: string; requestId: string }
-  | { type: "question"; sessionId: string; requestId: string; questions: Question[] }
+  | {
+      type: "question"
+      sessionId: string
+      rootId?: string
+      directory: string
+      requestId: string
+      questions: Question[]
+    }
   | { type: "title"; sessionId: string; title: string }
   | { type: "done"; sessionId: string }
   | { type: "failed"; sessionId: string; error: string }

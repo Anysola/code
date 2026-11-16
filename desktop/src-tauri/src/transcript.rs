@@ -83,6 +83,8 @@ fn tool(call: &str, name: &str, state: ToolState, directory: &str) -> Value {
         "status": status,
         "target": target(name, &input, directory),
         "files": metadata.get("files").cloned().unwrap_or(Value::Null),
+        // A subagent's own session, to read its transcript.
+        "child": metadata.get("sessionID").cloned().unwrap_or(Value::Null),
         "output": clip(&output),
         "error": error,
     })

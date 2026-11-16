@@ -53,6 +53,7 @@ pub fn to_json(event: &Event, directory: &str) -> Option<Value> {
         } => json!({
             "type": "permission",
             "sessionId": session_id,
+            "directory": directory,
             "requestId": request_id,
             "action": action,
             // A shell ask's resources are its commands; file asks name paths.
@@ -75,8 +76,8 @@ pub fn to_json(event: &Event, directory: &str) -> Option<Value> {
             session_id,
             request_id,
             questions,
-        } => json!({"type": "question", "sessionId": session_id, "requestId": request_id,
-                    "questions": questions}),
+        } => json!({"type": "question", "sessionId": session_id, "directory": directory,
+                    "requestId": request_id, "questions": questions}),
         Event::TitleChanged { session_id, title } => {
             json!({"type": "title", "sessionId": session_id, "title": title})
         }
