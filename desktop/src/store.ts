@@ -15,10 +15,14 @@ import {
   type Info,
   type Item,
   type Mode,
+  type Palette,
   type PermissionReply,
   type Question,
+  type Revert,
   type SessionRow,
+  type Todo,
   type UpdateCheck,
+  type View,
 } from "./bridge"
 
 export type { Mode }
@@ -62,6 +66,12 @@ export type Open = {
   info: Info | null
   status: Status
   loading: boolean
+  /** A staged rewind, until the next prompt makes it final or Redo puts it back. */
+  revert: Revert | null
+  todos: Todo[]
+  /** Text for the composer to take (a rewound message); `n` tells refills apart. With
+   * `replacing`, only while the composer still holds that text. */
+  fill: { text: string; n: number; replacing?: string } | null
 }
 
 /** A subagent's transcript, read alongside the open session. */
@@ -81,6 +91,10 @@ export type State = {
   peek: Peek | null
   mode: Mode
   notice: string | null
+  /** The folder new sessions start in; null asks each time. */
+  defaultFolder: string | null
+  /** The app's folder for sessions without a project, once known. */
+  scratch: string | null
 }
 
 /** Edits the "Edits" mode lets through without asking. */
@@ -94,6 +108,14 @@ function readMode(): Mode {
     // Storage can be unavailable; the default stands.
   }
   return "edits"
+}
+
+function readDefaultFolder(): string | null {
+  try {
+    return localStorage.getItem("anysola.defaultFolder") || null
+  } catch {
+    return null
+  }
 }
 
 let state: State = {
@@ -110,6 +132,8 @@ let state: State = {
   peek: null,
   mode: readMode(),
   notice: null,
+  defaultFolder: readDefaultFolder(),
+  scratch: null,
 }
 
 const listeners = new Set<() => void>()
@@ -187,6 +211,11 @@ export async function start() {
   try {
     const { signedIn } = await bridge.authStatus()
     set({ auth: signedIn ? "signed-in" : "signed-out" })
+    // Names the app's folder "No project" in the sidebar.
+    void bridge
+      .scratchFolder()
+      .then((scratch) => set({ scratch }))
+      .catch(() => {})
     if (signedIn) {
       void loadAccount()
       await loadSessions(true)
@@ -262,6 +291,9 @@ export async function openSession(row: SessionRow) {
       info: null,
       status: { kind: "idle" },
       loading: true,
+      revert: null,
+      todos: [],
+      fill: null,
     },
   })
   try {
@@ -269,7 +301,7 @@ export async function openSession(row: SessionRow) {
     set((s) => ({ busy: toggle(s.busy, row.id, opened.busy) }))
     setOpen(
       (o) => ({
-        items: opened.items,
+        ...viewPatch(opened.view, o),
         info: opened.info,
         title: opened.session.title,
         loading: false,
@@ -282,8 +314,9 @@ export async function openSession(row: SessionRow) {
   }
 }
 
-export async function newSession() {
-  const directory = await bridge.pickFolder()
+/** A new session: in `directory`, else the default folder, else one the user picks. */
+export async function newSession(directory?: string) {
+  if (!directory) directory = state.defaultFolder ?? (await pickFolder()) ?? undefined
   if (!directory) return
   set({
     open: {
@@ -295,6 +328,9 @@ export async function newSession() {
       info: null,
       status: { kind: "idle" },
       loading: false,
+      revert: null,
+      todos: [],
+      fill: null,
     },
   })
   try {
@@ -305,16 +341,49 @@ export async function newSession() {
   }
 }
 
+/** Opens the folder picker where the default folder is. */
+export async function pickFolder() {
+  return bridge.pickFolder(state.defaultFolder)
+}
+
+/** A session with no project: it runs in the app's own folder. */
+export async function newScratchSession() {
+  try {
+    const scratch = state.scratch ?? (await bridge.scratchFolder())
+    set({ scratch })
+    await newSession(scratch)
+  } catch (e) {
+    set({ notice: message(e) })
+  }
+}
+
+export function setDefaultFolder(directory: string | null) {
+  try {
+    if (directory) localStorage.setItem("anysola.defaultFolder", directory)
+    else localStorage.removeItem("anysola.defaultFolder")
+  } catch {
+    // Kept for this window only.
+  }
+  set({ defaultFolder: directory })
+}
+
+/** A view read from the database; text it now holds stops streaming separately. */
+function viewPatch(view: View, o: Open): Partial<Open> {
+  const items = view.items
+  return {
+    items,
+    revert: view.revert,
+    todos: view.todos,
+    live: o.live.filter((l) => !items.some((i) => "text" in i && i.text === l.text)),
+  }
+}
+
 async function refresh(sessionId: string) {
   const open = state.open
   if (!open || open.sessionId !== sessionId) return
   try {
-    const items = await bridge.transcript(open.directory, sessionId)
-    // Text the database now holds stops streaming separately.
-    setOpen(
-      (o) => ({ items, live: o.live.filter((l) => !items.some((i) => "text" in i && i.text === l.text)) }),
-      sessionId
-    )
+    const view = await bridge.transcript(open.directory, sessionId)
+    setOpen((o) => viewPatch(view, o), sessionId)
   } catch {
     // The next event reads again.
   }
@@ -331,10 +400,11 @@ function toggle(set: Set<string>, id: string, on: boolean) {
 // Prompting
 // ---------------------------------------------------------------------------
 
-export async function send(text: string, files: Attachment[] = []) {
+export async function send(text: string, files: Attachment[] = [], skills: string[] = []) {
   const open = state.open
   if (!open || (!text.trim() && files.length === 0)) return
-  setOpen({ status: { kind: "working" } })
+  // The prompt makes a staged rewind final.
+  setOpen({ status: { kind: "working" }, revert: null })
   try {
     const draft = !open.sessionId
     const { sessionId } = await bridge.prompt(open.directory, {
@@ -344,7 +414,9 @@ export async function send(text: string, files: Attachment[] = []) {
       // A new session takes the model picked before it existed.
       model: draft ? (open.info?.modelId ?? null) : null,
       variant: draft ? (open.info?.variant ?? null) : null,
+      agent: draft ? (open.info?.agent ?? null) : null,
       files,
+      skills,
     })
     if (!open.sessionId) {
       setOpen({ sessionId }, null)
@@ -373,6 +445,165 @@ export async function chooseModel(modelId: string, variant: string | null) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Rewind, retry, commands, agents
+// ---------------------------------------------------------------------------
+
+let fills = 0
+
+function lastUser(open: Open) {
+  for (let i = open.items.length - 1; i >= 0; i--) {
+    const item = open.items[i]
+    if (item.kind === "user") return item
+  }
+  return null
+}
+
+/** Rewinds to before a message: its turns are hidden, their files put back, its text returns
+ * to the composer. */
+export async function rewind(messageId: string) {
+  const open = state.open
+  if (!open?.sessionId) return
+  const sessionId = open.sessionId
+  try {
+    const { text, view } = await bridge.revert(open.directory, sessionId, messageId)
+    setOpen((o) => ({ ...viewPatch(view, o), live: [], status: { kind: "idle" }, fill: { text, n: ++fills } }), sessionId)
+  } catch (e) {
+    set({ notice: message(e) })
+  }
+}
+
+/** Rewinds the last turn. */
+export async function undo() {
+  const open = state.open
+  const last = open && lastUser(open)
+  if (!last) {
+    set({ notice: "Nothing to undo." })
+    return
+  }
+  await rewind(last.id)
+}
+
+export async function redo() {
+  const open = state.open
+  if (!open?.sessionId || !open.revert) return
+  const sessionId = open.sessionId
+  try {
+    const view = await bridge.unrevert(open.directory, sessionId)
+    // The rewound message leaves the composer unless the user changed it.
+    const replacing = open.fill?.text
+    setOpen((o) => ({ ...viewPatch(view, o), fill: { text: "", n: ++fills, replacing } }), sessionId)
+  } catch (e) {
+    set({ notice: message(e) })
+  }
+}
+
+/** Sends a message again from where it was, with new text, or as it was when `text` is null. */
+export async function resend(messageId: string, text: string | null) {
+  const open = state.open
+  if (!open?.sessionId) return
+  const sessionId = open.sessionId
+  setOpen({ status: { kind: "working" }, live: [], revert: null }, sessionId)
+  try {
+    await bridge.resend(open.directory, sessionId, messageId, text, state.mode)
+    set((s) => ({ busy: toggle(s.busy, sessionId, true) }))
+    await refresh(sessionId)
+  } catch (e) {
+    setOpen({ status: { kind: "failed", error: message(e) } }, sessionId)
+  }
+}
+
+/** Sends the last message again. */
+export async function retry() {
+  const open = state.open
+  const last = open && lastUser(open)
+  if (last) await resend(last.id, null)
+}
+
+const fileLists = new Map<string, { at: number; list: Promise<string[]> }>()
+
+/** The folder's commands and skills; read again on each menu open, as MCP prompts arrive late. */
+export function palette(directory: string): Promise<Palette> {
+  return bridge.palette(directory)
+}
+
+/** The folder's files for `@`, read at most every 30 seconds. */
+export function projectFiles(directory: string): Promise<string[]> {
+  const cached = fileLists.get(directory)
+  if (cached && Date.now() - cached.at < 30_000) return cached.list
+  const list = bridge.projectFiles(directory)
+  fileLists.set(directory, { at: Date.now(), list })
+  list.catch(() => fileLists.delete(directory))
+  return list
+}
+
+/** Runs `/<name> <arguments>`; a new session's command starts the session. */
+export async function runCommand(name: string, args: string) {
+  const open = state.open
+  if (!open) return
+  setOpen({ status: { kind: "working" }, revert: null })
+  try {
+    const draft = !open.sessionId
+    const { sessionId } = await bridge.runCommand(open.directory, {
+      sessionId: open.sessionId,
+      name,
+      arguments: args,
+      mode: state.mode,
+      model: draft ? (open.info?.modelId ?? null) : null,
+      variant: draft ? (open.info?.variant ?? null) : null,
+      agent: draft ? (open.info?.agent ?? null) : null,
+    })
+    if (draft) {
+      setOpen({ sessionId }, null)
+      void loadSessions()
+    }
+    set((s) => ({ busy: toggle(s.busy, sessionId, true) }))
+    await refresh(sessionId)
+  } catch (e) {
+    setOpen({ status: { kind: "failed", error: message(e) } })
+  }
+}
+
+export async function compact() {
+  const open = state.open
+  if (!open?.sessionId) {
+    set({ notice: "There’s nothing to compact yet." })
+    return
+  }
+  const sessionId = open.sessionId
+  setOpen({ status: { kind: "working" } }, sessionId)
+  try {
+    await bridge.compact(open.directory, sessionId)
+  } catch (e) {
+    setOpen({ status: { kind: "failed", error: message(e) } }, sessionId)
+  }
+}
+
+/** The session's agent (Build, Plan…); a new session takes it with its first prompt. */
+export async function chooseAgent(agent: string) {
+  const open = state.open
+  if (!open?.info || open.info.agent === agent) return
+  if (!open.sessionId) {
+    setOpen({ info: { ...open.info, agent } }, null)
+    return
+  }
+  const sessionId = open.sessionId
+  // Shown at once; the core records the switch.
+  setOpen((o) => ({ info: o.info && { ...o.info, agent } }), sessionId)
+  try {
+    const info = await bridge.selectAgent(open.directory, sessionId, agent)
+    setOpen((o) => ({ info: { ...info, fiveHour: info.fiveHour ?? o.info?.fiveHour ?? null } }), sessionId)
+  } catch (e) {
+    set({ notice: message(e) })
+  }
+}
+
+/** Plan approved: the session switches to Build and carries the plan out. */
+export async function buildPlan() {
+  await chooseAgent("build")
+  await send("Go ahead with the plan.")
+}
+
 export async function peekAt(directory: string, sessionId: string, title: string) {
   set({ peek: { directory, sessionId, title, items: [], loading: true } })
   await refreshPeek()
@@ -386,7 +617,7 @@ async function refreshPeek() {
   const peek = state.peek
   if (!peek) return
   try {
-    const items = await bridge.transcript(peek.directory, peek.sessionId)
+    const { items } = await bridge.transcript(peek.directory, peek.sessionId)
     set((s) => (s.peek?.sessionId === peek.sessionId ? { peek: { ...s.peek, items, loading: false } } : {}))
   } catch (e) {
     set({ peek: null, notice: message(e) })

@@ -14,16 +14,35 @@ import {
   Bot,
   Check,
   Copy,
+  Hammer,
+  Redo2,
+  RotateCcw,
+  Undo2,
 } from "lucide-react"
 import { useRef, useState, type ReactNode } from "react"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 
 import { getBridge, type FileDiff, type Item } from "./bridge"
-import { answer, peekAt, reply, type Asked, type Open, type Permission, type Status } from "./store"
+import {
+  answer,
+  buildPlan,
+  peekAt,
+  redo,
+  reply,
+  resend,
+  retry,
+  rewind,
+  useStore,
+  type Asked,
+  type Open,
+  type Permission,
+  type Status,
+} from "./store"
 import { btn, cn, Counts, DiffView, Kbd, Spinner } from "./ui"
 
 type Tool = Extract<Item, { kind: "tool" }>
+type UserItem = Extract<Item, { kind: "user" }>
 
 /** Lookups that only read: shown together as one line that opens. */
 const EXPLORE = new Set(["read", "grep", "glob", "list", "webfetch", "websearch"])
@@ -48,20 +67,36 @@ export function Transcript({
   open,
   permissions,
   questions,
+  readOnly = false,
 }: {
   open: Open
   permissions: Permission[]
   questions: Asked[]
+  /** A subagent's transcript: no rewinding or editing. */
+  readOnly?: boolean
 }) {
+  const busy = useStore((s) => (open.sessionId ? s.busy.has(open.sessionId) : false))
+  const last = open.items[open.items.length - 1]
+  const planned =
+    !readOnly &&
+    !busy &&
+    open.info?.agent === "plan" &&
+    open.status.kind === "idle" &&
+    !open.revert &&
+    last?.kind === "text" &&
+    open.info.agents.some((a) => a.id === "build")
   return (
     <div className="flex flex-col gap-5">
       {blocks(open.items).map((b) =>
         b.kind === "explore" ? (
           <Explored key={b.id} tools={b.tools} />
+        ) : b.item.kind === "user" ? (
+          <UserMessage key={b.item.id} item={b.item} actions={!readOnly} />
         ) : (
           <Entry key={b.item.id} item={b.item} directory={open.directory} />
         )
       )}
+      {open.revert && !readOnly && <Rewound revert={open.revert} />}
       {open.live.map((l) =>
         l.kind === "text" ? (
           <Prose key={l.key} text={l.text} />
@@ -80,24 +115,184 @@ export function Transcript({
         status={open.status}
         waiting={permissions.length + questions.length > 0}
         streaming={open.live.length > 0}
+        canRetry={!readOnly && open.items.some((i) => i.kind === "user")}
       />
+      {planned && (
+        <div className="flex items-center gap-3">
+          <button onClick={() => void buildPlan()} className={btn("primary", "sm", "gap-2")}>
+            <Hammer className="size-3.5" />
+            Build this plan
+          </button>
+          <span className="text-dense text-muted">Switches to Build and carries it out</span>
+        </div>
+      )}
     </div>
   )
 }
 
-function Entry({ item, directory }: { item: Item; directory: string }) {
-  switch (item.kind) {
-    case "user":
-      return (
-        <div className="rounded-2xl bg-surface-secondary/60 px-4 py-3 text-md leading-relaxed whitespace-pre-wrap">
-          {item.text}
-          {item.images > 0 && (
-            <div className="text-2xs mt-1.5 text-muted">
-              {item.images} image{item.images > 1 ? "s" : ""}
-            </div>
-          )}
+/** A message the user sent: copy it, edit and send it again, or rewind to before it. */
+function UserMessage({ item, actions }: { item: UserItem; actions: boolean }) {
+  const [editing, setEditing] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const [draft, setDraft] = useState(item.text)
+  const area = useRef<HTMLTextAreaElement>(null)
+  const [full, setFull] = useState(false)
+  const long = item.text.length > 700 || item.text.split("\n").length > 10
+  const submit = () => {
+    if (!draft.trim()) return
+    setEditing(false)
+    void resend(item.id, draft)
+    // Enter answers the turn's asks from the composer.
+    document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus()
+  }
+  if (editing)
+    return (
+      <div className="rounded-2xl bg-surface-secondary/60 p-2">
+        <textarea
+          ref={area}
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onFocus={(e) => {
+            const el = e.currentTarget
+            el.setSelectionRange(el.value.length, el.value.length)
+            el.style.height = `${Math.min(el.scrollHeight, 320)}px`
+          }}
+          onInput={(e) => {
+            const el = e.currentTarget
+            el.style.height = "auto"
+            el.style.height = `${Math.min(el.scrollHeight, 320)}px`
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault()
+              submit()
+            } else if (e.key === "Escape") {
+              e.stopPropagation()
+              setEditing(false)
+              setDraft(item.text)
+            }
+          }}
+          aria-label="Edit message"
+          className="text-md block w-full resize-none bg-transparent px-2 pt-1 leading-relaxed outline-none"
+        />
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <span className="text-2xs mr-auto px-2 text-muted">
+            Sends again from here; later turns and their file changes are undone
+          </span>
+          <button
+            onClick={() => {
+              setEditing(false)
+              setDraft(item.text)
+            }}
+            className={btn("ghost", "sm")}
+          >
+            Cancel
+          </button>
+          <button onClick={submit} disabled={!draft.trim()} className={btn("primary", "sm")}>
+            Send
+          </button>
         </div>
-      )
+      </div>
+    )
+  return (
+    <div className="group flex flex-col items-stretch">
+      <div className="rounded-2xl bg-surface-secondary/60 px-4 py-3 text-md leading-relaxed whitespace-pre-wrap">
+        <div className={cn(long && !full && "line-clamp-6")}>{item.text}</div>
+        {long && (
+          <button
+            onClick={() => setFull(!full)}
+            className="text-2xs mt-1.5 text-muted hover:text-foreground focus-visible:status-focused-field"
+          >
+            {full ? "Show less" : "Show all"}
+          </button>
+        )}
+        {item.images > 0 && (
+          <div className="text-2xs mt-1.5 text-muted">
+            {item.images} image{item.images > 1 ? "s" : ""}
+          </div>
+        )}
+      </div>
+      {actions && (
+        <div className="-mb-3 flex h-8 items-center justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+          <IconAction
+            label={copied ? "Copied" : "Copy"}
+            onClick={() =>
+              void navigator.clipboard.writeText(item.text).then(() => {
+                setCopied(true)
+                setTimeout(() => setCopied(false), 1500)
+              })
+            }
+          >
+            {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+          </IconAction>
+          <IconAction
+            label="Edit and send again"
+            onClick={() => {
+              setDraft(item.text)
+              setEditing(true)
+            }}
+          >
+            <Pencil className="size-3.5" />
+          </IconAction>
+          <IconAction label="Rewind to before this message" onClick={() => void rewind(item.id)}>
+            <Undo2 className="size-3.5" />
+          </IconAction>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function IconAction({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      className="flex size-7 items-center justify-center rounded-md text-muted hover:bg-default/60 hover:text-foreground focus-visible:status-focused-field"
+    >
+      {children}
+    </button>
+  )
+}
+
+const MARK = { added: "A", modified: "M", deleted: "D" } as const
+
+/** A staged rewind: what it hid and put back, until the next message makes it final. */
+function Rewound({ revert }: { revert: NonNullable<Open["revert"]> }) {
+  return (
+    <div className="flex flex-col gap-3 rounded-2xl bg-surface-secondary/40 px-4 py-3">
+      <div className="flex items-center gap-3">
+        <Undo2 className="size-3.5 shrink-0 text-muted" />
+        <span className="text-dense flex-1">
+          Rewound {revert.turns} turn{revert.turns === 1 ? "" : "s"}
+          {revert.files.length > 0 &&
+            ` · ${revert.files.length} file${revert.files.length === 1 ? "" : "s"} put back`}
+        </span>
+        <button onClick={() => void redo()} className={btn("secondary", "sm", "gap-1.5")}>
+          <Redo2 className="size-3.5" />
+          Redo
+        </button>
+      </div>
+      {revert.files.length > 0 && (
+        <ul className="flex flex-col gap-1 pl-6.5">
+          {revert.files.map((f) => (
+            <li key={f.file} className="text-dense flex items-center gap-2 font-mono text-muted">
+              <span className="w-3 text-center">{MARK[f.status] ?? "M"}</span>
+              <span className="min-w-0 flex-1 truncate text-foreground/85">{f.file}</span>
+              {f.additions + f.deletions > 0 && <Counts add={f.additions} del={f.deletions} />}
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="text-2xs pl-6.5 text-muted">Your next message continues from here and makes this final.</p>
+    </div>
+  )
+}
+
+function Entry({ item, directory }: { item: Exclude<Item, UserItem>; directory: string }) {
+  switch (item.kind) {
     case "text":
       return <Prose text={item.text} />
     case "reasoning":
@@ -516,7 +711,17 @@ function QuestionCard({ asked }: { asked: Asked }) {
   )
 }
 
-function StatusLine({ status, waiting, streaming }: { status: Status; waiting: boolean; streaming: boolean }) {
+function StatusLine({
+  status,
+  waiting,
+  streaming,
+  canRetry,
+}: {
+  status: Status
+  waiting: boolean
+  streaming: boolean
+  canRetry: boolean
+}) {
   if (waiting) return null
   switch (status.kind) {
     case "working":
@@ -540,9 +745,17 @@ function StatusLine({ status, waiting, streaming }: { status: Status; waiting: b
       )
     case "failed":
       return (
-        <div className="text-dense flex items-start gap-2 text-danger">
-          <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
-          {status.error}
+        <div className="flex flex-col items-start gap-2">
+          <div className="text-dense flex items-start gap-2 text-danger">
+            <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
+            {status.error}
+          </div>
+          {canRetry && (
+            <button onClick={() => void retry()} className={btn("secondary", "sm", "ml-5.5 gap-1.5")}>
+              <RotateCcw className="size-3.5" />
+              Try again
+            </button>
+          )}
         </div>
       )
     case "stopped":

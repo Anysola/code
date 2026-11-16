@@ -35,7 +35,11 @@ export type Item =
 
 export type ModelOption = { id: string; name: string; note: string | null; efforts: string[]; images: boolean }
 
+export type AgentOption = { id: string; name: string; description: string | null }
+
 export type Info = {
+  agent: string | null
+  agents: AgentOption[]
   model: string | null
   modelId: string | null
   variant: string | null
@@ -70,10 +74,37 @@ export type SendRequest = {
   mode: Mode
   model: string | null
   variant: string | null
+  agent: string | null
   files: Attachment[]
+  skills: string[]
 }
 
-export type Opened = { session: SessionRow; items: Item[]; info: Info; busy: boolean }
+/** A staged rewind: the turns it hides and the files it put back. */
+export type Revert = {
+  turns: number
+  files: { file: string; status: "added" | "modified" | "deleted"; additions: number; deletions: number }[]
+}
+
+export type Todo = { content: string; status: "pending" | "in_progress" | "completed" | "cancelled" | string }
+
+export type View = { items: Item[]; revert: Revert | null; todos: Todo[] }
+
+export type Opened = { session: SessionRow; view: View; info: Info; busy: boolean }
+
+export type Palette = {
+  commands: { name: string; description: string | null }[]
+  skills: { name: string; description: string | null }[]
+}
+
+export type CommandRequest = {
+  sessionId: string | null
+  name: string
+  arguments: string
+  mode: Mode
+  model: string | null
+  variant: string | null
+  agent: string | null
+}
 
 export type CoreEvent =
   | { type: "started"; sessionId: string }
@@ -118,7 +149,7 @@ export type Bridge = {
   loginWait(): Promise<{ signedIn: boolean }>
   sessions(): Promise<SessionRow[]>
   openSession(directory: string, sessionId: string): Promise<Opened>
-  transcript(directory: string, sessionId: string): Promise<Item[]>
+  transcript(directory: string, sessionId: string): Promise<View>
   account(): Promise<Account>
   updateCheck(): Promise<UpdateCheck>
   updateInstall(): Promise<void>
@@ -132,7 +163,16 @@ export type Bridge = {
   replyQuestion(directory: string, requestId: string, answers: string[][] | null): Promise<boolean>
   renameSession(sessionId: string, title: string): Promise<void>
   deleteSession(directory: string, sessionId: string): Promise<boolean>
-  pickFolder(): Promise<string | null>
+  revert(directory: string, sessionId: string, messageId: string): Promise<{ text: string; view: View }>
+  unrevert(directory: string, sessionId: string): Promise<View>
+  resend(directory: string, sessionId: string, messageId: string, text: string | null, mode: Mode): Promise<{ sessionId: string }>
+  palette(directory: string): Promise<Palette>
+  runCommand(directory: string, request: CommandRequest): Promise<{ sessionId: string }>
+  compact(directory: string, sessionId: string): Promise<void>
+  selectAgent(directory: string, sessionId: string, agent: string): Promise<Info>
+  projectFiles(directory: string): Promise<string[]>
+  scratchFolder(): Promise<string>
+  pickFolder(defaultPath?: string | null): Promise<string | null>
   openUrl(url: string): Promise<void>
   onEvent(handler: (e: CoreEvent) => void): () => void
   window: { minimize(): void; toggleMaximize(): void; close(): void }
@@ -163,9 +203,19 @@ function tauriBridge(): Bridge {
     interrupt: (directory, sessionId) => invoke("interrupt", { directory, sessionId }),
     replyPermission: (directory, requestId, reply) =>
       invoke("reply_permission", { directory, requestId, reply }),
-    async pickFolder() {
+    revert: (directory, sessionId, messageId) => invoke("revert", { directory, sessionId, messageId }),
+    unrevert: (directory, sessionId) => invoke("unrevert", { directory, sessionId }),
+    resend: (directory, sessionId, messageId, text, mode) =>
+      invoke("resend", { directory, sessionId, messageId, text, mode }),
+    palette: (directory) => invoke("palette", { directory }),
+    runCommand: (directory, request) => invoke("run_command", { directory, request }),
+    compact: (directory, sessionId) => invoke("compact", { directory, sessionId }),
+    selectAgent: (directory, sessionId, agent) => invoke("select_agent", { directory, sessionId, agent }),
+    projectFiles: (directory) => invoke("project_files", { directory }),
+    scratchFolder: () => invoke("scratch_folder"),
+    async pickFolder(defaultPath) {
       const { open } = await import("@tauri-apps/plugin-dialog")
-      const picked = await open({ directory: true, multiple: false })
+      const picked = await open({ directory: true, multiple: false, defaultPath: defaultPath ?? undefined })
       return typeof picked === "string" ? picked : null
     },
     async openUrl(url) {

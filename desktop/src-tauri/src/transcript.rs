@@ -2,9 +2,40 @@
 //! reasoning, and tool calls with the diffs edits attach. Read from SQLite on demand, so a
 //! missed event never leaves the window wrong for longer than the next refresh.
 
+use anysola_core::api::Core;
 use anysola_core::session::message::{Message, Part, ToolState};
 use anysola_core::tool::ToolContent;
 use serde_json::{Map, Value, json};
+
+/// What the window shows of a session: its items up to a staged revert, the revert itself
+/// (turns hidden, files put back) and the latest todo list.
+pub fn view(core: &Core, session_id: &str, directory: &str) -> Result<Value, String> {
+    let messages = core.messages(session_id).map_err(crate::text)?;
+    let boundary = core.revert_boundary(session_id).map_err(crate::text)?;
+    let (shown, hidden) = match &boundary {
+        Some(b) => match messages.iter().position(|(id, _)| id == b) {
+            Some(at) => {
+                let mut shown = messages;
+                let hidden = shown.split_off(at);
+                (shown, hidden)
+            }
+            None => (messages, Vec::new()),
+        },
+        None => (messages, Vec::new()),
+    };
+    let revert = boundary.map(|_| {
+        let turns = hidden
+            .iter()
+            .filter(|(_, m)| matches!(m, Message::User(_)))
+            .count();
+        json!({"turns": turns, "files": core.revert_files(session_id).unwrap_or_default()})
+    });
+    Ok(json!({
+        "items": items(shown, directory),
+        "revert": revert,
+        "todos": core.todos(session_id).unwrap_or_default(),
+    }))
+}
 
 /// Tool output kept for display; a command's full log stays in the session.
 const OUTPUT_CHARS: usize = 4_000;

@@ -97,6 +97,7 @@ version = "0.1.0"
 dependencies = [
  "anysola-core",
  "anysola-mcp",
+ "ignore",
  "serde",
  "serde_json",
  "tauri",

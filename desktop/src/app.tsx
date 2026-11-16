@@ -1,14 +1,11 @@
 import {
   ArrowDownToLine,
-  ArrowUp,
-  Check,
-  ChevronDown,
   ChevronUp,
   Ellipsis,
   FolderClosed,
   FolderOpen,
   LogOut,
-  Paperclip,
+  MessageSquare,
   Pencil,
   Plus,
   Search,
@@ -17,26 +14,24 @@ import {
 } from "lucide-react"
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 
-import type { Attachment, FileDiff, SessionRow, Window as AccountWindow } from "./bridge"
+import type { FileDiff, SessionRow, Window as AccountWindow } from "./bridge"
+import { capitalize, Composer, Tasks } from "./composer"
 import {
-  chooseModel,
   closePeek,
   deleteSession,
   dismissNotice,
   installUpdate,
+  newScratchSession,
   newSession,
   openLoginPage,
+  pickFolder,
   renameSession,
+  setDefaultFolder,
   signOut,
   openSession,
-  reply,
-  send,
-  setMode,
   signIn,
   start,
-  stop,
   useStore,
-  type Mode,
   type Open,
 } from "./store"
 import { EditCard, Transcript } from "./transcript"
@@ -138,6 +133,84 @@ function SignIn() {
 // Sidebar
 // ---------------------------------------------------------------------------
 
+/** A session's folder as the window names it: the app's own folder is "No project". */
+function usePlace(directory: string) {
+  const scratch = useStore((s) => s.scratch)
+  return directory === scratch ? "No project" : folderName(directory)
+}
+
+function PlaceLabel({ directory }: { directory: string }) {
+  return <>{usePlace(directory)}</>
+}
+
+/** New session: the default folder, a recent one, one to pick, or none. */
+function NewSessionButton() {
+  const sessions = useStore((s) => s.sessions)
+  const scratch = useStore((s) => s.scratch)
+  const preferred = useStore((s) => s.defaultFolder)
+  const [show, setShow] = useState(false)
+  const close = useCallback(() => setShow(false), [])
+  const recent = useMemo(() => {
+    const seen: string[] = []
+    for (const s of sessions) {
+      if (s.directory === scratch || s.directory === preferred || seen.includes(s.directory)) continue
+      seen.push(s.directory)
+      if (seen.length === 4) break
+    }
+    return seen
+  }, [sessions, scratch, preferred])
+  const go = (f: () => Promise<void>) => {
+    close()
+    void f()
+  }
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setShow(!show)}
+        aria-expanded={show}
+        className={btn("secondary", "md", "w-full justify-start gap-2")}
+      >
+        <Plus className="size-4" />
+        <span className="flex-1 text-left">New session</span>
+        <Kbd>Ctrl N</Kbd>
+      </button>
+      <Popover open={show} onClose={close} side="bottom" align="start" className="w-full min-w-60">
+        {preferred && (
+          <MenuItem onSelect={() => go(() => newSession(preferred))}>
+            <FolderClosed className="size-3.5 text-muted" />
+            <span className="min-w-0 flex-1 truncate" title={preferred}>
+              {folderName(preferred)}
+            </span>
+            <span className="text-2xs text-muted">Default</span>
+          </MenuItem>
+        )}
+        {recent.map((d) => (
+          <MenuItem key={d} onSelect={() => go(() => newSession(d))}>
+            <FolderClosed className="size-3.5 text-muted" />
+            <span className="min-w-0 flex-1 truncate" title={d}>
+              {folderName(d)}
+            </span>
+          </MenuItem>
+        ))}
+        {(preferred || recent.length > 0) && <div className="my-1 border-t border-separator" />}
+        <MenuItem
+          onSelect={() =>
+            go(async () => {
+              const d = await pickFolder()
+              if (d) await newSession(d)
+            })
+          }
+        >
+          <FolderOpen className="size-3.5 text-muted" /> Choose a folder…
+        </MenuItem>
+        <MenuItem onSelect={() => go(newScratchSession)}>
+          <MessageSquare className="size-3.5 text-muted" /> No project
+        </MenuItem>
+      </Popover>
+    </div>
+  )
+}
+
 function Sidebar() {
   const sessions = useStore((s) => s.sessions)
   const [query, setQuery] = useState("")
@@ -146,7 +219,7 @@ function Sidebar() {
     const q = query.trim().toLowerCase()
     const by = new Map<string, SessionRow[]>()
     for (const s of sessions) {
-      if (q && !s.title.toLowerCase().includes(q) && !folderName(s.directory).toLowerCase().includes(q)) continue
+      if (q && !s.title.toLowerCase().includes(q) && !s.directory.toLowerCase().includes(q)) continue
       by.set(s.directory, [...(by.get(s.directory) ?? []), s])
     }
     return [...by.entries()]
@@ -170,11 +243,7 @@ function Sidebar() {
         </div>
       </TitleBar>
       <div className="px-2 pt-2 pb-4">
-        <button onClick={() => void newSession()} className={btn("secondary", "md", "w-full justify-start gap-2")}>
-          <Plus className="size-4" />
-          <span className="flex-1 text-left">New session</span>
-          <Kbd>Ctrl N</Kbd>
-        </button>
+        <NewSessionButton />
         {sessions.length > 0 && (
           <label className="mt-1 flex h-9 items-center gap-2 rounded-lg px-3 text-muted focus-within:bg-default/60 hover:bg-default/60">
             <Search className="size-4 shrink-0" strokeWidth={1.75} />
@@ -205,7 +274,7 @@ function Sidebar() {
           <div key={directory}>
             <div className="text-2xs flex items-center gap-1.5 px-2 pb-1 font-medium tracking-wide text-muted" title={directory}>
               <FolderClosed className="size-3" strokeWidth={1.75} />
-              {folderName(directory)}
+              <PlaceLabel directory={directory} />
             </div>
             <ul className="flex flex-col">
               {rows.map((r) => (
@@ -364,6 +433,8 @@ function AccountRow() {
         <WindowMeter label="Weekly" window={account.weekly} />
       </button>
       <Popover open={open} onClose={close} side="top" className="w-60">
+        <DefaultFolder onDone={close} />
+        <div className="my-1 border-t border-separator" />
         <MenuItem
           onSelect={() => {
             close()
@@ -373,6 +444,39 @@ function AccountRow() {
           <LogOut className="size-3.5 text-muted" /> Sign out
         </MenuItem>
       </Popover>
+    </div>
+  )
+}
+
+/** Where new sessions start (Ctrl N); without one, each asks for a folder. */
+function DefaultFolder({ onDone }: { onDone: () => void }) {
+  const preferred = useStore((s) => s.defaultFolder)
+  return (
+    <div className="flex flex-col">
+      <div className="px-2.5 pt-1.5 pb-1">
+        <div className="text-2xs text-muted">New sessions start in</div>
+        <div className="truncate text-sm" title={preferred ?? undefined}>
+          {preferred ? folderName(preferred) : "A folder you pick each time"}
+        </div>
+      </div>
+      <MenuItem
+        onSelect={() => {
+          onDone()
+          void pickFolder().then((d) => d && setDefaultFolder(d))
+        }}
+      >
+        <FolderOpen className="size-3.5 text-muted" /> {preferred ? "Change default folder…" : "Set a default folder…"}
+      </MenuItem>
+      {preferred && (
+        <MenuItem
+          onSelect={() => {
+            onDone()
+            setDefaultFolder(null)
+          }}
+        >
+          <X className="size-3.5 text-muted" /> Ask each time
+        </MenuItem>
+      )}
     </div>
   )
 }
@@ -413,11 +517,14 @@ function Main() {
           <SessionHeader open={open} onReview={() => setReviewing(true)} />
           <Conversation open={open} />
           <div className="mx-auto w-full max-w-[50rem] px-8 pb-5">
+            <Tasks todos={open.todos} />
             <Composer open={open} />
             <div className="mt-2 flex items-center gap-3 px-2">
               <span className="text-2xs flex min-w-0 items-center gap-1 text-muted" title={open.directory}>
                 <FolderClosed className="size-3 shrink-0" strokeWidth={1.75} />
-                <span className="truncate">{open.directory}</span>
+                <span className="truncate">
+                  <FooterPlace directory={open.directory} />
+                </span>
               </span>
               <UsageMeter percent={open.info?.fiveHour ?? null} className="ml-auto w-44 shrink-0" />
             </div>
@@ -428,11 +535,15 @@ function Main() {
       ) : (
         <>
           <TitleBar controls />
-          <div className="flex flex-1 items-center justify-center pb-16">
-            <button onClick={() => void newSession()} className={btn("secondary", "md", "gap-2")}>
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 pb-16">
+            <button onClick={() => void newSession()} className={btn("secondary", "md", "min-w-60 gap-2")}>
               <FolderOpen className="size-4" />
-              Open a folder
+              <span className="flex-1 text-left">Open a folder</span>
               <Kbd>Ctrl N</Kbd>
+            </button>
+            <button onClick={() => void newScratchSession()} className={btn("ghost", "md", "min-w-60 gap-2 text-muted")}>
+              <MessageSquare className="size-4" />
+              <span className="flex-1 text-left">Start without a project</span>
             </button>
           </div>
         </>
@@ -455,6 +566,11 @@ function changedFiles(open: Open): { file: string; diffs: FileDiff[]; add: numbe
   }))
 }
 
+function FooterPlace({ directory }: { directory: string }) {
+  const scratch = useStore((s) => s.scratch)
+  return <>{directory === scratch ? "No project · runs in the app’s own folder" : directory}</>
+}
+
 function SessionHeader({ open, onReview }: { open: Open; onReview: () => void }) {
   const files = changedFiles(open)
   const add = files.reduce((n, f) => n + f.add, 0)
@@ -465,7 +581,7 @@ function SessionHeader({ open, onReview }: { open: Open; onReview: () => void })
         <h1 className="min-w-0 truncate text-sm font-medium">{open.title}</h1>
         <span className="text-2xs flex shrink-0 items-center gap-1 text-muted">
           <FolderClosed className="size-3" strokeWidth={1.75} />
-          {folderName(open.directory)}
+          <PlaceLabel directory={open.directory} />
         </span>
       </div>
       {files.length > 0 && (
@@ -525,260 +641,6 @@ function Conversation({ open }: { open: Open }) {
   )
 }
 
-const modes: { id: Mode; label: string; hint: string }[] = [
-  { id: "ask", label: "Ask", hint: "Ask before every edit and command" },
-  { id: "edits", label: "Edits", hint: "Edit files without asking; ask before commands" },
-  { id: "auto", label: "Auto", hint: "Run everything without asking" },
-]
-
-/** Images only, as the model takes them; larger ones are refused before they are read. */
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024
-
-function readImage(file: File): Promise<Attachment> {
-  return new Promise((resolve, reject) => {
-    if (!file.type.startsWith("image/")) return reject(new Error(`${file.name} isn’t an image.`))
-    if (file.size > MAX_IMAGE_BYTES) return reject(new Error(`${file.name} is over 5 MB.`))
-    const reader = new FileReader()
-    reader.onload = () => {
-      const url = String(reader.result)
-      resolve({ mime: file.type, data: url.slice(url.indexOf(",") + 1), name: file.name || "image.png" })
-    }
-    reader.onerror = () => reject(new Error(`Couldn’t read ${file.name}.`))
-    reader.readAsDataURL(file)
-  })
-}
-
-function Composer({ open }: { open: Open }) {
-  const mode = useStore((s) => s.mode)
-  const asking = useStore((s) => s.permissions.find((p) => p.rootId === open.sessionId) ?? null)
-  const [text, setText] = useState("")
-  const [files, setFiles] = useState<Attachment[]>([])
-  const [problem, setProblem] = useState<string | null>(null)
-  const [dragging, setDragging] = useState(false)
-  const area = useRef<HTMLTextAreaElement>(null)
-  const picker = useRef<HTMLInputElement>(null)
-  const running = open.status.kind === "working" || open.status.kind === "retrying"
-  const model = open.info?.models.find((m) => m.id === open.info?.modelId)
-  const empty = !text.trim() && files.length === 0
-
-  useEffect(() => area.current?.focus(), [open.sessionId])
-  useLayoutEffect(() => {
-    const el = area.current
-    if (!el) return
-    el.style.height = "auto"
-    el.style.height = `${Math.min(el.scrollHeight, 240)}px`
-  }, [text])
-
-  const add = async (list: Iterable<File>) => {
-    setProblem(null)
-    for (const file of list) {
-      try {
-        const image = await readImage(file)
-        setFiles((all) => [...all, image])
-      } catch (e) {
-        setProblem(e instanceof Error ? e.message : String(e))
-      }
-    }
-  }
-
-  const submit = () => {
-    if (empty) return
-    void send(text, files)
-    setText("")
-    setFiles([])
-    setProblem(null)
-  }
-
-  return (
-    <div
-      onDragOver={(e) => {
-        if (e.dataTransfer.types.includes("Files")) {
-          e.preventDefault()
-          setDragging(true)
-        }
-      }}
-      onDragLeave={() => setDragging(false)}
-      onDrop={(e) => {
-        e.preventDefault()
-        setDragging(false)
-        void add(e.dataTransfer.files)
-      }}
-      className={cn("rounded-[1.25rem] bg-surface p-2 transition-colors", dragging && "bg-default")}
-    >
-      {files.length > 0 && (
-        <div className="flex flex-wrap gap-2 px-1.5 pt-1 pb-2">
-          {files.map((f, i) => (
-            <div key={i} className="group relative">
-              <img
-                src={`data:${f.mime};base64,${f.data}`}
-                alt={f.name}
-                className="size-14 rounded-lg object-cover"
-              />
-              <button
-                onClick={() => setFiles((all) => all.filter((_, j) => j !== i))}
-                aria-label={`Remove ${f.name}`}
-                className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full bg-popover text-muted opacity-0 group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100"
-              >
-                <X className="size-3" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-      <textarea
-        ref={area}
-        value={text}
-        rows={2}
-        onChange={(e) => setText(e.target.value)}
-        onPaste={(e) => {
-          const images = [...e.clipboardData.files].filter((f) => f.type.startsWith("image/"))
-          if (images.length) {
-            e.preventDefault()
-            void add(images)
-          }
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault()
-            if (empty && asking) void reply(asking, "once")
-            else submit()
-          } else if (e.key === "Escape") {
-            if (asking) void reply(asking, "reject")
-            else if (running) stop()
-          }
-        }}
-        placeholder={asking ? "Reply, or press Enter to allow" : "Ask for a change"}
-        aria-label="Message"
-        className="text-md block min-h-14 w-full resize-none bg-transparent px-2.5 pt-1.5 leading-relaxed outline-none placeholder:text-field-placeholder"
-      />
-      {(problem || (files.length > 0 && model && !model.images)) && (
-        <p className="text-dense px-2.5 pb-2 text-warning">{problem ?? `${model?.name} doesn’t read images.`}</p>
-      )}
-      <div className="flex items-center gap-1.5">
-        <button
-          onClick={() => picker.current?.click()}
-          className={btn("ghost", "sm", "text-muted", true)}
-          aria-label="Attach images"
-          title="Attach images"
-        >
-          <Paperclip className="size-4" strokeWidth={1.75} />
-        </button>
-        <input
-          ref={picker}
-          type="file"
-          accept="image/*"
-          multiple
-          hidden
-          onChange={(e) => {
-            if (e.target.files) void add(e.target.files)
-            e.target.value = ""
-          }}
-        />
-        <div className="flex h-8 items-center rounded-full bg-default/60 p-0.5" role="radiogroup" aria-label="Permissions">
-          {modes.map((m) => (
-            <button
-              key={m.id}
-              role="radio"
-              aria-checked={mode === m.id}
-              title={m.hint}
-              onClick={() => setMode(m.id)}
-              className={cn(
-                "text-dense h-7 rounded-full px-3 transition-colors focus-visible:status-focused-field",
-                mode === m.id ? "bg-default-hover text-foreground" : "text-muted hover:text-foreground"
-              )}
-            >
-              {m.label}
-            </button>
-          ))}
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          <ModelPicker open={open} />
-          {running && empty ? (
-            <button onClick={stop} className={btn("secondary", "sm", "", true)} aria-label="Stop">
-              <span className="size-2.5 rounded-[2px] bg-current" />
-            </button>
-          ) : (
-            <button onClick={submit} disabled={empty} className={btn("primary", "sm", "", true)} aria-label="Send">
-              <ArrowUp className="size-4" />
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-const efforts: Record<string, string> = { xhigh: "Extra high" }
-
-function ModelPicker({ open }: { open: Open }) {
-  const [show, setShow] = useState(false)
-  const close = useCallback(() => setShow(false), [])
-  const info = open.info
-  if (!info?.model) return null
-  const current = info.models.find((m) => m.id === info.modelId)
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setShow(!show)}
-        aria-expanded={show}
-        className="text-dense flex h-8 items-center gap-1.5 rounded-full px-3 text-muted hover:bg-default/60 hover:text-foreground focus-visible:status-focused-field"
-      >
-        {info.model}
-        {info.variant && <span className="text-muted/70">· {efforts[info.variant] ?? capitalize(info.variant)}</span>}
-        <ChevronDown className="size-3.5" />
-      </button>
-      <Popover open={show} onClose={close} side="top" align="end" className="w-72">
-        <div role="listbox" aria-label="Model" className="flex flex-col">
-          {info.models.map((m) => (
-            <button
-              key={m.id}
-              role="option"
-              aria-selected={m.id === info.modelId}
-              onClick={() => {
-                // The effort carries over when the new model has it.
-                const variant = info.variant && m.efforts.includes(info.variant) ? info.variant : null
-                void chooseModel(m.id, variant)
-              }}
-              className="flex items-start gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-default-hover focus-visible:status-focused-field"
-            >
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm">{m.name}</span>
-                {m.note && <span className="text-2xs block text-muted">{m.note}</span>}
-              </span>
-              {m.id === info.modelId && <Check className="mt-0.5 size-3.5 shrink-0" />}
-            </button>
-          ))}
-        </div>
-        {current && current.efforts.length > 0 && (
-          <div className="mt-1 border-t border-separator px-2.5 pt-2.5 pb-1.5">
-            <div className="text-2xs pb-2 text-muted">Effort</div>
-            <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Effort">
-              {[null, ...current.efforts].map((e) => (
-                <button
-                  key={e ?? "default"}
-                  role="radio"
-                  aria-checked={info.variant === e}
-                  onClick={() => void chooseModel(current.id, e)}
-                  className={cn(
-                    "text-2xs h-7 rounded-full px-2.5 transition-colors focus-visible:status-focused-field",
-                    info.variant === e ? "bg-default-hover text-foreground" : "text-muted hover:bg-default/60"
-                  )}
-                >
-                  {e ? (efforts[e] ?? capitalize(e)) : "Default"}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </Popover>
-    </div>
-  )
-}
-
-function capitalize(s: string) {
-  return s.charAt(0).toUpperCase() + s.slice(1)
-}
-
 function Review({ open, onClose }: { open: Open; onClose: () => void }) {
   const files = changedFiles(open)
   useEffect(() => {
@@ -835,6 +697,9 @@ function PeekSheet() {
     info: null,
     status: { kind: "idle" },
     loading: peek.loading,
+    revert: null,
+    todos: [],
+    fill: null,
   }
   return (
     <div className="absolute inset-0 z-10 flex justify-end bg-black/40" onClick={closePeek}>
@@ -856,7 +721,7 @@ function PeekSheet() {
               <Spinner />
             </div>
           ) : (
-            <Transcript open={view} permissions={[]} questions={[]} />
+            <Transcript open={view} permissions={[]} questions={[]} readOnly />
           )}
         </div>
       </aside>

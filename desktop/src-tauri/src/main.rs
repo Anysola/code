@@ -6,6 +6,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod account;
+mod actions;
 mod events;
 mod transcript;
 mod update;
@@ -23,6 +24,7 @@ use anysola_core::paths::Paths;
 use anysola_core::session::TurnOptions;
 use anysola_core::session::gate::{Floor, Reply};
 use anysola_core::session::inbox::Delivery;
+use anysola_core::session::message::InvokedSkill;
 use anysola_core::storage::{Db, SessionRow};
 use anysola_core::tool::question::QuestionReply;
 use serde::Deserialize;
@@ -68,7 +70,11 @@ pub(crate) fn text(e: impl std::fmt::Display) -> String {
 }
 
 /// The directory's core, started on first use; its events go to the window from then on.
-async fn core_for(handle: &AppHandle, app: &App, directory: &str) -> Result<Core, String> {
+pub(crate) async fn core_for(
+    handle: &AppHandle,
+    app: &App,
+    directory: &str,
+) -> Result<Core, String> {
     let mut cores = app.cores.lock().await;
     if let Some(core) = cores.get(Path::new(directory)) {
         return Ok(core.clone());
@@ -196,7 +202,7 @@ fn session_json(row: &SessionRow) -> Value {
 
 /// The session's model, its effort and every model to pick from, with the 5-hour window when
 /// known. Without a session: the folder's default model.
-fn info(core: &Core, row: Option<&SessionRow>) -> Value {
+pub(crate) fn info(core: &Core, row: Option<&SessionRow>) -> Value {
     let loaded = core.loaded();
     let reference = row
         .and_then(|r| r.model.as_ref())
@@ -225,7 +231,19 @@ fn info(core: &Core, row: Option<&SessionRow>) -> Value {
             })
         })
         .collect();
+    let agent = row
+        .and_then(|r| r.agent.clone())
+        .or_else(|| loaded.agents.default_agent().map(|a| a.id.clone()));
+    let agents: Vec<Value> = loaded
+        .agents
+        .list
+        .iter()
+        .filter(|a| a.selectable())
+        .map(|a| json!({"id": a.id, "name": a.name, "description": a.description}))
+        .collect();
     json!({
+        "agent": agent,
+        "agents": agents,
         "model": current.map(|m| m.name.clone()),
         "modelId": current.map(|m| m.id.clone()),
         "variant": reference.and_then(|r| r.variant),
@@ -252,16 +270,16 @@ async fn open_session(
 ) -> Answer {
     let core = core_for(&handle, &app, &directory).await?;
     let (row, _) = core.open(&Target::Id(session_id), false).map_err(text)?;
-    let messages = core.messages(&row.id).map_err(text)?;
     Ok(json!({
         "session": session_json(&row),
-        "items": transcript::items(messages, &row.directory),
+        "view": transcript::view(&core, &row.id, &row.directory)?,
         "info": info(&core, Some(&row)),
         "busy": core.is_busy(&row.id),
     }))
 }
 
-/// The transcript alone, re-read after a tool call or a step changed it.
+/// The transcript alone (with its revert and todos), re-read after a tool call or a step
+/// changed it.
 #[tauri::command]
 async fn transcript(
     handle: AppHandle,
@@ -270,8 +288,7 @@ async fn transcript(
     session_id: String,
 ) -> Answer {
     let core = core_for(&handle, &app, &directory).await?;
-    let messages = core.messages(&session_id).map_err(text)?;
-    Ok(Value::Array(transcript::items(messages, &directory)))
+    transcript::view(&core, &session_id, &directory)
 }
 
 /// The model and window for a folder with no session yet (a new session's composer).
@@ -314,7 +331,7 @@ struct Attachment {
 
 /// The composer's mode as the session's permission floor: Ask asks before changes, Edits
 /// before commands, Auto leaves it to the rules.
-fn floor(mode: &str) -> Floor {
+pub(crate) fn floor(mode: &str) -> Floor {
     match mode {
         "ask" => Floor::Changes,
         "edits" => Floor::Commands,
@@ -347,8 +364,57 @@ struct Send {
     /// A new session's composer picks a model before the session exists.
     model: Option<String>,
     variant: Option<String>,
+    /// A new session's agent, picked before it existed.
+    agent: Option<String>,
     #[serde(default)]
     files: Vec<Attachment>,
+    /// Skills mentioned as `@<name>`: their content goes before the text.
+    #[serde(default)]
+    skills: Vec<String>,
+}
+
+/// A new session's settings from the composer: the session (created when there is none), its
+/// permission floor, and for a new one the model and agent picked before it existed.
+pub(crate) fn prepare(
+    core: &Core,
+    session_id: Option<String>,
+    mode: &str,
+    model: Option<String>,
+    variant: Option<String>,
+    agent: Option<String>,
+) -> Result<String, String> {
+    let id = match session_id {
+        Some(id) => id,
+        None => core.open(&Target::New, false).map_err(text)?.0.id,
+    };
+    core.set_permission_floor(&id, floor(mode)).map_err(text)?;
+    if let Some(model) = model {
+        let reference = ModelRef {
+            provider: PROVIDER.into(),
+            id: model,
+            variant,
+        };
+        core.select_model(&id, &reference).map_err(text)?;
+    }
+    if let Some(agent) = agent {
+        let current = core.session(&id).map_err(text)?.and_then(|r| r.agent);
+        if current.as_deref() != Some(agent.as_str()) {
+            core.select_agent(&id, &agent).map_err(text)?;
+        }
+    }
+    Ok(id)
+}
+
+/// Runs a turn in the background; a failure to start it goes to the window as `failed`.
+pub(crate) fn spawn_turn(handle: AppHandle, core: Core, session: String, prompt: Prompt) {
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = core.prompt(&session, prompt, TurnOptions::default()).await {
+            let _ = handle.emit(
+                "core",
+                json!({"type": "failed", "sessionId": session, "error": error.to_string()}),
+            );
+        }
+    });
 }
 
 /// Sends a prompt. The turn runs on; its events tell the rest.
@@ -365,30 +431,30 @@ async fn prompt(
         mode,
         model,
         variant,
+        agent,
         files,
+        skills,
     } = request;
     let core = core_for(&handle, &app, &directory).await?;
-    let id = match session_id {
-        Some(id) => id,
-        None => core.open(&Target::New, false).map_err(self::text)?.0.id,
-    };
-    core.set_permission_floor(&id, floor(&mode))
-        .map_err(self::text)?;
-    if let Some(model) = model {
-        let reference = ModelRef {
-            provider: PROVIDER.into(),
-            id: model,
-            variant,
-        };
-        core.select_model(&id, &reference).map_err(self::text)?;
-    }
+    let id = prepare(&core, session_id, &mode, model, variant, agent)?;
+    let loaded = core.loaded();
+    let skills = skills
+        .iter()
+        .filter_map(|name| {
+            let skill = loaded
+                .skills
+                .iter()
+                .find(|s| s.name == *name || s.id == *name)?;
+            Some(InvokedSkill::new(skill, &format!("@{name}")))
+        })
+        .collect();
     let prompt = Prompt {
         text,
         files: files
             .into_iter()
             .map(|f| (f.mime, f.data, f.name))
             .collect(),
-        skills: Vec::new(),
+        skills,
     };
     if core.is_busy(&id) {
         // A running turn takes it when it ends.
@@ -396,15 +462,7 @@ async fn prompt(
             .map_err(self::text)?;
         return Ok(json!({"sessionId": id, "queued": true}));
     }
-    let (session, events) = (id.clone(), handle.clone());
-    tauri::async_runtime::spawn(async move {
-        if let Err(error) = core.prompt(&session, prompt, TurnOptions::default()).await {
-            let _ = events.emit(
-                "core",
-                json!({"type": "failed", "sessionId": session, "error": error.to_string()}),
-            );
-        }
-    });
+    spawn_turn(handle.clone(), core, id.clone(), prompt);
     Ok(json!({"sessionId": id, "queued": false}))
 }
 
@@ -515,6 +573,15 @@ fn main() {
             reply_question,
             rename_session,
             delete_session,
+            actions::revert,
+            actions::unrevert,
+            actions::resend,
+            actions::palette,
+            actions::run_command,
+            actions::compact,
+            actions::select_agent,
+            actions::project_files,
+            actions::scratch_folder,
         ])
         .run(tauri::generate_context!())
         .expect("the Anysola Code window failed to start");

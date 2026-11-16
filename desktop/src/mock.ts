@@ -1,9 +1,9 @@
 /**
  * The bridge outside Tauri: example sessions and a transcript, for working on the window in a
  * browser and for screenshots. `?state=` picks a moment: `signed-out`, `empty`, `approval`
- * (the default), `running`, `failed`, `question`, `update`.
+ * (the default), `running`, `failed`, `question`, `update`, `rewound`, `plan`, `todos`, `done`.
  */
-import type { Account, Bridge, CoreEvent, FileDiff, Info, Item, SessionRow } from "./bridge"
+import type { Account, Bridge, CoreEvent, FileDiff, Info, Item, Revert, SessionRow, Todo, View } from "./bridge"
 
 const WEB = "/home/alex/code/anysola-web"
 const CODE = "/home/alex/code/anysola-code"
@@ -113,7 +113,14 @@ const pricingItems: Item[] = [
 ]
 
 const efforts = ["low", "medium", "high", "xhigh", "max"]
+const agents = [
+  { id: "build", name: "Build", description: "The default agent." },
+  { id: "plan", name: "Plan", description: "Read-only agent for planning." },
+]
+
 const info: Info = {
+  agent: "build",
+  agents,
   model: "Opus 5.5",
   modelId: "claude-opus-5-5",
   variant: "high",
@@ -133,6 +140,33 @@ const account: Account = {
   weekly: { percent: 12, resetsAt: new Date(now + 4 * 86_400_000).toISOString() },
 }
 
+const planItems: Item[] = [
+  { kind: "user", id: "p1", text: "Plan how to add yearly prices to the team plan.", images: 0 },
+  tool("p2", "read", "apps/web/src/lib/plans.ts", { output: "88 lines" }),
+  tool("p3", "grep", "teamPrices", { output: "3 matches" }),
+  {
+    kind: "text",
+    id: "p4:0",
+    text: "Here’s the plan:\n\n1. Add `yearly` to `teamPrices` in `lib/plans.ts`, at 10× monthly like the other plans.\n2. Let `PlanCard` show the toggle for the team card.\n3. Extend `pricing.test.tsx` with a team-plan case.\n\nNothing else reads `teamPrices`, so the change stays in these three files.",
+  },
+]
+
+const todos: Todo[] = [
+  { content: "Pass the selected cycle to PlanCard", status: "completed" },
+  { content: "Read the price from the cycle", status: "completed" },
+  { content: "Add a pricing test", status: "in_progress" },
+  { content: "Check the team and enterprise cards", status: "pending" },
+]
+
+const rewound: Revert = {
+  turns: 1,
+  files: [
+    { file: planCard.file, status: "modified", additions: 2, deletions: 2 },
+    { file: pricing.file, status: "modified", additions: 1, deletions: 1 },
+    { file: test.file, status: "added", additions: 28, deletions: 0 },
+  ],
+}
+
 export function mockBridge(): Bridge {
   const state = new URLSearchParams(location.search).get("state") ?? "approval"
   const handlers = new Set<(e: CoreEvent) => void>()
@@ -148,7 +182,20 @@ export function mockBridge(): Bridge {
       ],
     ],
   ])
+  if (state === "plan") transcripts.set("ses_pricing", planItems)
   let signedIn = state !== "signed-out"
+  let revert: Revert | null = state === "rewound" ? rewound : null
+  const view = (sessionId: string): View => {
+    const items = transcripts.get(sessionId) ?? []
+    if (revert && sessionId === "ses_pricing")
+      return { items: [], revert, todos: [] }
+    const done = state === "done" || state === "plan" || state === "todos"
+    return {
+      items: state === "question" ? items.slice(0, -1) : done ? items.filter((i) => i.kind !== "tool" || i.status !== "running") : items,
+      revert: null,
+      todos: state === "todos" && sessionId === "ses_pricing" ? todos : [],
+    }
+  }
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
   return {
@@ -168,7 +215,6 @@ export function mockBridge(): Bridge {
     },
     async openSession(_directory, sessionId) {
       const session = rows.find((r) => r.id === sessionId) ?? rows[0]
-      const items = transcripts.get(session.id) ?? []
       if (session.id === "ses_pricing") {
         if (state === "approval")
           emit({
@@ -215,11 +261,70 @@ export function mockBridge(): Bridge {
             error: "Anysola Code is temporarily unavailable. Try again shortly.",
           })
       }
-      const busy = session.id === "ses_pricing" && state !== "failed"
-      return { session, items: state === "question" ? items.slice(0, -1) : items, info, busy }
+      const busy = session.id === "ses_pricing" && ["approval", "running", "question"].includes(state)
+      return {
+        session,
+        view: view(session.id),
+        info: state === "plan" ? { ...info, agent: "plan" } : info,
+        busy,
+      }
     },
     async transcript(_directory, sessionId) {
-      return transcripts.get(sessionId) ?? []
+      return view(sessionId)
+    },
+    async revert(_directory, sessionId, messageId) {
+      const items = transcripts.get(sessionId) ?? []
+      const text = items.find((i) => i.id === messageId)
+      revert = rewound
+      return { text: text?.kind === "user" ? text.text : "", view: view(sessionId) }
+    },
+    async unrevert(_directory, sessionId) {
+      revert = null
+      return view(sessionId)
+    },
+    async resend(_directory, sessionId) {
+      revert = null
+      emit({ type: "started", sessionId })
+      return { sessionId }
+    },
+    async palette() {
+      return {
+        commands: [
+          { name: "init", description: "create/update AGENTS.md" },
+          { name: "review", description: "review changes [commit|branch|pr], defaults to uncommitted" },
+          { name: "goal", description: "keep working until an objective is met [pause|resume|clear]" },
+          { name: "release-notes", description: "Draft release notes from the commits since the last tag" },
+        ],
+        skills: [
+          { name: "frontend-design", description: "Distinctive, intentional visual design for new UI" },
+          { name: "pdf", description: "Read, fill and create PDF files" },
+        ],
+      }
+    },
+    async runCommand(_directory, { sessionId }) {
+      const id = sessionId ?? "ses_pricing"
+      emit({ type: "started", sessionId: id })
+      return { sessionId: id }
+    },
+    async compact() {},
+    async selectAgent(_directory, _sessionId, agent) {
+      return { ...info, agent }
+    },
+    async projectFiles() {
+      return [
+        "apps/",
+        "apps/web/",
+        "apps/web/src/",
+        "apps/web/src/routes/pricing.tsx",
+        "apps/web/src/components/plan-card.tsx",
+        "apps/web/src/lib/plans.ts",
+        "apps/web/test/pricing.test.tsx",
+        "package.json",
+        "README.md",
+      ]
+    },
+    async scratchFolder() {
+      return "/home/alex/.anysola/no-project"
     },
     async account() {
       return account
