@@ -1,0 +1,405 @@
+import {
+  ChevronDown,
+  ChevronRight,
+  CircleAlert,
+  FilePlus2,
+  FileText,
+  Globe,
+  ListTodo,
+  Pencil,
+  Search,
+  SquareTerminal,
+  Wrench,
+} from "lucide-react"
+import { useState, type ReactNode } from "react"
+import Markdown from "react-markdown"
+import remarkGfm from "remark-gfm"
+
+import { getBridge, type FileDiff, type Item } from "./bridge"
+import { reply, type Open, type Permission, type Status } from "./store"
+import { btn, cn, Counts, DiffView, Kbd, Spinner } from "./ui"
+
+type Tool = Extract<Item, { kind: "tool" }>
+
+/** Lookups that only read: shown together as one line that opens. */
+const EXPLORE = new Set(["read", "grep", "glob", "list", "webfetch", "websearch"])
+
+type Block =
+  | { kind: "item"; item: Item }
+  | { kind: "explore"; id: string; tools: Tool[] }
+
+function blocks(items: Item[]): Block[] {
+  const out: Block[] = []
+  for (const item of items) {
+    const last = out[out.length - 1]
+    if (item.kind === "tool" && EXPLORE.has(item.name)) {
+      if (last?.kind === "explore") last.tools.push(item)
+      else out.push({ kind: "explore", id: item.id, tools: [item] })
+    } else out.push({ kind: "item", item })
+  }
+  return out
+}
+
+export function Transcript({ open, permissions }: { open: Open; permissions: Permission[] }) {
+  return (
+    <div className="flex flex-col gap-5">
+      {blocks(open.items).map((b) =>
+        b.kind === "explore" ? <Explored key={b.id} tools={b.tools} /> : <Entry key={b.item.id} item={b.item} />
+      )}
+      {open.live.map((l) =>
+        l.kind === "text" ? (
+          <Prose key={l.key} text={l.text} />
+        ) : (
+          <Thinking key={l.key} text={l.text} live />
+        )
+      )}
+      {permissions.map((p) => (
+        <PermissionCard key={p.requestId} permission={p} />
+      ))}
+      <StatusLine status={open.status} waiting={permissions.length > 0} streaming={open.live.length > 0} />
+    </div>
+  )
+}
+
+function Entry({ item }: { item: Item }) {
+  switch (item.kind) {
+    case "user":
+      return (
+        <div className="rounded-2xl bg-surface-secondary/60 px-4 py-3 text-md leading-relaxed whitespace-pre-wrap">
+          {item.text}
+          {item.images > 0 && (
+            <div className="text-2xs mt-1.5 text-muted">
+              {item.images} image{item.images > 1 ? "s" : ""}
+            </div>
+          )}
+        </div>
+      )
+    case "text":
+      return <Prose text={item.text} />
+    case "reasoning":
+      return <Thinking text={item.text} />
+    case "error":
+      return (
+        <div className="text-dense flex items-start gap-2 text-danger">
+          <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
+          {item.message}
+        </div>
+      )
+    case "tool":
+      if (item.files?.length) return <Edits tool={item} />
+      if (item.name === "shell" || item.name === "bash") return <Command tool={item} />
+      return <OtherTool tool={item} />
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Text
+// ---------------------------------------------------------------------------
+
+export function Prose({ text }: { text: string }) {
+  return (
+    <div className="prose-anysola text-md leading-relaxed text-foreground/90">
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ href, children }) => (
+            <a
+              href={href}
+              onClick={(e) => {
+                e.preventDefault()
+                if (href?.startsWith("http")) void getBridge().then((b) => b.openUrl(href))
+              }}
+              className="underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground"
+            >
+              {children}
+            </a>
+          ),
+        }}
+      >
+        {text}
+      </Markdown>
+    </div>
+  )
+}
+
+function Thinking({ text, live = false }: { text: string; live?: boolean }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="-mx-2">
+      <Disclosure open={open} onToggle={() => setOpen(!open)}>
+        {live ? "Thinking…" : "Thought"}
+      </Disclosure>
+      {open && <div className="text-dense ml-6 border-l border-separator pl-3 whitespace-pre-wrap text-muted">{text}</div>}
+    </div>
+  )
+}
+
+function Disclosure({ open, onToggle, children }: { open: boolean; onToggle: () => void; children: ReactNode }) {
+  return (
+    <button
+      onClick={onToggle}
+      aria-expanded={open}
+      className="text-dense flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-muted hover:bg-default/60 focus-visible:status-focused-field"
+    >
+      {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+      {children}
+    </button>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Tools
+// ---------------------------------------------------------------------------
+
+const icons: Record<string, typeof FileText> = {
+  read: FileText,
+  list: FileText,
+  grep: Search,
+  glob: Search,
+  webfetch: Globe,
+  websearch: Globe,
+  todowrite: ListTodo,
+}
+
+const verbs: Record<string, string> = {
+  read: "Read",
+  list: "Listed",
+  grep: "Searched",
+  glob: "Found files",
+  webfetch: "Fetched",
+  websearch: "Searched the web",
+  todowrite: "Updated the plan",
+  task: "Ran a subagent",
+  skill: "Used a skill",
+}
+
+function summary(tools: Tool[]) {
+  const reads = tools.filter((t) => t.name === "read" || t.name === "list").length
+  const searches = tools.length - reads
+  const parts = []
+  if (reads) parts.push(`Read ${reads} file${reads > 1 ? "s" : ""}`)
+  if (searches) parts.push(`searched ${searches === 1 ? "once" : `${searches} times`}`)
+  const text = parts.join(", ")
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+function Explored({ tools }: { tools: Tool[] }) {
+  const running = tools.some((t) => t.status === "running" || t.status === "streaming")
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="-mx-2">
+      <Disclosure open={open} onToggle={() => setOpen(!open)}>
+        {summary(tools)}
+        {running && <Spinner className="size-3" />}
+      </Disclosure>
+      {open && (
+        <div className="ml-[0.9rem] border-l border-separator pl-2">
+          {tools.map((t) => (
+            <ToolRow key={t.id} tool={t} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ToolRow({ tool, verb, icon }: { tool: Tool; verb?: string; icon?: typeof FileText }) {
+  const Icon = icon ?? icons[tool.name] ?? Wrench
+  return (
+    <div className="text-dense flex h-8 items-center gap-2.5 rounded-lg px-2">
+      <Icon className="size-3.5 shrink-0 text-muted" strokeWidth={1.75} />
+      <span className="shrink-0 text-foreground/80">{verb ?? verbs[tool.name] ?? tool.name}</span>
+      <span className="min-w-0 truncate font-mono text-xs text-muted">{tool.target}</span>
+      <span className="ml-auto flex shrink-0 items-center gap-2 text-2xs text-muted">
+        {(tool.status === "running" || tool.status === "streaming") && <Spinner className="size-3" />}
+        {tool.status === "error" && <span className="text-danger">Failed</span>}
+      </span>
+    </div>
+  )
+}
+
+function OtherTool({ tool }: { tool: Tool }) {
+  return (
+    <div className="-mx-2">
+      <ToolRow tool={tool} />
+      {tool.error && <div className="text-2xs ml-8 text-danger">{tool.error}</div>}
+    </div>
+  )
+}
+
+function Command({ tool }: { tool: Tool }) {
+  const [open, setOpen] = useState(false)
+  const running = tool.status === "running" || tool.status === "streaming"
+  const output = tool.error ?? tool.output
+  return (
+    <div className="-mx-2">
+      <button
+        onClick={() => output && setOpen(!open)}
+        aria-expanded={output ? open : undefined}
+        className="text-dense group flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left hover:bg-default/60 focus-visible:status-focused-field"
+      >
+        <SquareTerminal className="size-3.5 shrink-0 text-muted" strokeWidth={1.75} />
+        <span className="shrink-0 text-foreground/80">{running ? "Running" : "Ran"}</span>
+        <span className="min-w-0 truncate font-mono text-xs text-muted">{tool.target}</span>
+        <span className="ml-auto flex shrink-0 items-center gap-2 text-2xs text-muted">
+          {running && <Spinner className="size-3" />}
+          {tool.status === "error" && <span className="text-danger">Failed</span>}
+          {output && (open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5 opacity-0 group-hover:opacity-100" />)}
+        </span>
+      </button>
+      {open && output && (
+        <pre className="mx-2 mt-1 max-h-80 overflow-auto rounded-lg bg-background/60 px-3 py-2.5 font-mono text-xs leading-relaxed whitespace-pre-wrap text-foreground/75">
+          {output}
+        </pre>
+      )}
+    </div>
+  )
+}
+
+function Edits({ tool }: { tool: Tool }) {
+  return (
+    <div className="flex flex-col gap-2">
+      {tool.files!.map((f) => (
+        <EditCard key={f.file} file={f} status={tool.status} error={tool.error} />
+      ))}
+    </div>
+  )
+}
+
+export function EditCard({ file, status, error }: { file: FileDiff; status?: Tool["status"]; error?: string | null }) {
+  const [open, setOpen] = useState(true)
+  const added = file.status === "added"
+  const waiting = status === "running"
+  return (
+    <div className="overflow-hidden rounded-xl bg-surface">
+      <button
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="text-dense flex h-9 w-full items-center gap-2.5 px-3 text-left hover:bg-default/30 focus-visible:status-focused-field focus-visible:ring-inset"
+      >
+        {added ? (
+          <FilePlus2 className="size-3.5 shrink-0 text-muted" strokeWidth={1.75} />
+        ) : (
+          <Pencil className="size-3.5 shrink-0 text-muted" strokeWidth={1.75} />
+        )}
+        <span className="shrink-0 text-foreground/80">
+          {waiting ? (added ? "Create" : "Edit") : added ? "Created" : file.status === "deleted" ? "Deleted" : "Edited"}
+        </span>
+        <span className="min-w-0 truncate font-mono text-xs text-muted">{file.file}</span>
+        <span className="ml-auto flex shrink-0 items-center gap-2">
+          {status === "error" && <span className="text-2xs text-danger">Not applied</span>}
+          <Counts add={file.additions} del={file.deletions} />
+        </span>
+      </button>
+      {open && <DiffView patch={file.patch} className="pb-2" />}
+      {error && <div className="text-2xs px-3 pb-2.5 text-danger">{error}</div>}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Asks and status
+// ---------------------------------------------------------------------------
+
+const asks: Record<string, string> = {
+  shell: "Run a command?",
+  edit: "Edit this file?",
+  write: "Write this file?",
+  webfetch: "Fetch this page?",
+  external_directory: "Work outside this folder?",
+}
+
+function PermissionCard({ permission: p }: { permission: Permission }) {
+  const shell = p.action === "shell"
+  return (
+    <div className="rounded-xl bg-surface p-4">
+      <div className="flex items-center gap-2 text-sm">
+        <span className="size-1.5 rounded-full bg-warning" />
+        {asks[p.action] ?? `Allow ${p.action}?`}
+      </div>
+      {shell ? (
+        <div className="text-dense mt-3 overflow-x-auto rounded-lg bg-background/60 px-3 py-2.5 font-mono whitespace-pre-wrap">
+          {p.resources.map((r) => (
+            <div key={r}>
+              <span className="text-muted select-none">$ </span>
+              {r}
+            </div>
+          ))}
+        </div>
+      ) : p.files?.length ? (
+        <div className="mt-3 flex flex-col gap-2">
+          {p.files.map((f) => (
+            <div key={f.file} className="overflow-hidden rounded-lg bg-background/60">
+              <div className="flex h-9 items-center gap-2 px-3">
+                <span className="min-w-0 truncate font-mono text-xs text-muted">{f.file}</span>
+                <span className="ml-auto">
+                  <Counts add={f.additions} del={f.deletions} />
+                </span>
+              </div>
+              <DiffView patch={f.patch} className="pb-2" />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-2 font-mono text-xs text-muted">{p.resources.join(", ")}</div>
+      )}
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <button onClick={() => void reply(p, "once")} className={btn("primary", "sm", "gap-2")}>
+          Allow once <Kbd onPrimary>Enter</Kbd>
+        </button>
+        {p.canAlways && (
+          <button onClick={() => void reply(p, "always")} className={btn("secondary", "sm")}>
+            Always allow{shell ? " this command" : ""}
+          </button>
+        )}
+        <button onClick={() => void reply(p, "reject")} className={btn("ghost", "sm", "ml-auto gap-2")}>
+          Deny <Kbd>Esc</Kbd>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function StatusLine({ status, waiting, streaming }: { status: Status; waiting: boolean; streaming: boolean }) {
+  if (waiting) return null
+  switch (status.kind) {
+    case "working":
+      // Streaming text already shows the model at work.
+      if (streaming) return null
+      return (
+        <div className="text-dense flex items-center gap-2 text-muted">
+          <Spinner />
+          Working
+        </div>
+      )
+    case "retrying":
+      return (
+        <div className="text-dense flex items-start gap-2 text-muted">
+          <Spinner className="mt-0.5" />
+          <span>
+            Retrying, attempt {status.attempt}
+            <span className="block text-2xs text-muted/80">{status.error}</span>
+          </span>
+        </div>
+      )
+    case "failed":
+      return (
+        <div className="text-dense flex items-start gap-2 text-danger">
+          <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
+          {status.error}
+        </div>
+      )
+    case "stopped":
+      return (
+        <div className="text-dense text-muted">
+          {status.reason === "budget"
+            ? "Stopped at this session’s budget."
+            : status.reason === "declined"
+              ? "Stopped after a denied request."
+              : "Stopped."}
+        </div>
+      )
+    default:
+      return null
+  }
+}

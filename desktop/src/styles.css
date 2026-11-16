@@ -1,0 +1,231 @@
+/* Grafit, copied from the Anysola monorepo's packages/ui styles.css (2026-11-16):
+   the desktop app is open source and cannot depend on the private package. */
+@import "tailwindcss";
+@import "@heroui/styles";
+@import "@fontsource-variable/archivo/wdth.css";
+@import "@fontsource-variable/jetbrains-mono";
+@source not "../node_modules";
+@source not "../dist";
+
+:root {
+  --font-sans-family: "Archivo Variable", ui-sans-serif, system-ui, sans-serif, "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji";
+  --font-mono-family: "JetBrains Mono Variable", ui-monospace, monospace;
+}
+
+@theme inline {
+  --font-heading: var(--font-sans-family);
+  --font-sans: var(--font-sans-family);
+  --font-mono: var(--font-mono-family);
+  /* The sizes between Tailwind's steps, size only (the line height stays
+     the element's): 10 and 11px for labels and counts, 13px for the dense
+     console text, 15px for a row's title. No other size is written by hand
+     outside a display component (DESIGN.md §2b). */
+  --text-3xs: 0.625rem;
+  --text-2xs: 0.6875rem;
+  --text-dense: 0.8125rem;
+  --text-md: 0.9375rem;
+  /* Large surfaces (cards, panels, tiles) round like HeroUI's Card: three
+     radius steps, capped at 32px. Inner boxes use rounded-lg (one step). */
+  --radius-surface: min(2rem, calc(var(--radius) * 3));
+  /* Project tokens HeroUI has no slot for. */
+  --color-info: var(--info);
+  --color-chart-series-1: var(--chart-series-1);
+  --color-chart-series-2: var(--chart-series-2);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  /* shadcn names → HeroUI variables. */
+  --color-card: var(--surface);
+  --color-card-foreground: var(--surface-foreground);
+  --color-popover: var(--overlay);
+  --color-popover-foreground: var(--overlay-foreground);
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--accent-foreground);
+  --color-secondary: var(--default);
+  --color-secondary-foreground: var(--default-foreground);
+  --color-muted-foreground: var(--muted);
+  --color-destructive: var(--danger);
+  --color-input: var(--field-border-hover);
+  --color-ring: var(--focus);
+}
+
+.dark {
+  color-scheme: dark;
+  /* "Grafit": a warm graphite (hue ~70) the owner picked over the neutral
+     greys, Cursor-like. Page #110f0d, cards and the sidebar #1a1815, menus
+     and dialogs a step lighter; fields, chips and the secondary button on
+     --default; the primary is a warm near-white with dark text. Every grey
+     here carries the same hue, so nothing reads cold next to it. */
+  --radius: 1rem;
+  --background: oklch(0.17 0.006 70);
+  --foreground: oklch(0.975 0.004 80);
+  --surface: oklch(0.21 0.007 70);
+  --surface-foreground: var(--foreground);
+  --surface-secondary: oklch(0.25 0.008 70);
+  --surface-secondary-foreground: var(--foreground);
+  --surface-tertiary: oklch(0.29 0.008 70);
+  --surface-tertiary-foreground: var(--foreground);
+  /* Dialogs and sheets: a step above the page they cover. Menus, selects
+     and other popovers: a step above the panel they open from (--surface),
+     so a select inside a card or a sheet still reads as its own layer.
+     Neither carries a ring (--overlay-shadow): tone alone parts them. */
+  --overlay: oklch(0.22 0.007 70);
+  --overlay-foreground: var(--foreground);
+  --popover: oklch(0.255 0.008 70);
+  --muted: oklch(0.72 0.015 70);
+  --default: oklch(0.27 0.008 70);
+  --default-foreground: var(--foreground);
+  --default-hover: oklch(0.31 0.009 70);
+  /* The primary: warm near-white with dark text, brightening to the
+     foreground on hover. */
+  --accent: oklch(0.93 0.012 80);
+  --accent-foreground: oklch(0.2 0.01 70);
+  --accent-hover: var(--foreground);
+  --accent-soft: oklch(0.93 0.012 80 / 10%);
+  --accent-soft-foreground: var(--foreground);
+  --accent-soft-hover: oklch(0.93 0.012 80 / 14%);
+  /* Fields sit on surfaces of the same tone, so the app's inputs use
+     HeroUI's `secondary` variant (filled with --default), as the demo did. */
+  --field-background: oklch(0.21 0.007 70);
+  --field-foreground: var(--foreground);
+  --field-placeholder: oklch(0.6 0.012 70);
+  --segment: oklch(0.33 0.009 70);
+  --segment-foreground: var(--foreground);
+  --border: oklch(0.29 0.008 70);
+  --separator: oklch(0.26 0.008 70);
+  --focus: oklch(0.62 0.015 70);
+  --link: var(--foreground);
+  --backdrop: oklch(0.1 0.005 70 / 55%);
+  --overlay-shadow: none;
+  /* HeroUI's semantic colours stay; info (ticket "open") is ours and stays
+     blue, since it is a status hue, not a grey. */
+  --info: oklch(0.72 0.09 250);
+  --chart-series-1: #3987e5;
+  --chart-series-2: #d95926;
+  --sidebar: var(--surface);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--accent);
+  --sidebar-primary-foreground: var(--accent-foreground);
+  --sidebar-accent: var(--default);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--separator);
+  --sidebar-ring: var(--focus);
+  /* shadcn variable names, for the Clerk appearance in @anysola/auth/react. */
+  --card: var(--surface);
+  --primary: var(--accent);
+  --primary-foreground: var(--accent-foreground);
+  --muted-foreground: var(--muted);
+  --destructive: var(--danger);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-focus;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+    scroll-padding-top: 4.25rem;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply font-heading tracking-tight;
+    text-wrap: balance;
+  }
+  /* No double-tap zoom delay on controls, and no grey flash on tap: every
+     control already has its own hover/active state. */
+  a,
+  button,
+  input,
+  label,
+  select,
+  summary,
+  textarea,
+  [role="button"] {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+@layer components {
+  .tooltip {
+    background-color: var(--popover);
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Code shows the characters typed: no => or /> ligatures. */
+code,
+kbd,
+.font-mono {
+  font-variant-ligatures: none;
+}
+
+/* The model's markdown: the app's type, quiet code, lists that keep their markers. */
+.prose-anysola > * + * {
+  margin-top: 0.75em;
+}
+.prose-anysola :where(code) {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--foreground);
+}
+.prose-anysola :where(pre) {
+  overflow-x: auto;
+  border-radius: 0.75rem;
+  background: oklch(0.17 0.006 70 / 60%);
+  padding: 0.625rem 0.75rem;
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+.prose-anysola :where(ul) {
+  list-style: disc;
+  padding-left: 1.25rem;
+}
+.prose-anysola :where(ol) {
+  list-style: decimal;
+  padding-left: 1.25rem;
+}
+.prose-anysola :where(li + li) {
+  margin-top: 0.25em;
+}
+.prose-anysola :where(h1, h2, h3, h4) {
+  font-weight: 500;
+  font-size: 0.9375rem;
+  margin-top: 1.25em;
+}
+.prose-anysola :where(strong) {
+  font-weight: 600;
+  color: var(--foreground);
+}
+.prose-anysola :where(blockquote) {
+  border-left: 2px solid var(--separator);
+  padding-left: 0.75rem;
+  color: var(--muted);
+}
+.prose-anysola :where(table) {
+  display: block;
+  overflow-x: auto;
+  font-size: 0.8125rem;
+  border-collapse: collapse;
+}
+.prose-anysola :where(th, td) {
+  padding: 0.25rem 0.75rem 0.25rem 0;
+  text-align: left;
+  border-bottom: 1px solid var(--separator);
+}
