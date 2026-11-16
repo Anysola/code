@@ -103,7 +103,11 @@ const pricingItems: Item[] = [
   tool("t4", "edit", planCard.file, { files: [planCard] }),
   tool("t5", "edit", pricing.file, { files: [pricing] }),
   tool("t6", "write", test.file, { files: [test] }),
-  { kind: "text", id: "m4:0", text: "The fix is in. Running the pricing tests next." },
+  {
+    kind: "text",
+    id: "m4:0",
+    text: "The fix is in. The card now reads its price this way:\n\n```tsx\nconst price = plan.prices[cycle]\n```\n\nRunning the pricing tests next.",
+  },
   tool("t7", "shell", "pnpm --filter @anysola/web test pricing", { status: "running" }),
 ]
 

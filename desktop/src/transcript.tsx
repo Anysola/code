@@ -12,8 +12,9 @@ import {
   SquareTerminal,
   Wrench,
   Check,
+  Copy,
 } from "lucide-react"
-import { useState, type ReactNode } from "react"
+import { useRef, useState, type ReactNode } from "react"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 
@@ -119,6 +120,7 @@ export function Prose({ text }: { text: string }) {
       <Markdown
         remarkPlugins={[remarkGfm]}
         components={{
+          pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
           a: ({ href, children }) => (
             <a
               href={href}
@@ -135,6 +137,31 @@ export function Prose({ text }: { text: string }) {
       >
         {text}
       </Markdown>
+    </div>
+  )
+}
+
+/** A fenced block from the model, with a copy button that shows on hover. */
+function CodeBlock({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLPreElement>(null)
+  const [copied, setCopied] = useState(false)
+  const copy = () => {
+    const text = ref.current?.innerText ?? ""
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+  return (
+    <div className="group relative">
+      <pre ref={ref}>{children}</pre>
+      <button
+        onClick={copy}
+        aria-label={copied ? "Copied" : "Copy"}
+        className="absolute top-1.5 right-1.5 flex size-7 items-center justify-center rounded-md bg-surface text-muted opacity-0 group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:status-focused-field"
+      >
+        {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+      </button>
     </div>
   )
 }
