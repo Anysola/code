@@ -69,8 +69,9 @@ export function Transcript({
           <Thinking key={l.key} text={l.text} live />
         )
       )}
-      {permissions.map((p) => (
-        <PermissionCard key={p.requestId} permission={p} />
+      {permissions.map((p, i) => (
+        // Enter and Escape answer the first ask; the keys show on that one only.
+        <PermissionCard key={p.requestId} permission={p} keys={i === 0} />
       ))}
       {questions.map((q) => (
         <QuestionCard key={q.requestId} asked={q} />
@@ -385,7 +386,7 @@ const asks: Record<string, string> = {
   external_directory: "Work outside this folder?",
 }
 
-function PermissionCard({ permission: p }: { permission: Permission }) {
+function PermissionCard({ permission: p, keys }: { permission: Permission; keys: boolean }) {
   const shell = p.action === "shell"
   return (
     <div className="rounded-xl bg-surface p-4">
@@ -421,7 +422,7 @@ function PermissionCard({ permission: p }: { permission: Permission }) {
       )}
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <button onClick={() => void reply(p, "once")} className={btn("primary", "sm", "gap-2")}>
-          Allow once <Kbd onPrimary>Enter</Kbd>
+          Allow once {keys && <Kbd onPrimary>Enter</Kbd>}
         </button>
         {p.canAlways && (
           <button onClick={() => void reply(p, "always")} className={btn("secondary", "sm")}>
@@ -429,7 +430,7 @@ function PermissionCard({ permission: p }: { permission: Permission }) {
           </button>
         )}
         <button onClick={() => void reply(p, "reject")} className={btn("ghost", "sm", "ml-auto gap-2")}>
-          Deny <Kbd>Esc</Kbd>
+          Deny {keys && <Kbd>Esc</Kbd>}
         </button>
       </div>
     </div>
