@@ -31,19 +31,58 @@ use anysola_core::tool::question::QuestionReply;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::sync::Mutex;
 use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::{Mutex, OnceCell};
 
 pub(crate) type Answer = Result<Value, String>;
 
 /// Sessions of every project, newest first, for the sidebar.
 const SESSION_LIST: u64 = 200;
+/// How long closing the window waits for MCP servers to stop.
+const EXIT_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// A folder's core and the task that sends its events to the window.
+struct Running {
+    core: Core,
+    forward: tauri::async_runtime::JoinHandle<()>,
+}
+
+impl Running {
+    /// Ends what the core has going: its turns, its MCP servers, its background commands.
+    async fn stop(&self) {
+        self.core.interrupt_all();
+        if let Some(mcp) = self.core.mcp() {
+            mcp.shutdown().await;
+        }
+        self.core.shutdown();
+        // The task holds the core and would otherwise never end.
+        self.forward.abort();
+    }
+}
 
 pub(crate) struct App {
     db: Option<Arc<Db>>,
-    /// One core per project directory, started when one of its sessions opens.
-    cores: Mutex<HashMap<PathBuf, Core>>,
+    /// One core per project directory, started when one of its sessions opens. Each has its own
+    /// cell, so a folder that is slow to start holds up nothing but itself.
+    cores: Mutex<HashMap<PathBuf, Arc<OnceCell<Running>>>>,
     pub(crate) login: Mutex<Option<DeviceLogin>>,
+}
+
+/// One key per folder however it is spelled: Windows hands the same folder over with either
+/// case and with or without a trailing separator, and two cores on one folder would each run
+/// its MCP servers and not see the other's turns.
+fn key(directory: &str) -> PathBuf {
+    let trimmed = directory.trim_end_matches(['/', '\\']);
+    let trimmed = if trimmed.is_empty() || trimmed.ends_with(':') {
+        directory
+    } else {
+        trimmed
+    };
+    if cfg!(windows) {
+        PathBuf::from(trimmed.replace('/', "\\").to_lowercase())
+    } else {
+        PathBuf::from(trimmed)
+    }
 }
 
 impl App {
@@ -55,14 +94,18 @@ impl App {
 
     /// A core reads the token when it starts: after signing in or out, start them afresh.
     pub(crate) async fn drop_cores(&self) {
-        for (_, core) in self.cores.lock().await.drain() {
-            core.shutdown();
+        let cells: Vec<_> = self.cores.lock().await.drain().map(|(_, c)| c).collect();
+        for cell in cells {
+            if let Some(running) = cell.get() {
+                running.stop().await;
+            }
         }
     }
 
     /// The directory's core if one is running (deleting must not start one).
     async fn running(&self, directory: &str) -> Option<Core> {
-        self.cores.lock().await.get(Path::new(directory)).cloned()
+        let cell = self.cores.lock().await.get(&key(directory)).cloned()?;
+        cell.get().map(|running| running.core.clone())
     }
 }
 
@@ -76,21 +119,44 @@ pub(crate) async fn core_for(
     app: &App,
     directory: &str,
 ) -> Result<Core, String> {
-    let mut cores = app.cores.lock().await;
-    if let Some(core) = cores.get(Path::new(directory)) {
-        return Ok(core.clone());
+    let key = key(directory);
+    let cell = app
+        .cores
+        .lock()
+        .await
+        .entry(key.clone())
+        .or_default()
+        .clone();
+    let running = cell
+        .get_or_try_init(|| async {
+            if !Path::new(directory).is_dir() {
+                return Err(format!("{directory} is not a folder on this computer."));
+            }
+            let core = Core::start(Path::new(directory)).await.map_err(text)?;
+            anysola_mcp::Runtime::attach(&core);
+            let forward = forward(handle.clone(), &core, directory.to_string());
+            Ok(Running { core, forward })
+        })
+        .await?;
+    // Signing in or out let the cores go while this one was starting: it has the old token.
+    let kept = app
+        .cores
+        .lock()
+        .await
+        .get(&key)
+        .is_some_and(|held| Arc::ptr_eq(held, &cell));
+    if !kept {
+        running.stop().await;
+        return Err("The account changed while this folder was opening. Open it again.".into());
     }
-    if !Path::new(directory).is_dir() {
-        return Err(format!("{directory} is not a folder on this computer."));
-    }
-    let core = Core::start(Path::new(directory)).await.map_err(text)?;
-    anysola_mcp::Runtime::attach(&core);
-    forward(handle.clone(), &core, directory.to_string());
-    cores.insert(PathBuf::from(directory), core.clone());
-    Ok(core)
+    Ok(running.core.clone())
 }
 
-fn forward(handle: AppHandle, core: &Core, directory: String) {
+fn forward(
+    handle: AppHandle,
+    core: &Core,
+    directory: String,
+) -> tauri::async_runtime::JoinHandle<()> {
     let mut events = core.subscribe();
     let core = core.clone();
     tauri::async_runtime::spawn(async move {
@@ -133,7 +199,7 @@ fn forward(handle: AppHandle, core: &Core, directory: String) {
                 Err(RecvError::Closed) => return,
             }
         }
-    });
+    })
 }
 
 /// The top session above a subagent's (itself for a root session).
@@ -270,7 +336,11 @@ async fn open_session(
     session_id: String,
 ) -> Answer {
     let core = core_for(&handle, &app, &directory).await?;
-    let (row, _) = core.open(&Target::Id(session_id), false).map_err(text)?;
+    // `open` would start an empty session under the id of one deleted elsewhere.
+    let row = core
+        .session(&session_id)
+        .map_err(text)?
+        .ok_or("This session no longer exists.")?;
     Ok(json!({
         "session": session_json(&row),
         "view": transcript::view(&core, &row.id, &row.directory)?,
@@ -331,12 +401,12 @@ struct Attachment {
 }
 
 /// The composer's mode as the session's permission floor: Ask asks before changes, Edits
-/// before commands, Auto leaves it to the rules.
+/// before commands, Auto leaves it to the rules. A mode this build doesn't know asks.
 pub(crate) fn floor(mode: &str) -> Floor {
     match mode {
-        "ask" => Floor::Changes,
+        "auto" => Floor::None,
         "edits" => Floor::Commands,
-        _ => Floor::None,
+        _ => Floor::Changes,
     }
 }
 
@@ -610,6 +680,16 @@ fn main() {
             git::suggest_commit_message,
             git::reveal,
         ])
-        .run(tauri::generate_context!())
-        .expect("the Anysola Code window failed to start");
+        .build(tauri::generate_context!())
+        .expect("the Anysola Code window failed to start")
+        .run(|handle, event| {
+            // Windows leaves a closed app's children running: background commands and MCP
+            // servers would outlive the window.
+            if let tauri::RunEvent::Exit = event {
+                let app = handle.state::<App>();
+                tauri::async_runtime::block_on(async {
+                    let _ = tokio::time::timeout(EXIT_GRACE, app.drop_cores()).await;
+                });
+            }
+        });
 }

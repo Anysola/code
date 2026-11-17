@@ -750,6 +750,19 @@ impl Core {
             .contains_key(session_id)
     }
 
+    /// Interrupts every running turn (the front end is letting this core go).
+    pub fn interrupt_all(&self) {
+        for token in self
+            .shared
+            .turns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+        {
+            token.cancel();
+        }
+    }
+
     /// Interrupts the session's running turn, if any.
     pub fn interrupt(&self, session_id: &str) {
         if let Some(token) = self

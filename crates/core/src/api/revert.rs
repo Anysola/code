@@ -9,6 +9,11 @@ use crate::session::message::Message;
 use crate::tool::edit::diff::{FileDiff, Status};
 
 impl Core {
+    /// Whether a rewind puts files back here: only where snapshots are kept (a git folder).
+    pub fn restores_files(&self) -> bool {
+        self.shared.snapshots.is_some()
+    }
+
     /// Reverts the session to before `message_id`. Repeating it with another message keeps the
     /// files' original state from the first revert.
     pub fn revert(&self, session_id: &str, message_id: &str) -> Result<Value, CoreError> {

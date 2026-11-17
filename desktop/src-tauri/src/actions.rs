@@ -74,6 +74,8 @@ pub async fn revert(
     Ok(json!({
         "text": typed,
         "view": transcript::view(&core, &session_id, &directory)?,
+        // Outside git nothing was snapshotted: the turns hide but their edits stay.
+        "filesKept": !core.restores_files(),
     }))
 }
 
