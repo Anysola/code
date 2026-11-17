@@ -7,6 +7,9 @@ use crate::config::{Config, Entry};
 use crate::paths::Paths;
 use crate::permission::{Effect, Rule};
 
+/// The folders of a config directory that hold markdown agents (`mode`/`modes`: primary ones).
+pub const FOLDERS: [&str; 4] = ["agent", "agents", "mode", "modes"];
+
 pub const PROMPT_EXPLORE: &str = include_str!("prompt/explore.txt");
 pub const PROMPT_TITLE: &str = include_str!("prompt/title.txt");
 
@@ -30,6 +33,9 @@ pub struct Agent {
     pub model: Option<String>,
     pub steps: Option<u32>,
     pub permissions: Vec<Rule>,
+    /// Where it is defined (its markdown file or config document); `None` for a built-in, even
+    /// one a config tunes.
+    pub source: Option<String>,
 }
 
 impl Agent {
@@ -43,6 +49,7 @@ impl Agent {
             system: None,
             model: None,
             steps: None,
+            source: None,
             permissions: vec![
                 Rule::new("*", "*", Effect::Allow),
                 Rule::new("read", "*.env", Effect::Ask),
@@ -173,17 +180,18 @@ impl Agents {
             .map(|r| expand(r, &home))
             .collect();
         let mut list = builtins(paths);
+        let builtin: Vec<String> = list.iter().map(|a| a.id.clone()).collect();
         for agent in &mut list {
             agent.permissions.extend(global.iter().cloned());
         }
         let defined = config.entries.iter().flat_map(|entry| match entry {
             Entry::Directory(dir) => markdown_agents(dir),
-            Entry::Document { agents, .. } => agents
+            Entry::Document { agents, source, .. } => agents
                 .iter()
-                .map(|(id, item)| (id.clone(), item.clone()))
+                .map(|(id, item)| (id.clone(), item.clone(), source.clone()))
                 .collect(),
         });
-        for (id, item) in defined {
+        for (id, item, source) in defined {
             if item.get("disabled").and_then(Value::as_bool) == Some(true) {
                 list.retain(|a| a.id != id);
                 continue;
@@ -198,6 +206,9 @@ impl Agents {
                 }
             };
             apply(&mut list[index], &item, &home);
+            if !builtin.contains(&id) {
+                list[index].source = source;
+            }
         }
         Agents {
             list,
@@ -238,14 +249,10 @@ impl Agents {
 
 /// `{agent,agents}/**/*.md` (mode from frontmatter) and `{mode,modes}/*.md` (always primary) of a
 /// config directory; the id is the path below that folder without `.md`.
-fn markdown_agents(dir: &std::path::Path) -> Vec<(String, Value)> {
+fn markdown_agents(dir: &std::path::Path) -> Vec<(String, Value, Option<String>)> {
     let mut out = Vec::new();
-    for (folder, primary) in [
-        ("agent", false),
-        ("agents", false),
-        ("mode", true),
-        ("modes", true),
-    ] {
+    for folder in FOLDERS {
+        let primary = folder.starts_with("mode");
         let root = dir.join(folder);
         if !root.is_dir() {
             continue;
@@ -274,7 +281,11 @@ fn markdown_agents(dir: &std::path::Path) -> Vec<(String, Value)> {
                 agent["mode"] = Value::String("primary".into());
             }
             let id = file.strip_prefix(&root).unwrap_or(&file).with_extension("");
-            out.push((id.to_string_lossy().replace('\\', "/"), agent));
+            out.push((
+                id.to_string_lossy().replace('\\', "/"),
+                agent,
+                Some(file.display().to_string()),
+            ));
         }
     }
     out
@@ -319,6 +330,7 @@ mod tests {
         cfg.entries = vec![Entry::Document {
             agents: config.as_object().unwrap().clone(),
             commands: Default::default(),
+            source: Some("/doc.json".into()),
         }];
         Agents::load(&cfg, &paths)
     }
@@ -332,6 +344,7 @@ mod tests {
         assert_eq!(all.default_agent().unwrap().id, "build");
         assert!(all.get("general").is_none());
         let review = all.get("anysola-review").unwrap();
+        assert_eq!(review.source.as_deref(), Some("/doc.json"));
         assert_eq!(review.permissions.last().unwrap().effect, Effect::Deny);
         assert_eq!(
             all.subagents_for(&all.get("build").unwrap().permissions)
@@ -386,8 +399,9 @@ mod tests {
                     .unwrap()
                     .clone(),
                 commands: Default::default(),
+                source: Some("/doc.json".into()),
             },
-            Entry::Directory(project),
+            Entry::Directory(project.clone()),
         ];
         let all = Agents::load(&config, &Paths::isolated("/home/u".into()));
         let reviewer = all.get("team/reviewer").unwrap();
@@ -428,6 +442,11 @@ mod tests {
             "an invalid V1 colour drops the agent"
         );
         assert_eq!(all.get("focus").unwrap().mode, Mode::Primary);
+        assert_eq!(
+            reviewer.source,
+            Some(project.join("agent/team/reviewer.md").display().to_string())
+        );
+        assert_eq!(all.get("build").unwrap().source, None);
         assert!(all.get("nested/skip").is_none());
     }
 }

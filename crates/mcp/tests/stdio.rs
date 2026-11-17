@@ -93,6 +93,9 @@ fn server_through_the_stack() {
             ("testsrv".into(), Status::Connected),
         ]
     );
+    // `broken` has a malformed schema and is left out.
+    assert_eq!(mcp.tool_count("testsrv"), Some(2));
+    assert_eq!(mcp.tool_count("bad1"), None, "not connected");
     let greet = core.commands().get("testsrv:greet").cloned().unwrap();
     assert_eq!(greet.description.as_deref(), Some("Greets"));
 

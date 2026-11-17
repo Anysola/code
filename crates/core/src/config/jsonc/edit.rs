@@ -1,6 +1,7 @@
-//! Setting one property in a JSONC document the way `jsonc-parser`'s `modify` + `applyEdits` do
-//! (formatting 2 spaces, comments and the rest of the file kept), so `mcp add` writes the same
-//! bytes 0.5.1 wrote.
+//! Editing one property of a JSONC document in place. Setting works the way `jsonc-parser`'s
+//! `modify` + `applyEdits` do (formatting 2 spaces, comments and the rest of the file kept), so
+//! `mcp add` writes the same bytes 0.5.1 wrote. Removing cuts the property, its comma and a line
+//! it leaves empty, and touches nothing else.
 
 use serde_json::{Value, json};
 
@@ -385,7 +386,8 @@ impl Tree {
         node
     }
 
-    /// `findNodeAtLocation`.
+    /// `findNodeAtLocation`, except that of duplicate keys the last one is found: it is the one
+    /// a parser keeps.
     fn find(&self, root: usize, path: &[&str]) -> Option<usize> {
         let mut node = root;
         for segment in path {
@@ -393,7 +395,7 @@ impl Tree {
             if current.kind != NodeType::Object {
                 return None;
             }
-            node = current.children.iter().find_map(|&property| {
+            node = current.children.iter().rev().find_map(|&property| {
                 let children = &self.nodes[property].children;
                 (children.len() == 2 && self.nodes[children[0]].value == *segment)
                     .then(|| children[1])
@@ -419,6 +421,7 @@ fn apply(text: &str, edit: &Edit) -> String {
 }
 
 const INDENT: &str = "  ";
+const BOM: char = '\u{feff}';
 
 fn indent_level(text: &str) -> usize {
     let columns: usize = text
@@ -600,6 +603,10 @@ fn with_formatting(text: &str, edit: Edit) -> String {
 /// Sets `path` (object keys) to `value` in `text`, as `applyEdits(text, modify(text, path, value,
 /// {formattingOptions: {tabSize: 2, insertSpaces: true}}))`.
 pub fn set(text: &str, path: &[&str], value: Value) -> Result<String, String> {
+    // A byte order mark is kept in front and not edited (the scanner would take it for a token).
+    if let Some(rest) = text.strip_prefix(BOM) {
+        return set(rest, path, value).map(|out| format!("{BOM}{out}"));
+    }
     let tree = Tree::parse(text);
     let root = (!tree.nodes.is_empty()).then_some(0);
     let mut value = value;
@@ -613,7 +620,7 @@ pub fn set(text: &str, path: &[&str], value: Value) -> Result<String, String> {
         }
         value = json!({ path[depth]: value });
     }
-    let content = |v: &Value| anysola_core::json::compact(v);
+    let content = |v: &Value| crate::json::compact(v);
     let Some(parent) = found else {
         let (offset, length) =
             root.map_or((0, 0), |r| (tree.nodes[r].offset, tree.nodes[r].length));
@@ -659,4 +666,248 @@ pub fn set(text: &str, path: &[&str], value: Value) -> Result<String, String> {
         },
     };
     Ok(with_formatting(text, edit))
+}
+
+/// The first significant token at or after `from`, with its offset.
+fn next_token(text: &str, from: usize) -> (Kind, usize) {
+    let mut scanner = Scanner::new(text);
+    scanner.pos = from;
+    let kind = scanner.scan_significant();
+    (kind, scanner.offset)
+}
+
+/// Removes `path` (object keys) from `text`: the property, the comma that separated it from its
+/// neighbour, and its line when nothing else was on it. An object the removal leaves empty goes
+/// too, up to (not including) the root. A missing key leaves the text as it was.
+pub fn remove(text: &str, path: &[&str]) -> String {
+    if let Some(rest) = text.strip_prefix(BOM) {
+        return format!("{BOM}{}", remove(rest, path));
+    }
+    let mut out = text.to_string();
+    for depth in (1..=path.len()).rev() {
+        let Some(next) = remove_one(&out, &path[..depth]) else {
+            break;
+        };
+        out = next;
+        if depth == 1 {
+            break;
+        }
+        // The parent goes too when it is now `{}` with nothing inside, comments included.
+        let tree = Tree::parse(&out);
+        let Some(parent) = (!tree.nodes.is_empty())
+            .then(|| tree.find(0, &path[..depth - 1]))
+            .flatten()
+        else {
+            break;
+        };
+        let node = &tree.nodes[parent];
+        let empty = node.kind == NodeType::Object
+            && node.children.is_empty()
+            && node.length >= 2
+            && out[node.offset + 1..node.offset + node.length - 1]
+                .trim()
+                .is_empty();
+        if !empty {
+            break;
+        }
+    }
+    out
+}
+
+fn remove_one(text: &str, path: &[&str]) -> Option<String> {
+    let tree = Tree::parse(text);
+    if tree.nodes.is_empty() {
+        return None;
+    }
+    let (key, parents) = path.split_last()?;
+    let parent = &tree.nodes[tree.find(0, parents)?];
+    if parent.kind != NodeType::Object {
+        return None;
+    }
+    // The last of duplicate keys, the one a parser keeps.
+    let index = parent.children.iter().rposition(|&property| {
+        let children = &tree.nodes[property].children;
+        children.len() == 2 && tree.nodes[children[0]].value == *key
+    })?;
+    let property = &tree.nodes[parent.children[index]];
+    let mut start = property.offset;
+    let mut end = property.offset + property.length;
+    // The comma after the property, else (the last one) the comma before it.
+    let mut comma_before = None;
+    match next_token(text, end) {
+        (Kind::Comma, at) => end = at + 1,
+        _ if index > 0 => {
+            let previous = &tree.nodes[parent.children[index - 1]];
+            if let (Kind::Comma, at) = next_token(text, previous.offset + previous.length) {
+                comma_before = Some(at);
+            }
+        }
+        _ => {}
+    }
+    let line_start = text[..start].rfind(['\n', '\r']).map_or(0, |i| i + 1);
+    let line_end = text[end..].find(['\n', '\r']).map(|i| end + i);
+    // A comment after it on its line is about it, and goes with it.
+    let alone = text[line_start..start].trim().is_empty()
+        && line_end.is_some_and(|line_end| {
+            let rest = text[end..line_end].trim();
+            rest.is_empty() || rest.starts_with("//")
+        });
+    match line_end {
+        Some(line_end) if alone => {
+            start = line_start;
+            end = line_end
+                + if text[line_end..].starts_with("\r\n") {
+                    2
+                } else {
+                    1
+                };
+        }
+        _ => {
+            // On a shared line: no gap left behind, and a comma just before goes with it.
+            end += text[end..]
+                .bytes()
+                .take_while(|b| *b == b' ' || *b == b'\t')
+                .count();
+            if let Some(at) = comma_before
+                && text[at + 1..start].trim().is_empty()
+            {
+                start = at;
+                comma_before = None;
+            }
+        }
+    }
+    let mut out = format!("{}{}", &text[..start], &text[end..]);
+    if let Some(at) = comma_before {
+        out.remove(at);
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parsed(text: &str) -> Value {
+        super::super::parse(text).unwrap_or_else(|e| panic!("{e}: {text}"))
+    }
+
+    #[test]
+    fn set_adds_and_replaces_keeping_comments() {
+        let text = "{\n  // servers\n  \"mcp\": {}\n}\n";
+        let added = set(text, &["mcp", "servers", "x"], json!({"type": "remote"})).unwrap();
+        assert!(added.contains("// servers"));
+        assert_eq!(
+            parsed(&added),
+            json!({"mcp": {"servers": {"x": {"type": "remote"}}}})
+        );
+        let replaced = set(&added, &["mcp", "servers", "x"], json!(1)).unwrap();
+        assert_eq!(parsed(&replaced), json!({"mcp": {"servers": {"x": 1}}}));
+        assert_eq!(
+            set("", &["model"], json!("anysola/m")).unwrap(),
+            "{\n  \"model\": \"anysola/m\"\n}"
+        );
+    }
+
+    #[test]
+    fn remove_a_line_of_its_own() {
+        let text =
+            "{\n  // the model\n  \"model\": \"anysola/m\",\n  \"shell\": \"zsh\" // mine\n}\n";
+        assert_eq!(
+            remove(text, &["model"]),
+            "{\n  // the model\n  \"shell\": \"zsh\" // mine\n}\n"
+        );
+        assert_eq!(
+            remove(text, &["shell"]),
+            "{\n  // the model\n  \"model\": \"anysola/m\"\n}\n"
+        );
+    }
+
+    #[test]
+    fn remove_with_trailing_commas() {
+        assert_eq!(remove("{\"a\": 1,}", &["a"]), "{}");
+        assert_eq!(remove("{\n  \"a\": 1,\n}\n", &["a"]), "{\n}\n");
+        let last = "{\n  \"a\": 1,\n  \"b\": 2,\n}\n";
+        let out = remove(last, &["b"]);
+        assert_eq!(out, "{\n  \"a\": 1,\n}\n");
+        assert_eq!(parsed(&out), json!({"a": 1}));
+    }
+
+    #[test]
+    fn remove_the_last_key_after_a_commented_line() {
+        let text = "{\n  \"a\": 1, // note\n  \"b\": 2,\n}\n";
+        let out = remove(text, &["b"]);
+        assert_eq!(out, "{\n  \"a\": 1, // note\n}\n");
+        assert_eq!(parsed(&out), json!({"a": 1}));
+        let text = "{\n  \"a\": 1, // note\n  \"b\": 2\n}\n";
+        assert_eq!(parsed(&remove(text, &["b"])), json!({"a": 1}));
+    }
+
+    #[test]
+    fn duplicate_keys_edit_the_one_that_counts() {
+        let text = "{\n  \"a\": 1,\n  \"a\": 2\n}\n";
+        let set_out = set(text, &["a"], json!(3)).unwrap();
+        assert_eq!(set_out, "{\n  \"a\": 1,\n  \"a\": 3\n}\n");
+        assert_eq!(parsed(&set_out), json!({"a": 3}));
+        let removed = remove(text, &["a"]);
+        assert_eq!(removed, "{\n  \"a\": 1\n}\n");
+        let nested = "{\"m\": {\"x\": 1}, \"m\": {\"y\": 2}}";
+        assert_eq!(
+            parsed(&set(nested, &["m", "z"], json!(3)).unwrap()),
+            json!({"m": {"y": 2, "z": 3}})
+        );
+    }
+
+    #[test]
+    fn remove_on_one_line() {
+        assert_eq!(remove("{\"a\": 1, \"b\": 2}", &["a"]), "{\"b\": 2}");
+        assert_eq!(remove("{\"a\": 1, \"b\": 2}", &["b"]), "{\"a\": 1}");
+        assert_eq!(
+            remove("{\"a\": 1, \"b\": 2, \"c\": 3}", &["b"]),
+            "{\"a\": 1, \"c\": 3}"
+        );
+    }
+
+    #[test]
+    fn remove_nested_drops_a_parent_left_empty() {
+        let text = "{\n  \"experimental\": {\n    \"todo\": true\n  },\n  \"x\": 1\n}\n";
+        let out = remove(text, &["experimental", "todo"]);
+        assert_eq!(out, "{\n  \"x\": 1\n}\n");
+        let kept = "{\n  \"experimental\": {\n    \"todo\": true,\n    \"other\": 1\n  }\n}\n";
+        assert_eq!(
+            parsed(&remove(kept, &["experimental", "todo"])),
+            json!({"experimental": {"other": 1}})
+        );
+        // A comment inside keeps the parent.
+        let commented = "{\n  \"experimental\": {\n    // why\n    \"todo\": true\n  }\n}\n";
+        assert_eq!(
+            remove(commented, &["experimental", "todo"]),
+            "{\n  \"experimental\": {\n    // why\n  }\n}\n"
+        );
+    }
+
+    #[test]
+    fn remove_missing_keys_changes_nothing() {
+        let text = "{\n  \"a\": 1 // c\n}";
+        assert_eq!(remove(text, &["b"]), text);
+        assert_eq!(remove(text, &["a", "deeper"]), text);
+        assert_eq!(remove("", &["a"]), "");
+    }
+
+    #[test]
+    fn a_byte_order_mark_stays_in_front() {
+        let text = "\u{feff}{\n  \"a\": 1\n}\n";
+        let added = set(text, &["b"], json!(2)).unwrap();
+        assert!(added.starts_with('\u{feff}') && added.matches('{').count() == 1);
+        assert_eq!(parsed(&added), json!({"a": 1, "b": 2}));
+        let removed = remove(&added, &["a"]);
+        assert!(removed.starts_with('\u{feff}'));
+        assert_eq!(parsed(&removed), json!({"b": 2}));
+    }
+
+    #[test]
+    fn remove_keeps_crlf() {
+        let text = "{\r\n  \"a\": 1,\r\n  \"b\": 2\r\n}\r\n";
+        assert_eq!(remove(text, &["a"]), "{\r\n  \"b\": 2\r\n}\r\n");
+        assert_eq!(remove(text, &["b"]), "{\r\n  \"a\": 1\r\n}\r\n");
+    }
 }

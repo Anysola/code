@@ -57,6 +57,11 @@ impl Paths {
         self.data.join("config.json")
     }
 
+    /// The desktop app's own preferences.
+    pub fn desktop_prefs(&self) -> PathBuf {
+        self.data.join("desktop.json")
+    }
+
     pub fn log_file(&self) -> PathBuf {
         self.data.join("log").join("anysola.log")
     }

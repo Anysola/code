@@ -47,6 +47,8 @@ struct Logger {
     level: Level,
     print: bool,
     run: String,
+    /// Which program wrote the line (`cli`, `desktop`): every one appends to the same file.
+    role: &'static str,
     lock: Mutex<()>,
 }
 
@@ -72,6 +74,11 @@ fn trim(file: &PathBuf) {
 
 /// Sets up logging for this process; `level` and `print` come from flags, else the environment.
 pub fn init(paths: &crate::paths::Paths, level: Option<&str>, print: bool) {
+    init_as(paths, level, print, "cli");
+}
+
+/// [`init`] for a program other than the CLI, named by `role` in each line.
+pub fn init_as(paths: &crate::paths::Paths, level: Option<&str>, print: bool, role: &'static str) {
     let level = level
         .and_then(Level::parse)
         .or_else(|| {
@@ -92,6 +99,7 @@ pub fn init(paths: &crate::paths::Paths, level: Option<&str>, print: bool) {
         level,
         print,
         run,
+        role,
         lock: Mutex::new(()),
     });
 }
@@ -119,7 +127,7 @@ pub fn write(level: Level, message: &str, fields: &[(&str, &str)]) {
     for (key, text) in fields {
         line.push_str(&format!(" {key}={}", value(text)));
     }
-    line.push_str(" role=cli\n");
+    line.push_str(&format!(" role={}\n", logger.role));
     let _guard = logger.lock.lock().unwrap_or_else(|e| e.into_inner());
     if let Ok(mut file) = OpenOptions::new()
         .create(true)

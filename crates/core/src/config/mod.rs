@@ -13,6 +13,8 @@
 
 pub mod jsonc;
 mod mcp;
+
+pub use mcp::{local_server, remote_server};
 mod normalize;
 mod substitute;
 
@@ -46,6 +48,8 @@ struct Document {
     managed: bool,
     /// The directory of the document's file; relative `references` paths resolve against it.
     dir: Option<PathBuf>,
+    /// The file (or variable) it came from; `None` for the gateway's document.
+    source: Option<String>,
 }
 
 /// A config source as `anysola debug config` lists it.
@@ -68,6 +72,8 @@ pub enum Entry {
     Document {
         agents: Map<String, Value>,
         commands: Map<String, Value>,
+        /// The document's file (or variable); `None` for the gateway's document.
+        source: Option<String>,
     },
     /// A config directory whose `agent/`, `command/`, … folders hold markdown definitions.
     Directory(PathBuf),
@@ -163,6 +169,31 @@ impl Config {
         self.mcp.resolve(&self.policies())
     }
 
+    /// The last local document that sets the top-level `key` (a later document replaces the
+    /// whole value), as its path; the gateway's document is not one.
+    pub fn source_of(&self, key: &str) -> Option<&str> {
+        self.documents()
+            .filter(|(_, data)| data.contains_key(key))
+            .last()
+            .map(|(path, _)| path)
+    }
+
+    /// The last local document that defines MCP server `name`.
+    pub fn mcp_source(&self, name: &str) -> Option<&str> {
+        self.documents()
+            .filter(|(_, data)| mcp::defines(data, name))
+            .last()
+            .map(|(path, _)| path)
+    }
+
+    /// The local documents in load order: `(path, data)`.
+    pub fn documents(&self) -> impl Iterator<Item = (&str, &Map<String, Value>)> {
+        self.sources.iter().filter_map(|source| match source {
+            Source::Document { path, data } => Some((path.as_str(), data)),
+            Source::Directory(_) => None,
+        })
+    }
+
     /// Every policy statement; the last one matching decides.
     pub fn policies(&self) -> Policies {
         Policies(
@@ -183,6 +214,7 @@ impl Config {
                 data: data.as_object().cloned().unwrap_or_default(),
                 managed: false,
                 dir: None,
+                source: None,
             });
         }
         config
@@ -233,7 +265,11 @@ impl Config {
         let agents = map(data.remove("agents"));
         let commands = map(data.remove("commands"));
         if !agents.is_empty() || !commands.is_empty() {
-            self.entries.push(Entry::Document { agents, commands });
+            self.entries.push(Entry::Document {
+                agents,
+                commands,
+                source: document.source.clone(),
+            });
         }
         if let Some(Value::Object(mut providers)) = data.remove("providers")
             && let Some(Value::Object(anysola)) = providers.remove("anysola")
@@ -530,13 +566,24 @@ struct Loader<'a> {
     managed: bool,
 }
 
+/// One local document as the loader takes it: variables substituted, the 0.5.x keys moved to
+/// their current names, and the provider lock applied. `None` when it isn't a JSON object.
+pub fn document(text: &str, dir: &Path, paths: &Paths) -> Option<Map<String, Value>> {
+    let text = substitute::substitute(text, dir, &paths.home);
+    match jsonc::parse(&text) {
+        Ok(Value::Object(map)) => {
+            let mut data = normalize::normalize(map);
+            lock_local(&mut data);
+            Some(data)
+        }
+        _ => None,
+    }
+}
+
 impl Loader<'_> {
     fn text(&mut self, text: &str, dir: &Path, source: &str) {
-        let text = substitute::substitute(text, dir, &self.paths.home);
-        match jsonc::parse(&text) {
-            Ok(Value::Object(map)) => {
-                let mut data = normalize::normalize(map);
-                lock_local(&mut data);
+        match document(text, dir, self.paths) {
+            Some(data) => {
                 self.config.sources.push(Source::Document {
                     path: source.to_string(),
                     data: data.clone(),
@@ -545,6 +592,7 @@ impl Loader<'_> {
                     data,
                     managed: self.managed,
                     dir: Some(dir.to_path_buf()),
+                    source: Some(source.to_string()),
                 });
             }
             _ => self
@@ -594,6 +642,7 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
             data: remote,
             managed: false,
             dir: None,
+            source: None,
         });
     }
     let legacy = paths.legacy_config_dir();
@@ -671,6 +720,7 @@ mod tests {
             data: value.as_object().unwrap().clone(),
             managed,
             dir: None,
+            source: None,
         };
         let deny =
             |resource: &str| json!({"action": "tool.use", "resource": resource, "effect": "deny"});
@@ -762,6 +812,12 @@ mod tests {
             Some(&Entry::Document {
                 agents: json!({"build": {"steps": 3}}).as_object().unwrap().clone(),
                 commands: Map::new(),
+                source: Some(
+                    project
+                        .join(".opencode/opencode.json")
+                        .display()
+                        .to_string()
+                ),
             })
         );
     }
@@ -810,8 +866,59 @@ mod tests {
             Some(&Entry::Document {
                 agents: json!({"build": {"steps": 5}}).as_object().unwrap().clone(),
                 commands: Map::new(),
+                source: Some(project.join(".anysola/anysola.json").display().to_string()),
             })
         );
+    }
+
+    #[test]
+    fn a_hand_written_trailing_comma_before_a_comment_loads() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        std::fs::create_dir_all(home.join(".anysola")).unwrap();
+        let paths = Paths::isolated(home.clone());
+        std::fs::write(paths.config_file(), "{\n  \"shell\": \"zsh\", // mine\n}\n").unwrap();
+        let config = load(&paths, &home, &LoadOptions::default());
+        assert_eq!(config.shell(), Some("zsh"));
+        assert!(config.warnings.is_empty(), "{:?}", config.warnings);
+    }
+
+    #[test]
+    fn which_document_defines_a_key_or_server() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let project = home.join("proj");
+        std::fs::create_dir_all(home.join(".anysola")).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        let paths = Paths::isolated(home.clone());
+        std::fs::write(
+            paths.config_file(),
+            r#"{"websearch": false, "experimental": {"todo": true},
+                "mcp": {"servers": {"mine": {"type": "remote", "url": "https://m/mcp"},
+                                    "shared": {"type": "local", "command": ["a"]}},
+                        "old": {"type": "local", "command": ["b"]}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            project.join("anysola.json"),
+            r#"{"experimental": {"subagent_depth": 2},
+                "mcp": {"servers": {"shared": {"type": "local", "command": ["c"]}}}}"#,
+        )
+        .unwrap();
+        let config = load(&paths, &project, &LoadOptions::default());
+        let global = paths.config_file().display().to_string();
+        let local = project.join("anysola.json").display().to_string();
+        assert_eq!(config.source_of("websearch"), Some(global.as_str()));
+        assert_eq!(config.source_of("experimental"), Some(local.as_str()));
+        assert_eq!(config.source_of("shell"), None);
+        assert_eq!(config.mcp_source("mine"), Some(global.as_str()));
+        assert_eq!(
+            config.mcp_source("old"),
+            Some(global.as_str()),
+            "a 0.5.x entry"
+        );
+        assert_eq!(config.mcp_source("shared"), Some(local.as_str()));
+        assert_eq!(config.mcp_source("none"), None);
     }
 
     #[test]

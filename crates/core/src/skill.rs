@@ -4,6 +4,7 @@
 //! source replaces a skill with the same id.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -158,9 +159,30 @@ enum Source {
     Url(String),
 }
 
+/// Whether `.claude` skill folders are read, as a front end's own setting says (the desktop's
+/// Settings); `ANYSOLA_DISABLE_CLAUDE_CODE[_SKILLS]` turns them off whatever this says. A switch
+/// in the process rather than an environment variable, which would leak into shells and MCP
+/// servers. Running cores see a change on their next reload ([`crate::api::Core::reload`]).
+static CLAUDE_SKILLS: AtomicBool = AtomicBool::new(true);
+
+pub fn set_claude_skills(on: bool) {
+    CLAUDE_SKILLS.store(on, Ordering::SeqCst);
+}
+
+/// Whether `.claude` skill folders are read now: the switch and the environment.
+pub fn claude_skills() -> bool {
+    CLAUDE_SKILLS.load(Ordering::SeqCst)
+        && !truthy("DISABLE_CLAUDE_CODE")
+        && !truthy("DISABLE_CLAUDE_CODE_SKILLS")
+}
+
 /// The `.claude` and `.agents` roots: home first, then the project walk farthest first (nearest
-/// wins). `.claude` is skipped under `ANYSOLA_DISABLE_CLAUDE_CODE[_SKILLS]`.
+/// wins). `.claude` is skipped when [`claude_skills`] says so.
 fn compatibility_roots(paths: &Paths, directory: &Path) -> Vec<PathBuf> {
+    roots(paths, directory, claude_skills())
+}
+
+fn roots(paths: &Paths, directory: &Path, claude: bool) -> Vec<PathBuf> {
     let project = !truthy("CONFIG_PROJECT_DISABLE")
         && !truthy("DISABLE_PROJECT_CONFIG")
         && directory != paths.legacy_config_dir()
@@ -173,7 +195,6 @@ fn compatibility_roots(paths: &Paths, directory: &Path) -> Vec<PathBuf> {
     } else {
         Vec::new()
     };
-    let claude = !truthy("DISABLE_CLAUDE_CODE") && !truthy("DISABLE_CLAUDE_CODE_SKILLS");
     let mut roots = Vec::new();
     for (name, enabled) in [(".claude", claude), (".agents", true)] {
         if !enabled {
@@ -792,6 +813,23 @@ mod tests {
             .block_on(discover(&paths, &config, &project));
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].description.as_deref(), Some("project agents"));
+    }
+
+    #[test]
+    fn claude_folders_can_be_left_out() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let project = home.join("proj");
+        for dir in [
+            home.join(".claude"),
+            project.join(".claude"),
+            home.join(".agents"),
+        ] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let paths = Paths::isolated(home.clone());
+        assert_eq!(roots(&paths, &project, false), vec![home.join(".agents")]);
+        assert_eq!(roots(&paths, &project, true).len(), 3);
     }
 
     #[test]

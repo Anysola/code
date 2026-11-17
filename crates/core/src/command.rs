@@ -11,6 +11,9 @@ use serde_json::Value;
 
 use crate::config::{Config, Entry};
 
+/// The folders of a config directory that hold markdown commands.
+pub const FOLDERS: [&str; 2] = ["command", "commands"];
+
 const INITIALIZE: &str = include_str!("prompt/initialize.txt");
 const REVIEW: &str = include_str!("prompt/review.txt");
 const SCHEDULE: &str = include_str!("prompt/schedule.txt");
@@ -37,6 +40,9 @@ pub struct Command {
     /// Runs in a child session.
     pub subagent: bool,
     pub template: Template,
+    /// Where it is defined: its markdown file or config document; `None` for the built-ins and
+    /// MCP prompts.
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -44,7 +50,7 @@ pub struct Commands {
     list: Vec<Command>,
 }
 
-fn from_value(name: &str, value: &Value) -> Option<Command> {
+fn from_value(name: &str, value: &Value, source: Option<String>) -> Option<Command> {
     let text = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_string);
     let flag = |key: &str| value.get(key).and_then(Value::as_bool);
     Some(Command {
@@ -58,6 +64,7 @@ fn from_value(name: &str, value: &Value) -> Option<Command> {
             .or_else(|| flag("subtask"))
             .unwrap_or(false),
         template: Template::User(text("template")?),
+        source,
     })
 }
 
@@ -65,7 +72,7 @@ fn from_value(name: &str, value: &Value) -> Option<Command> {
 /// that folder without `.md`.
 fn markdown_commands(dir: &Path) -> Vec<Command> {
     let mut files: Vec<(PathBuf, PathBuf)> = Vec::new();
-    for folder in ["command", "commands"] {
+    for folder in FOLDERS {
         let root = dir.join(folder);
         if !root.is_dir() {
             continue;
@@ -92,6 +99,7 @@ fn markdown_commands(dir: &Path) -> Vec<Command> {
             from_value(
                 &name.to_string_lossy().replace('\\', "/"),
                 &Value::Object(meta),
+                Some(file.display().to_string()),
             )
         })
         .collect()
@@ -107,6 +115,7 @@ impl Commands {
                 model: None,
                 subagent: false,
                 template: Template::Builtin(INITIALIZE),
+                source: None,
             },
             Command {
                 name: "review".into(),
@@ -117,6 +126,7 @@ impl Commands {
                 model: None,
                 subagent: false,
                 template: Template::Builtin(REVIEW),
+                source: None,
             },
             Command {
                 name: "goal".into(),
@@ -127,6 +137,7 @@ impl Commands {
                 model: None,
                 subagent: false,
                 template: Template::Goal,
+                source: None,
             },
         ];
         if crate::schedule::enabled(config) {
@@ -140,13 +151,16 @@ impl Commands {
                 model: None,
                 subagent: false,
                 template: Template::Builtin(SCHEDULE),
+                source: None,
             });
         }
         let defined = config.entries.iter().flat_map(|entry| match entry {
             Entry::Directory(dir) => markdown_commands(dir),
-            Entry::Document { commands, .. } => commands
+            Entry::Document {
+                commands, source, ..
+            } => commands
                 .iter()
-                .filter_map(|(name, value)| from_value(name, value))
+                .filter_map(|(name, value)| from_value(name, value, source.clone()))
                 .collect(),
         });
         for command in defined {
@@ -167,6 +181,7 @@ impl Commands {
                     model: None,
                     subagent: false,
                     template: Template::Mcp(prompt),
+                    source: None,
                 });
             }
         }
@@ -390,6 +405,7 @@ mod tests {
                     .as_object()
                     .unwrap()
                     .clone(),
+                source: Some("/p/anysola.json".into()),
             },
         ];
         let commands = Commands::load(&config);
@@ -400,6 +416,12 @@ mod tests {
             Some("anysola/claude-haiku-5-5#high")
         );
         assert!(commit.subagent);
+        assert_eq!(commit.source, Some(command.display().to_string()));
+        assert_eq!(
+            commands.get("init").unwrap().source.as_deref(),
+            Some("/p/anysola.json")
+        );
+        assert_eq!(commands.get("review").unwrap().source, None);
         assert_eq!(commit.template, Template::User("Commit $ARGUMENTS".into()));
         assert_eq!(
             commands.get("init").unwrap().template,

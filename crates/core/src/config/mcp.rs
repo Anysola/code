@@ -5,8 +5,50 @@ use serde_json::{Map, Value, json};
 
 use crate::permission::policy::Policies;
 
+/// Whether the document's `mcp` defines server `name` (in either shape).
+pub(super) fn defines(document: &Map<String, Value>, name: &str) -> bool {
+    normalize_quietly(document, true).1.contains_key(name)
+}
+
+/// A remote server entry as `anysola mcp add --url` writes it.
+pub fn remote_server(url: &str, headers: Map<String, Value>) -> Result<Value, String> {
+    if url::Url::parse(url).is_err() {
+        return Err(format!("Invalid URL: {url}"));
+    }
+    let mut server = json!({"type": "remote", "url": url});
+    if !headers.is_empty() {
+        server["headers"] = Value::Object(headers);
+    }
+    Ok(server)
+}
+
+/// A local server entry as `anysola mcp add -- <command>` writes it.
+pub fn local_server(
+    command: Vec<String>,
+    environment: Map<String, Value>,
+) -> Result<Value, String> {
+    if command
+        .first()
+        .is_none_or(|program| program.trim().is_empty())
+    {
+        return Err("An MCP server needs a command to run.".into());
+    }
+    let mut server = json!({"type": "local", "command": command});
+    if !environment.is_empty() {
+        server["environment"] = Value::Object(environment);
+    }
+    Ok(server)
+}
+
 /// The `mcp` key of one document, normalized: `(timeout, servers)`.
 fn normalize(document: &Map<String, Value>) -> (Map<String, Value>, Map<String, Value>) {
+    normalize_quietly(document, false)
+}
+
+fn normalize_quietly(
+    document: &Map<String, Value>,
+    quiet: bool,
+) -> (Map<String, Value>, Map<String, Value>) {
     let mut timeout = Map::new();
     if let Some(value) = document
         .get("experimental")
@@ -28,6 +70,9 @@ fn normalize(document: &Map<String, Value>) -> (Map<String, Value>, Map<String, 
             Some("local" | "remote")
         );
         if value.get("type").is_none() && value.get("enabled").is_some_and(Value::is_boolean) {
+            if quiet {
+                continue;
+            }
             crate::log::warn(
                 "omitted enabled-only legacy MCP entry",
                 &[("path", &format!("mcp.{name}"))],

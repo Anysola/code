@@ -111,6 +111,11 @@ pub fn background_shells(session_id: &str) -> Vec<BackgroundShell> {
         .collect()
 }
 
+/// How many background shells of this process are still running, in any session.
+pub fn background_running() -> usize {
+    background().len()
+}
+
 /// How a background shell ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellEnd {

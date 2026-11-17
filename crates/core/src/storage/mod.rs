@@ -13,6 +13,7 @@ mod transfer;
 
 pub use inbox::InboxRow;
 pub use instruction::{InstructionState, Values};
+pub use permission::SavedPermission;
 pub use schedule::{Guard, ScheduleRow};
 pub use transfer::{ImportError, SessionSummary, sanitize};
 
@@ -305,6 +306,30 @@ impl Db {
                  ORDER BY time_updated DESC, id DESC LIMIT ?4",
             )?;
             let rows = statement.query_map(params![directory, updated, id, limit as i64], session_row)?;
+            rows.collect()
+        })
+    }
+
+    /// Every root session of every project, archived ones included: `(id, directory, held)`,
+    /// `held` when a live process (this one included) is running a turn of it.
+    pub fn all_root_sessions(&self) -> Result<Vec<(String, String, bool)>> {
+        let now = now_ms() as i64;
+        self.with(|c| {
+            let mut statement = c.prepare(
+                "SELECT id, directory, busy_owner, busy_heartbeat FROM session WHERE parent_id IS NULL
+                 ORDER BY time_updated DESC, id DESC",
+            )?;
+            let rows = statement.query_map([], |r| {
+                let owner: Option<String> = r.get(2)?;
+                let beat: Option<i64> = r.get(3)?;
+                let held = match (owner, beat) {
+                    (Some(owner), Some(beat)) => {
+                        now - beat < BUSY_STALE_MS as i64 && owner_alive(&owner)
+                    }
+                    _ => false,
+                };
+                Ok((r.get(0)?, r.get(1)?, held))
+            })?;
             rows.collect()
         })
     }
@@ -714,6 +739,30 @@ mod tests {
             let conn = Connection::open(&path).unwrap();
             assert_eq!(user_version(&conn).unwrap(), schema::MIGRATIONS.len());
         }
+    }
+
+    #[test]
+    fn all_root_sessions_say_which_are_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("a.db")).unwrap();
+        db.create_session(&session("ses_1", "/p")).unwrap();
+        db.create_session(&session("ses_2", "/q")).unwrap();
+        let mut child = session("ses_3", "/p");
+        child.parent_id = Some("ses_1".into());
+        db.create_session(&child).unwrap();
+        let owner = format!("{}:x", std::process::id());
+        assert!(db.acquire("ses_2", &owner).unwrap());
+        let mut all = db.all_root_sessions().unwrap();
+        all.sort();
+        assert_eq!(
+            all,
+            [
+                ("ses_1".to_string(), "/p".to_string(), false),
+                ("ses_2".to_string(), "/q".to_string(), true)
+            ]
+        );
+        db.release("ses_2", &owner).unwrap();
+        assert!(db.all_root_sessions().unwrap().iter().all(|s| !s.2));
     }
 
     #[test]

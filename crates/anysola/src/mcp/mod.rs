@@ -1,7 +1,5 @@
 //! `anysola mcp`: `list` (live statuses), `add`, `auth` (OAuth sign-in) and `logout`.
 
-mod jsonc;
-
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -37,13 +35,8 @@ pub async fn mcp(command: McpCommand) -> i32 {
     }
 }
 
-fn pairs(items: &[(String, String)]) -> Value {
-    Value::Object(
-        items
-            .iter()
-            .map(|(k, v)| (k.clone(), json!(v)))
-            .collect::<Map<_, _>>(),
-    )
+fn pairs(items: &[(String, String)]) -> Map<String, Value> {
+    items.iter().map(|(k, v)| (k.clone(), json!(v))).collect()
 }
 
 /// The first existing config file of `directory` (the new names first, as they win), else its
@@ -81,27 +74,16 @@ fn add(args: McpAddArgs) -> Result<String, String> {
         }
         (None, true) => return Err("Provide either --url <url> or a command after --".into()),
         (Some(url), true) => {
-            if url::Url::parse(&url).is_err() {
-                return Err(format!("Invalid URL: {url}"));
-            }
             if !env.is_empty() {
                 return Err("--env is only valid for local MCP servers".into());
             }
-            let mut server = json!({"type": "remote", "url": url});
-            if !header.is_empty() {
-                server["headers"] = pairs(&header);
-            }
-            server
+            config::remote_server(&url, pairs(&header))?
         }
         (None, false) => {
             if !header.is_empty() {
                 return Err("--header is only valid for remote MCP servers".into());
             }
-            let mut server = json!({"type": "local", "command": command});
-            if !env.is_empty() {
-                server["environment"] = pairs(&env);
-            }
-            server
+            config::local_server(command, pairs(&env))?
         }
     };
     let path = if global {
@@ -114,7 +96,7 @@ fn add(args: McpAddArgs) -> Result<String, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => "{}".to_string(),
         Err(error) => return Err(error.to_string()),
     };
-    let updated = jsonc::set(&text, &["mcp", "servers", &name], server)?;
+    let updated = config::jsonc::set(&text, &["mcp", "servers", &name], server)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }

@@ -116,6 +116,14 @@ impl Runtime {
         }
     }
 
+    /// How many tools a connected server offers; `None` while it is not connected.
+    pub fn tool_count(&self, name: &str) -> Option<usize> {
+        self.lock()
+            .get(name)
+            .filter(|e| e.connection.is_some())
+            .map(|e| e.tools.len())
+    }
+
     /// The configured entry of a server.
     pub fn config(&self, name: &str) -> Option<Value> {
         self.lock().get(name).map(|e| e.config.clone())

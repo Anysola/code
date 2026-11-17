@@ -327,9 +327,20 @@ impl Core {
         &self.shared.project.id
     }
 
+    /// The project's root: its VCS root, else the directory itself.
+    pub fn worktree(&self) -> &Path {
+        &self.shared.project.worktree
+    }
+
     /// The session's running background shells.
     pub fn background_shells(&self, session_id: &str) -> Vec<crate::tool::shell::BackgroundShell> {
         crate::tool::shell::background_shells(session_id)
+    }
+
+    /// Whether a background shell of this process is still running (they outlive their turn and
+    /// keep writing their output under `~/.anysola/shell`).
+    pub fn any_background_shell(&self) -> bool {
+        crate::tool::shell::background_running() > 0
     }
 
     /// How a background shell ended; `None` while it runs.
@@ -419,6 +430,14 @@ impl Core {
 
     /// Reloads the config sources if any changed (the loop does this before every step).
     pub async fn refresh(&self) {
+        self.shared.refresh().await
+    }
+
+    /// Reads every config source again now, without waiting for the file watcher: after a front
+    /// end wrote a config file itself, or flipped a switch such as
+    /// [`crate::skill::set_claude_skills`].
+    pub async fn reload(&self) {
+        self.shared.changes.mark();
         self.shared.refresh().await
     }
 
@@ -755,6 +774,16 @@ impl Core {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .contains_key(session_id)
+    }
+
+    /// Whether this process is driving any turn of this core.
+    pub fn any_busy(&self) -> bool {
+        !self
+            .shared
+            .turns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty()
     }
 
     /// Interrupts every running turn (the front end is letting this core go).

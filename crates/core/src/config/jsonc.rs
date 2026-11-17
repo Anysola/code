@@ -1,6 +1,11 @@
-//! JSON with comments and trailing commas, as `jsonc-parser` with `allowTrailingComma` accepts it.
+//! JSON with comments and trailing commas, as `jsonc-parser` with `allowTrailingComma` accepts it,
+//! and the in-place edits that keep a hand-written file's comments and layout.
+
+mod edit;
 
 use serde_json::Value;
+
+pub use edit::{remove, set};
 
 /// Removes `//` and `/* */` comments and trailing commas outside strings, then parses.
 pub fn parse(text: &str) -> Result<Value, serde_json::Error> {
@@ -39,10 +44,7 @@ fn strip(text: &str) -> String {
             continue;
         }
         if c == ',' {
-            let next = chars[i + 1..]
-                .iter()
-                .position(|c| !c.is_whitespace())
-                .map(|p| chars[i + 1 + p]);
+            let next = next_significant(&chars, i + 1);
             if matches!(next, Some('}') | Some(']')) {
                 i += 1;
                 continue;
@@ -52,6 +54,29 @@ fn strip(text: &str) -> String {
         i += 1;
     }
     out
+}
+
+/// The first character from `at` that is neither whitespace nor inside a comment.
+fn next_significant(chars: &[char], mut at: usize) -> Option<char> {
+    while at < chars.len() {
+        match (chars[at], chars.get(at + 1)) {
+            (c, _) if c.is_whitespace() => at += 1,
+            ('/', Some('/')) => {
+                while at < chars.len() && chars[at] != '\n' {
+                    at += 1;
+                }
+            }
+            ('/', Some('*')) => {
+                at += 2;
+                while at < chars.len() && !(chars[at] == '*' && chars.get(at + 1) == Some(&'/')) {
+                    at += 1;
+                }
+                at += 2;
+            }
+            (c, _) => return Some(c),
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -67,5 +92,15 @@ mod tests {
             parse(text).unwrap(),
             json!({"a": "x // not a comment", "b": [1, 2]})
         );
+    }
+
+    #[test]
+    fn a_trailing_comma_before_a_comment() {
+        assert_eq!(parse("{\"a\": 1, // note\n}").unwrap(), json!({"a": 1}));
+        assert_eq!(
+            parse("{\"a\": [1, /* x */ ], /* y */\n // z\n}").unwrap(),
+            json!({"a": [1]})
+        );
+        assert_eq!(parse("[\"a,\", 2]").unwrap(), json!(["a,", 2]));
     }
 }
