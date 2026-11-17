@@ -1,7 +1,8 @@
 //! Image normalization before images reach the model (tool results and prompt attachments), with
 //! the rules 0.5.1 applied through photon: images within the limits pass unchanged (large opaque
 //! PNGs become JPEG when that is smaller); larger ones are scaled to fit and re-encoded, shrinking
-//! by 0.75 per step until the base64 size fits.
+//! by 0.75 per step until the base64 size fits. Images of a type the models don't take are
+//! converted to PNG first (and then follow the same rules); ones that can't be decoded are refused.
 
 use std::io::Cursor;
 
@@ -27,14 +28,8 @@ pub const READABLE: [&str; 5] = [
     "application/pdf",
 ];
 
-/// Prompt attachments with these types are normalized; others pass as they are.
-pub const RESIZABLE: [&str; 5] = [
-    "image/png",
-    "image/jpeg",
-    "image/gif",
-    "image/webp",
-    "image/bmp",
-];
+/// The image types the models take; images of other types are converted or refused.
+pub const ACCEPTED: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Limits {
@@ -172,13 +167,44 @@ fn sizes(width: u32, height: u32, limits: &Limits) -> Vec<(u32, u32)> {
 }
 
 /// Normalizes base64 image data; `Ok(None)` means unchanged, `Ok(Some((mime, base64)))` replaced.
+/// The bytes decide the type: data of an accepted type under another name is relabeled, other
+/// decodable data (BMP) is converted, and anything else (SVG, TIFF, HEIC, AVIF, ICO, ...) fails
+/// with [`ImageError::Decode`].
 pub fn normalize(
     mime: &str,
     data: &str,
     limits: &Limits,
 ) -> Result<Option<(String, String)>, ImageError> {
     let bytes = STANDARD.decode(data).map_err(|_| ImageError::Decode)?;
-    let decoded = image::load_from_memory(&bytes).map_err(|_| ImageError::Decode)?;
+    let format = image::guess_format(&bytes).map_err(|_| ImageError::Decode)?;
+    let decoded =
+        image::load_from_memory_with_format(&bytes, format).map_err(|_| ImageError::Decode)?;
+    let actual = match format {
+        ImageFormat::Png => "image/png",
+        ImageFormat::Jpeg => "image/jpeg",
+        ImageFormat::Gif => "image/gif",
+        ImageFormat::WebP => "image/webp",
+        _ => {
+            let png = STANDARD.encode(encode_png(&decoded.to_rgba8()));
+            return Ok(Some(
+                fit("image/png", &png, &decoded, limits)?
+                    .unwrap_or_else(|| ("image/png".to_string(), png)),
+            ));
+        }
+    };
+    Ok(match fit(actual, data, &decoded, limits)? {
+        None if !mime.eq_ignore_ascii_case(actual) => Some((actual.to_string(), data.to_string())),
+        fitted => fitted,
+    })
+}
+
+/// [`normalize`] for data of an accepted type, `mime` being the one its bytes have.
+fn fit(
+    mime: &str,
+    data: &str,
+    decoded: &DynamicImage,
+    limits: &Limits,
+) -> Result<Option<(String, String)>, ImageError> {
     let (width, height) = (decoded.width(), decoded.height());
     let size = data.len();
     let fits =
@@ -373,6 +399,91 @@ mod tests {
                 data.len()
             )
         );
+    }
+
+    fn encoded(width: u32, height: u32, alpha: u8, format: ImageFormat) -> String {
+        let image = RgbaImage::from_fn(width, height, |x, y| {
+            image::Rgba([(x % 256) as u8, (y % 256) as u8, 0, alpha])
+        });
+        let mut out = Cursor::new(Vec::new());
+        match format {
+            ImageFormat::Jpeg => DynamicImage::ImageRgba8(image)
+                .to_rgb8()
+                .write_to(&mut out, format)
+                .unwrap(),
+            _ => image.write_to(&mut out, format).unwrap(),
+        }
+        STANDARD.encode(out.into_inner())
+    }
+
+    fn format(data: &str) -> ImageFormat {
+        image::guess_format(&STANDARD.decode(data).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn types_the_model_does_not_take_become_png() {
+        let bmp = encoded(40, 30, 255, ImageFormat::Bmp);
+        let (mime, out) = normalize("image/bmp", &bmp, &Limits::default())
+            .unwrap()
+            .unwrap();
+        assert_eq!(mime, "image/png");
+        assert_eq!(
+            (format(&out), dimensions(&out)),
+            (ImageFormat::Png, (40, 30))
+        );
+        // Converting is not resizing: it happens with auto_resize off too.
+        let fixed = Limits {
+            auto_resize: false,
+            ..Limits::default()
+        };
+        let (mime, _) = normalize("image/x-ms-bmp", &bmp, &fixed).unwrap().unwrap();
+        assert_eq!(mime, "image/png");
+        // Too large, it is scaled like any other image.
+        let large = encoded(3000, 100, 255, ImageFormat::Bmp);
+        let (mime, out) = normalize("image/bmp", &large, &Limits::default())
+            .unwrap()
+            .unwrap();
+        assert!(ACCEPTED.contains(&mime.as_str()));
+        assert_eq!(dimensions(&out), (2000, 67));
+        assert!(matches!(
+            normalize("image/bmp", &large, &fixed),
+            Err(ImageError::Size { .. })
+        ));
+    }
+
+    #[test]
+    fn images_that_cannot_be_decoded_are_refused() {
+        let svg = STANDARD.encode(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1"/></svg>"#,
+        );
+        // TIFF, HEIC, AVIF and ICO are recognized but not decoded with this build's features.
+        let tiff = STANDARD.encode(b"II*\0\x08\0\0\0\0\0\0\0");
+        let ico = STANDARD.encode(b"\0\0\x01\0\x01\0\x10\x10\0\0\x01\0\x20\0\0\0\0\0");
+        for (mime, data) in [
+            ("image/svg+xml", &svg),
+            ("image/tiff", &tiff),
+            ("image/x-icon", &ico),
+        ] {
+            assert_eq!(
+                normalize(mime, data, &Limits::default()),
+                Err(ImageError::Decode),
+                "{mime}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_bytes_decide_the_type() {
+        let jpeg = encoded(10, 10, 255, ImageFormat::Jpeg);
+        assert_eq!(normalize("image/jpeg", &jpeg, &Limits::default()), Ok(None));
+        assert_eq!(normalize("image/JPEG", &jpeg, &Limits::default()), Ok(None));
+        for named in ["image/jpg", "image/png"] {
+            assert_eq!(
+                normalize(named, &jpeg, &Limits::default()),
+                Ok(Some(("image/jpeg".to_string(), jpeg.clone()))),
+                "{named}"
+            );
+        }
     }
 
     #[test]

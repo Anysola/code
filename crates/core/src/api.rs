@@ -858,7 +858,9 @@ const BACKGROUNDED: &str = "The backgrounded work is still unfinished. Move on t
 fn normalize(shared: &Shared, mut prompt: Prompt) -> Result<Prompt, CoreError> {
     let limits = crate::media::Limits::from_config(shared.loaded().config.get("media"));
     for (mime, data, name) in &mut prompt.files {
-        if !crate::media::RESIZABLE.contains(&mime.as_str()) {
+        // Every image goes through: one the model can't take is converted or refused here,
+        // before it is stored and sent with every later turn.
+        if !mime.to_ascii_lowercase().starts_with("image/") {
             continue;
         }
         match crate::media::normalize(mime, data, &limits) {
