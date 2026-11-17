@@ -185,7 +185,7 @@ mod tests {
     #[test]
     fn args_per_shell_kind() {
         assert_eq!(args("/bin/bash", "ls"), ["-c", "ls"]);
-        assert_eq!(args("cmd", "dir"), ["/c", "dir"]);
+        assert_eq!(args_for("cmd", "dir", false), ["/c", "dir"]);
         assert_eq!(
             args_for("pwsh", "ls", false),
             ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "ls"]
