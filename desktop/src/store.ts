@@ -409,6 +409,8 @@ export async function openSession(row: SessionRow) {
     )
   } catch (e) {
     setOpen({ loading: false, status: { kind: "failed", error: message(e) } }, row.id)
+    // A session deleted elsewhere ("This session no longer exists."): its row goes too.
+    void loadSessions().catch(() => {})
   }
 }
 
