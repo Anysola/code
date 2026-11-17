@@ -26,6 +26,10 @@ pub async fn update_check(handle: AppHandle, pending: State<'_, Pending>) -> Ans
         return Ok(json!({"available": false}));
     }
     let current = handle.package_info().version.to_string();
+    // So do branch builds from CI, which no release would be newer than in any useful sense.
+    if current.starts_with("0.") {
+        return Ok(json!({"available": false}));
+    }
     let Some(info) = Gateway::new(None).version(Duration::from_secs(8)).await else {
         return Ok(json!({"available": false}));
     };
@@ -61,11 +65,12 @@ pub async fn update_check(handle: AppHandle, pending: State<'_, Pending>) -> Ans
 /// Downloads and installs the checked update, then starts the new version.
 #[tauri::command]
 pub async fn update_install(handle: AppHandle, pending: State<'_, Pending>) -> Answer {
+    // Stays pending until it is installed: a download that fails can be tried again.
     let update = pending
         .0
         .lock()
         .await
-        .take()
+        .clone()
         .ok_or("No update is ready; check again.")?;
     update
         .download_and_install(|_, _| {}, || {})
