@@ -628,6 +628,14 @@ fn main() {
     anysola_core::version::set_desktop_client();
     let db = Db::open(&Paths::from_env().database()).ok().map(Arc::new);
     tauri::Builder::default()
+        // A second start shows the window that is open: two apps on one database would each
+        // run the folders' MCP servers and miss each other's turns.
+        .plugin(tauri_plugin_single_instance::init(|handle, _, _| {
+            if let Some(window) = handle.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         // Size, position and maximized state come back on the next start.
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
