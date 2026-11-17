@@ -2,6 +2,8 @@
  * The bridge outside Tauri: example sessions and a transcript, for working on the window in a
  * browser and for screenshots. `?state=` picks a moment: `signed-out`, `empty`, `approval`
  * (the default), `running`, `failed`, `question`, `update`, `rewound`, `plan`, `todos`, `done`.
+ * Prompts in `refused` are refused before their answer comes back; in `stuck` they send no
+ * events and Stop sends none either, as when nothing was running.
  */
 import type { Account, Bridge, CoreEvent, FileDiff, Info, Item, Revert, SessionRow, Todo, View } from "./bridge"
 
@@ -394,6 +396,13 @@ export function mockBridge(): Bridge {
         rows.unshift({ id, title: "New session", directory, updated: Date.now() })
         emit({ type: "created", sessionId: id, title: "New session", directory })
       }
+      if (state === "refused") {
+        // The core answers after the spawned turn has already said no.
+        emit({ type: "refused", sessionId: id, error: "This model doesn’t read images." })
+        await wait(50)
+        return { sessionId: id, queued: false }
+      }
+      if (state === "stuck") return { sessionId: id, queued: false }
       const list = transcripts.get(id) ?? []
       transcripts.set(id, [...list, { kind: "user", id: `u${list.length}`, text, images: files.length }])
       emit({ type: "changed", sessionId: id })
@@ -410,7 +419,7 @@ export function mockBridge(): Bridge {
     },
     async setMode() {},
     async interrupt(_directory, sessionId) {
-      emit({ type: "interrupted", sessionId, reason: "user" })
+      if (state !== "stuck") emit({ type: "interrupted", sessionId, reason: "user" })
     },
     async replyPermission(_directory, requestId) {
       emit({ type: "permissionReplied", sessionId: "ses_pricing", requestId })

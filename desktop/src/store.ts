@@ -508,6 +508,51 @@ function toggle(set: Set<string>, id: string, on: boolean) {
 // Prompting
 // ---------------------------------------------------------------------------
 
+/** Events per session, so a read of its state can tell whether an event said more meanwhile. */
+const activity = new Map<string, number>()
+
+function touch(sessionId: string) {
+  activity.set(sessionId, (activity.get(sessionId) ?? 0) + 1)
+}
+
+/** First prompts in flight. Until each answers with its new session's id, that session's
+ * events match nothing open, so its latest start or end is kept here to replay. */
+let creating = 0
+const early = new Map<string, CoreEvent>()
+const LIFECYCLE = new Set(["started", "done", "failed", "interrupted", "refused", "settled"])
+
+/** A new session's view takes the id its first prompt created, and any end that came first. */
+function adopt(target: string | { key: string }, sessionId: string) {
+  setOpen({ sessionId }, target)
+  void loadSessions()
+  const e = early.get(sessionId)
+  early.delete(sessionId)
+  if (e && e.type !== "started") onEvent(e)
+  return sessionId
+}
+
+/** Busy and status read back from the core, for when the events that would say so were lost
+ * or never sent. Dropped if an event for the session came meanwhile. */
+async function reconcile(directory: string, sessionId: string) {
+  const since = activity.get(sessionId)
+  const n = ++reads
+  try {
+    const opened = await bridge.openSession(directory, sessionId)
+    if (activity.get(sessionId) !== since) return
+    set((s) => ({ busy: toggle(s.busy, sessionId, opened.busy) }))
+    setOpen((o) => {
+      const shown = o.status.kind === "working" || o.status.kind === "retrying"
+      return {
+        ...(latest(n) ? viewPatch(opened.view, o) : {}),
+        ...(shown && !opened.busy ? { live: [], status: { kind: "idle" } as Status } : {}),
+        ...(!shown && opened.busy ? { status: { kind: "working" } as Status } : {}),
+      }
+    }, sessionId)
+  } catch {
+    // The next event says more.
+  }
+}
+
 export async function send(text: string, files: Attachment[] = [], skills: string[] = []) {
   const open = state.open
   if (!open || (!text.trim() && files.length === 0 && state.comments.length === 0)) return
@@ -516,8 +561,10 @@ export async function send(text: string, files: Attachment[] = [], skills: strin
   // The prompt makes a staged rewind final.
   setOpen({ status: { kind: "working" }, revert: null })
   let target = whose(open)
+  const draft = !open.sessionId
+  if (open.sessionId) touch(open.sessionId)
+  else creating++
   try {
-    const draft = !open.sessionId
     const { sessionId } = await bridge.prompt(open.directory, {
       sessionId: open.sessionId,
       text,
@@ -529,15 +576,14 @@ export async function send(text: string, files: Attachment[] = [], skills: strin
       files,
       skills,
     })
-    if (draft) {
-      setOpen({ sessionId }, target)
-      target = sessionId
-      void loadSessions()
-    }
-    set((s) => ({ busy: toggle(s.busy, sessionId, true) }))
+    if (draft) target = adopt(target, sessionId)
+    // Busy comes from `started`: the turn is spawned before this answer, and its end can
+    // arrive first.
     await refresh(sessionId)
   } catch (e) {
     failed(target, e)
+  } finally {
+    if (draft && --creating === 0) early.clear()
   }
 }
 
@@ -620,9 +666,9 @@ export async function resend(messageId: string, text: string | null) {
   if (!open?.sessionId) return
   const sessionId = open.sessionId
   setOpen({ status: { kind: "working" }, live: [], revert: null }, sessionId)
+  touch(sessionId)
   try {
     await bridge.resend(open.directory, sessionId, messageId, text, state.mode)
-    set((s) => ({ busy: toggle(s.busy, sessionId, true) }))
     await refresh(sessionId)
   } catch (e) {
     setOpen({ status: { kind: "failed", error: message(e) } }, sessionId)
@@ -659,8 +705,10 @@ export async function runCommand(name: string, args: string) {
   if (!open) return
   setOpen({ status: { kind: "working" }, revert: null })
   let target = whose(open)
+  const draft = !open.sessionId
+  if (open.sessionId) touch(open.sessionId)
+  else creating++
   try {
-    const draft = !open.sessionId
     const { sessionId } = await bridge.runCommand(open.directory, {
       sessionId: open.sessionId,
       name,
@@ -670,15 +718,14 @@ export async function runCommand(name: string, args: string) {
       variant: draft ? (open.info?.variant ?? null) : null,
       agent: draft ? (open.info?.agent ?? null) : null,
     })
-    if (draft) {
-      setOpen({ sessionId }, target)
-      target = sessionId
-      void loadSessions()
-    }
-    set((s) => ({ busy: toggle(s.busy, sessionId, true) }))
+    if (draft) target = adopt(target, sessionId)
+    // Busy comes from `started`: the turn is spawned before this answer, and its end can
+    // arrive first.
     await refresh(sessionId)
   } catch (e) {
     failed(target, e)
+  } finally {
+    if (draft && --creating === 0) early.clear()
   }
 }
 
@@ -925,9 +972,22 @@ export function openExternal(url: string) {
   void bridge.openUrl(url).catch(() => set({ notice: `Your browser didn’t open. The link is ${url}` }))
 }
 
+/** How long a stop waits for the turn's end before asking whether anything was running. */
+const STOP_GRACE = 1500
+
 export function stop() {
   const open = state.open
-  if (open?.sessionId) void bridge.interrupt(open.directory, open.sessionId)
+  if (!open?.sessionId) return
+  const { directory, sessionId } = open
+  const since = activity.get(sessionId)
+  bridge.interrupt(directory, sessionId).then(
+    // Stopping a session with nothing running sends no event; "Working" would stay.
+    () =>
+      setTimeout(() => {
+        if (activity.get(sessionId) === since) void reconcile(directory, sessionId)
+      }, STOP_GRACE),
+    (e) => set({ notice: message(e) })
+  )
 }
 
 export function setMode(mode: Mode) {
@@ -972,7 +1032,9 @@ function onEvent(e: CoreEvent) {
     return
   }
   const id = e.sessionId
+  touch(id)
   const here = state.open?.sessionId === id
+  if (!here && creating > 0 && LIFECYCLE.has(e.type)) early.set(id, e)
   if (state.peek?.sessionId === id && (e.type === "changed" || e.type === "done" || e.type === "failed"))
     void refreshPeek()
   switch (e.type) {
