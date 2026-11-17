@@ -4,6 +4,32 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.0.6 (2026-11-17)
+
+The first release of Anysola Code Desktop, and a scan of the paths only a real install runs, Windows above all.
+
+- Anysola Code Desktop for Windows (installer) and Linux (AppImage, .deb) is on the release page: your sessions
+  from the terminal, with the conversation, diffs, permission cards and review in a window. It shares its
+  sessions and sign-in with the CLI and updates itself.
+- On Windows, the output of PowerShell and cmd commands keeps Turkish and other non-ASCII letters; it used to
+  come back as `�`. The terminal is left on the UTF-8 code page afterwards.
+- `anysola update` no longer says "Updated" when the installer could not be downloaded, and when the latest
+  version cannot be checked it stops instead of installing anyway (`--force` installs regardless).
+- `anysola login` signs in again when the server rejects the stored token, instead of answering "Already signed
+  in". `anysola login --force` keeps the old token until the new sign-in has worked.
+- `anysola run` and editors over ACP say "Not signed in. Run `anysola login` or set ANYSOLA_TOKEN." or "Cannot
+  reach …" where they said "No model is available for session …".
+- Formatters installed in `node_modules/.bin` (prettier, biome, oxfmt) and formatter commands that start with
+  `npx` run on Windows; they were silently skipped.
+- The system proxy set in Windows or macOS settings is used.
+- Alt+V pastes an image from the clipboard on Windows, where the terminal keeps Ctrl+V for itself, and a
+  clipboard whose image cannot be read still pastes its text.
+- An attached image the model cannot take no longer breaks the session for good: BMP is converted, and SVG,
+  TIFF, HEIC, AVIF and ICO are refused before the message is stored.
+- Two prompts sent to one session at the same moment no longer start two turns; the second waits for the first.
+- Restarting after `/update` starts the new version on Linux. `$EDITOR` may have spaces in its path. Prerelease
+  versions order by their numbers (`rc.10` after `rc.9`).
+
 ## 1.0.5 (2026-11-15)
 
 - A turn could fail with "This model does not support assistant message prefill. The conversation must end with a
