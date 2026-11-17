@@ -266,6 +266,21 @@ export function folderName(directory: string) {
 }
 
 /**
+ * One key per folder however it is spelled (the CLI, the picker and a terminal differ on
+ * Windows): Windows paths (drive letter or UNC) ignore case and treat `/` as `\`; any path
+ * ignores a trailing separator. Shown and passed on, a folder keeps its first spelling.
+ */
+export function folderKey(directory: string) {
+  if (/^[a-z]:([\\/]|$)|^[\\/]{2}[^\\/]/i.test(directory))
+    return directory.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase()
+  return directory.length > 1 ? directory.replace(/\/+$/, "") : directory
+}
+
+export function sameFolder(a: string | null | undefined, b: string | null | undefined) {
+  return a != null && b != null && folderKey(a) === folderKey(b)
+}
+
+/**
  * Escape closes a panel laid over the session. Pressed in the composer behind it, the key goes
  * to the panel only: the composer would stop the turn or deny the waiting ask. Fields inside the
  * panel handle their own Escape first (a comment box cancels the comment).

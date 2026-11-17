@@ -25,6 +25,7 @@ import {
   type UpdateCheck,
   type View,
 } from "./bridge"
+import { folderKey, sameFolder } from "./ui"
 
 export type { Mode }
 
@@ -110,7 +111,7 @@ export type State = {
   notice: string | null
   /** The folder new sessions start in; null asks each time. */
   defaultFolder: string | null
-  /** Sessions kept at the top of the sidebar, and project groups folded shut. */
+  /** Sessions kept at the top of the sidebar, and project groups folded shut (by `folderKey`). */
   pinned: Set<string>
   collapsed: Set<string>
   /** The open session's folder in git, once read. */
@@ -173,7 +174,8 @@ let state: State = {
   defaultFolder: readDefaultFolder(),
   scratch: null,
   pinned: readSet("anysola.pinned"),
-  collapsed: readSet("anysola.collapsed"),
+  // Folded projects by folder key; older entries were stored as spelled.
+  collapsed: new Set([...readSet("anysola.collapsed")].map(folderKey)),
   git: null,
   comments: [],
 }
@@ -882,7 +884,8 @@ export function togglePin(id: string) {
 export function toggleCollapsed(directory: string) {
   set((s) => {
     const collapsed = new Set(s.collapsed)
-    if (!collapsed.delete(directory)) collapsed.add(directory)
+    const key = folderKey(directory)
+    if (!collapsed.delete(key)) collapsed.add(key)
     saveSet("anysola.collapsed", collapsed)
     return { collapsed }
   })
@@ -953,7 +956,7 @@ export async function refreshGit(directory = state.open?.directory) {
   if (!directory) return
   try {
     const status = await bridge.gitStatus(directory)
-    if (state.open && state.open.directory !== directory) return
+    if (state.open && !sameFolder(state.open.directory, directory)) return
     set({ git: { ...status, directory } })
   } catch {
     set({ git: null })
@@ -1061,7 +1064,7 @@ function onEvent(e: CoreEvent) {
   if (e.type === "lagged") {
     // Lost events may have started or ended turns: read busy and status back, not only the text.
     const open = state.open
-    if (open?.sessionId && open.directory === e.directory) void reconcile(open.directory, open.sessionId)
+    if (open?.sessionId && sameFolder(open.directory, e.directory)) void reconcile(open.directory, open.sessionId)
     void loadSessions().catch(() => {})
     return
   }

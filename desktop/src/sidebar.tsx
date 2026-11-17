@@ -41,12 +41,12 @@ import {
   togglePin,
   useStore,
 } from "./store"
-import { ago, btn, cn, folderName, Kbd, Mark, MenuItem, Popover, resetsIn, Spinner, TitleBar } from "./ui"
+import { ago, btn, cn, folderKey, folderName, Kbd, Mark, MenuItem, Popover, resetsIn, sameFolder, Spinner, TitleBar } from "./ui"
 
 /** A session's folder as the window names it: the app's own folder is "No project". */
 function usePlace(directory: string) {
   const scratch = useStore((s) => s.scratch)
-  return directory === scratch ? "No project" : folderName(directory)
+  return sameFolder(directory, scratch) ? "No project" : folderName(directory)
 }
 
 export function PlaceLabel({ directory }: { directory: string }) {
@@ -61,13 +61,14 @@ function NewSessionButton() {
   const [show, setShow] = useState(false)
   const close = useCallback(() => setShow(false), [])
   const recent = useMemo(() => {
-    const seen: string[] = []
+    const seen = new Map<string, string>()
     for (const s of sessions) {
-      if (s.directory === scratch || s.directory === preferred || seen.includes(s.directory)) continue
-      seen.push(s.directory)
-      if (seen.length === 4) break
+      const key = folderKey(s.directory)
+      if (sameFolder(s.directory, scratch) || sameFolder(s.directory, preferred) || seen.has(key)) continue
+      seen.set(key, s.directory)
+      if (seen.size === 4) break
     }
-    return seen
+    return [...seen.values()]
   }, [sessions, scratch, preferred])
   const go = (f: () => Promise<void>) => {
     close()
@@ -143,16 +144,20 @@ export function Sidebar() {
   )
   const pins = useMemo(() => sessions.filter((s) => pinned.has(s.id) && matches(s)), [sessions, pinned, matches])
   const groups = useMemo(() => {
-    const by = new Map<string, SessionRow[]>()
+    // By folder however spelled; the group shows the first spelling.
+    const by = new Map<string, [string, SessionRow[]]>()
     for (const s of sessions) {
       if (pinned.has(s.id) || !matches(s)) continue
-      by.set(s.directory, [...(by.get(s.directory) ?? []), s])
+      const key = folderKey(s.directory)
+      const group = by.get(key)
+      if (group) group[1].push(s)
+      else by.set(key, [s.directory, [s]])
     }
-    return [...by.entries()]
+    return [...by.values()]
   }, [sessions, pinned, matches])
   // The rows in the order they show, for Shift ranges (folded projects show none).
   const order = useMemo(
-    () => [...pins, ...groups.flatMap(([d, rows]) => (collapsed.has(d) && !q ? [] : rows))],
+    () => [...pins, ...groups.flatMap(([d, rows]) => (collapsed.has(folderKey(d)) && !q ? [] : rows))],
     [pins, groups, collapsed, q]
   )
   // A deleted or vanished session leaves the selection.
@@ -253,11 +258,11 @@ export function Sidebar() {
         )}
         {groups.map(([directory, rows]) => (
           <Project
-            key={directory}
+            key={folderKey(directory)}
             directory={directory}
             rows={rows}
             // A search shows every match, folded or not.
-            folded={collapsed.has(directory) && !q}
+            folded={collapsed.has(folderKey(directory)) && !q}
             selecting={selecting}
           />
         ))}
@@ -336,7 +341,7 @@ function Project({
           >
             <Plus className="size-3.5 text-muted" /> New session here
           </MenuItem>
-          {directory !== scratch && (
+          {!sameFolder(directory, scratch) && (
             <MenuItem
               onSelect={() => {
                 close()

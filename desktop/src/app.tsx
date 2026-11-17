@@ -18,7 +18,7 @@ import {
 import { changedFiles, GitMenu, Review } from "./review"
 import { PlaceLabel, Sidebar } from "./sidebar"
 import { Transcript } from "./transcript"
-import { btn, Counts, Kbd, Mark, Spinner, TitleBar, UsageMeter, useEscape } from "./ui"
+import { btn, Counts, Kbd, Mark, sameFolder, Spinner, TitleBar, UsageMeter, useEscape } from "./ui"
 
 export function App() {
   const auth = useStore((s) => s.auth)
@@ -169,7 +169,7 @@ function Main() {
 
 function FooterPlace({ directory }: { directory: string }) {
   const scratch = useStore((s) => s.scratch)
-  return <>{directory === scratch ? "No project · runs in the app’s own folder" : directory}</>
+  return <>{sameFolder(directory, scratch) ? "No project · runs in the app’s own folder" : directory}</>
 }
 
 function SessionHeader({ open, onReview }: { open: Open; onReview: () => void }) {

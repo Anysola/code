@@ -31,7 +31,7 @@ import {
   type Open,
 } from "./store"
 import { EditCard } from "./transcript"
-import { btn, cn, Counts, DiffView, Popover, Spinner, useEscape } from "./ui"
+import { btn, cn, Counts, DiffView, Popover, sameFolder, Spinner, useEscape } from "./ui"
 
 // ---------------------------------------------------------------------------
 // Git
@@ -44,7 +44,7 @@ export function GitMenu({ open }: { open: Open }) {
   const git = useStore((s) => s.git)
   const [show, setShow] = useState(false)
   const close = useCallback(() => setShow(false), [])
-  if (!git?.repo || git.directory !== open.directory) return null
+  if (!git?.repo || !sameFolder(git.directory, open.directory)) return null
   const changed = git.files.length
   return (
     <div className="relative shrink-0">
