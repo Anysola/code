@@ -286,7 +286,7 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
               {edits.map((f) => (
                 <div key={f.file} className="flex flex-col gap-2">
                   {f.diffs.map((d, i) => (
-                    <EditCard key={i} file={d} />
+                    <EditCard key={i} file={d} startOpen />
                   ))}
                 </div>
               ))}

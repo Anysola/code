@@ -572,8 +572,19 @@ function Edits({ tool }: { tool: Tool }) {
   )
 }
 
-export function EditCard({ file, status, error }: { file: FileDiff; status?: Tool["status"]; error?: string | null }) {
-  const [open, setOpen] = useState(true)
+/** A file's change. In the conversation it starts closed, one row per file; Review opens it. */
+export function EditCard({
+  file,
+  status,
+  error,
+  startOpen = false,
+}: {
+  file: FileDiff
+  status?: Tool["status"]
+  error?: string | null
+  startOpen?: boolean
+}) {
+  const [open, setOpen] = useState(startOpen)
   const added = file.status === "added"
   const waiting = status === "running"
   return (
@@ -595,6 +606,11 @@ export function EditCard({ file, status, error }: { file: FileDiff; status?: Too
         <span className="ml-auto flex shrink-0 items-center gap-2">
           {status === "error" && <span className="text-2xs text-danger">Not applied</span>}
           <Counts add={file.additions} del={file.deletions} />
+          {open ? (
+            <ChevronDown className="size-3.5 text-muted" />
+          ) : (
+            <ChevronRight className="size-3.5 text-muted" />
+          )}
         </span>
       </button>
       {open && <DiffView patch={file.patch} className="pb-2" />}
