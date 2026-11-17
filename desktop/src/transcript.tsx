@@ -24,10 +24,11 @@ import { useRef, useState, type ReactNode } from "react"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 
-import { getBridge, type FileDiff, type Item } from "./bridge"
+import type { FileDiff, Item } from "./bridge"
 import {
   answer,
   buildPlan,
+  openExternal,
   peekAt,
   redo,
   reply,
@@ -362,7 +363,13 @@ export function Prose({ text }: { text: string }) {
               href={href}
               onClick={(e) => {
                 e.preventDefault()
-                if (href?.startsWith("http")) void getBridge().then((b) => b.openUrl(href))
+                if (href?.startsWith("http")) openExternal(href)
+              }}
+              // A middle click would open a WebView2 window of its own.
+              onAuxClick={(e) => {
+                if (e.button !== 1) return
+                e.preventDefault()
+                if (href?.startsWith("http")) openExternal(href)
               }}
               className="underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground"
             >

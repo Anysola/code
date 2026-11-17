@@ -880,7 +880,7 @@ export async function suggestCommitMessage(): Promise<string | null> {
 }
 
 export function openExternal(url: string) {
-  void bridge.openUrl(url)
+  void bridge.openUrl(url).catch(() => set({ notice: `Your browser didn’t open. The link is ${url}` }))
 }
 
 export function stop() {
