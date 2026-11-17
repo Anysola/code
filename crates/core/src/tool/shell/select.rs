@@ -41,17 +41,43 @@ pub fn resolve(configured: Option<&str>) -> String {
 
 /// Arguments that make `shell` run `command` (not a login shell).
 pub fn args(shell: &str, command: &str) -> Vec<String> {
+    args_for(shell, command, cfg!(windows))
+}
+
+/// Redirected PowerShell output is in the console's OEM code page (cp857 on Turkish Windows),
+/// which reads back as U+FFFD; this switches it to UTF-8 without BOM and ignores a failure (no
+/// console). It runs before the command, so `$?` and the exit code stay the command's.
+const PWSH_UTF8: &str = "try{[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);$OutputEncoding=[Console]::OutputEncoding}catch{};";
+/// The same for cmd; `&` runs the command whatever chcp returns.
+const CMD_UTF8: &str = "chcp 65001>nul 2>&1 & ";
+
+fn args_for(shell: &str, command: &str, windows: bool) -> Vec<String> {
     match name(shell).as_str() {
-        "cmd" => vec!["/c".into(), command.into()],
-        "pwsh" | "powershell" => [
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            command,
-        ]
-        .map(String::from)
-        .to_vec(),
+        "cmd" => {
+            let command = if windows {
+                format!("{CMD_UTF8}{command}")
+            } else {
+                command.into()
+            };
+            vec!["/c".into(), command]
+        }
+        "pwsh" | "powershell" => {
+            // `using` and `param` must open the script, so those commands go unprefixed.
+            let first = command.trim_start().to_ascii_lowercase();
+            let leads = ["using ", "param(", "param ("]
+                .iter()
+                .any(|word| first.starts_with(word));
+            let command = if windows && !leads {
+                format!("{PWSH_UTF8}{command}")
+            } else {
+                command.into()
+            };
+            ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]
+                .map(String::from)
+                .into_iter()
+                .chain([command])
+                .collect()
+        }
         _ => vec!["-c".into(), command.into()],
     }
 }
@@ -161,9 +187,56 @@ mod tests {
         assert_eq!(args("/bin/bash", "ls"), ["-c", "ls"]);
         assert_eq!(args("cmd", "dir"), ["/c", "dir"]);
         assert_eq!(
-            args("pwsh", "ls"),
+            args_for("pwsh", "ls", false),
             ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "ls"]
         );
+    }
+
+    #[test]
+    fn windows_output_is_utf8() {
+        assert_eq!(
+            args_for("cmd", "dir", true),
+            ["/c", "chcp 65001>nul 2>&1 & dir"]
+        );
+        assert_eq!(
+            args_for("powershell", "ls", true),
+            [
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &format!("{PWSH_UTF8}ls")
+            ]
+        );
+        assert_eq!(
+            args_for("pwsh", "using namespace System.Text; ls", true)[4],
+            "using namespace System.Text; ls"
+        );
+        assert_eq!(args_for("/usr/bin/bash", "ls", true), ["-c", "ls"]);
+    }
+
+    /// The prefixed command keeps non-ASCII output and the command's exit code.
+    #[test]
+    #[cfg(windows)]
+    fn windows_shells_print_turkish_letters() {
+        let text = "şğıİçöü";
+        for shell in ["powershell", "pwsh", "cmd"] {
+            let Some(path) = crate::which::which(shell) else {
+                continue;
+            };
+            let command = if shell == "cmd" {
+                format!("echo {text}& exit /b 3")
+            } else {
+                format!("Write-Output '{text}'; exit 3")
+            };
+            let out = std::process::Command::new(path)
+                .args(args(shell, &command))
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert_eq!(stdout.trim(), text, "{shell}");
+            assert_eq!(out.status.code(), Some(3), "{shell}");
+        }
     }
 
     #[test]
