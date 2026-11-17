@@ -1,10 +1,16 @@
-# The desktop app (desktop/, its own Cargo workspace on top of crates/core): checks, then installers
+# The desktop app (desktop/, its own Cargo workspace on top of crates/core): checks, and installers
 # for Windows (NSIS, per-user) and Linux (AppImage, .deb), kept as workflow artifacts. Unsigned for
 # now: Windows shows SmartScreen's "unknown publisher" on first run.
+#
+# Checks and installers are separate jobs that run side by side: the installer is there to be tried
+# on a real machine, so it does not wait for clippy and the tests (three builds in a row on a cold
+# cache), and a red check does not withhold it.
 name: desktop
 
 on:
   push:
+    # Branches only: a tag's installers are release.yml's, and a path filter does not apply to tags.
+    branches: ["**"]
     paths:
       - "desktop/**"
       - "crates/core/**"
@@ -24,8 +30,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    name: ${{ matrix.build }}
+  installer:
+    name: installer (${{ matrix.build }})
     strategy:
       fail-fast: false
       matrix:
@@ -44,11 +50,65 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+          key: desktop-${{ matrix.build }}
+          # A cache saved under a tag is readable from that tag alone.
+          save-if: ${{ github.ref_type == 'branch' }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: npm ci
+      - name: Installer
+        env:
+          # Signs the updater artifacts; the key is the one tauri.conf.json's pubkey checks.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        # Types and the window's build run first, as tauri.conf.json's beforeBuildCommand.
+        run: npx tauri build --bundles ${{ matrix.bundles }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: anysola-code-desktop-${{ matrix.build }}
+          if-no-files-found: error
+          path: |
+            desktop/src-tauri/target/release/bundle/nsis/*.exe
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+
+  checks:
+    name: checks (${{ matrix.build }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { build: windows-x64, os: windows-2025 }
+          - { build: linux-x64, os: ubuntu-24.04 }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
           key: desktop-${{ matrix.build }}
+          save-if: ${{ github.ref_type == 'branch' }}
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -61,6 +121,7 @@ jobs:
           sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - run: npm ci
       - name: Window (types and build)
+        # The Rust side embeds the built window, so it comes first.
         run: npm run build
       - name: Rust checks
         working-directory: desktop/src-tauri
@@ -68,17 +129,3 @@ jobs:
           cargo fmt --check
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
-      - name: Installer
-        env:
-          # Signs the updater artifacts; the key is the one tauri.conf.json's pubkey checks.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npx tauri build --bundles ${{ matrix.bundles }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: anysola-code-desktop-${{ matrix.build }}
-          if-no-files-found: error
-          path: |
-            desktop/src-tauri/target/release/bundle/nsis/*.exe
-            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
-            desktop/src-tauri/target/release/bundle/deb/*.deb

@@ -61,6 +61,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.build }}
+          # A cache saved under a tag is readable from that tag alone; six of them push the
+          # branches' caches out of the repository's 10 GB.
+          save-if: ${{ github.ref_type == 'branch' }}
       - name: Linux packages
         if: runner.os == 'Linux'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools time
