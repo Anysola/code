@@ -365,6 +365,9 @@ export async function openSession(row: SessionRow) {
   })
   try {
     const opened = await bridge.openSession(row.directory, row.id)
+    // The composer's mode is the window's, the floor the session's: a turn still running here
+    // would otherwise go on under the mode it started with while the composer shows another.
+    void bridge.setMode(row.directory, row.id, state.mode).catch(() => {})
     set((s) => ({ busy: toggle(s.busy, row.id, opened.busy) }))
     setOpen(
       (o) => ({
