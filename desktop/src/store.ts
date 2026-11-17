@@ -25,6 +25,7 @@ import {
   type UpdateCheck,
   type View,
 } from "./bridge"
+import { getPrefs, loadPrefs, onPrefsFailure, setPref } from "./prefs"
 import { folderKey, sameFolder } from "./ui"
 
 export type { Mode }
@@ -92,6 +93,25 @@ export type Comment = {
   text: string
 }
 
+export type SettingsSection =
+  | "account"
+  | "usage"
+  | "billing"
+  | "general"
+  | "appearance"
+  | "conversation"
+  | "notifications"
+  | "keyboard"
+  | "permissions"
+  | "mcp"
+  | "skills"
+  | "commands"
+  | "instructions"
+  | "advanced"
+  | "discord"
+  | "data"
+  | "about"
+
 /** A subagent's transcript, read alongside the open session. */
 export type Peek = { directory: string; sessionId: string; title: string; items: Item[]; loading: boolean }
 
@@ -109,8 +129,12 @@ export type State = {
   peek: Peek | null
   mode: Mode
   notice: string | null
-  /** The folder new sessions start in; null asks each time. */
-  defaultFolder: string | null
+  /** A notice that has a place in Settings to fix it (an MCP server's failure). */
+  noticeLink: SettingsSection | null
+  /** Settings, open over the window; the session stays as it was under it. */
+  settings: SettingsSection | null
+  /** Counts the core's `mcp` events: Settings reads the servers again when it changes. */
+  mcpChanged: number
   /** Sessions kept at the top of the sidebar, and project groups folded shut (by `folderKey`). */
   pinned: Set<string>
   collapsed: Set<string>
@@ -149,12 +173,16 @@ function saveSet(key: string, value: Set<string>) {
   }
 }
 
-function readDefaultFolder(): string | null {
-  try {
-    return localStorage.getItem("anysola.defaultFolder") || null
-  } catch {
-    return null
-  }
+const SECTIONS = new Set<string>([
+  "account", "usage", "billing", "general", "appearance", "conversation", "notifications", "keyboard",
+  "permissions", "mcp", "skills", "commands", "instructions", "advanced", "discord", "data", "about",
+])
+
+/** `?settings=<section>` outside Tauri, for screenshots. */
+function readSettingsParam(): SettingsSection | null {
+  if (typeof location === "undefined") return null
+  const s = new URLSearchParams(location.search).get("settings")
+  return s && SECTIONS.has(s) ? (s as SettingsSection) : null
 }
 
 let state: State = {
@@ -171,7 +199,9 @@ let state: State = {
   peek: null,
   mode: readMode(),
   notice: null,
-  defaultFolder: readDefaultFolder(),
+  noticeLink: null,
+  settings: readSettingsParam(),
+  mcpChanged: 0,
   scratch: null,
   pinned: readSet("anysola.pinned"),
   // Folded projects by folder key; older entries were stored as spelled.
@@ -183,7 +213,9 @@ let state: State = {
 const listeners = new Set<() => void>()
 
 function set(patch: Partial<State> | ((s: State) => Partial<State>)) {
-  state = { ...state, ...(typeof patch === "function" ? patch(state) : patch) }
+  const p = typeof patch === "function" ? patch(state) : patch
+  // A new notice drops the last one's link unless it brings its own.
+  state = { ...state, ...("notice" in p && !("noticeLink" in p) ? { noticeLink: null } : {}), ...p }
   listeners.forEach((l) => l())
 }
 
@@ -245,11 +277,22 @@ let started = false
 const UPDATE_EVERY = 6 * 3_600_000
 
 async function checkUpdate() {
-  if (state.update?.installing) return
+  if (state.update?.installing || !getPrefs().general.checkUpdates) return
   try {
     set({ update: await bridge.updateCheck() })
   } catch {
     // Offline or no release yet: the next check tries again.
+  }
+}
+
+/** "Check now" in Settings: the answer, or what went wrong. */
+export async function checkUpdateNow(): Promise<UpdateCheck | string> {
+  try {
+    const update = await bridge.updateCheck()
+    if (!state.update?.installing) set({ update })
+    return update
+  } catch (e) {
+    return message(e)
   }
 }
 
@@ -277,8 +320,13 @@ export async function start() {
   started = true
   bridge = await getBridge()
   bridge.onEvent(onEvent)
-  void checkUpdate()
+  onPrefsFailure((notice) => set({ notice, noticeLink: null }))
+  // The update check waits for the preference that may turn it off; the first session too, so
+  // its file changes and command output open as the preferences say.
+  const prefsRead = loadPrefs(bridge)
+  void prefsRead.finally(() => void checkUpdate())
   setInterval(() => void checkUpdate(), UPDATE_EVERY)
+  listeners.add(watchPresence)
   try {
     const { signedIn } = await bridge.authStatus()
     set({ auth: signedIn ? "signed-in" : "signed-out" })
@@ -289,6 +337,7 @@ export async function start() {
       .catch(() => {})
     if (signedIn) {
       void loadAccount()
+      await prefsRead
       await loadSessions(true)
     }
   } catch (e) {
@@ -332,7 +381,7 @@ async function openLogin(url: string) {
   }
 }
 
-async function loadAccount() {
+export async function loadAccount() {
   try {
     const account = await bridge.account()
     if (account.expired) {
@@ -356,7 +405,15 @@ export async function signOut() {
       set({ notice: "ANYSOLA_TOKEN is set, so this computer stays signed in." })
       return
     }
-    set({ auth: "signed-out", account: null, sessions: [], open: null, permissions: [], questions: [] })
+    set({
+      auth: "signed-out",
+      account: null,
+      sessions: [],
+      open: null,
+      permissions: [],
+      questions: [],
+      settings: null,
+    })
   } catch (e) {
     set({ notice: message(e) })
   }
@@ -418,8 +475,11 @@ export async function openSession(row: SessionRow) {
 
 /** A new session: in `directory`, else the default folder, else one the user picks. */
 export async function newSession(directory?: string) {
-  if (!directory) directory = state.defaultFolder ?? (await pickFolder()) ?? undefined
+  if (!directory) directory = getPrefs().general.defaultFolder ?? (await pickFolder()) ?? undefined
   if (!directory) return
+  // A new session starts in the mode Settings names; "last" keeps the composer's.
+  const startMode = getPrefs().general.startMode
+  if (startMode !== "last" && startMode !== state.mode) set({ mode: startMode })
   void refreshGit(directory)
   const view = { key: `v${++views}` }
   set({
@@ -450,7 +510,7 @@ export async function newSession(directory?: string) {
 
 /** Opens the folder picker where the default folder is. */
 export async function pickFolder() {
-  return bridge.pickFolder(state.defaultFolder)
+  return bridge.pickFolder(getPrefs().general.defaultFolder)
 }
 
 /** A session with no project: it runs in the app's own folder. */
@@ -465,13 +525,101 @@ export async function newScratchSession() {
 }
 
 export function setDefaultFolder(directory: string | null) {
-  try {
-    if (directory) localStorage.setItem("anysola.defaultFolder", directory)
-    else localStorage.removeItem("anysola.defaultFolder")
-  } catch {
-    // Kept for this window only.
+  void setPref("general", { defaultFolder: directory })
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+/** What had focus before Settings opened (the composer, mostly): it gets it back on return, so
+ * Enter and Escape answer a waiting ask again without a click. */
+let returnFocus: HTMLElement | null = null
+
+export function openSettings(section: SettingsSection = "general") {
+  if (state.auth !== "signed-in") return
+  if (!state.settings) {
+    const active = document.activeElement
+    returnFocus = active instanceof HTMLElement && !active.closest("[data-settings]") ? active : null
   }
-  set({ defaultFolder: directory })
+  set({ settings: section })
+}
+
+export function closeSettings() {
+  if (!state.settings) return
+  set({ settings: null })
+  const back = returnFocus
+  returnFocus = null
+  // After React drops `inert` from the window behind.
+  requestAnimationFrame(() => {
+    if (back?.isConnected) back.focus()
+    else document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus()
+  })
+}
+
+export function setAccount(account: Account) {
+  if (!account.expired) set({ account })
+}
+
+/** For Settings: the bridge once started. */
+export function currentBridge(): Bridge {
+  return bridge
+}
+
+/** The folder the agent sections read: the open session's, else the app's own. */
+export async function settingsFolder(): Promise<string> {
+  if (state.open) return state.open.directory
+  const scratch = state.scratch ?? (await bridge.scratchFolder())
+  if (!state.scratch) set({ scratch })
+  return scratch
+}
+
+/** The session list read again (Settings deleted sessions); an open one that went is closed. */
+export async function reloadSessions() {
+  try {
+    await loadSessions()
+    const open = state.open
+    if (open?.sessionId && !state.sessions.some((r) => r.id === open.sessionId)) set({ open: null })
+  } catch {
+    // The next event reads it again.
+  }
+}
+
+/** The sign-in screen, for a token Settings found expired. */
+export function requireSignIn(reason?: string) {
+  set({ auth: "signed-out", account: null, settings: null, loginError: reason ?? "Your sign-in expired. Sign in again." })
+}
+
+export function notify(notice: string) {
+  set({ notice, noticeLink: null })
+}
+
+// ---------------------------------------------------------------------------
+// Discord
+// ---------------------------------------------------------------------------
+
+let presenceKey = ""
+let presenceTimer: ReturnType<typeof setTimeout> | undefined
+
+/** What the window shows, for the Discord status: sent half a second after it settles, once. */
+function watchPresence() {
+  if (!bridge) return
+  const o = state.open
+  const p = {
+    directory: o?.directory ?? null,
+    title: o ? o.title : null,
+    model: o?.info?.model ?? null,
+    working: !!o && ((!!o.sessionId && state.busy.has(o.sessionId)) || o.status.kind === "working"),
+  }
+  const key = JSON.stringify(p)
+  // A change that is undone within the wait sends nothing.
+  clearTimeout(presenceTimer)
+  if (key === presenceKey) return
+  presenceTimer = setTimeout(() => {
+    if (key === presenceKey) return
+    presenceKey = key
+    void bridge.presence(p).catch(() => {})
+  }, 500)
 }
 
 /** A view read from the database; text it now holds stops streaming separately. */
@@ -1061,7 +1209,12 @@ function directoryOf(sessionId: string) {
 
 function onEvent(e: CoreEvent) {
   if (e.type === "notice") {
-    set({ notice: e.message })
+    // An MCP server's trouble is fixed in Settings: the notice links there.
+    set({ notice: e.message, noticeLink: /\bMCP\b/i.test(e.message) ? "mcp" : null })
+    return
+  }
+  if (e.type === "mcp") {
+    set((s) => ({ mcpChanged: s.mcpChanged + 1 }))
     return
   }
   if (e.type === "lagged") {
@@ -1192,5 +1345,5 @@ function onEvent(e: CoreEvent) {
 }
 
 export function dismissNotice() {
-  set({ notice: null })
+  set({ notice: null, noticeLink: null })
 }

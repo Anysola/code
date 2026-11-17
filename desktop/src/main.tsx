@@ -2,7 +2,11 @@ import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 
 import { App } from "./app"
+import { applyEarly } from "./prefs"
 import "./styles.css"
+
+// The theme, size and width last used, before the first paint.
+applyEarly()
 
 // A file dropped anywhere but the composer would otherwise open in the webview in place of
 // the app. Text drags into fields keep their default.

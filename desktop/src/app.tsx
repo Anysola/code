@@ -4,9 +4,11 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { Composer, Tasks } from "./composer"
 import {
   closePeek,
+  closeSettings,
   dismissNotice,
   newScratchSession,
   newSession,
+  openSettings,
   cancelSignIn,
   openLoginPage,
   signIn,
@@ -16,12 +18,14 @@ import {
   type Peek,
 } from "./store"
 import { changedFiles, GitMenu, Review } from "./review"
+import { Settings, sectionLabel } from "./settings"
 import { PlaceLabel, Sidebar } from "./sidebar"
 import { Transcript } from "./transcript"
 import { btn, Counts, Kbd, Mark, sameFolder, Spinner, TitleBar, UsageMeter, useEscape } from "./ui"
 
 export function App() {
   const auth = useStore((s) => s.auth)
+  const settings = useStore((s) => s.settings)
   useEffect(() => {
     void start()
   }, [])
@@ -29,9 +33,13 @@ export function App() {
   if (auth === "checking") return <div className="h-full bg-background" />
   if (auth === "signed-out") return <SignIn />
   return (
-    <div className="flex h-full bg-background">
-      <Sidebar />
-      <Main />
+    <div className="relative h-full bg-background">
+      {/* Settings covers the window; the session stays as it was (scroll, draft, open panels). */}
+      <div className="flex h-full" inert={settings !== null} aria-hidden={settings !== null || undefined}>
+        <Sidebar />
+        <Main />
+      </div>
+      {settings && <Settings section={settings} />}
       <Notice />
     </div>
   )
@@ -40,9 +48,17 @@ export function App() {
 function useShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "n") {
+      const ctrl = e.ctrlKey || e.metaKey
+      if (ctrl && e.key.toLowerCase() === "n") {
         e.preventDefault()
+        closeSettings()
         void newSession()
+      }
+      if (ctrl && e.key === ",") {
+        e.preventDefault()
+        // openSettings itself does nothing while signed out.
+        if (document.querySelector("[data-settings]")) closeSettings()
+        else openSettings()
       }
     }
     window.addEventListener("keydown", onKey)
@@ -131,7 +147,7 @@ function Main() {
         <>
           <SessionHeader open={open} onReview={() => setReviewing(true)} />
           <Conversation open={open} />
-          <div className="mx-auto w-full max-w-[50rem] px-8 pb-5">
+          <div className="mx-auto w-full max-w-(--conversation-width) px-8 pb-5">
             <Tasks todos={open.todos} />
             <Composer open={open} />
             <div className="mt-2 flex items-center gap-3 px-2">
@@ -232,7 +248,7 @@ function Conversation({ open }: { open: Open }) {
       }}
       className="min-h-0 flex-1 overflow-y-auto"
     >
-      <div className="mx-auto max-w-[50rem] px-8 pt-6 pb-8">
+      <div className="mx-auto max-w-(--conversation-width) px-8 pt-6 pb-8">
         {open.loading ? (
           <div className="flex justify-center pt-16">
             <Spinner />
@@ -271,7 +287,7 @@ function Peeking({ peek }: { peek: Peek }) {
     fill: null,
   }
   return (
-    <div ref={panel} className="absolute inset-0 z-10 flex justify-end bg-black/40" onClick={closePeek}>
+    <div ref={panel} className="absolute inset-0 z-10 flex justify-end bg-scrim" onClick={closePeek}>
       <aside
         className="flex h-full w-[min(44rem,92%)] flex-col bg-overlay"
         onClick={(e) => e.stopPropagation()}
@@ -300,10 +316,24 @@ function Peeking({ peek }: { peek: Peek }) {
 
 function Notice() {
   const notice = useStore((s) => s.notice)
+  const link = useStore((s) => s.noticeLink)
   if (!notice) return null
   return (
-    <div className="text-dense fixed right-6 bottom-6 z-20 flex max-w-sm items-start gap-3 rounded-xl bg-popover px-4 py-3">
-      <span className="flex-1">{notice}</span>
+    <div className="text-dense fixed right-6 bottom-6 z-30 flex max-w-sm items-start gap-3 rounded-xl bg-popover px-4 py-3">
+      <span className="flex max-h-40 min-w-0 flex-1 flex-col items-start gap-2 overflow-y-auto">
+        <span className="select-text">{notice}</span>
+        {link && (
+          <button
+            onClick={() => {
+              dismissNotice()
+              openSettings(link)
+            }}
+            className={btn("secondary", "sm")}
+          >
+            Open {sectionLabel(link)}
+          </button>
+        )}
+      </span>
       <button onClick={dismissNotice} className="text-muted hover:text-foreground" aria-label="Dismiss">
         <X className="size-4" />
       </button>

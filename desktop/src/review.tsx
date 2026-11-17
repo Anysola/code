@@ -5,6 +5,8 @@
 import {
   ArrowUpFromLine,
   Check,
+  ChevronDown,
+  ChevronRight,
   ExternalLink,
   GitBranch,
   GitCommitHorizontal,
@@ -254,8 +256,10 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
   useEscape(panel, onClose)
   const edits = changedFiles(open)
   const count = net ? net.length : edits.length
+  // A few files open with their diffs; more start as rows, so the list reads first.
+  const startOpen = count <= 6
   return (
-    <div ref={panel} className="absolute inset-0 z-10 flex justify-end bg-black/40" onClick={onClose}>
+    <div ref={panel} className="absolute inset-0 z-10 flex justify-end bg-scrim" onClick={onClose}>
       <aside
         className="flex h-full w-[min(46rem,94%)] flex-col bg-overlay"
         onClick={(e) => e.stopPropagation()}
@@ -286,14 +290,14 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
               {edits.map((f) => (
                 <div key={f.file} className="flex flex-col gap-2">
                   {f.diffs.map((d, i) => (
-                    <EditCard key={i} file={d} startOpen />
+                    <EditCard key={i} file={d} startOpen={startOpen} />
                   ))}
                 </div>
               ))}
             </>
           )}
           {net?.length === 0 && <p className="text-dense px-1 pt-4 text-muted">Every file is back as it was before this session.</p>}
-          {net?.map((f) => <ReviewFile key={f.file} file={f} onRestored={reload} />)}
+          {net?.map((f) => <ReviewFile key={f.file} file={f} onRestored={reload} startOpen={startOpen} />)}
         </div>
       </aside>
     </div>
@@ -302,20 +306,25 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
 
 const VERB = { added: "Added", modified: "Changed", deleted: "Deleted" } as const
 
-function ReviewFile({ file, onRestored }: { file: FileDiff; onRestored: () => void }) {
+function ReviewFile({ file, onRestored, startOpen }: { file: FileDiff; onRestored: () => void; startOpen: boolean }) {
   const all = useStore((s) => s.comments)
   const comments = all.filter((c) => c.file === file.file)
   const [confirm, setConfirm] = useState(false)
   const [working, setWorking] = useState(false)
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(startOpen)
   return (
     <div className="overflow-hidden rounded-xl bg-surface">
       <div className="flex h-10 items-center gap-2.5 pr-2 pl-3">
         <button
           onClick={() => setOpen(!open)}
           aria-expanded={open}
-          className="text-dense flex min-w-0 flex-1 items-center gap-2.5 text-left focus-visible:status-focused-field"
+          className="text-dense flex min-w-0 flex-1 items-center gap-2.5 self-stretch text-left focus-visible:status-focused-field"
         >
+          {open ? (
+            <ChevronDown className="size-3.5 shrink-0 text-muted" />
+          ) : (
+            <ChevronRight className="size-3.5 shrink-0 text-muted" />
+          )}
           <span className="shrink-0 text-foreground/80">{VERB[file.status] ?? "Changed"}</span>
           <span className="min-w-0 truncate font-mono text-xs text-muted">{file.file}</span>
           {comments.length > 0 && <span className="text-2xs shrink-0 text-muted">· {comments.length} comment{comments.length === 1 ? "" : "s"}</span>}

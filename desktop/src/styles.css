@@ -8,6 +8,8 @@
 @source not "../dist";
 
 :root {
+  /* The conversation column (Settings, Appearance); prefs.ts sets it. */
+  --conversation-width: 50rem;
   --font-sans-family: "Archivo Variable", ui-sans-serif, system-ui, sans-serif, "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji";
   --font-mono-family: "JetBrains Mono Variable", ui-monospace, monospace;
 }
@@ -52,6 +54,10 @@
   --color-destructive: var(--danger);
   --color-input: var(--field-border-hover);
   --color-ring: var(--focus);
+  /* What dims the session under a sheet (Review, a subagent). */
+  --color-scrim: var(--scrim);
+  /* A fenced code block in a reply. */
+  --color-code: var(--code);
 }
 
 .dark {
@@ -101,6 +107,8 @@
   --focus: oklch(0.62 0.015 70);
   --link: var(--foreground);
   --backdrop: oklch(0.1 0.005 70 / 55%);
+  --scrim: oklch(0 0 0 / 40%);
+  --code: oklch(0.17 0.006 70 / 60%);
   --overlay-shadow: none;
   /* HeroUI's semantic colours stay; info (ticket "open") is ours and stays
      blue, since it is a status hue, not a grey. */
@@ -116,6 +124,71 @@
   --sidebar-border: var(--separator);
   --sidebar-ring: var(--focus);
   /* shadcn variable names, for the Clerk appearance in @anysola/auth/react. */
+  --card: var(--surface);
+  --primary: var(--accent);
+  --primary-foreground: var(--accent-foreground);
+  --muted-foreground: var(--muted);
+  --destructive: var(--danger);
+}
+
+/* Light, the same warm hue on paper: the page a step darker than the cards and the main frame,
+   menus and sheets darker still, fields and chips a step below the card; the primary a warm near-black
+   with paper-coloured text. No shadow anywhere: tone alone parts the layers, as in dark. */
+.light {
+  color-scheme: light;
+  --radius: 1rem;
+  --background: oklch(0.952 0.006 80);
+  --foreground: oklch(0.21 0.01 70);
+  --surface: oklch(0.985 0.004 80);
+  --surface-foreground: var(--foreground);
+  --surface-secondary: oklch(0.93 0.007 80);
+  --surface-secondary-foreground: var(--foreground);
+  --surface-tertiary: oklch(0.905 0.008 80);
+  --surface-tertiary-foreground: var(--foreground);
+  /* Menus and sheets (bg-popover is --overlay): a step toward the foreground, as in dark. They
+     open over the page, the frame and the cards, and only a darker tone stays apart from all
+     three without a shadow; a sheet's white cards then read on it too. */
+  --overlay: oklch(0.932 0.008 80);
+  --overlay-foreground: var(--foreground);
+  --popover: oklch(0.932 0.008 80);
+  --muted: oklch(0.5 0.014 70);
+  --default: oklch(0.92 0.007 78);
+  --default-foreground: var(--foreground);
+  --default-hover: oklch(0.89 0.008 78);
+  --accent: oklch(0.25 0.01 70);
+  --accent-foreground: oklch(0.975 0.004 80);
+  --accent-hover: oklch(0.33 0.01 70);
+  --accent-soft: oklch(0.25 0.01 70 / 7%);
+  --accent-soft-foreground: var(--foreground);
+  --accent-soft-hover: oklch(0.25 0.01 70 / 11%);
+  --field-background: oklch(0.985 0.004 80);
+  --field-foreground: var(--foreground);
+  --field-placeholder: oklch(0.58 0.012 70);
+  --segment: oklch(0.86 0.008 78);
+  --segment-foreground: var(--foreground);
+  --border: oklch(0.87 0.007 78);
+  --separator: oklch(0.915 0.006 78);
+  --focus: oklch(0.55 0.015 70);
+  --link: var(--foreground);
+  --backdrop: oklch(0.21 0.01 70 / 30%);
+  --scrim: oklch(0.21 0.01 70 / 22%);
+  --code: oklch(0.935 0.006 80);
+  --surface-shadow: none;
+  --overlay-shadow: none;
+  --field-shadow: none;
+  /* The semantic colours, a step darker than HeroUI's so text in them reads on paper. */
+  --success: oklch(0.55 0.13 150);
+  --warning: oklch(0.6 0.13 70);
+  --danger: oklch(0.56 0.19 25);
+  --info: oklch(0.55 0.1 250);
+  --sidebar: var(--surface);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--accent);
+  --sidebar-primary-foreground: var(--accent-foreground);
+  --sidebar-accent: var(--default);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--separator);
+  --sidebar-ring: var(--focus);
   --card: var(--surface);
   --primary: var(--accent);
   --primary-foreground: var(--accent-foreground);
@@ -188,7 +261,7 @@ kbd,
 .prose-anysola :where(pre) {
   overflow-x: auto;
   border-radius: 0.75rem;
-  background: oklch(0.17 0.006 70 / 60%);
+  background: var(--code);
   padding: 0.625rem 0.75rem;
   font-size: 0.75rem;
   line-height: 1.6;
@@ -254,4 +327,25 @@ kbd,
 }
 ::-webkit-scrollbar-thumb:hover {
   background-color: color-mix(in oklab, var(--muted) 65%, transparent);
+}
+
+/* Settings, Appearance: long lines in diffs and code blocks wrap instead of scrolling. */
+html[data-wrap-code] .code-line {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+html[data-wrap-code] .prose-anysola pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Settings, Appearance (or the system): no transitions or animations. A spinner keeps turning,
+   since it says something is still happening. */
+html[data-reduce-motion] *:not(.spinner, .spinner *, .animate-spin),
+html[data-reduce-motion] *::before,
+html[data-reduce-motion] *::after {
+  transition-duration: 0s !important;
+  animation-duration: 0s !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
 }

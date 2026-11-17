@@ -20,11 +20,12 @@ import {
   SquareSlash,
   Undo2,
 } from "lucide-react"
-import { useRef, useState, type ReactNode } from "react"
-import Markdown from "react-markdown"
+import { useState, type ReactNode } from "react"
+import Markdown, { type ExtraProps } from "react-markdown"
 import remarkGfm from "remark-gfm"
 
 import type { FileDiff, Item } from "./bridge"
+import { getPrefs, isSendKey, sendKeyLabel, usePrefs } from "./prefs"
 import {
   answer,
   buildPlan,
@@ -146,9 +147,9 @@ function UserMessage({ item, actions }: { item: UserItem; actions: boolean }) {
   const [editing, setEditing] = useState(false)
   const [copied, setCopied] = useState(false)
   const [draft, setDraft] = useState(item.text)
-  const area = useRef<HTMLTextAreaElement>(null)
   const [full, setFull] = useState(false)
-  const long = item.text.length > 700 || item.text.split("\n").length > 10
+  const shorten = usePrefs((p) => p.conversation.shorten)
+  const long = shorten && (item.text.length > 700 || item.text.split("\n").length > 10)
   const submit = () => {
     if (!draft.trim()) return
     setEditing(false)
@@ -160,7 +161,6 @@ function UserMessage({ item, actions }: { item: UserItem; actions: boolean }) {
     return (
       <div className="rounded-2xl bg-surface-secondary/60 p-2">
         <textarea
-          ref={area}
           autoFocus
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -175,7 +175,7 @@ function UserMessage({ item, actions }: { item: UserItem; actions: boolean }) {
             el.style.height = `${Math.min(el.scrollHeight, 320)}px`
           }}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
+            if (isSendKey(e)) {
               e.preventDefault()
               submit()
             } else if (e.key === "Escape") {
@@ -288,6 +288,9 @@ const MARK = { added: "A", modified: "M", deleted: "D" } as const
 
 /** A staged rewind: what it hid and put back, until the next message makes it final. */
 function Rewound({ revert }: { revert: NonNullable<Open["revert"]> }) {
+  const [all, setAll] = useState(false)
+  const files = all ? revert.files : revert.files.slice(0, 5)
+  const more = revert.files.length - files.length
   return (
     <div className="flex flex-col gap-3 rounded-2xl bg-surface-secondary/40 px-4 py-3">
       <div className="flex items-center gap-3">
@@ -304,13 +307,23 @@ function Rewound({ revert }: { revert: NonNullable<Open["revert"]> }) {
       </div>
       {revert.files.length > 0 && (
         <ul className="flex flex-col gap-1 pl-6.5">
-          {revert.files.map((f) => (
+          {files.map((f) => (
             <li key={f.file} className="text-dense flex items-center gap-2 font-mono text-muted">
               <span className="w-3 text-center">{MARK[f.status] ?? "M"}</span>
               <span className="min-w-0 flex-1 truncate text-foreground/85">{f.file}</span>
               {f.additions + f.deletions > 0 && <Counts add={f.additions} del={f.deletions} />}
             </li>
           ))}
+          {more > 0 && (
+            <li>
+              <button
+                onClick={() => setAll(true)}
+                className="text-2xs text-muted hover:text-foreground focus-visible:status-focused-field"
+              >
+                {more} more
+              </button>
+            </li>
+          )}
         </ul>
       )}
       <p className="text-2xs pl-6.5 text-muted">Your next message continues from here and makes this final.</p>
@@ -357,7 +370,7 @@ export function Prose({ text }: { text: string }) {
       <Markdown
         remarkPlugins={[remarkGfm]}
         components={{
-          pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+          pre: ({ children, node }) => <CodeBlock node={node}>{children}</CodeBlock>,
           a: ({ href, children }) => (
             <a
               href={href}
@@ -384,20 +397,55 @@ export function Prose({ text }: { text: string }) {
   )
 }
 
-/** A fenced block from the model, with a copy button that shows on hover. */
-function CodeBlock({ children }: { children: ReactNode }) {
-  const ref = useRef<HTMLPreElement>(null)
+type Hast = { type: string; value?: string; tagName?: string; properties?: Record<string, unknown>; children?: Hast[] }
+
+function textOf(node: Hast | undefined): string {
+  if (!node) return ""
+  if (node.type === "text") return node.value ?? ""
+  return (node.children ?? []).map(textOf).join("")
+}
+
+/** Over this many lines, a block shows its first lines and "Show all". */
+const CODE_LIMIT = 24
+const CODE_SHOWN = 16
+
+/**
+ * A fenced block from the model, with a copy button that shows on hover. With "shorten" on, a
+ * long block shows its start; copy always takes the whole block.
+ */
+function CodeBlock({ children, node }: { children: ReactNode; node: ExtraProps["node"] }) {
   const [copied, setCopied] = useState(false)
+  const [full, setFull] = useState(false)
+  const shorten = usePrefs((p) => p.conversation.shorten)
+  const code = (node as Hast | undefined)?.children?.find((c) => c.tagName === "code")
+  const source = textOf(code ?? (node as Hast | undefined)).replace(/\n$/, "")
+  const lines = source.split("\n").length
+  const cut = !!code && shorten && lines > CODE_LIMIT && !full
+  const language = (code?.properties?.className as string[] | undefined)?.join(" ")
   const copy = () => {
-    const text = ref.current?.innerText ?? ""
-    void navigator.clipboard.writeText(text).then(() => {
+    void navigator.clipboard.writeText(source).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     })
   }
   return (
     <div className="group relative">
-      <pre ref={ref}>{children}</pre>
+      {cut ? (
+        <pre>
+          <code className={language}>{source.split("\n").slice(0, CODE_SHOWN).join("\n")}</code>
+        </pre>
+      ) : (
+        <pre>{children}</pre>
+      )}
+      {code && shorten && lines > CODE_LIMIT && (
+        <button
+          onClick={() => setFull(!full)}
+          aria-expanded={full}
+          className="text-2xs mt-1.5 text-muted hover:text-foreground focus-visible:status-focused-field"
+        >
+          {full ? "Show less" : `Show all ${lines} lines`}
+        </button>
+      )}
       <button
         onClick={copy}
         aria-label={copied ? "Copied" : "Copy"}
@@ -469,6 +517,15 @@ function summary(tools: Tool[]) {
 function Explored({ tools }: { tools: Tool[] }) {
   const running = tools.some((t) => t.status === "running" || t.status === "streaming")
   const [open, setOpen] = useState(false)
+  const listed = usePrefs((p) => p.conversation.lookups === "listed")
+  if (listed)
+    return (
+      <div className="-mx-2">
+        {tools.map((t) => (
+          <ToolRow key={t.id} tool={t} />
+        ))}
+      </div>
+    )
   return (
     <div className="-mx-2">
       <Disclosure open={open} onToggle={() => setOpen(!open)}>
@@ -528,13 +585,13 @@ function OtherTool({ tool }: { tool: Tool }) {
   return (
     <div className="-mx-2">
       <ToolRow tool={tool} />
-      {tool.error && <div className="text-2xs ml-8 text-danger">{tool.error}</div>}
+      {tool.error && <div className="text-2xs ml-8 max-h-32 overflow-y-auto whitespace-pre-wrap text-danger">{tool.error}</div>}
     </div>
   )
 }
 
 function Command({ tool }: { tool: Tool }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(() => getPrefs().conversation.commands === "open")
   const running = tool.status === "running" || tool.status === "streaming"
   const output = tool.error ?? tool.output
   return (
@@ -572,19 +629,19 @@ function Edits({ tool }: { tool: Tool }) {
   )
 }
 
-/** A file's change. In the conversation it starts closed, one row per file; Review opens it. */
+/** A file's change: closed or open in the conversation as Settings says; Review passes its own. */
 export function EditCard({
   file,
   status,
   error,
-  startOpen = false,
+  startOpen,
 }: {
   file: FileDiff
   status?: Tool["status"]
   error?: string | null
   startOpen?: boolean
 }) {
-  const [open, setOpen] = useState(startOpen)
+  const [open, setOpen] = useState(() => startOpen ?? getPrefs().conversation.changes === "open")
   const added = file.status === "added"
   const waiting = status === "running"
   return (
@@ -613,8 +670,14 @@ export function EditCard({
           )}
         </span>
       </button>
-      {open && <DiffView patch={file.patch} className="pb-2" />}
-      {error && <div className="text-2xs px-3 pb-2.5 text-danger">{error}</div>}
+      {/* In the conversation a long diff scrolls inside its card; Review shows it whole. */}
+      {open && (
+        <DiffView
+          patch={file.patch}
+          className={cn("pb-2", startOpen === undefined && "max-h-[min(36rem,70vh)] overflow-y-auto")}
+        />
+      )}
+      {error && <div className="text-2xs max-h-32 overflow-y-auto px-3 pb-2.5 whitespace-pre-wrap text-danger">{error}</div>}
     </div>
   )
 }
@@ -633,6 +696,7 @@ const asks: Record<string, string> = {
 
 function PermissionCard({ permission: p, keys }: { permission: Permission; keys: boolean }) {
   const shell = p.action === "shell"
+  const send = usePrefs((s) => s.conversation.send)
   return (
     <div className="rounded-xl bg-surface p-4">
       <div className="flex items-center gap-2 text-sm">
@@ -640,7 +704,8 @@ function PermissionCard({ permission: p, keys }: { permission: Permission; keys:
         {asks[p.action] ?? `Allow ${p.action}?`}
       </div>
       {shell ? (
-        <div className="text-dense mt-3 overflow-x-auto rounded-lg bg-background/60 px-3 py-2.5 font-mono whitespace-pre-wrap">
+        // Capped, so Allow and Deny stay on screen however long the ask is.
+        <div className="text-dense mt-3 max-h-[min(22rem,40vh)] overflow-auto rounded-lg bg-background/60 px-3 py-2.5 font-mono whitespace-pre-wrap">
           {p.resources.map((r) => (
             <div key={r}>
               <span className="text-muted select-none">$ </span>
@@ -649,9 +714,9 @@ function PermissionCard({ permission: p, keys }: { permission: Permission; keys:
           ))}
         </div>
       ) : p.files?.length ? (
-        <div className="mt-3 flex flex-col gap-2">
+        <div className="mt-3 flex max-h-[min(22rem,40vh)] flex-col gap-2 overflow-y-auto rounded-lg">
           {p.files.map((f) => (
-            <div key={f.file} className="overflow-hidden rounded-lg bg-background/60">
+            <div key={f.file} className="shrink-0 overflow-hidden rounded-lg bg-background/60">
               <div className="flex h-9 items-center gap-2 px-3">
                 <span className="min-w-0 truncate font-mono text-xs text-muted">{f.file}</span>
                 <span className="ml-auto">
@@ -663,11 +728,11 @@ function PermissionCard({ permission: p, keys }: { permission: Permission; keys:
           ))}
         </div>
       ) : (
-        <div className="mt-2 font-mono text-xs text-muted">{p.resources.join(", ")}</div>
+        <div className="mt-2 max-h-40 overflow-y-auto font-mono text-xs break-all text-muted">{p.resources.join(", ")}</div>
       )}
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <button onClick={() => void reply(p, "once")} className={btn("primary", "sm", "gap-2")}>
-          Allow once {keys && <Kbd onPrimary>Enter</Kbd>}
+          Allow once {keys && <Kbd onPrimary>{sendKeyLabel(send)}</Kbd>}
         </button>
         {p.canAlways && (
           <button onClick={() => void reply(p, "always")} className={btn("secondary", "sm")}>
@@ -698,6 +763,8 @@ function QuestionCard({ asked }: { asked: Asked }) {
   }
   return (
     <div className="flex flex-col gap-5 rounded-xl bg-surface p-4">
+      {/* Capped, so Send stays on screen however many questions come. */}
+      <div className="-m-1 flex max-h-[min(26rem,50vh)] flex-col gap-5 overflow-y-auto p-1">
       {asked.questions.map((q, i) => (
         <fieldset key={i} className="flex flex-col gap-2.5">
           <legend className="contents">
@@ -745,6 +812,7 @@ function QuestionCard({ asked }: { asked: Asked }) {
           </div>
         </fieldset>
       ))}
+      </div>
       <div className="flex items-center gap-2">
         <button
           disabled={!complete}
@@ -787,7 +855,7 @@ function StatusLine({ status, waiting, streaming }: { status: Status; waiting: b
       return (
         <div className="text-dense flex items-start gap-2 text-danger">
           <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
-          {status.error}
+          <span className="max-h-40 min-w-0 overflow-y-auto whitespace-pre-wrap select-text">{status.error}</span>
         </div>
       )
     case "stopped":

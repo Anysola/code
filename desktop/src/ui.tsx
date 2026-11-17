@@ -219,7 +219,7 @@ function DiffRow({ l, wrap, onComment }: { l: DiffLine; wrap: boolean; onComment
   return (
     <div
       className={cn(
-        "group/line relative flex",
+        "code-line group/line relative flex",
         wrap ? "whitespace-pre-wrap" : "whitespace-pre",
         l.kind === "add" && "bg-success/10",
         l.kind === "del" && "bg-danger/10"
@@ -288,11 +288,13 @@ export function sameFolder(a: string | null | undefined, b: string | null | unde
 export function useEscape(panel: RefObject<HTMLElement | null>, onClose: () => void) {
   useEffect(() => {
     const outside = (e: KeyboardEvent) => {
+      // Settings, open over the panel, takes its own Escape.
+      if (document.querySelector("[data-settings]")) return
       if (e.key !== "Escape" || panel.current?.contains(e.target as Node)) return
       e.stopPropagation()
       onClose()
     }
-    const inside = (e: KeyboardEvent) => e.key === "Escape" && onClose()
+    const inside = (e: KeyboardEvent) => e.key === "Escape" && !document.querySelector("[data-settings]") && onClose()
     document.addEventListener("keydown", outside, true)
     window.addEventListener("keydown", inside)
     return () => {

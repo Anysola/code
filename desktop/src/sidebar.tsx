@@ -11,6 +11,7 @@ import {
   Ellipsis,
   FolderClosed,
   FolderOpen,
+  Gauge,
   ListChecks,
   LogOut,
   MessageSquare,
@@ -19,23 +20,25 @@ import {
   PinOff,
   Plus,
   Search,
+  Settings as SettingsIcon,
   Trash2,
-  X,
+  UserRound,
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import type { SessionRow, Window as AccountWindow } from "./bridge"
 import { capitalize } from "./composer"
+import { usePrefs } from "./prefs"
 import {
   deleteSessions,
   installUpdate,
   newScratchSession,
   newSession,
   openSession,
+  openSettings,
   pickFolder,
   renameSession,
   reveal,
-  setDefaultFolder,
   signOut,
   toggleCollapsed,
   togglePin,
@@ -57,7 +60,7 @@ export function PlaceLabel({ directory }: { directory: string }) {
 function NewSessionButton() {
   const sessions = useStore((s) => s.sessions)
   const scratch = useStore((s) => s.scratch)
-  const preferred = useStore((s) => s.defaultFolder)
+  const preferred = usePrefs((p) => p.general.defaultFolder)
   const [show, setShow] = useState(false)
   const close = useCallback(() => setShow(false), [])
   const recent = useMemo(() => {
@@ -173,7 +176,8 @@ export function Sidebar() {
         e.preventDefault()
         search.current?.focus()
       }
-      if (e.key === "Escape" && selected.size > 0) setSelected(new Set())
+      // Under Settings, Escape is Settings' own.
+      if (e.key === "Escape" && selected.size > 0 && !document.querySelector("[data-settings]")) setSelected(new Set())
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
@@ -275,6 +279,7 @@ export function Sidebar() {
       ) : (
         <>
           <UpdateRow />
+          <SettingsRow />
           <AccountRow />
         </>
       )}
@@ -600,28 +605,64 @@ function UpdateRow() {
   )
 }
 
+function SettingsRow() {
+  return (
+    <div className="px-2 pt-2">
+      <button
+        onClick={() => openSettings("general")}
+        className="text-dense flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-muted hover:bg-default/60 hover:text-foreground focus-visible:status-focused-field"
+      >
+        <SettingsIcon className="size-3.5 shrink-0" strokeWidth={1.75} />
+        <span className="flex-1">Settings</span>
+        <Kbd>Ctrl ,</Kbd>
+      </button>
+    </div>
+  )
+}
+
+/** The plan and its windows: the name opens the account menu, the meters open Usage. */
 function AccountRow() {
   const account = useStore((s) => s.account)
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
   if (!account || account.expired) return null
+  const go = (section: "account" | "usage" | "general") => {
+    close()
+    openSettings(section)
+  }
   return (
-    <div className="relative px-2 pt-2 pb-3">
+    <div className="relative px-2 pt-1 pb-3">
       <button
         onClick={() => setOpen(!open)}
         aria-expanded={open}
-        className="flex w-full flex-col gap-2 rounded-lg px-2 py-2 text-left hover:bg-default/60 focus-visible:status-focused-field"
+        className="flex h-8 w-full items-center justify-between rounded-lg px-2 text-left text-sm hover:bg-default/60 focus-visible:status-focused-field"
       >
-        <span className="flex items-center justify-between text-sm">
-          {account.plan ? `${capitalize(account.plan)} plan` : "Anysola"}
-          <ChevronUp className="size-3.5 text-muted" />
-        </span>
-        {!account.included && <span className="text-dense text-warning">This plan doesn’t include Anysola Code.</span>}
-        <WindowMeter label="5-hour" window={account.fiveHour} />
-        <WindowMeter label="Weekly" window={account.weekly} />
+        {account.plan ? `${capitalize(account.plan)} plan` : "Anysola"}
+        <ChevronUp className="size-3.5 text-muted" />
       </button>
+      {!account.included && <p className="text-dense px-2 pb-1 text-warning">This plan doesn’t include Anysola Code.</p>}
+      {(account.fiveHour || account.weekly) && (
+        <button
+          onClick={() => go("usage")}
+          aria-label="Usage and limits"
+          className="flex w-full flex-col gap-2 rounded-lg px-2 pt-1 pb-2 text-left hover:bg-default/60 focus-visible:status-focused-field"
+        >
+          <WindowMeter label="5-hour" window={account.fiveHour} />
+          <WindowMeter label="Weekly" window={account.weekly} />
+        </button>
+      )}
       <Popover open={open} onClose={close} side="top" className="left-2 w-60">
-        <DefaultFolder onDone={close} />
+        <MenuItem onSelect={() => go("account")}>
+          <UserRound className="size-3.5 text-muted" /> Account and devices
+        </MenuItem>
+        <MenuItem onSelect={() => go("usage")}>
+          <Gauge className="size-3.5 text-muted" /> Usage and limits
+        </MenuItem>
+        <MenuItem onSelect={() => go("general")}>
+          <SettingsIcon className="size-3.5 text-muted" />
+          <span className="flex-1">Settings</span>
+          <Kbd>Ctrl ,</Kbd>
+        </MenuItem>
         <div className="my-1 border-t border-separator" />
         <MenuItem
           onSelect={() => {
@@ -632,39 +673,6 @@ function AccountRow() {
           <LogOut className="size-3.5 text-muted" /> Sign out
         </MenuItem>
       </Popover>
-    </div>
-  )
-}
-
-/** Where new sessions start (Ctrl N); without one, each asks for a folder. */
-function DefaultFolder({ onDone }: { onDone: () => void }) {
-  const preferred = useStore((s) => s.defaultFolder)
-  return (
-    <div className="flex flex-col">
-      <div className="px-2.5 pt-1.5 pb-1">
-        <div className="text-2xs text-muted">New sessions start in</div>
-        <div className="truncate text-sm" title={preferred ?? undefined}>
-          {preferred ? folderName(preferred) : "A folder you pick each time"}
-        </div>
-      </div>
-      <MenuItem
-        onSelect={() => {
-          onDone()
-          void pickFolder().then((d) => d && setDefaultFolder(d))
-        }}
-      >
-        <FolderOpen className="size-3.5 text-muted" /> {preferred ? "Change default folder…" : "Set a default folder…"}
-      </MenuItem>
-      {preferred && (
-        <MenuItem
-          onSelect={() => {
-            onDone()
-            setDefaultFolder(null)
-          }}
-        >
-          <X className="size-3.5 text-muted" /> Ask each time
-        </MenuItem>
-      )}
     </div>
   )
 }

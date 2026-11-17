@@ -21,6 +21,7 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 
 import type { Attachment, Palette, Todo } from "./bridge"
+import { isSendKey, usePrefs } from "./prefs"
 import {
   chooseAgent,
   chooseModel,
@@ -43,7 +44,7 @@ import {
 } from "./store"
 import { btn, cn, Popover } from "./ui"
 
-const modes: { id: Mode | "plan"; label: string; hint: string }[] = [
+export const modes: { id: Mode | "plan"; label: string; hint: string }[] = [
   { id: "ask", label: "Ask", hint: "Ask before every edit and command" },
   { id: "edits", label: "Edits", hint: "Edit files without asking; ask before commands" },
   { id: "auto", label: "Auto", hint: "Ask only where your rules say to" },
@@ -82,19 +83,33 @@ type Row = {
   run?: () => void
 }
 
+/** The window's own commands, for the composer and for Settings' list. `redo` shows only after a
+ * rewind, `plan` and `build` only where the folder has those agents. */
+export const APP_COMMANDS: { name: string; detail: string }[] = [
+  { name: "undo", detail: "Rewind the last turn and put its message back here" },
+  { name: "redo", detail: "Put back what the rewind undid" },
+  { name: "retry", detail: "Send the last message again" },
+  { name: "compact", detail: "Summarize the session so far to free up context" },
+  { name: "new", detail: "Start a new session in this folder" },
+  { name: "plan", detail: "Plan before changing anything" },
+  { name: "build", detail: "Make changes (the default agent)" },
+]
+
+const detail = (name: string) => APP_COMMANDS.find((c) => c.name === name)?.detail ?? ""
+
 /** The window's own commands; the folder's commands (`/init`, `/review`, its own) follow. */
 function actions(open: Open): Row[] {
   const rows: Row[] = [
-    { name: "undo", detail: "Rewind the last turn and put its message back here", run: () => void undo() },
-    { name: "retry", detail: "Send the last message again", run: () => void retry() },
-    { name: "compact", detail: "Summarize the session so far to free up context", run: () => void compact() },
-    { name: "new", detail: "Start a new session in this folder", run: () => void newSession(open.directory) },
+    { name: "undo", detail: detail("undo"), run: () => void undo() },
+    { name: "retry", detail: detail("retry"), run: () => void retry() },
+    { name: "compact", detail: detail("compact"), run: () => void compact() },
+    { name: "new", detail: detail("new"), run: () => void newSession(open.directory) },
   ].map((a) => ({ key: `a:${a.name}`, label: `/${a.name}`, detail: a.detail, kind: "action", insert: "", run: a.run }))
   if (open.revert)
     rows.splice(1, 0, {
       key: "a:redo",
       label: "/redo",
-      detail: "Put back what the rewind undid",
+      detail: detail("redo"),
       kind: "action",
       insert: "",
       run: () => void redo(),
@@ -104,7 +119,7 @@ function actions(open: Open): Row[] {
       rows.push({
         key: `a:${agent.id}`,
         label: `/${agent.id}`,
-        detail: agent.id === "plan" ? "Plan before changing anything" : "Make changes (the default agent)",
+        detail: detail(agent.id),
         kind: "action",
         insert: "",
         run: () => void chooseAgent(agent.id),
@@ -112,7 +127,7 @@ function actions(open: Open): Row[] {
   return rows
 }
 
-const ACTION_NAMES = new Set(["undo", "redo", "retry", "compact", "new", "plan", "build"])
+const ACTION_NAMES = new Set(APP_COMMANDS.map((c) => c.name))
 
 /** Prefix matches first, then matches inside, then letters in order (fuzzy). */
 function rank(text: string, query: string): number {
@@ -215,6 +230,7 @@ function Menu({
 
 export function Composer({ open }: { open: Open }) {
   const mode = useStore((s) => s.mode)
+  const sendKey = usePrefs((p) => p.conversation.send)
   const asking = useStore((s) => s.permissions.find((p) => p.rootId === open.sessionId) ?? null)
   const [text, setText] = useState("")
   const [caret, setCaret] = useState(0)
@@ -426,7 +442,7 @@ export function Composer({ open }: { open: Open }) {
         className={cn("rounded-[1.25rem] bg-surface p-2 transition-colors", dragging && "bg-default")}
       >
         {comments.length > 0 && (
-          <div className="flex flex-col gap-1 px-1.5 pt-1 pb-2">
+          <div className="flex max-h-40 flex-col gap-1 overflow-y-auto px-1.5 pt-1 pb-2">
             {comments.map((c) => (
               <div key={c.id} className="text-dense flex items-center gap-2 rounded-lg bg-default/50 py-1 pr-1 pl-2.5">
                 <MessageSquareText className="size-3.5 shrink-0 text-muted" />
@@ -497,7 +513,7 @@ export function Composer({ open }: { open: Open }) {
               setDismissed(typed.start)
               return
             }
-            if (e.key === "Enter" && !e.shiftKey) {
+            if (isSendKey(e, sendKey)) {
               e.preventDefault()
               if (empty && asking) void reply(asking, "once")
               else submit()
@@ -507,11 +523,17 @@ export function Composer({ open }: { open: Open }) {
             }
           }}
           placeholder={
-            asking
-              ? "Reply, or press Enter to allow"
-              : planning
-                ? "Describe what to plan"
-                : "Ask for a change, / for commands, @ for files"
+            sendKey === "enter"
+              ? asking
+                ? "Reply, or press Enter to allow"
+                : planning
+                  ? "Describe what to plan"
+                  : "Ask for a change, / for commands, @ for files"
+              : asking
+                ? "Reply, or press Ctrl Enter to allow"
+                : planning
+                  ? "Describe what to plan, Ctrl Enter to send"
+                  : "Ask for a change, / for commands, @ for files, Ctrl Enter to send"
           }
           aria-label="Message"
           className="text-md block min-h-14 w-full resize-none bg-transparent px-2.5 pt-1.5 leading-relaxed outline-none placeholder:text-field-placeholder"
@@ -608,7 +630,7 @@ function ModelPicker({ open }: { open: Open }) {
         <ChevronDown className="size-3.5" />
       </button>
       <Popover open={show} onClose={close} side="top" align="end" className="w-72">
-        <div role="listbox" aria-label="Model" className="flex flex-col">
+        <div role="listbox" aria-label="Model" className="flex max-h-[min(20rem,50vh)] flex-col overflow-y-auto">
           {info.models.map((m) => (
             <button
               key={m.id}
@@ -687,7 +709,7 @@ export function Tasks({ todos }: { todos: Todo[] }) {
         {open ? <ChevronDown className="size-3.5 text-muted" /> : <ChevronUp className="size-3.5 text-muted" />}
       </button>
       {open && (
-        <ul className="flex flex-col pb-1">
+        <ul className="flex max-h-60 flex-col overflow-y-auto pb-1">
           {todos.map((t, i) => (
             <li key={i} className="text-dense flex items-start gap-2.5 px-2 py-1">
               <TaskIcon status={t.status} />
