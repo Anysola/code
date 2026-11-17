@@ -258,10 +258,14 @@ export function Composer({ open }: { open: Open }) {
     el.style.height = "auto"
     el.style.height = `${Math.min(el.scrollHeight, 240)}px`
   }, [text])
+  // An answer for the folder open before a switch doesn't land in this one's menus.
+  const folder = useRef(open.directory)
+  folder.current = open.directory
   // Commands and skills of this folder; read again when the menu opens (MCP prompts come late).
   const loadPalette = useCallback(() => {
-    void readPalette(open.directory)
-      .then(setPal)
+    const directory = open.directory
+    void readPalette(directory)
+      .then((p) => folder.current === directory && setPal(p))
       .catch(() => {})
   }, [open.directory])
   useEffect(() => {
@@ -276,10 +280,12 @@ export function Composer({ open }: { open: Open }) {
     if (!typed) return
     if (typed.kind === "/" ) loadPalette()
     // Read on every open: the agent may have added files (the store keeps them 30 s).
-    if (typed.kind === "@")
-      void projectFiles(open.directory)
-        .then(setPaths)
-        .catch(() => setPaths([]))
+    if (typed.kind === "@") {
+      const directory = open.directory
+      void projectFiles(directory)
+        .then((list) => folder.current === directory && setPaths(list))
+        .catch(() => folder.current === directory && setPaths([]))
+    }
     // Only when a menu opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [typed?.kind, typed?.start])

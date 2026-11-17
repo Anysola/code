@@ -363,6 +363,7 @@ export async function openSession(row: SessionRow) {
       fill: null,
     },
   })
+  const n = ++reads
   try {
     const opened = await bridge.openSession(row.directory, row.id)
     // The composer's mode is the window's, the floor the session's: a turn still running here
@@ -371,7 +372,7 @@ export async function openSession(row: SessionRow) {
     set((s) => ({ busy: toggle(s.busy, row.id, opened.busy) }))
     setOpen(
       (o) => ({
-        ...viewPatch(opened.view, o),
+        ...(latest(n) ? viewPatch(opened.view, o) : {}),
         info: opened.info,
         title: opened.session.title,
         loading: false,
@@ -452,12 +453,23 @@ function viewPatch(view: View, o: Open): Partial<Open> {
   }
 }
 
+/** Each read of the open view is numbered; an answer older than one already shown is dropped. */
+let reads = 0
+let shown = 0
+
+function latest(n: number) {
+  if (n < shown) return false
+  shown = n
+  return true
+}
+
 async function refresh(sessionId: string) {
   const open = state.open
   if (!open || open.sessionId !== sessionId) return
+  const n = ++reads
   try {
     const view = await bridge.transcript(open.directory, sessionId)
-    setOpen((o) => viewPatch(view, o), sessionId)
+    if (latest(n)) setOpen((o) => viewPatch(view, o), sessionId)
   } catch {
     // The next event reads again.
   }
@@ -541,8 +553,10 @@ export async function rewind(messageId: string) {
   const open = state.open
   if (!open?.sessionId) return
   const sessionId = open.sessionId
+  const n = ++reads
   try {
     const { text, view } = await bridge.revert(open.directory, sessionId, messageId)
+    latest(n)
     setOpen((o) => ({ ...viewPatch(view, o), live: [], status: { kind: "idle" }, fill: { text, n: ++fills } }), sessionId)
   } catch (e) {
     set({ notice: message(e) })
@@ -564,8 +578,10 @@ export async function redo() {
   const open = state.open
   if (!open?.sessionId || !open.revert) return
   const sessionId = open.sessionId
+  const n = ++reads
   try {
     const view = await bridge.unrevert(open.directory, sessionId)
+    latest(n)
     // The rewound message leaves the composer unless the user changed it.
     const replacing = open.fill?.text
     setOpen((o) => ({ ...viewPatch(view, o), fill: { text: "", n: ++fills, replacing } }), sessionId)
