@@ -205,7 +205,7 @@ export function Sidebar() {
   return (
     <aside className="flex w-64 shrink-0 flex-col">
       <TitleBar>
-        <div data-tauri-drag-region className="flex items-center gap-2 px-4 text-sm font-medium whitespace-nowrap">
+        <div className="flex items-center gap-2 px-4 text-sm font-medium whitespace-nowrap">
           <Mark />
           Anysola Code
         </div>

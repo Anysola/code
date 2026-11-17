@@ -62,8 +62,9 @@ export function TitleBar({
   controls?: boolean
 }) {
   return (
-    <div data-tauri-drag-region className={cn("flex h-9 shrink-0 items-center select-none", className)}>
-      <div data-tauri-drag-region className="flex h-full min-w-0 flex-1 items-center">
+    // "deep": the title, folder and logo inside drag too; buttons and popovers don't.
+    <div data-tauri-drag-region="deep" className={cn("flex h-9 shrink-0 items-center select-none", className)}>
+      <div className="flex h-full min-w-0 flex-1 items-center">
         {children}
       </div>
       {controls && <WindowControls />}
@@ -309,6 +310,8 @@ export function Popover({
     <div
       ref={ref}
       role="dialog"
+      // Inside a title bar, its text and padding would drag the window.
+      data-tauri-drag-region="false"
       className={cn(
         "absolute z-30 rounded-xl bg-popover p-1.5",
         side === "top" ? "bottom-full mb-2" : "top-full mt-1.5",

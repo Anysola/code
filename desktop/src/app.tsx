@@ -177,7 +177,7 @@ function SessionHeader({ open, onReview }: { open: Open; onReview: () => void })
   const del = files.reduce((n, f) => n + f.del, 0)
   return (
     <TitleBar className="pl-6" controls>
-      <div data-tauri-drag-region className="flex min-w-0 items-center gap-3">
+      <div className="flex min-w-0 items-center gap-3">
         <h1 className="min-w-0 truncate text-sm font-medium">{open.title}</h1>
         <span className="text-2xs flex shrink-0 items-center gap-1 text-muted">
           <FolderClosed className="size-3" strokeWidth={1.75} />
