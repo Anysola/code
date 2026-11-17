@@ -85,6 +85,14 @@ async fn revoke(token: &str) -> Result<(), String> {
         .await
 }
 
+/// True when `GET /me` answers 401 for a stored login; a network failure is not a rejection.
+async fn rejected(token: &str) -> bool {
+    Gateway::new(Some(Token::Login(token.to_string())))
+        .account_call(Method::GET, "/me", None)
+        .await
+        .is_ok_and(|reply| reply.status == 401)
+}
+
 pub async fn login(force: bool) -> i32 {
     clack::intro("Sign in to Anysola");
     let result = async {
@@ -96,16 +104,24 @@ pub async fn login(force: bool) -> i32 {
         let Some((id, token)) = db.anysola_credential().map_err(|e| e.to_string())? else {
             return sign_in(&db).await.map(|()| "Signed in");
         };
-        if !force {
+        // A token the gateway refuses is replaced without --force; offline it is kept.
+        let dead = !force && rejected(&token).await;
+        if !force && !dead {
             clack::info(&format!(
                 "Already signed in ({}). Use `anysola login --force` for a new token.",
                 mask(&token)
             ));
             return Ok("Done");
         }
+        if dead {
+            clack::info(&format!(
+                "The stored token ({}) was revoked or expired; signing in again.",
+                mask(&token)
+            ));
+        }
         // The old token goes only once the new one is stored: a failed sign-in keeps it.
         sign_in(&db).await?;
-        if let Err(error) = revoke(&token).await {
+        if !dead && let Err(error) = revoke(&token).await {
             clack::warn(&format!(
                 "Could not revoke the old token ({error}); revoke it at {APPS_URL}"
             ));

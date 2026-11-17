@@ -254,7 +254,43 @@ fn already_signed_in() {
         out.stdout,
         capture("anysola login (already signed in)").replace("FFFF...FFFF", "SSSS...SSSS") + "\n"
     );
-    assert!(gateway.requests().is_empty());
+    let paths: Vec<String> = gateway.requests().iter().map(|r| r.path.clone()).collect();
+    assert_eq!(paths, ["/v1/code/me"], "the stored token is checked");
+}
+
+#[test]
+fn a_rejected_stored_token_is_replaced_without_force() {
+    let (gateway, mut home) = setup();
+    store_login(&home);
+    gateway.set_reply("/v1/code/me", json_reply(401, json!({})));
+    let out = anysola(&home, &["login"]);
+    assert_eq!(out.code, 0, "{}", out.stdout);
+    assert!(
+        out.stdout.contains(
+            "●  The stored token (asc_SSSS...SSSS) was revoked or expired; signing in again.\n│\n◇  Authorization started\n"
+        ),
+        "{}",
+        out.stdout
+    );
+    assert!(out.stdout.contains("└  Signed in"), "{}", out.stdout);
+    assert!(
+        gateway
+            .requests_to("/v1/code/tokens/self/revoke")
+            .is_empty()
+    );
+    assert_eq!(stored(&home).as_deref(), Some(DEVICE_TOKEN));
+
+    // Offline the stored token cannot be checked and stays.
+    store_login(&home);
+    home.set_env("ANYSOLA_API_URL", "http://127.0.0.1:9");
+    let out = anysola(&home, &["login"]);
+    assert_eq!(out.code, 0);
+    assert!(
+        out.stdout
+            .contains("●  Already signed in (asc_SSSS...SSSS)."),
+        "{}",
+        out.stdout
+    );
 }
 
 #[test]
