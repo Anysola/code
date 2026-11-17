@@ -50,7 +50,8 @@ impl Stdio {
         environment: &[(String, String)],
         incoming: mpsc::UnboundedSender<Incoming>,
     ) -> Result<Stdio, Error> {
-        let mut process = tokio::process::Command::new(anysola_core::which::program(&command[0]));
+        let mut process =
+            anysola_core::console::tokio_command(anysola_core::which::program(&command[0]));
         process
             .args(&command[1..])
             .current_dir(cwd)

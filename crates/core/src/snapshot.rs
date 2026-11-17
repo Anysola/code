@@ -27,7 +27,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn git_output(dir: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
+    let output = crate::console::command("git")
         .args(args)
         .current_dir(dir)
         .stdin(Stdio::null())
@@ -74,7 +74,7 @@ impl Store {
     }
 
     fn command(&self, args: &[&str]) -> Command {
-        let mut command = Command::new("git");
+        let mut command = crate::console::command("git");
         command
             .arg("--git-dir")
             .arg(&self.git_dir)

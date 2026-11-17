@@ -98,7 +98,7 @@ impl Running {
 pub fn spawn(job: Job<'_>) -> io::Result<Running> {
     let output = File::create(job.file)?;
     let (reader, writer) = io::pipe()?;
-    let mut command = tokio::process::Command::new(job.program);
+    let mut command = crate::console::tokio_command(job.program);
     command
         .args(&job.args)
         .current_dir(job.cwd)

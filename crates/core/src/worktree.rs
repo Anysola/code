@@ -5,8 +5,6 @@
 
 use std::path::{Path, PathBuf};
 
-use tokio::process::Command;
-
 use crate::storage::Db;
 
 const STRATEGY: &str = "git";
@@ -73,7 +71,7 @@ fn canonical(directory: &Path) -> Option<PathBuf> {
 }
 
 async fn git(cwd: &Path, args: &[&std::ffi::OsStr]) -> Result<String, String> {
-    let output = Command::new("git")
+    let output = crate::console::tokio_command("git")
         .args(args)
         .current_dir(cwd)
         .stdin(std::process::Stdio::null())

@@ -4,7 +4,6 @@
 //! composer's `@alias[/path]` mentions resolve through [`resolve`].
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -395,7 +394,7 @@ pub const REMOVED: &str =
     "Project reference guidance is no longer available. Do not use previously listed references.";
 
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
+    let output = crate::console::command("git")
         .args(args)
         .current_dir(dir)
         .stdin(std::process::Stdio::null())

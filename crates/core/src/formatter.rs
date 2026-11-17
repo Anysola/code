@@ -260,7 +260,7 @@ impl Formatters {
                 "formatting file",
                 &[("file", &file), ("command", &argv.join(" "))],
             );
-            let status = tokio::process::Command::new(&argv[0])
+            let status = crate::console::tokio_command(&argv[0])
                 .args(&argv[1..])
                 .current_dir(directory)
                 .envs(formatter.environment.iter().cloned())
@@ -369,7 +369,7 @@ fn with_file(command: String, args: &[&str]) -> Vec<String> {
 }
 
 async fn output(argv: &[&str], directory: &Path) -> Option<std::process::Output> {
-    tokio::process::Command::new(argv[0])
+    crate::console::tokio_command(argv[0])
         .args(&argv[1..])
         .current_dir(directory)
         .stdin(Stdio::null())

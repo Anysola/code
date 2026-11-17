@@ -177,7 +177,7 @@ impl Core {
             .map(str::to_string);
         let (program, args) = crate::tool::shell::invocation(configured.as_deref(), command);
         let created = now_ms();
-        let child = tokio::process::Command::new(program)
+        let child = crate::console::tokio_command(program)
             .args(args)
             .current_dir(&session.directory)
             .stdin(std::process::Stdio::null())

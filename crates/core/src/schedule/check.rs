@@ -361,7 +361,7 @@ async fn run_shell(ctx: &ToolContext, condition: &Value, state: &Value) -> Outco
     if let Err(error) = crate::tool::shell::authorize(ctx, run, &shell, &target).await {
         return failed(error.message);
     }
-    let mut command = tokio::process::Command::new(&shell);
+    let mut command = crate::console::tokio_command(&shell);
     command
         .args(crate::tool::shell::select::args(&shell, run))
         .current_dir(&target.absolute)

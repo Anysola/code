@@ -27,9 +27,11 @@ pub fn set_acp_client() {
     let _ = CLIENT.set("acp");
 }
 
-/// Marks this process as the desktop app, which model calls report.
+/// Marks this process as the desktop app, which model calls report. The desktop app has no
+/// console, so the processes it starts open no console window either.
 pub fn set_desktop_client() {
     let _ = CLIENT.set("desktop");
+    crate::console::set_no_console();
 }
 
 /// `cli`, `acp` under `anysola acp`, or `desktop` in the desktop app.

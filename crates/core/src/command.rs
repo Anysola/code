@@ -261,7 +261,7 @@ pub async fn interpolate(
     let outputs: Vec<Result<String, String>> = futures_util::stream::iter(sources)
         .map(|source| async move {
             let (program, args) = crate::tool::shell::invocation(shell, &source);
-            let output = tokio::process::Command::new(&program)
+            let output = crate::console::tokio_command(&program)
                 .args(&args)
                 .current_dir(cwd)
                 .env_clear()

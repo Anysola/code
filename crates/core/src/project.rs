@@ -1,7 +1,6 @@
 //! Project identification: the VCS root of a directory and the project id 0.5.1 computed for it.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use sha1::{Digest, Sha1};
 
@@ -26,7 +25,7 @@ fn sha1_hex(text: &str) -> String {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
+    let output = crate::console::command("git")
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -78,7 +77,7 @@ pub fn identify(directory: &Path) -> Project {
         .ok()
         .map(|s| s.trim().to_string());
     let id = cached.filter(|s| !s.is_empty()).or_else(|| {
-        let output = Command::new("hg")
+        let output = crate::console::command("hg")
             .arg("-R")
             .arg(&root)
             .args(["log", "-r", "0", "--template", "{node}"])
@@ -152,7 +151,7 @@ mod tests {
     }
 
     fn run(dir: &Path, args: &[&str]) {
-        let ok = Command::new("git")
+        let ok = std::process::Command::new("git")
             .args(args)
             .current_dir(dir)
             .env("GIT_AUTHOR_NAME", "t")
