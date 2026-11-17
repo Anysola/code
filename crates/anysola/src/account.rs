@@ -93,22 +93,25 @@ pub async fn login(force: bool) -> i32 {
             return Ok("Done");
         }
         let db = open_db()?;
-        if let Some((id, token)) = db.anysola_credential().map_err(|e| e.to_string())? {
-            if !force {
-                clack::info(&format!(
-                    "Already signed in ({}). Use `anysola login --force` for a new token.",
-                    mask(&token)
-                ));
-                return Ok("Done");
-            }
-            if let Err(error) = revoke(&token).await {
-                clack::warn(&format!(
-                    "Could not revoke the old token ({error}); revoke it at {APPS_URL}"
-                ));
-            }
-            db.remove_credential(&id).map_err(|e| e.to_string())?;
+        let Some((id, token)) = db.anysola_credential().map_err(|e| e.to_string())? else {
+            return sign_in(&db).await.map(|()| "Signed in");
+        };
+        if !force {
+            clack::info(&format!(
+                "Already signed in ({}). Use `anysola login --force` for a new token.",
+                mask(&token)
+            ));
+            return Ok("Done");
         }
-        sign_in(&db).await.map(|()| "Signed in")
+        // The old token goes only once the new one is stored: a failed sign-in keeps it.
+        sign_in(&db).await?;
+        if let Err(error) = revoke(&token).await {
+            clack::warn(&format!(
+                "Could not revoke the old token ({error}); revoke it at {APPS_URL}"
+            ));
+        }
+        db.remove_credential(&id).map_err(|e| e.to_string())?;
+        Ok("Signed in")
     }
     .await;
     match result {

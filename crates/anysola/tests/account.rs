@@ -258,7 +258,7 @@ fn already_signed_in() {
 }
 
 #[test]
-fn force_revokes_the_old_token_first() {
+fn force_revokes_the_old_token_after_the_new_sign_in() {
     let (gateway, home) = setup();
     store_login(&home);
     let out = anysola(&home, &["login", "-f"]);
@@ -276,8 +276,29 @@ fn force_revokes_the_old_token_first() {
     let out = anysola(&home, &["login", "--force"]);
     assert_eq!(out.code, 0);
     assert!(out.stdout.contains(
-        "│\n▲  Could not revoke the old token (HTTP 500); revoke it at https://account.anysola.com/apps\n│\n◇  Authorization started\n"
+        "◆  Connected to Anysola\n│\n▲  Could not revoke the old token (HTTP 500); revoke it at https://account.anysola.com/apps\n│\n└  Signed in\n"
     ), "{}", out.stdout);
+    assert_eq!(stored(&home).as_deref(), Some(DEVICE_TOKEN));
+}
+
+#[test]
+fn a_failed_forced_sign_in_keeps_the_old_token() {
+    let (gateway, home) = setup();
+    store_login(&home);
+    gateway.set_device_poll(|_| json_reply(400, json!({"error": "access_denied"})));
+    let out = anysola(&home, &["login", "--force"]);
+    assert_eq!(out.code, 1);
+    assert!(
+        out.stdout.contains("■  Login was denied.\n"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        gateway
+            .requests_to("/v1/code/tokens/self/revoke")
+            .is_empty()
+    );
+    assert_eq!(stored(&home).as_deref(), Some(STORED));
 }
 
 #[test]
