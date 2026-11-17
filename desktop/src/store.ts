@@ -595,7 +595,7 @@ export async function send(text: string, files: Attachment[] = [], skills: strin
   if (open.sessionId) touch(open.sessionId)
   else creating++
   try {
-    const { sessionId } = await bridge.prompt(open.directory, {
+    const { sessionId, queued } = await bridge.prompt(open.directory, {
       sessionId: open.sessionId,
       text,
       mode: state.mode,
@@ -607,6 +607,8 @@ export async function send(text: string, files: Attachment[] = [], skills: strin
       skills,
     })
     if (draft) target = adopt(target, sessionId)
+    // A running turn took it: it is delivered, whatever that turn does next.
+    if (queued && unsent && same(unsent.target, target)) unsent = null
     // Busy comes from `started`: the turn is spawned before this answer, and its end can
     // arrive first.
     await refresh(sessionId)
@@ -1133,6 +1135,7 @@ function onEvent(e: CoreEvent) {
     case "done":
     case "failed":
     case "interrupted":
+      if (unsent?.target === id) unsent = null
       set((s) => ({
         busy: toggle(s.busy, id, false),
         permissions: s.permissions.filter((p) => p.sessionId !== id && p.rootId !== id),
@@ -1167,6 +1170,7 @@ function onEvent(e: CoreEvent) {
       }
       break
     case "settled":
+      if (unsent?.target === id) unsent = null
       set((s) => ({ busy: toggle(s.busy, id, false) }))
       if (here) {
         setOpen((o) => (o.status.kind === "working" ? { live: [], status: { kind: "idle" } } : {}), id)
