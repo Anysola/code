@@ -536,7 +536,8 @@ function putBack(target: string | { key: string }) {
   if (state.comments.length === 0) set({ comments: u.comments })
 }
 
-/** Events per session, so a read of its state can tell whether an event said more meanwhile. */
+/** Starts and ends per session (and sends), so a read of its busy state can tell whether one
+ * came meanwhile and said more. Streaming text doesn't count: it says nothing about busy. */
 const activity = new Map<string, number>()
 
 function touch(sessionId: string) {
@@ -561,20 +562,20 @@ function adopt(target: string | { key: string }, sessionId: string) {
 }
 
 /** Busy and status read back from the core, for when the events that would say so were lost
- * or never sent. Dropped if an event for the session came meanwhile. */
+ * or never sent. A start or end that came meanwhile says more, so then only the view is taken. */
 async function reconcile(directory: string, sessionId: string) {
   const since = activity.get(sessionId)
   const n = ++reads
   try {
     const opened = await bridge.openSession(directory, sessionId)
-    if (activity.get(sessionId) !== since) return
-    set((s) => ({ busy: toggle(s.busy, sessionId, opened.busy) }))
+    const current = activity.get(sessionId) === since
+    if (current) set((s) => ({ busy: toggle(s.busy, sessionId, opened.busy) }))
     setOpen((o) => {
       const shown = o.status.kind === "working" || o.status.kind === "retrying"
       return {
         ...(latest(n) ? viewPatch(opened.view, o) : {}),
-        ...(shown && !opened.busy ? { live: [], status: { kind: "idle" } as Status } : {}),
-        ...(!shown && opened.busy ? { status: { kind: "working" } as Status } : {}),
+        ...(current && shown && !opened.busy ? { live: [], status: { kind: "idle" } as Status } : {}),
+        ...(current && !shown && opened.busy ? { status: { kind: "working" } as Status } : {}),
       }
     }, sessionId)
   } catch {
@@ -1071,9 +1072,11 @@ function onEvent(e: CoreEvent) {
     return
   }
   const id = e.sessionId
-  touch(id)
   const here = state.open?.sessionId === id
-  if (!here && creating > 0 && LIFECYCLE.has(e.type)) early.set(id, e)
+  if (LIFECYCLE.has(e.type)) {
+    touch(id)
+    if (!here && creating > 0) early.set(id, e)
+  }
   if (state.peek?.sessionId === id && (e.type === "changed" || e.type === "done" || e.type === "failed"))
     void refreshPeek()
   switch (e.type) {
