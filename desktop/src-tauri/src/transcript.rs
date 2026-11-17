@@ -55,9 +55,15 @@ pub fn items(messages: Vec<(String, Message)>, directory: &str) -> Vec<Value> {
                     f.iter().filter(|f| f.mime.starts_with("image/")).count()
                 });
                 if !data.text.is_empty() || images > 0 {
-                    out.push(
-                        json!({"kind": "user", "id": id, "text": data.text, "images": images}),
-                    );
+                    // A command's message shows as the line the user typed.
+                    let command = data.extra.get("command").and_then(Value::as_str);
+                    out.push(json!({
+                        "kind": "user",
+                        "id": id,
+                        "text": data.text,
+                        "images": images,
+                        "command": command,
+                    }));
                 }
             }
             Message::Assistant(data) => {

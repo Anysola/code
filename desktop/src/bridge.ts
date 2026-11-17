@@ -16,7 +16,8 @@ export type FileDiff = {
 }
 
 export type Item =
-  | { kind: "user"; id: string; text: string; images: number }
+  /** `command`: the `/name args` line a command's text was rendered from. */
+  | { kind: "user"; id: string; text: string; images: number; command?: string | null }
   | { kind: "text"; id: string; text: string }
   | { kind: "reasoning"; id: string; text: string }
   | {
@@ -148,6 +149,21 @@ export type CoreEvent =
   | { type: "lagged"; directory: string }
   | { type: "notice"; message: string }
 
+export type GitStatus =
+  | { repo: false }
+  | {
+      repo: true
+      branch: string
+      detached: boolean
+      upstream: string | null
+      ahead: number
+      behind: number
+      files: { file: string; status: "added" | "modified" | "deleted" }[]
+      remote: string | null
+      /** The GitHub CLI is installed, so a pull request opens from here. */
+      gh: boolean
+    }
+
 export type PermissionReply = "once" | "always" | "reject"
 
 export type Bridge = {
@@ -179,6 +195,15 @@ export type Bridge = {
   selectAgent(directory: string, sessionId: string, agent: string): Promise<Info>
   projectFiles(directory: string): Promise<string[]>
   scratchFolder(): Promise<string>
+  changes(directory: string, sessionId: string): Promise<FileDiff[] | null>
+  restoreFile(directory: string, sessionId: string, file: string): Promise<void>
+  gitStatus(directory: string): Promise<GitStatus>
+  gitBranch(directory: string, name: string): Promise<void>
+  gitCommit(directory: string, message: string): Promise<{ commit: string }>
+  gitPush(directory: string): Promise<void>
+  gitPr(directory: string, title: string, body: string): Promise<{ url: string; created: boolean }>
+  suggestCommitMessage(directory: string, sessionId: string): Promise<string>
+  reveal(directory: string): Promise<void>
   pickFolder(defaultPath?: string | null): Promise<string | null>
   openUrl(url: string): Promise<void>
   onEvent(handler: (e: CoreEvent) => void): () => void
@@ -220,6 +245,15 @@ function tauriBridge(): Bridge {
     selectAgent: (directory, sessionId, agent) => invoke("select_agent", { directory, sessionId, agent }),
     projectFiles: (directory) => invoke("project_files", { directory }),
     scratchFolder: () => invoke("scratch_folder"),
+    changes: (directory, sessionId) => invoke("changes", { directory, sessionId }),
+    restoreFile: (directory, sessionId, file) => invoke("restore_file", { directory, sessionId, file }),
+    gitStatus: (directory) => invoke("git_status", { directory }),
+    gitBranch: (directory, name) => invoke("git_branch", { directory, name }),
+    gitCommit: (directory, message) => invoke("git_commit", { directory, message }),
+    gitPush: (directory) => invoke("git_push", { directory }),
+    gitPr: (directory, title, body) => invoke("git_pr", { directory, title, body }),
+    suggestCommitMessage: (directory, sessionId) => invoke("suggest_commit_message", { directory, sessionId }),
+    reveal: (directory) => invoke("reveal", { directory }),
     async pickFolder(defaultPath) {
       const { open } = await import("@tauri-apps/plugin-dialog")
       const picked = await open({ directory: true, multiple: false, defaultPath: defaultPath ?? undefined })

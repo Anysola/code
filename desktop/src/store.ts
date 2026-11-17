@@ -12,6 +12,7 @@ import {
   type Bridge,
   type CoreEvent,
   type FileDiff,
+  type GitStatus,
   type Info,
   type Item,
   type Mode,
@@ -77,6 +78,17 @@ export type Open = {
   fill: { text: string; n: number; replacing?: string } | null
 }
 
+/** A remark on a diff line, sent with the next message. */
+export type Comment = {
+  id: number
+  file: string
+  line: number
+  /** A removed line counts in the old file. */
+  removed: boolean
+  code: string
+  text: string
+}
+
 /** A subagent's transcript, read alongside the open session. */
 export type Peek = { directory: string; sessionId: string; title: string; items: Item[]; loading: boolean }
 
@@ -96,6 +108,13 @@ export type State = {
   notice: string | null
   /** The folder new sessions start in; null asks each time. */
   defaultFolder: string | null
+  /** Sessions kept at the top of the sidebar, and project groups folded shut. */
+  pinned: Set<string>
+  collapsed: Set<string>
+  /** The open session's folder in git, once read. */
+  git: (GitStatus & { directory: string }) | null
+  /** Diff comments waiting for the next message, by session (`""` for a new one). */
+  comments: Comment[]
   /** The app's folder for sessions without a project, once known. */
   scratch: string | null
 }
@@ -111,6 +130,23 @@ function readMode(): Mode {
     // Storage can be unavailable; the default stands.
   }
   return "edits"
+}
+
+function readSet(key: string): Set<string> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(key) ?? "[]")
+    return new Set(Array.isArray(raw) ? raw.filter((x) => typeof x === "string") : [])
+  } catch {
+    return new Set()
+  }
+}
+
+function saveSet(key: string, value: Set<string>) {
+  try {
+    localStorage.setItem(key, JSON.stringify([...value]))
+  } catch {
+    // Kept for this window only.
+  }
 }
 
 function readDefaultFolder(): string | null {
@@ -137,6 +173,10 @@ let state: State = {
   notice: null,
   defaultFolder: readDefaultFolder(),
   scratch: null,
+  pinned: readSet("anysola.pinned"),
+  collapsed: readSet("anysola.collapsed"),
+  git: null,
+  comments: [],
 }
 
 const listeners = new Set<() => void>()
@@ -284,7 +324,9 @@ async function loadSessions(openFirst = false) {
 }
 
 export async function openSession(row: SessionRow) {
+  void refreshGit(row.directory)
   set({
+    comments: [],
     open: {
       directory: row.directory,
       sessionId: row.id,
@@ -322,7 +364,9 @@ export async function openSession(row: SessionRow) {
 export async function newSession(directory?: string) {
   if (!directory) directory = state.defaultFolder ?? (await pickFolder()) ?? undefined
   if (!directory) return
+  void refreshGit(directory)
   set({
+    comments: [],
     open: {
       directory,
       sessionId: null,
@@ -408,7 +452,9 @@ function toggle(set: Set<string>, id: string, on: boolean) {
 
 export async function send(text: string, files: Attachment[] = [], skills: string[] = []) {
   const open = state.open
-  if (!open || (!text.trim() && files.length === 0)) return
+  if (!open || (!text.trim() && files.length === 0 && state.comments.length === 0)) return
+  text = withComments(text)
+  set({ comments: [] })
   // The prompt makes a staged rewind final.
   setOpen({ status: { kind: "working" }, revert: null })
   try {
@@ -650,13 +696,167 @@ export async function renameSession(row: SessionRow, title: string) {
 }
 
 export async function deleteSession(row: SessionRow) {
+  await deleteSessions([row])
+}
+
+/** Deletes sessions one by one; running ones are kept and named in the notice. */
+export async function deleteSessions(rows: SessionRow[]) {
+  const gone = new Set<string>()
+  const kept: string[] = []
+  for (const row of rows) {
+    try {
+      await bridge.deleteSession(row.directory, row.id)
+      gone.add(row.id)
+    } catch {
+      kept.push(row.title)
+    }
+  }
+  if (state.open?.sessionId && gone.has(state.open.sessionId)) set({ open: null })
+  set((s) => {
+    const pinned = new Set([...s.pinned].filter((id) => !gone.has(id)))
+    saveSet("anysola.pinned", pinned)
+    return { sessions: s.sessions.filter((r) => !gone.has(r.id)), pinned }
+  })
+  if (kept.length)
+    set({
+      notice:
+        kept.length === 1
+          ? `“${kept[0]}” is still running, so it was kept. Stop it to delete it.`
+          : `${kept.length} sessions are still running, so they were kept. Stop them to delete them.`,
+    })
+}
+
+export function togglePin(id: string) {
+  set((s) => {
+    const pinned = new Set(s.pinned)
+    if (!pinned.delete(id)) pinned.add(id)
+    saveSet("anysola.pinned", pinned)
+    return { pinned }
+  })
+}
+
+export function toggleCollapsed(directory: string) {
+  set((s) => {
+    const collapsed = new Set(s.collapsed)
+    if (!collapsed.delete(directory)) collapsed.add(directory)
+    saveSet("anysola.collapsed", collapsed)
+    return { collapsed }
+  })
+}
+
+export async function reveal(directory: string) {
   try {
-    await bridge.deleteSession(row.directory, row.id)
-    if (state.open?.sessionId === row.id) set({ open: null })
-    set((s) => ({ sessions: s.sessions.filter((r) => r.id !== row.id) }))
+    await bridge.reveal(directory)
   } catch (e) {
     set({ notice: message(e) })
   }
+}
+
+// ---------------------------------------------------------------------------
+// Review and git
+// ---------------------------------------------------------------------------
+
+/** The session's net file changes (null outside git: the window sums the edits instead). */
+export async function readChanges(): Promise<FileDiff[] | null> {
+  const open = state.open
+  if (!open?.sessionId) return null
+  try {
+    return await bridge.changes(open.directory, open.sessionId)
+  } catch {
+    return null
+  }
+}
+
+/** Puts one file back as it was before the session changed it. */
+export async function restoreFile(file: string) {
+  const open = state.open
+  if (!open?.sessionId) return false
+  try {
+    await bridge.restoreFile(open.directory, open.sessionId, file)
+    void refreshGit(open.directory)
+    return true
+  } catch (e) {
+    set({ notice: message(e) })
+    return false
+  }
+}
+
+let comments = 0
+
+export function addComment(c: Omit<Comment, "id">) {
+  set((s) => ({ comments: [...s.comments, { ...c, id: ++comments }] }))
+}
+
+export function removeComment(id: number) {
+  set((s) => ({ comments: s.comments.filter((c) => c.id !== id) }))
+}
+
+/** The comments as text the model reads after the message. */
+function withComments(text: string) {
+  if (state.comments.length === 0) return text
+  const list = state.comments
+    .map((c) => {
+      const where = c.removed ? `${c.file}, removed line ${c.line}` : `${c.file}:${c.line}`
+      const code = c.code.trim() ? ` (\`${c.code.trim()}\`)` : ""
+      return `- ${where}${code}: ${c.text}`
+    })
+    .join("\n")
+  const head = text.trim() ? `${text}\n\n` : ""
+  return `${head}Comments on the changes:\n${list}`
+}
+
+export async function refreshGit(directory = state.open?.directory) {
+  if (!directory) return
+  try {
+    const status = await bridge.gitStatus(directory)
+    if (state.open && state.open.directory !== directory) return
+    set({ git: { ...status, directory } })
+  } catch {
+    set({ git: null })
+  }
+}
+
+/** A git step from the header menu; true when it worked. Errors are git's own words. */
+async function gitStep(step: (directory: string) => Promise<unknown>): Promise<string | true> {
+  const open = state.open
+  if (!open) return "No folder is open."
+  try {
+    await step(open.directory)
+    await refreshGit(open.directory)
+    return true
+  } catch (e) {
+    await refreshGit(open.directory)
+    return message(e)
+  }
+}
+
+export const gitCommit = (text: string) => gitStep((d) => bridge.gitCommit(d, text))
+export const gitPush = () => gitStep((d) => bridge.gitPush(d))
+export const gitBranch = (name: string) => gitStep((d) => bridge.gitBranch(d, name))
+
+export async function gitPr(title: string, body: string): Promise<{ url: string; created: boolean } | string> {
+  const open = state.open
+  if (!open) return "No folder is open."
+  try {
+    return await bridge.gitPr(open.directory, title, body)
+  } catch (e) {
+    return message(e)
+  }
+}
+
+export async function suggestCommitMessage(): Promise<string | null> {
+  const open = state.open
+  if (!open?.sessionId) return null
+  try {
+    return await bridge.suggestCommitMessage(open.directory, open.sessionId)
+  } catch (e) {
+    set({ notice: message(e) })
+    return null
+  }
+}
+
+export function openExternal(url: string) {
+  void bridge.openUrl(url)
 }
 
 export function stop() {
@@ -794,6 +994,8 @@ function onEvent(e: CoreEvent) {
           id
         )
         void refresh(id)
+        // The turn may have changed files: the header's git count follows.
+        void refreshGit()
       }
       void loadSessions()
       break
@@ -809,6 +1011,7 @@ function onEvent(e: CoreEvent) {
       if (here) {
         setOpen((o) => (o.status.kind === "working" ? { live: [], status: { kind: "idle" } } : {}), id)
         void refresh(id)
+        void refreshGit()
       }
       void loadSessions()
       break

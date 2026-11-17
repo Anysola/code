@@ -324,6 +324,41 @@ export function mockBridge(): Bridge {
         "README.md",
       ]
     },
+    async changes(_directory, sessionId) {
+      return sessionId === "ses_pricing" ? [planCard, pricing, test] : []
+    },
+    async restoreFile() {},
+    async gitStatus(directory) {
+      if (directory !== WEB) return { repo: false }
+      return {
+        repo: true,
+        branch: "fix/yearly-price",
+        detached: false,
+        upstream: state === "pushed" ? "origin/fix/yearly-price" : null,
+        ahead: state === "pushed" ? 0 : 1,
+        behind: 0,
+        files: [
+          { file: planCard.file, status: "modified" },
+          { file: pricing.file, status: "modified" },
+          { file: test.file, status: "added" },
+        ],
+        remote: "origin",
+        gh: true,
+      }
+    },
+    async gitBranch() {},
+    async gitCommit() {
+      return { commit: "4f2a9c1" }
+    },
+    async gitPush() {},
+    async gitPr() {
+      return { url: "https://github.com/anysola/web/pull/412", created: true }
+    },
+    async suggestCommitMessage() {
+      await wait(500)
+      return "Show the selected cycle's price on the plan cards"
+    },
+    async reveal() {},
     async scratchFolder() {
       return "/home/alex/.anysola/no-project"
     },

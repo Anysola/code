@@ -12,6 +12,7 @@ import {
   FileText,
   Folder,
   LoaderCircle,
+  MessageSquareText,
   Paperclip,
   Sparkles,
   SquareSlash,
@@ -28,6 +29,7 @@ import {
   palette as readPalette,
   projectFiles,
   redo,
+  removeComment,
   reply,
   retry,
   runCommand,
@@ -228,7 +230,8 @@ export function Composer({ open }: { open: Open }) {
   const picker = useRef<HTMLInputElement>(null)
   const running = open.status.kind === "working" || open.status.kind === "retrying"
   const model = open.info?.models.find((m) => m.id === open.info?.modelId)
-  const empty = !text.trim() && files.length === 0
+  const comments = useStore((s) => s.comments)
+  const empty = !text.trim() && files.length === 0 && comments.length === 0
   const planning = open.info?.agent === "plan"
   const hasPlan = open.info?.agents.some((a) => a.id === "plan") ?? false
 
@@ -414,6 +417,26 @@ export function Composer({ open }: { open: Open }) {
         }}
         className={cn("rounded-[1.25rem] bg-surface p-2 transition-colors", dragging && "bg-default")}
       >
+        {comments.length > 0 && (
+          <div className="flex flex-col gap-1 px-1.5 pt-1 pb-2">
+            {comments.map((c) => (
+              <div key={c.id} className="text-dense flex items-center gap-2 rounded-lg bg-default/50 py-1 pr-1 pl-2.5">
+                <MessageSquareText className="size-3.5 shrink-0 text-muted" />
+                <span className="shrink-0 font-mono text-xs text-muted">
+                  {c.file.split("/").pop()}:{c.line}
+                </span>
+                <span className="min-w-0 flex-1 truncate">{c.text}</span>
+                <button
+                  onClick={() => removeComment(c.id)}
+                  aria-label="Remove comment"
+                  className="flex size-6 items-center justify-center rounded-md text-muted hover:text-foreground"
+                >
+                  <X className="size-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         {files.length > 0 && (
           <div className="flex flex-wrap gap-2 px-1.5 pt-1 pb-2">
             {files.map((f, i) => (

@@ -17,6 +17,7 @@ import {
   Hammer,
   Redo2,
   RotateCcw,
+  SquareSlash,
   Undo2,
 } from "lucide-react"
 import { useRef, useState, type ReactNode } from "react"
@@ -211,8 +212,24 @@ function UserMessage({ item, actions }: { item: UserItem; actions: boolean }) {
   return (
     <div className="group flex flex-col items-stretch">
       <div className="rounded-2xl bg-surface-secondary/60 px-4 py-3 text-md leading-relaxed whitespace-pre-wrap">
-        <div className={cn(long && !full && "line-clamp-6")}>{item.text}</div>
-        {long && (
+        {item.command ? (
+          <div className="flex items-center gap-2">
+            <SquareSlash className="size-3.5 shrink-0 text-muted" />
+            <span className="font-mono text-sm">{item.command}</span>
+            <button
+              onClick={() => setFull(!full)}
+              className="text-2xs ml-auto text-muted hover:text-foreground focus-visible:status-focused-field"
+            >
+              {full ? "Hide prompt" : "Show prompt"}
+            </button>
+          </div>
+        ) : (
+          <div className={cn(long && !full && "line-clamp-6")}>{item.text}</div>
+        )}
+        {item.command && full && (
+          <div className="text-dense mt-2 max-h-80 overflow-y-auto border-t border-separator pt-2 text-muted">{item.text}</div>
+        )}
+        {long && !item.command && (
           <button
             onClick={() => setFull(!full)}
             className="text-2xs mt-1.5 text-muted hover:text-foreground focus-visible:status-focused-field"
@@ -239,7 +256,7 @@ function UserMessage({ item, actions }: { item: UserItem; actions: boolean }) {
           >
             {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
           </IconAction>
-          <IconAction
+          {!item.command && <IconAction
             label="Edit and send again"
             onClick={() => {
               setDraft(item.text)
@@ -247,7 +264,7 @@ function UserMessage({ item, actions }: { item: UserItem; actions: boolean }) {
             }}
           >
             <Pencil className="size-3.5" />
-          </IconAction>
+          </IconAction>}
           <IconAction label="Rewind to before this message" onClick={() => void rewind(item.id)}>
             <Undo2 className="size-3.5" />
           </IconAction>
@@ -420,6 +437,8 @@ function Disclosure({ open, onToggle, children }: { open: boolean; onToggle: () 
 
 const icons: Record<string, typeof FileText> = {
   read: FileText,
+  write: FilePlus2,
+  edit: Pencil,
   list: FileText,
   grep: Search,
   glob: Search,
@@ -431,6 +450,9 @@ const icons: Record<string, typeof FileText> = {
 
 const verbs: Record<string, string> = {
   read: "Read",
+  // Edits without a diff (older sessions' writes) still say what they did.
+  write: "Wrote",
+  edit: "Edited",
   list: "Listed",
   grep: "Searched",
   glob: "Found files",

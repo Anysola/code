@@ -1,8 +1,8 @@
 import { Spinner as HeroSpinner } from "@heroui/react/spinner"
 import { buttonVariants } from "@heroui/styles"
 import { clsx, type ClassValue } from "clsx"
-import { Minus, Square, X } from "lucide-react"
-import { useEffect, useRef, type ReactNode } from "react"
+import { Minus, Plus, Square, X } from "lucide-react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { extendTailwindMerge } from "tailwind-merge"
 
 import { getBridge } from "./bridge"
@@ -121,29 +121,120 @@ export function Counts({ add, del }: { add: number; del: number }) {
   )
 }
 
-export function DiffView({ patch, wrap = false, className }: { patch: string; wrap?: boolean; className?: string }) {
+/** A diff; with `comments`, a line takes a remark (the "+" in its gutter) and shows its own. */
+export function DiffView({
+  patch,
+  wrap = false,
+  className,
+  comments,
+}: {
+  patch: string
+  wrap?: boolean
+  className?: string
+  comments?: {
+    list: { id: number; line: number; removed: boolean; text: string }[]
+    add: (line: DiffLine, text: string) => void
+    remove: (id: number) => void
+  }
+}) {
   const lines = parsePatch(patch)
+  const [writing, setWriting] = useState<number | null>(null)
   return (
     <div className={cn("overflow-x-auto font-mono text-xs leading-[1.6rem]", className)}>
-      {lines.map((l, i) => (
-        <DiffRow key={i} l={l} wrap={wrap} />
-      ))}
+      {lines.map((l, i) => {
+        const number = l.kind === "del" ? l.old : l.new
+        const own =
+          comments && l.kind !== "hunk"
+            ? comments.list.filter((c) => c.line === number && c.removed === (l.kind === "del"))
+            : []
+        return (
+          <div key={i}>
+            <DiffRow l={l} wrap={wrap} onComment={comments && l.kind !== "hunk" ? () => setWriting(i) : undefined} />
+            {own.map((c) => (
+              <div key={c.id} className="text-dense flex items-start gap-2 bg-default/40 py-2 pr-3 pl-18 font-sans">
+                <span className="min-w-0 flex-1 whitespace-pre-wrap">{c.text}</span>
+                <button
+                  onClick={() => comments?.remove(c.id)}
+                  aria-label="Remove comment"
+                  className="mt-0.5 text-muted hover:text-foreground"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </div>
+            ))}
+            {writing === i && comments && (
+              <CommentBox
+                onCancel={() => setWriting(null)}
+                onAdd={(text) => {
+                  comments.add(l, text)
+                  setWriting(null)
+                }}
+              />
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }
 
-function DiffRow({ l, wrap }: { l: DiffLine; wrap: boolean }) {
+function CommentBox({ onAdd, onCancel }: { onAdd: (text: string) => void; onCancel: () => void }) {
+  const [text, setText] = useState("")
+  return (
+    <div className="bg-default/40 py-2 pr-3 pl-18 font-sans">
+      <textarea
+        autoFocus
+        value={text}
+        rows={2}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey && text.trim()) {
+            e.preventDefault()
+            onAdd(text.trim())
+          } else if (e.key === "Escape") {
+            e.stopPropagation()
+            onCancel()
+          }
+        }}
+        placeholder="What should change here?"
+        aria-label="Comment"
+        className="text-dense block w-full resize-none rounded-lg bg-field px-2.5 py-1.5 outline-none placeholder:text-field-placeholder focus-visible:status-focused-field"
+      />
+      <div className="flex items-center justify-end gap-2 pt-1.5">
+        <span className="text-2xs mr-auto text-muted">Goes with your next message</span>
+        <button onClick={onCancel} className={btn("ghost", "sm")}>
+          Cancel
+        </button>
+        <button onClick={() => text.trim() && onAdd(text.trim())} disabled={!text.trim()} className={btn("primary", "sm")}>
+          Comment
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function DiffRow({ l, wrap, onComment }: { l: DiffLine; wrap: boolean; onComment?: () => void }) {
   if (l.kind === "hunk") return <div className="bg-default/30 px-3 text-muted/70">{l.text}</div>
   return (
     <div
       className={cn(
-        "flex",
+        "group/line relative flex",
         wrap ? "whitespace-pre-wrap" : "whitespace-pre",
         l.kind === "add" && "bg-success/10",
         l.kind === "del" && "bg-danger/10"
       )}
     >
-      <span className="w-10 shrink-0 pr-2 text-right text-muted/50 tabular-nums select-none">
+      {onComment && (
+        <button
+          onClick={onComment}
+          aria-label="Comment on this line"
+          className="absolute top-1 left-1 flex size-4 items-center justify-center rounded bg-accent text-accent-foreground opacity-0 group-hover/line:opacity-100 focus-visible:opacity-100"
+        >
+          <Plus className="size-3" strokeWidth={2.5} />
+        </button>
+      )}
+      {/* With comments, the gutter leaves room for the "+" before the number. */}
+      <span className={cn("shrink-0 pr-2 text-right text-muted/50 tabular-nums select-none", onComment ? "w-14" : "w-10")}>
         {l.kind === "del" ? l.old : l.new}
       </span>
       <span

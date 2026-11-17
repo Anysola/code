@@ -65,8 +65,14 @@ pub async fn revert(
     stop_and_wait(&core, &session_id).await?;
     let data = user_message(&core, &session_id, &message_id)?;
     core.revert(&session_id, &message_id).map_err(text)?;
+    // A command comes back as the line the user typed, to run again.
+    let typed = data
+        .extra
+        .get("command")
+        .and_then(Value::as_str)
+        .map_or(data.text, str::to_string);
     Ok(json!({
-        "text": data.text,
+        "text": typed,
         "view": transcript::view(&core, &session_id, &directory)?,
     }))
 }
@@ -108,6 +114,11 @@ pub async fn resend(
             (f.mime, f.data, name)
         })
         .collect();
+    let command = data
+        .extra
+        .get("command")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let skills: Vec<InvokedSkill> = data
         .extra
         .get("skills")
@@ -125,9 +136,44 @@ pub async fn resend(
             text,
             files,
             skills,
+            command,
         },
     );
     Ok(json!({"sessionId": id}))
+}
+
+/// What the session changed in its files, from before its first change to now; `null`
+/// outside git, where the window sums the edits instead.
+#[tauri::command]
+pub async fn changes(
+    handle: AppHandle,
+    app: State<'_, App>,
+    directory: String,
+    session_id: String,
+) -> Answer {
+    let core = core_for(&handle, &app, &directory).await?;
+    let found = tauri::async_runtime::spawn_blocking(move || core.session_changes(&session_id))
+        .await
+        .map_err(text)?
+        .map_err(text)?;
+    Ok(json!(found))
+}
+
+/// Puts one file back as it was before the session first changed it.
+#[tauri::command]
+pub async fn restore_file(
+    handle: AppHandle,
+    app: State<'_, App>,
+    directory: String,
+    session_id: String,
+    file: String,
+) -> Answer {
+    let core = core_for(&handle, &app, &directory).await?;
+    if core.is_busy(&session_id) {
+        return Err("Stop the session before putting files back.".into());
+    }
+    core.restore_file(&session_id, &file).map_err(text)?;
+    Ok(Value::Null)
 }
 
 /// What the composer's `/` and `@` menus list: commands (built-in, the project's and MCP

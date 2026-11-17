@@ -8,6 +8,7 @@
 mod account;
 mod actions;
 mod events;
+mod git;
 mod transcript;
 mod update;
 
@@ -470,6 +471,7 @@ async fn prompt(
             .map(|f| (f.mime, f.data, f.name))
             .collect(),
         skills,
+        command: None,
     };
     if core.is_busy(&id) {
         // A running turn takes it when it ends.
@@ -597,6 +599,15 @@ fn main() {
             actions::select_agent,
             actions::project_files,
             actions::scratch_folder,
+            actions::changes,
+            actions::restore_file,
+            git::git_status,
+            git::git_branch,
+            git::git_commit,
+            git::git_push,
+            git::git_pr,
+            git::suggest_commit_message,
+            git::reveal,
         ])
         .run(tauri::generate_context!())
         .expect("the Anysola Code window failed to start");
