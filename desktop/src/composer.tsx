@@ -245,6 +245,8 @@ export function Composer({ open }: { open: Open }) {
     if (fill.replacing !== undefined && current.current !== fill.replacing) return
     setText(fill.text)
     setCaret(fill.text.length)
+    const back = fill.files
+    if (back?.length) setFiles((all) => (all.length ? all : back))
     requestAnimationFrame(() => {
       const el = area.current
       if (!el) return

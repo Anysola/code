@@ -75,9 +75,9 @@ export type Open = {
   todos: Todo[]
   /** The agent that wrote the last reply shown. */
   lastAgent: string | null
-  /** Text for the composer to take (a rewound message); `n` tells refills apart. With
-   * `replacing`, only while the composer still holds that text. */
-  fill: { text: string; n: number; replacing?: string } | null
+  /** Text for the composer to take (a rewound message, or one that didn't send); `n` tells
+   * refills apart. With `replacing`, only while the composer still holds that text. */
+  fill: { text: string; n: number; replacing?: string; files?: Attachment[] } | null
 }
 
 /** A remark on a diff line, sent with the next message. */
@@ -214,11 +214,18 @@ function whose(open: Open): string | { key: string } {
   return open.sessionId ?? { key: open.key }
 }
 
+function same(a: string | { key: string }, b: string | { key: string }) {
+  return typeof a === "string" || typeof b === "string" ? a === b : a.key === b.key
+}
+
+function showing(target: string | { key: string }) {
+  const o = state.open
+  return !!o && (typeof target === "string" ? o.sessionId === target : o.key === target.key)
+}
+
 /** A request's failure: on its own view while shown, else in the notice, never on another. */
 function failed(target: string | { key: string }, e: unknown) {
-  const o = state.open
-  const shown = o && (typeof target === "string" ? o.sessionId === target : o.key === target.key)
-  if (shown) setOpen({ status: { kind: "failed", error: message(e) } }, target)
+  if (showing(target)) setOpen({ status: { kind: "failed", error: message(e) } }, target)
   else set({ notice: message(e) })
 }
 
@@ -508,6 +515,23 @@ function toggle(set: Set<string>, id: string, on: boolean) {
 // Prompting
 // ---------------------------------------------------------------------------
 
+let fills = 0
+
+/** The last message sent, until its turn starts: a send that fails or is refused before then
+ * puts it back in the composer instead of losing what was typed. */
+let unsent: { target: string | { key: string }; text: string; files: Attachment[]; comments: Comment[] } | null =
+  null
+
+function putBack(target: string | { key: string }) {
+  const u = unsent
+  if (!u || !same(u.target, target)) return
+  unsent = null
+  if (!showing(target)) return
+  // Only into an empty composer: what the user typed since stays.
+  setOpen({ fill: { text: u.text, files: u.files, n: ++fills, replacing: "" } }, target)
+  if (state.comments.length === 0) set({ comments: u.comments })
+}
+
 /** Events per session, so a read of its state can tell whether an event said more meanwhile. */
 const activity = new Map<string, number>()
 
@@ -524,6 +548,7 @@ const LIFECYCLE = new Set(["started", "done", "failed", "interrupted", "refused"
 /** A new session's view takes the id its first prompt created, and any end that came first. */
 function adopt(target: string | { key: string }, sessionId: string) {
   setOpen({ sessionId }, target)
+  if (unsent && same(unsent.target, target)) unsent = { ...unsent, target: sessionId }
   void loadSessions()
   const e = early.get(sessionId)
   early.delete(sessionId)
@@ -556,11 +581,12 @@ async function reconcile(directory: string, sessionId: string) {
 export async function send(text: string, files: Attachment[] = [], skills: string[] = []) {
   const open = state.open
   if (!open || (!text.trim() && files.length === 0 && state.comments.length === 0)) return
+  let target = whose(open)
+  unsent = { target, text, files, comments: state.comments }
   text = withComments(text)
   set({ comments: [] })
   // The prompt makes a staged rewind final.
   setOpen({ status: { kind: "working" }, revert: null })
-  let target = whose(open)
   const draft = !open.sessionId
   if (open.sessionId) touch(open.sessionId)
   else creating++
@@ -582,6 +608,7 @@ export async function send(text: string, files: Attachment[] = [], skills: strin
     await refresh(sessionId)
   } catch (e) {
     failed(target, e)
+    putBack(target)
   } finally {
     if (draft && --creating === 0) early.clear()
   }
@@ -606,8 +633,6 @@ export async function chooseModel(modelId: string, variant: string | null) {
 // ---------------------------------------------------------------------------
 // Rewind, retry, commands, agents
 // ---------------------------------------------------------------------------
-
-let fills = 0
 
 function lastUser(open: Open) {
   for (let i = open.items.length - 1; i >= 0; i--) {
@@ -703,8 +728,9 @@ export function projectFiles(directory: string): Promise<string[]> {
 export async function runCommand(name: string, args: string) {
   const open = state.open
   if (!open) return
-  setOpen({ status: { kind: "working" }, revert: null })
   let target = whose(open)
+  unsent = { target, text: args ? `/${name} ${args}` : `/${name}`, files: [], comments: [] }
+  setOpen({ status: { kind: "working" }, revert: null })
   const draft = !open.sessionId
   if (open.sessionId) touch(open.sessionId)
   else creating++
@@ -724,6 +750,7 @@ export async function runCommand(name: string, args: string) {
     await refresh(sessionId)
   } catch (e) {
     failed(target, e)
+    putBack(target)
   } finally {
     if (draft && --creating === 0) early.clear()
   }
@@ -1042,6 +1069,7 @@ function onEvent(e: CoreEvent) {
     void refreshPeek()
   switch (e.type) {
     case "started":
+      if (unsent?.target === id) unsent = null
       set((s) => ({ busy: toggle(s.busy, id, true) }))
       if (here) setOpen({ status: { kind: "working" } }, id)
       break
@@ -1127,6 +1155,7 @@ function onEvent(e: CoreEvent) {
       set((s) => ({ busy: toggle(s.busy, id, false) }))
       if (here) {
         setOpen({ live: [], status: { kind: "failed", error: e.error } }, id)
+        putBack(id)
         void refresh(id)
       }
       break
