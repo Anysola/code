@@ -7,8 +7,14 @@
 
 mod account;
 mod actions;
+mod config;
+mod data;
+mod discord;
 mod events;
 mod git;
+mod prefs;
+mod servers;
+mod sources;
 mod transcript;
 mod update;
 
@@ -28,6 +34,7 @@ use anysola_core::session::inbox::Delivery;
 use anysola_core::session::message::InvokedSkill;
 use anysola_core::storage::{Db, SessionRow};
 use anysola_core::tool::question::QuestionReply;
+use prefs::Notifications;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -41,9 +48,10 @@ const SESSION_LIST: u64 = 200;
 /// How long closing the window waits for MCP servers to stop.
 const EXIT_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 
-/// A folder's core and the task that sends its events to the window.
+/// A folder's core, its MCP runtime and the task that sends its events to the window.
 struct Running {
     core: Core,
+    runtime: Arc<anysola_mcp::Runtime>,
     forward: tauri::async_runtime::JoinHandle<()>,
 }
 
@@ -62,6 +70,18 @@ impl Running {
 
 pub(crate) struct App {
     db: Option<Arc<Db>>,
+    pub(crate) paths: Paths,
+    /// Read without I/O by `notify()` and the commands; written by `prefs_set`.
+    pub(crate) prefs: std::sync::RwLock<prefs::Prefs>,
+    /// Started in `setup`, once the single-instance check has let this process go on: a second
+    /// launch never sets an activity.
+    pub(crate) discord: std::sync::OnceLock<discord::Handle>,
+    /// `desktop.json` was there but couldn't be parsed: moved aside before the first save.
+    pub(crate) prefs_invalid: std::sync::atomic::AtomicBool,
+    /// Held across each read-change-write of the global config file.
+    pub(crate) config_file: Mutex<()>,
+    /// MCP sign-ins waiting for the browser, by folder and server.
+    pub(crate) sign_ins: Mutex<HashMap<(PathBuf, String), servers::Waiting>>,
     /// One core per project directory, started when one of its sessions opens. Each has its own
     /// cell, so a folder that is slow to start holds up nothing but itself.
     cores: Mutex<HashMap<PathBuf, Arc<OnceCell<Running>>>>,
@@ -103,9 +123,26 @@ impl App {
     }
 
     /// The directory's core if one is running (deleting must not start one).
-    async fn running(&self, directory: &str) -> Option<Core> {
+    pub(crate) async fn running(&self, directory: &str) -> Option<Core> {
         let cell = self.cores.lock().await.get(&key(directory)).cloned()?;
         cell.get().map(|running| running.core.clone())
+    }
+
+    /// Every core that has started, with its folder as it was first opened.
+    pub(crate) async fn cores_running(&self) -> Vec<(String, Core)> {
+        let cells: Vec<_> = self.cores.lock().await.values().cloned().collect();
+        cells
+            .iter()
+            .filter_map(|cell| cell.get())
+            .map(|running| {
+                let core = running.core.clone();
+                (core.directory().display().to_string(), core)
+            })
+            .collect()
+    }
+
+    pub(crate) fn prefs(&self) -> prefs::Prefs {
+        self.prefs.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 
@@ -119,6 +156,15 @@ pub(crate) async fn core_for(
     app: &App,
     directory: &str,
 ) -> Result<Core, String> {
+    Ok(mcp_for(handle, app, directory).await?.0)
+}
+
+/// [`core_for`] with the core's MCP runtime.
+pub(crate) async fn mcp_for(
+    handle: &AppHandle,
+    app: &App,
+    directory: &str,
+) -> Result<(Core, Arc<anysola_mcp::Runtime>), String> {
     let key = key(directory);
     let cell = app
         .cores
@@ -133,9 +179,13 @@ pub(crate) async fn core_for(
                 return Err(format!("{directory} is not a folder on this computer."));
             }
             let core = Core::start(Path::new(directory)).await.map_err(text)?;
-            anysola_mcp::Runtime::attach(&core);
+            let runtime = anysola_mcp::Runtime::attach(&core);
             let forward = forward(handle.clone(), &core, directory.to_string());
-            Ok(Running { core, forward })
+            Ok(Running {
+                core,
+                runtime,
+                forward,
+            })
         })
         .await?;
     // Signing in or out let the cores go while this one was starting: it has the old token.
@@ -149,7 +199,7 @@ pub(crate) async fn core_for(
         running.stop().await;
         return Err("The account changed while this folder was opening. Open it again.".into());
     }
-    Ok(running.core.clone())
+    Ok((running.core.clone(), running.runtime.clone()))
 }
 
 fn forward(
@@ -220,13 +270,29 @@ fn root_of(handle: &AppHandle, session_id: &str) -> Option<String> {
 /// background. Subagents' sessions stay quiet: their parent speaks for them.
 fn notify(handle: &AppHandle, event: &Event) {
     use tauri_plugin_notification::NotificationExt;
-    let (session_id, what) = match event {
-        Event::PermissionAsked { session_id, .. } => (session_id, "Needs your approval"),
-        Event::QuestionAsked { session_id, .. } => (session_id, "Has a question for you"),
-        Event::Succeeded { session_id } => (session_id, "Done"),
-        Event::Failed { session_id, .. } => (session_id, "Stopped with an error"),
+    let (session_id, what, on): (_, _, fn(&Notifications) -> bool) = match event {
+        Event::PermissionAsked { session_id, .. } => {
+            (session_id, "Needs your approval", |n: &Notifications| {
+                n.approval
+            })
+        }
+        Event::QuestionAsked { session_id, .. } => {
+            (session_id, "Has a question for you", |n: &Notifications| {
+                n.question
+            })
+        }
+        Event::Succeeded { session_id } => (session_id, "Done", |n: &Notifications| n.finished),
+        Event::Failed { session_id, .. } => {
+            (session_id, "Stopped with an error", |n: &Notifications| {
+                n.failed
+            })
+        }
         _ => return,
     };
+    let wanted = handle.state::<App>().prefs().notifications;
+    if !(wanted.enabled && on(&wanted)) {
+        return;
+    }
     let focused = handle
         .get_webview_window("main")
         .and_then(|w| w.is_focused().ok())
@@ -624,9 +690,28 @@ async fn delete_session(app: State<'_, App>, directory: String, session_id: Stri
     Ok(json!(app.db()?.delete_session(&session_id).map_err(text)?))
 }
 
+/// Shows one notification now, focused or not, so the user sees what they look like.
+#[tauri::command]
+fn notify_test(handle: AppHandle) -> Answer {
+    use tauri_plugin_notification::NotificationExt;
+    handle
+        .notification()
+        .builder()
+        .title("Anysola Code")
+        .body("Notifications are on.")
+        .show()
+        .map_err(|e| format!("The system didn’t show it: {e}"))?;
+    Ok(Value::Null)
+}
+
 fn main() {
     anysola_core::version::set_desktop_client();
-    let db = Db::open(&Paths::from_env().database()).ok().map(Arc::new);
+    let paths = Paths::from_env();
+    // The same file the CLI appends to, each line marked `role=desktop`; nothing on stdout.
+    anysola_core::log::init_as(&paths, None, false, "desktop");
+    let db = Db::open(&paths.database()).ok().map(Arc::new);
+    let (prefs, prefs_invalid) = prefs::Prefs::read(&paths.desktop_prefs());
+    anysola_core::skill::set_claude_skills(prefs.sources.claude_skills);
     tauri::Builder::default()
         // A second start shows the window that is open: two apps on one database would each
         // run the folders' MCP servers and miss each other's turns.
@@ -645,8 +730,20 @@ fn main() {
         .manage(update::Pending::default())
         .manage(App {
             db,
+            paths,
+            prefs: std::sync::RwLock::new(prefs),
+            discord: std::sync::OnceLock::new(),
+            prefs_invalid: prefs_invalid.into(),
+            config_file: Mutex::default(),
+            sign_ins: Mutex::default(),
             cores: Mutex::default(),
             login: Mutex::default(),
+        })
+        .setup(|app| {
+            let state = app.state::<App>();
+            let wanted = state.prefs().discord;
+            let _ = state.discord.set(discord::Handle::start(wanted));
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             account::auth_status,
@@ -687,6 +784,37 @@ fn main() {
             git::git_pr,
             git::suggest_commit_message,
             git::reveal,
+            prefs::prefs_get,
+            prefs::prefs_set,
+            account::devices,
+            account::device_revoke,
+            account::usage,
+            account::limits_redeem,
+            config::config_get,
+            config::config_set,
+            servers::mcp_list,
+            servers::mcp_add,
+            servers::mcp_remove,
+            servers::mcp_enable,
+            servers::mcp_retry,
+            servers::mcp_sign_in,
+            servers::mcp_sign_in_wait,
+            servers::mcp_sign_out,
+            sources::sources,
+            sources::personal_instructions,
+            sources::save_personal_instructions,
+            sources::reveal_path,
+            data::permissions,
+            data::permission_forget,
+            data::permission_forget_all,
+            data::data_info,
+            data::data_clear,
+            data::delete_all_sessions,
+            data::export_session,
+            data::about,
+            notify_test,
+            discord::discord_status,
+            discord::presence,
         ])
         .build(tauri::generate_context!())
         .expect("the Anysola Code window failed to start")
@@ -698,6 +826,10 @@ fn main() {
                 tauri::async_runtime::block_on(async {
                     let _ = tokio::time::timeout(EXIT_GRACE, app.drop_cores()).await;
                 });
+                // Nobody is working in Anysola Code once it is closed.
+                if let Some(discord) = app.discord.get() {
+                    discord.stop(EXIT_GRACE);
+                }
             }
         });
 }

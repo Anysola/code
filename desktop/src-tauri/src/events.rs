@@ -107,6 +107,8 @@ pub fn to_json(event: &Event, directory: &str) -> Option<Value> {
         } => {
             json!({"type": "created", "sessionId": session_id, "title": title, "directory": directory})
         }
+        // The window re-reads the folder's server list.
+        Event::McpStatusChanged { .. } => json!({"type": "mcp", "directory": directory}),
         _ => return None,
     };
     Some(v)
