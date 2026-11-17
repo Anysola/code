@@ -77,7 +77,7 @@ fn frame(lines: &[&str]) -> String {
     lines.iter().map(|l| format!("{l}\n")).collect()
 }
 
-const SCRIPT_COMMAND: &str = r#"sh -c "s=$(curl -fsSL https://www.anysola.com/install) && printf '%s\\n' \"$s\" | sh -s -- --no-modify-path""#;
+const SCRIPT_COMMAND: &str = r#"sh -c "(curl -fsSL https://www.anysola.com/install || echo exit 1) | sh -s -- --no-modify-path""#;
 
 #[test]
 fn update_print_with_notes_for_npm_and_script_installs() {
@@ -181,7 +181,7 @@ fn the_script_install_reruns_the_installer() {
     assert!(out.stdout.contains(&format!("◇  {SCRIPT_COMMAND}\n")));
     assert_eq!(
         calls(&home),
-        "sh -c s=$(curl -fsSL https://www.anysola.com/install) && printf '%s\\n' \"$s\" | sh -s -- --no-modify-path\n"
+        "sh -c (curl -fsSL https://www.anysola.com/install || echo exit 1) | sh -s -- --no-modify-path\n"
     );
 }
 
