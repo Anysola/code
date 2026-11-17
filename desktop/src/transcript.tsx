@@ -106,13 +106,9 @@ export function Transcript({
         )
       )}
       {open.revert && !readOnly && <Rewound revert={open.revert} />}
-      {open.live.map((l) =>
-        l.kind === "text" ? (
-          <Prose key={l.key} text={l.text} />
-        ) : (
-          <Thinking key={l.key} text={l.text} live />
-        )
-      )}
+      {/* Reasoning isn't shown: the gateway sends it summarized or empty, so a "Thought" row
+          opened onto nothing. The status line says the model is at work meanwhile. */}
+      {open.live.map((l) => l.kind === "text" && <Prose key={l.key} text={l.text} />)}
       {permissions.map((p, i) => (
         // Enter and Escape answer the first ask; the keys show on that one only.
         <PermissionCard key={p.requestId} permission={p} keys={i === 0} />
@@ -123,7 +119,7 @@ export function Transcript({
       <StatusLine
         status={open.status}
         waiting={permissions.length + questions.length > 0}
-        streaming={open.live.length > 0}
+        streaming={open.live.some((l) => l.kind === "text")}
       />
       {retryable && open.items.some((i) => i.kind === "user") && (
         <button onClick={() => void retry()} className={btn("secondary", "sm", "-mt-2 gap-1.5 self-start")}>
@@ -326,7 +322,7 @@ function Entry({ item, directory }: { item: Exclude<Item, UserItem>; directory: 
     case "text":
       return <Prose text={item.text} />
     case "reasoning":
-      return <Thinking text={item.text} />
+      return null
     case "note":
       return (
         <div className={cn("text-dense flex items-center gap-3", item.failed ? "text-danger" : "text-muted")}>
@@ -402,18 +398,6 @@ function CodeBlock({ children }: { children: ReactNode }) {
       >
         {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
       </button>
-    </div>
-  )
-}
-
-function Thinking({ text, live = false }: { text: string; live?: boolean }) {
-  const [open, setOpen] = useState(false)
-  return (
-    <div className="-mx-2">
-      <Disclosure open={open} onToggle={() => setOpen(!open)}>
-        {live ? "Thinking…" : "Thought"}
-      </Disclosure>
-      {open && <div className="text-dense ml-6 border-l border-separator pl-3 whitespace-pre-wrap text-muted">{text}</div>}
     </div>
   )
 }
