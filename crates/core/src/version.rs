@@ -63,6 +63,8 @@ pub fn is_dev_build(version: &str) -> bool {
 pub fn compare(a: &str, b: &str) -> std::cmp::Ordering {
     let parse = |v: &str| {
         let v = v.strip_prefix('v').unwrap_or(v);
+        // Build metadata does not take part in the order.
+        let v = v.split_once('+').map_or(v, |(v, _)| v);
         let (core, pre) = v
             .split_once('-')
             .map_or((v, None), |(c, p)| (c, Some(p.to_string())));
@@ -85,7 +87,35 @@ pub fn compare(a: &str, b: &str) -> std::cmp::Ordering {
         (None, None) => std::cmp::Ordering::Equal,
         (Some(_), None) => std::cmp::Ordering::Less,
         (None, Some(_)) => std::cmp::Ordering::Greater,
-        (Some(a), Some(b)) => a.cmp(&b),
+        (Some(a), Some(b)) => prerelease(&a, &b),
+    }
+}
+
+/// Semver prerelease order: dot-separated identifiers left to right, numeric ones by value and
+/// below alphanumeric ones, a shorter list first when it is a prefix (`rc.9` < `rc.10`).
+fn prerelease(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    // Digits by value without parsing, so any length works: fewer digits first, then the text.
+    fn numeric(s: &str) -> Option<&str> {
+        (!s.is_empty() && s.bytes().all(|c| c.is_ascii_digit())).then(|| s.trim_start_matches('0'))
+    }
+    let mut left = a.split('.');
+    let mut right = b.split('.');
+    loop {
+        let order = match (left.next(), right.next()) {
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(x), Some(y)) => match (numeric(x), numeric(y)) {
+                (Some(x), Some(y)) => x.len().cmp(&y.len()).then_with(|| x.cmp(y)),
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => x.cmp(y),
+            },
+        };
+        if order.is_ne() {
+            return order;
+        }
     }
 }
 
@@ -101,6 +131,12 @@ mod tests {
         assert_eq!(compare("1.0.0-rc.1", "1.0.0"), Less);
         assert_eq!(compare("1.0.0-a", "1.0.0-b"), Less);
         assert_eq!(compare("0.10.0", "0.9.9"), Greater);
+        assert_eq!(compare("1.1.0-rc.10", "1.1.0-rc.9"), Greater);
+        assert_eq!(compare("1.0.0-rc", "1.0.0-rc.1"), Less);
+        assert_eq!(compare("1.0.0-1", "1.0.0-alpha"), Less);
+        assert_eq!(compare("1.0.0-alpha.beta", "1.0.0-alpha.1"), Greater);
+        assert_eq!(compare("1.0.5+build.7", "1.0.5"), Equal);
+        assert_eq!(compare("1.0.0-rc.1+x", "1.0.0-rc.1"), Equal);
     }
 
     #[test]

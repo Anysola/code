@@ -350,6 +350,12 @@ async fn turn(
         shared.refresh().await;
         prepared = prepare(shared);
     }
+    if let Err(error) = &mut prepared
+        && error.kind == "provider.no-route"
+        && let Some(reason) = no_models(shared)
+    {
+        error.message = reason;
+    }
     if let Err(error) = prepared {
         // The input that could not start is dropped with the error; left in the inbox it would
         // go out unseen, together with whatever the user types next.
@@ -376,6 +382,26 @@ async fn turn(
     }
     outcome
 }
+
+/// Why no model is available at all: no credential, or no remote document (none cached) because
+/// the gateway refused the token or did not answer. `None` when the models were loaded.
+pub(crate) fn no_models(shared: &Shared) -> Option<String> {
+    if shared.gateway.token().is_none() {
+        return Some(NOT_SIGNED_IN.into());
+    }
+    let remote = shared.remote();
+    if remote.body.is_some() {
+        return None;
+    }
+    Some(if remote.needs_auth {
+        crate::gateway::config::SIGNED_OUT.into()
+    } else {
+        format!("Cannot reach {}", shared.gateway.base())
+    })
+}
+
+/// The turn error without a credential (`anysola run`, ACP, the TUI).
+pub const NOT_SIGNED_IN: &str = "Not signed in. Run `anysola login` or set ANYSOLA_TOKEN.";
 
 /// Runs the session until its inbox is empty: a manual compaction or a turn per pending item,
 /// queued prompts one at a time. Stops at the first turn that does not succeed. A turn that

@@ -159,6 +159,7 @@ impl Keymap {
             values.insert("terminal.suspend".into(), Value::String("none".into()));
         }
         let mut user_undo = false;
+        let mut user_paste = false;
         if let Some(Value::Object(overrides)) = tui.get("keybinds") {
             let unknown: Vec<&str> = overrides
                 .keys()
@@ -173,6 +174,7 @@ impl Keymap {
             for (key, value) in overrides {
                 let id = v1_name(key).unwrap_or(key);
                 user_undo |= id == "input.undo";
+                user_paste |= id == "prompt.paste";
                 values.insert(id.to_string(), value.clone());
             }
         }
@@ -182,6 +184,18 @@ impl Keymap {
                 .unwrap_or_default()
                 .to_string();
             values.insert("input.undo".into(), Value::String(format!("ctrl+z,{undo}")));
+        }
+        // Windows terminals keep Ctrl+V for their own text paste, which never reaches the app as
+        // a key, so an image on the clipboard needs another key.
+        if windows && !user_paste {
+            let paste = values["prompt.paste"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            values.insert(
+                "prompt.paste".into(),
+                Value::String(format!("{paste},alt+v")),
+            );
         }
         let leader = values
             .get("leader")
@@ -428,6 +442,30 @@ mod tests {
             Match::Exact
         );
         assert_eq!(keymap.first("terminal.suspend"), None);
+    }
+
+    #[test]
+    fn windows_binds_alt_v_to_paste() {
+        let keymap = Keymap::from_config(&Value::Null, true).unwrap();
+        assert_eq!(
+            keymap.matches("prompt.paste", &strokes("alt+v")),
+            Match::Exact
+        );
+        assert_eq!(
+            keymap.matches("prompt.paste", &strokes("ctrl+v")),
+            Match::Exact
+        );
+        let keymap = Keymap::from_config(&Value::Null, false).unwrap();
+        assert_ne!(
+            keymap.matches("prompt.paste", &strokes("alt+v")),
+            Match::Exact
+        );
+        let own = serde_json::json!({"keybinds": {"input_paste": "ctrl+y"}});
+        let keymap = Keymap::from_config(&own, true).unwrap();
+        assert_ne!(
+            keymap.matches("prompt.paste", &strokes("alt+v")),
+            Match::Exact
+        );
     }
 
     #[test]

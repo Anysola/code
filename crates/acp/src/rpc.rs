@@ -41,7 +41,10 @@ impl Failure {
     pub fn auth_required() -> Failure {
         Failure {
             code: -32000,
-            message: "Authentication required: provider authentication required".into(),
+            message: format!(
+                "Authentication required: {}",
+                anysola_core::session::NOT_SIGNED_IN
+            ),
             data: Some(json!({})),
         }
     }

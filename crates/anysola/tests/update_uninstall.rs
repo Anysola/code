@@ -77,8 +77,7 @@ fn frame(lines: &[&str]) -> String {
     lines.iter().map(|l| format!("{l}\n")).collect()
 }
 
-const SCRIPT_COMMAND: &str =
-    r#"sh -c "curl -fsSL https://www.anysola.com/install | sh -s -- --no-modify-path""#;
+const SCRIPT_COMMAND: &str = r#"sh -c "(curl -fsSL https://www.anysola.com/install || echo exit 1) | sh -s -- --no-modify-path""#;
 
 #[test]
 fn update_print_with_notes_for_npm_and_script_installs() {
@@ -182,7 +181,7 @@ fn the_script_install_reruns_the_installer() {
     assert!(out.stdout.contains(&format!("◇  {SCRIPT_COMMAND}\n")));
     assert_eq!(
         calls(&home),
-        "sh -c curl -fsSL https://www.anysola.com/install | sh -s -- --no-modify-path\n"
+        "sh -c (curl -fsSL https://www.anysola.com/install || echo exit 1) | sh -s -- --no-modify-path\n"
     );
 }
 
@@ -191,8 +190,23 @@ fn a_failed_install_and_an_unreachable_gateway() {
     let gateway = gateway();
     let mut home = home(&gateway);
     home.set_env("ANYSOLA_API_URL", "http://127.0.0.1:9");
-    home.set_env("FAKE_EXIT", "3");
     let out = home.run(BIN, &["update"], None, None);
+    assert_eq!(out.code, 1);
+    assert_eq!(
+        out.stdout,
+        frame(&[
+            "┌  Update Anysola Code",
+            "│",
+            "■  Could not check the latest version at http://127.0.0.1:9. Use `anysola update --force` to install anyway.",
+            "│",
+            "└  Failed",
+            "",
+        ])
+    );
+    assert_eq!(calls(&home), "", "nothing runs without the version check");
+
+    home.set_env("FAKE_EXIT", "3");
+    let out = home.run(BIN, &["update", "--force"], None, None);
     assert_eq!(out.code, 1);
     assert_eq!(
         out.stdout,

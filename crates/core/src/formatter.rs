@@ -260,7 +260,7 @@ impl Formatters {
                 "formatting file",
                 &[("file", &file), ("command", &argv.join(" "))],
             );
-            let status = crate::console::tokio_command(&argv[0])
+            let status = crate::console::tokio_command(crate::which::program(&argv[0]))
                 .args(&argv[1..])
                 .current_dir(directory)
                 .envs(formatter.environment.iter().cloned())
@@ -337,12 +337,18 @@ impl Place<'_> {
         which_in(name, Some(self.bin)).map(|p| p.to_string_lossy().into_owned())
     }
 
-    /// The package's bin in the nearest `node_modules/.bin` up the tree.
+    /// The package's bin in the nearest `node_modules/.bin` up the tree; on Windows its `.cmd`
+    /// shim, since the extensionless sh script beside it cannot be started there.
     fn npm_bin(&self, bin: &str) -> Option<String> {
         self.find_up("node_modules/.bin")
             .into_iter()
-            .map(|dir| dir.join(bin))
-            .find(|path| path.exists())
+            .find_map(|dir| {
+                if cfg!(windows) {
+                    crate::which::in_dir(bin, &dir)
+                } else {
+                    Some(dir.join(bin)).filter(|path| path.exists())
+                }
+            })
             .map(|p| p.to_string_lossy().into_owned())
     }
 
@@ -551,6 +557,33 @@ mod tests {
         );
     }
 
+    /// A project's npm formatter runs: on Windows through its `.cmd` shim.
+    #[tokio::test]
+    async fn npm_formatter_shims_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
+        std::fs::write(
+            project.join("package.json"),
+            r#"{"devDependencies": {"prettier": "3"}}"#,
+        )
+        .unwrap();
+        let bin = project.join("node_modules/.bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("prettier"), "#!/bin/sh\nprintf 'X\\n' > \"$2\"\n").unwrap();
+        std::fs::write(bin.join("prettier.cmd"), "@echo off\r\necho X> \"%~2\"\r\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::Permissions::from_mode(0o755);
+            std::fs::set_permissions(bin.join("prettier"), mode).unwrap();
+        }
+        let file = project.join("a.js");
+        std::fs::write(&file, "x").unwrap();
+        let list = formatters(r#"{"formatter": true}"#).unwrap();
+        assert!(list.format(&file, project, project).await);
+        assert_eq!(std::fs::read_to_string(&file).unwrap().trim(), "X");
+    }
+
     #[test]
     fn npm_formatters_need_the_dependency_and_the_bin() {
         let dir = tempfile::tempdir().unwrap();
@@ -558,6 +591,7 @@ mod tests {
         let sub = project.join("src");
         std::fs::create_dir_all(sub.join("node_modules/.bin")).unwrap();
         std::fs::write(sub.join("node_modules/.bin/prettier"), "").unwrap();
+        std::fs::write(sub.join("node_modules/.bin/prettier.cmd"), "").unwrap();
         let place = Place {
             directory: &sub,
             worktree: project,
@@ -577,14 +611,27 @@ mod tests {
             r#"{"devDependencies": {"prettier": "3"}}"#,
         )
         .unwrap();
+        // Windows starts the `.cmd` shim (PATHEXT spells it `.CMD`), not the sh script.
         let bin = sub
             .join("node_modules/.bin")
-            .join("prettier")
+            .join(if cfg!(windows) {
+                "prettier.cmd"
+            } else {
+                "prettier"
+            })
             .to_string_lossy()
             .into_owned();
-        assert_eq!(
-            runtime.block_on(detect(&prettier, &place)),
-            Some(vec![bin, "--write".into(), "$FILE".into()])
-        );
+        let found = runtime.block_on(detect(&prettier, &place)).map(|mut argv| {
+            if cfg!(windows) {
+                argv[0] = argv[0].to_lowercase();
+            }
+            argv
+        });
+        let bin = if cfg!(windows) {
+            bin.to_lowercase()
+        } else {
+            bin
+        };
+        assert_eq!(found, Some(vec![bin, "--write".into(), "$FILE".into()]));
     }
 }

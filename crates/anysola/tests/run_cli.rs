@@ -226,6 +226,37 @@ fn errors_before_and_after_the_session() {
 }
 
 #[test]
+fn no_models_say_why() {
+    let gateway = FakeGateway::start(answer("ok"));
+    let mut home = TestHome::new(&gateway.url);
+    home.set_env("ANYSOLA_API_URL", "http://127.0.0.1:9");
+    let cases = [
+        (true, "Cannot reach http://127.0.0.1:9"),
+        (
+            false,
+            "Not signed in. Run `anysola login` or set ANYSOLA_TOKEN.",
+        ),
+    ];
+    for (token, message) in cases {
+        if !token {
+            home.remove_env("ANYSOLA_TOKEN");
+        }
+        for args in [
+            &["run", "x"][..],
+            &["run", "-m", "anysola/claude-sonnet-5-5", "x"],
+        ] {
+            let out = home.run(BIN, args, None, None);
+            assert_eq!(out.code, 1, "{args:?}");
+            assert!(
+                out.stderr.ends_with(&format!("{message}\n")),
+                "{args:?}: {}",
+                out.stderr
+            );
+        }
+    }
+}
+
+#[test]
 fn sessions_continue_resume_and_fork() {
     let gateway = FakeGateway::start(answer("ok"));
     let home = TestHome::new(&gateway.url);
