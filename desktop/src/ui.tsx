@@ -2,7 +2,7 @@ import { Spinner as HeroSpinner } from "@heroui/react/spinner"
 import { buttonVariants } from "@heroui/styles"
 import { clsx, type ClassValue } from "clsx"
 import { Minus, Plus, Square, X } from "lucide-react"
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react"
 import { extendTailwindMerge } from "tailwind-merge"
 
 import { getBridge } from "./bridge"
@@ -263,6 +263,28 @@ export function ago(ms: number) {
 
 export function folderName(directory: string) {
   return directory.split(/[\\/]/).filter(Boolean).pop() ?? directory
+}
+
+/**
+ * Escape closes a panel laid over the session. Pressed in the composer behind it, the key goes
+ * to the panel only: the composer would stop the turn or deny the waiting ask. Fields inside the
+ * panel handle their own Escape first (a comment box cancels the comment).
+ */
+export function useEscape(panel: RefObject<HTMLElement | null>, onClose: () => void) {
+  useEffect(() => {
+    const outside = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || panel.current?.contains(e.target as Node)) return
+      e.stopPropagation()
+      onClose()
+    }
+    const inside = (e: KeyboardEvent) => e.key === "Escape" && onClose()
+    document.addEventListener("keydown", outside, true)
+    window.addEventListener("keydown", inside)
+    return () => {
+      document.removeEventListener("keydown", outside, true)
+      window.removeEventListener("keydown", inside)
+    }
+  }, [panel, onClose])
 }
 
 /**

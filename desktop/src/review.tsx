@@ -13,7 +13,7 @@ import {
   Sparkles,
   X,
 } from "lucide-react"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import type { FileDiff } from "./bridge"
 import {
@@ -31,7 +31,7 @@ import {
   type Open,
 } from "./store"
 import { EditCard } from "./transcript"
-import { btn, cn, Counts, DiffView, Popover, Spinner } from "./ui"
+import { btn, cn, Counts, DiffView, Popover, Spinner, useEscape } from "./ui"
 
 // ---------------------------------------------------------------------------
 // Git
@@ -250,15 +250,12 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
   const comments = useStore((s) => s.comments)
   const reload = useCallback(() => void readChanges().then(setNet), [])
   useEffect(reload, [reload, open.items.length])
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose()
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
-  }, [onClose])
+  const panel = useRef<HTMLDivElement>(null)
+  useEscape(panel, onClose)
   const edits = changedFiles(open)
   const count = net ? net.length : edits.length
   return (
-    <div className="absolute inset-0 z-10 flex justify-end bg-black/40" onClick={onClose}>
+    <div ref={panel} className="absolute inset-0 z-10 flex justify-end bg-black/40" onClick={onClose}>
       <aside
         className="flex h-full w-[min(46rem,94%)] flex-col bg-overlay"
         onClick={(e) => e.stopPropagation()}

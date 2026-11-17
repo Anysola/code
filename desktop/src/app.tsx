@@ -13,11 +13,12 @@ import {
   start,
   useStore,
   type Open,
+  type Peek,
 } from "./store"
 import { changedFiles, GitMenu, Review } from "./review"
 import { PlaceLabel, Sidebar } from "./sidebar"
 import { Transcript } from "./transcript"
-import { btn, Counts, Kbd, Mark, Spinner, TitleBar, UsageMeter } from "./ui"
+import { btn, Counts, Kbd, Mark, Spinner, TitleBar, UsageMeter, useEscape } from "./ui"
 
 export function App() {
   const auth = useStore((s) => s.auth)
@@ -247,13 +248,13 @@ function Conversation({ open }: { open: Open }) {
 /** A subagent's transcript, read-only, over the session that ran it. */
 function PeekSheet() {
   const peek = useStore((s) => s.peek)
-  useEffect(() => {
-    if (!peek) return
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && closePeek()
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
-  }, [peek])
   if (!peek) return null
+  return <Peeking peek={peek} />
+}
+
+function Peeking({ peek }: { peek: Peek }) {
+  const panel = useRef<HTMLDivElement>(null)
+  useEscape(panel, closePeek)
   const view: Open = {
     directory: peek.directory,
     sessionId: peek.sessionId,
@@ -269,7 +270,7 @@ function PeekSheet() {
     fill: null,
   }
   return (
-    <div className="absolute inset-0 z-10 flex justify-end bg-black/40" onClick={closePeek}>
+    <div ref={panel} className="absolute inset-0 z-10 flex justify-end bg-black/40" onClick={closePeek}>
       <aside
         className="flex h-full w-[min(44rem,92%)] flex-col bg-overlay"
         onClick={(e) => e.stopPropagation()}
