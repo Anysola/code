@@ -243,6 +243,7 @@ fn swap_draft(
 /// Runs the UI; a panic shows the crash screen, whose Restart starts the UI again.
 pub async fn run(core: Core, mut options: Options) -> Result<(), String> {
     use futures_util::FutureExt;
+    own_exe();
     // The core in use: `/cd` and `/connect` swap in a new one and shut the old one down, so a
     // restart after a crash continues with whatever the slot holds then.
     let current = Arc::new(Mutex::new(core));
@@ -442,13 +443,37 @@ async fn run_once(core: Core, options: Options, current: Arc<Mutex<Core>>) -> Re
     if let Some(summary) = app.summary() {
         print!("{}", crate::menus::anysola::exit_summary(&summary));
     }
-    if app.restart
-        && let Ok(exe) = std::env::current_exe()
-    {
+    if app.restart {
         let args: Vec<String> = std::env::args().skip(1).collect();
-        let _ = std::process::Command::new(exe).args(args).status();
+        let started = own_exe()
+            .ok_or_else(|| "the executable path is unknown".to_string())
+            .and_then(|exe| {
+                std::process::Command::new(exe)
+                    .args(args)
+                    .status()
+                    .map_err(|e| e.to_string())
+            });
+        if let Err(error) = started {
+            eprintln!("Could not restart Anysola Code ({error}). Run `anysola` again.");
+        }
     }
     Ok(())
+}
+
+/// This executable's path, read at start: once an update replaced the file, Linux reports the
+/// running image as `… (deleted)`, which the restart and a second `/update` cannot start.
+pub(super) fn own_exe() -> Option<&'static Path> {
+    static EXE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    EXE.get_or_init(|| {
+        let exe = std::env::current_exe().ok()?;
+        let text = exe.to_string_lossy();
+        // Started after a replacement (a crash restart, say): the name still holds the new file.
+        Some(match text.strip_suffix(" (deleted)") {
+            Some(path) if cfg!(target_os = "linux") => PathBuf::from(path),
+            _ => exe,
+        })
+    })
+    .as_deref()
 }
 
 impl App {

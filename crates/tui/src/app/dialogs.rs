@@ -1527,8 +1527,8 @@ impl App {
         self.replace_update(&lists::Update::Installing(version.clone()));
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = match std::env::current_exe() {
-                Ok(exe) => tokio::process::Command::new(exe)
+            let result = match super::own_exe() {
+                Some(exe) => tokio::process::Command::new(exe)
                     .arg("update")
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
@@ -1543,7 +1543,7 @@ impl App {
                             Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
                         }
                     }),
-                Err(error) => Err(error.to_string()),
+                None => Err("The executable path is unknown".to_string()),
             };
             let _ = tx.send(Msg::Apply(Box::new(move |app: &mut App| match result {
                 Ok(()) => {
