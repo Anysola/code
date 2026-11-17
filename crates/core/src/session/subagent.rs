@@ -211,6 +211,7 @@ fn start(
             text,
             files: Vec::new(),
             skills: Vec::new(),
+            command: None,
         };
         let outcome =
             crate::api::prompt_session(&shared, &child, prompt, TurnOptions::default(), cancel)

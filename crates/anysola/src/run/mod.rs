@@ -192,6 +192,7 @@ pub async fn run(args: RunArgs) -> i32 {
         text,
         files,
         skills: Vec::new(),
+        command: None,
     };
     let (mut code, limited) = drive(&core, &session_id, prompt, &options).await;
     // A window filled up during the turn: spend one banked reset and let the model go on.
@@ -202,6 +203,7 @@ pub async fn run(args: RunArgs) -> i32 {
                     text: "Continue.".into(),
                     files: Vec::new(),
                     skills: Vec::new(),
+                    command: None,
                 };
                 code = drive(&core, &session_id, prompt, &options).await.0;
             }

@@ -52,6 +52,9 @@ pub fn user_data(prompt: &Prompt) -> Value {
     if !prompt.skills.is_empty() {
         extra.insert("skills".into(), json!(prompt.skills));
     }
+    if let Some(command) = &prompt.command {
+        extra.insert("command".into(), json!(command));
+    }
     encode(&UserData {
         time: Created { created: now_ms() },
         text: prompt.text.clone(),
@@ -199,6 +202,7 @@ mod tests {
             text: text.into(),
             files: vec![],
             skills: Vec::new(),
+            command: None,
         }
     }
 

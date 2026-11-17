@@ -153,6 +153,72 @@ impl Core {
     }
 }
 
+impl Core {
+    /// Each file the session changed, from before its first change to now (commands' changes
+    /// included), skipping files that are back as they were. `None` without snapshots.
+    pub fn session_changes(&self, session_id: &str) -> Result<Option<Vec<Value>>, CoreError> {
+        let Some(store) = self.shared.snapshots.as_deref() else {
+            return Ok(None);
+        };
+        let first = first_trees(&self.shared.db, session_id)?;
+        if first.is_empty() {
+            return Ok(Some(Vec::new()));
+        }
+        let now = store.capture().ok_or(CoreError::Snapshot(
+            "Could not read the working tree".into(),
+        ))?;
+        Ok(Some(
+            first
+                .iter()
+                .filter_map(|(file, tree)| file_diff(store, tree, &now, file))
+                .filter(|diff| {
+                    diff["status"] != "modified"
+                        || diff["additions"].as_u64().unwrap_or(0)
+                            + diff["deletions"].as_u64().unwrap_or(0)
+                            > 0
+                })
+                .collect(),
+        ))
+    }
+
+    /// Puts one file back as it was before the session first changed it.
+    pub fn restore_file(&self, session_id: &str, file: &str) -> Result<(), CoreError> {
+        let store = self.shared.snapshots.as_deref().ok_or(CoreError::Snapshot(
+            "This folder isn’t a git repository, so there’s no earlier copy to restore".into(),
+        ))?;
+        let (path, tree) = first_trees(&self.shared.db, session_id)?
+            .into_iter()
+            .find(|(path, _)| path == file || path.ends_with(&format!("/{file}")))
+            .ok_or_else(|| CoreError::Snapshot(format!("This session didn’t change {file}")))?;
+        store.restore(&[(path, tree)]).map_err(CoreError::Snapshot)
+    }
+}
+
+/// Every file the session's steps changed, with the tree before the first step that did.
+fn first_trees(
+    db: &crate::storage::Db,
+    session_id: &str,
+) -> Result<Vec<(String, String)>, CoreError> {
+    let mut first: Vec<(String, String)> = Vec::new();
+    for row in db.messages(session_id)? {
+        let Message::Assistant(data) = Message::decode(&row.kind, &row.data) else {
+            continue;
+        };
+        let Some(snapshot) = data.snapshot else {
+            continue;
+        };
+        let Some(start) = snapshot.start else {
+            continue;
+        };
+        for file in snapshot.files.into_iter().flatten() {
+            if !first.iter().any(|(f, _)| *f == file) {
+                first.push((file, start.clone()));
+            }
+        }
+    }
+    Ok(first)
+}
+
 fn file_diff(store: &crate::snapshot::Store, from: &str, to: &str, file: &str) -> Option<Value> {
     let before = store.read(from, file);
     let after = store.read(to, file);

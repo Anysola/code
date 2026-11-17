@@ -49,6 +49,25 @@ fn markdown_command_with_arguments_and_shell() {
     assert!(texts[1].contains(&project), "{}", texts[1]);
     assert!(texts[1].contains("be brief"));
     assert!(!texts[1].contains("$ARGUMENTS"));
+    // The typed line stays with the message for front ends to show and restore.
+    let typed: Vec<_> = core
+        .messages(&session.id)
+        .unwrap()
+        .into_iter()
+        .filter_map(|(_, m)| match m {
+            anysola_core::session::message::Message::User(data) => {
+                data.extra.get("command").cloned()
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        typed,
+        [
+            serde_json::json!("/hello hi there"),
+            serde_json::json!("/init be brief")
+        ]
+    );
 }
 
 #[test]
@@ -78,6 +97,7 @@ fn subagent_command_reports_to_the_parent() {
                 text: "start".into(),
                 files: vec![],
                 skills: Vec::new(),
+                command: None,
             },
             TurnOptions::default(),
         ))

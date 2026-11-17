@@ -16,6 +16,7 @@ fn prompt(text: &str) -> Prompt {
         text: text.into(),
         files: vec![],
         skills: Vec::new(),
+        command: None,
     }
 }
 
@@ -85,6 +86,31 @@ fn revert_unrevert_commit() {
         "two\n"
     );
     assert!(db.revert(&session.id).unwrap().is_none());
+
+    // Review: the net change per file, and one file put back on its own.
+    let changes = core.session_changes(&session.id).unwrap().unwrap();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0]["file"], "a.txt");
+    assert_eq!(changes[0]["additions"], 1);
+    assert_eq!(changes[0]["deletions"], 1);
+    // The write's result carries its diff, as edit's does.
+    assert_eq!(
+        edit.data["content"][0]["state"]["metadata"]["files"][0]["file"],
+        "a.txt"
+    );
+    core.restore_file(&session.id, "a.txt").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(project.join("a.txt")).unwrap(),
+        "one\n"
+    );
+    assert!(
+        core.session_changes(&session.id)
+            .unwrap()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(core.restore_file(&session.id, "b.txt").is_err());
+    std::fs::write(project.join("a.txt"), "two\n").unwrap();
 
     core.revert(&session.id, &user).unwrap();
     runtime

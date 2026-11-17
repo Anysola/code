@@ -731,6 +731,7 @@ fn blocks(prompt: &Value) -> Result<Prompt, Failure> {
         text: texts.join("\n"),
         files,
         skills: Vec::new(),
+        command: None,
     })
 }
 

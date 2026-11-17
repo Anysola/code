@@ -96,6 +96,9 @@ pub struct Prompt {
     pub files: Vec<(String, String, String)>,
     /// Skills the user invoked with `@<skill>`; their content goes before the text.
     pub skills: Vec<crate::session::message::InvokedSkill>,
+    /// The `/<name> <arguments>` line a command's text was rendered from, kept with the message
+    /// so a front end can show and restore what the user typed.
+    pub command: Option<String>,
 }
 
 pub(crate) struct Shared {

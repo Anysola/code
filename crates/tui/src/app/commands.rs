@@ -638,6 +638,7 @@ impl App {
             text: text.clone(),
             files: self.state.composer.attachments(),
             skills,
+            command: None,
         };
         self.history.push(Entry {
             text: text.clone(),

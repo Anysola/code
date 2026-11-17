@@ -101,6 +101,7 @@ fn server_through_the_stack() {
         text: "hi".into(),
         files: Vec::new(),
         skills: Vec::new(),
+        command: None,
     };
     let outcome = rt
         .block_on(core.prompt(&session.id, prompt, TurnOptions::default()))

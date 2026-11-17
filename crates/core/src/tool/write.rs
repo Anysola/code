@@ -105,16 +105,24 @@ async fn write(input: &Input, ctx: &ToolContext) -> ToolResult {
     mutation::write_file(&target.absolute, &mutation::join_bom(content, bom))
         .await
         .map_err(|_| failed())?;
-    mutation::format(ctx, &target.absolute, bom).await;
+    let formatted = mutation::format(ctx, &target.absolute, bom).await;
     let verb = if existing_bom.is_some() {
         "Wrote"
     } else {
         "Created"
     };
-    Ok(ToolOutput::text(format!(
-        "{verb} file successfully: {}",
-        target.resource
-    )))
+    // The file as written (after the formatter), for front ends to show, as edit does.
+    let after = formatted.as_deref().unwrap_or(content);
+    let file = FileDiff::new(
+        &target.resource,
+        current.as_deref().unwrap_or(""),
+        after,
+        status,
+    );
+    Ok(
+        ToolOutput::text(format!("{verb} file successfully: {}", target.resource))
+            .with_metadata("files", json!([file.to_value()])),
+    )
 }
 
 /// Whether the file starts with a UTF-8 BOM, or `None` when it does not exist.
