@@ -574,6 +574,7 @@ fn main() {
             account::auth_status,
             account::login_start,
             account::login_wait,
+            account::login_cancel,
             account::account,
             account::logout,
             update::update_check,

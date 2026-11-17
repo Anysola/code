@@ -7,6 +7,7 @@ import {
   dismissNotice,
   newScratchSession,
   newSession,
+  cancelSignIn,
   openLoginPage,
   signIn,
   start,
@@ -88,6 +89,9 @@ function SignIn() {
                 className={btn("ghost", "sm", "text-muted")}
               >
                 {copied ? "Copied" : "Copy link"}
+              </button>
+              <button onClick={cancelSignIn} className={btn("ghost", "sm", "text-muted")}>
+                Cancel
               </button>
             </div>
             {error && <p className="text-dense max-w-sm text-center text-danger">{error}</p>}

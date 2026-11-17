@@ -277,13 +277,20 @@ export async function signIn() {
     const login = await bridge.loginStart()
     set({ login })
     void openLogin(login.url)
-    await bridge.loginWait()
+    const { signedIn } = await bridge.loginWait()
+    // Cancelled, or a newer sign-in took this one's place.
+    if (!signedIn) return
     set({ auth: "signed-in", login: null, loginError: null })
     void loadAccount()
     await loadSessions(true)
   } catch (e) {
     set({ login: null, loginError: message(e) })
   }
+}
+
+export function cancelSignIn() {
+  set({ login: null, loginError: null })
+  void bridge.loginCancel().catch(() => {})
 }
 
 export function openLoginPage() {
@@ -304,7 +311,11 @@ async function loadAccount() {
   try {
     const account = await bridge.account()
     if (account.expired) {
-      set({ auth: "signed-out", account: null, loginError: "Your sign-in expired. Sign in again." })
+      set({
+        auth: "signed-out",
+        account: null,
+        loginError: account.rejected ?? "Your sign-in expired. Sign in again.",
+      })
       return
     }
     set({ account })

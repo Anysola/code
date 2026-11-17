@@ -198,6 +198,7 @@ export function mockBridge(): Bridge {
     }
   }
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  let cancelLogin = () => {}
 
   return {
     async authStatus() {
@@ -207,9 +208,14 @@ export function mockBridge(): Bridge {
       return { url: "https://account.anysola.com/device", code: "QWKD-7RTM" }
     },
     async loginWait() {
-      await wait(1_000_000)
-      signedIn = true
+      await new Promise<void>((done) => {
+        cancelLogin = done
+        setTimeout(done, 1_000_000)
+      })
       return { signedIn }
+    },
+    async loginCancel() {
+      cancelLogin()
     },
     async sessions() {
       return state === "empty" ? [] : rows

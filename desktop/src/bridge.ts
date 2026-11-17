@@ -53,7 +53,7 @@ export type Info = {
 export type Window = { percent: number; resetsAt: string | null }
 
 export type Account =
-  | { expired: true }
+  | { expired: true; rejected?: string | null }
   | { expired: false; plan: string | null; included: boolean; fiveHour: Window | null; weekly: Window | null }
 
 export type Question = {
@@ -170,6 +170,7 @@ export type Bridge = {
   authStatus(): Promise<{ signedIn: boolean }>
   loginStart(): Promise<{ url: string; code: string }>
   loginWait(): Promise<{ signedIn: boolean }>
+  loginCancel(): Promise<void>
   sessions(): Promise<SessionRow[]>
   openSession(directory: string, sessionId: string): Promise<Opened>
   transcript(directory: string, sessionId: string): Promise<View>
@@ -217,6 +218,7 @@ function tauriBridge(): Bridge {
     authStatus: () => invoke("auth_status"),
     loginStart: () => invoke("login_start"),
     loginWait: () => invoke("login_wait"),
+    loginCancel: () => invoke("login_cancel"),
     sessions: () => invoke("sessions"),
     openSession: (directory, sessionId) => invoke("open_session", { directory, sessionId }),
     transcript: (directory, sessionId) => invoke("transcript", { directory, sessionId }),
