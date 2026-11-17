@@ -281,11 +281,12 @@ export function mockBridge(): Bridge {
     async transcript(_directory, sessionId) {
       return view(sessionId)
     },
-    async revert(_directory, sessionId, messageId) {
+    async revert(directory, sessionId, messageId) {
       const items = transcripts.get(sessionId) ?? []
       const text = items.find((i) => i.id === messageId)
       revert = rewound
-      return { text: text?.kind === "user" ? text.text : "", view: view(sessionId) }
+      // Only the web folder is a git repository here (see gitStatus).
+      return { text: text?.kind === "user" ? text.text : "", view: view(sessionId), filesKept: directory !== WEB }
     },
     async unrevert(_directory, sessionId) {
       revert = null

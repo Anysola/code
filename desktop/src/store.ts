@@ -650,9 +650,11 @@ export async function rewind(messageId: string) {
   const sessionId = open.sessionId
   const n = ++reads
   try {
-    const { text, view } = await bridge.revert(open.directory, sessionId, messageId)
+    const { text, view, filesKept } = await bridge.revert(open.directory, sessionId, messageId)
     latest(n)
     setOpen((o) => ({ ...viewPatch(view, o), live: [], status: { kind: "idle" }, fill: { text, n: ++fills } }), sessionId)
+    if (filesKept)
+      set({ notice: "This folder isn’t a git repository, so the files those turns changed stay as they are." })
   } catch (e) {
     set({ notice: message(e) })
   }

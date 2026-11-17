@@ -187,7 +187,12 @@ export type Bridge = {
   replyQuestion(directory: string, requestId: string, answers: string[][] | null): Promise<boolean>
   renameSession(sessionId: string, title: string): Promise<void>
   deleteSession(directory: string, sessionId: string): Promise<boolean>
-  revert(directory: string, sessionId: string, messageId: string): Promise<{ text: string; view: View }>
+  /** `filesKept`: the folder keeps no snapshots (not git), so the turns' edits stay. */
+  revert(
+    directory: string,
+    sessionId: string,
+    messageId: string
+  ): Promise<{ text: string; view: View; filesKept: boolean }>
   unrevert(directory: string, sessionId: string): Promise<View>
   resend(directory: string, sessionId: string, messageId: string, text: string | null, mode: Mode): Promise<{ sessionId: string }>
   palette(directory: string): Promise<Palette>
