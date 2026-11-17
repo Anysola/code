@@ -119,9 +119,6 @@ export type State = {
   scratch: string | null
 }
 
-/** Edits the "Edits" mode lets through without asking. */
-const EDIT_ACTIONS = new Set(["edit", "write", "patch"])
-
 function readMode(): Mode {
   try {
     const m = localStorage.getItem("anysola.mode")
@@ -896,15 +893,10 @@ export function setMode(mode: Mode) {
   }
   set({ mode })
   // The open session's floor follows at once; a running turn picks it up at its next step.
+  // An ask already waiting stays for the user: the floor only adds asks, so it came from a rule.
   const open = state.open
   if (open?.sessionId)
     void bridge.setMode(open.directory, open.sessionId, mode).catch((e) => set({ notice: message(e) }))
-  // Asks already waiting that the new mode lets through.
-  for (const p of state.permissions) if (allowedByMode(p)) void reply(p, "once")
-}
-
-function allowedByMode(p: Permission) {
-  return state.mode === "auto" || (state.mode === "edits" && EDIT_ACTIONS.has(p.action))
 }
 
 export async function reply(p: Permission, answer: PermissionReply) {
@@ -966,11 +958,9 @@ function onEvent(e: CoreEvent) {
         )
       break
     case "permission": {
+      // The mode is the session's floor in the core; an ask that reaches here is one a rule
+      // (`read *.env`, the user's own) wants asked, whatever the mode.
       const p: Permission = { ...e, rootId: e.rootId ?? id, directory: e.directory || directoryOf(id) }
-      if (allowedByMode(p)) {
-        void reply(p, "once")
-        break
-      }
       set((s) => ({ permissions: [...s.permissions.filter((x) => x.requestId !== e.requestId), p] }))
       break
     }

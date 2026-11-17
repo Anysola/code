@@ -46,7 +46,7 @@ import { btn, cn, Popover } from "./ui"
 const modes: { id: Mode | "plan"; label: string; hint: string }[] = [
   { id: "ask", label: "Ask", hint: "Ask before every edit and command" },
   { id: "edits", label: "Edits", hint: "Edit files without asking; ask before commands" },
-  { id: "auto", label: "Auto", hint: "Run everything without asking" },
+  { id: "auto", label: "Auto", hint: "Ask only where your rules say to" },
   { id: "plan", label: "Plan", hint: "Read and plan; change nothing until you approve" },
 ]
 
