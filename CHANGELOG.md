@@ -4,6 +4,38 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.0.7 (2026-11-17)
+
+Settings for Anysola Code Desktop, and a conversation that starts folded.
+
+- Desktop has a Settings screen: the row above your plan, or Ctrl+comma.
+  - Account, Usage and Billing: your plan, the devices signed in to your account (revoke one from here), both usage
+    windows with when they start over, banked resets you can use, and requests per day and per model.
+  - General, Appearance, Conversation, Notifications and Keyboard: the default folder, the mode new sessions start
+    in and the default model; a light theme and one that follows the system, text size, conversation width, wrapped
+    code and reduced motion; which events notify you; the send key (Enter or Ctrl+Enter); every shortcut.
+  - MCP servers: add a remote or local server, switch it off, sign in and out, remove it. Each shows its state, its
+    tools and prompts, its error in full, and the file that defines it. The terminal's `anysola mcp add` is no
+    longer the only way.
+  - Skills, Commands and Instructions: what the agent picks up for the open folder, the file each one came from,
+    and every place that is looked in. A switch turns Claude Code's skill folders off. Your personal instructions
+    (`~/.anysola/AGENTS.md`) are edited here.
+  - Permissions: the answers you saved with "Always allow", per project, with Remove.
+  - Advanced: web search, the task list, subagent depth, automatic summarizing, snapshots and the shell, written
+    to `~/.anysola/config.json` with its comments kept; a setting a project file overrides says so.
+  - Discord: show what you are working on as your Discord status. Off by default; it needs a Discord application
+    ID.
+  - Data and About: where everything is kept, cache sizes with Clear, exporting a session, deleting all sessions,
+    the log file, the version and links.
+- In a desktop conversation, a file change and a command's output are one row that opens on a click; long code
+  blocks and messages are cut with "Show all"; a permission or question card keeps its buttons on screen however
+  long the diff is; Review opens every file only when six or fewer changed. Conversation settings change each of
+  these.
+- Desktop writes to `~/.anysola/log/anysola.log`, as the terminal does.
+- A config file with a comment after its last entry's comma (`"a": 1, // note` before `}`) loads; it was refused
+  as invalid JSON.
+- `anysola mcp add` refuses a command whose program is empty.
+
 ## 1.0.6 (2026-11-17)
 
 The first release of Anysola Code Desktop, and a scan of the paths only a real install runs, Windows above all.
