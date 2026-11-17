@@ -13,7 +13,27 @@ pub fn which_in(command: &str, extra: Option<&Path>) -> Option<PathBuf> {
     let path = env::var_os("PATH").or_else(|| env::var_os("Path"));
     let mut dirs: Vec<PathBuf> = path.iter().flat_map(env::split_paths).collect();
     dirs.extend(extra.map(Path::to_path_buf));
-    let extensions: Vec<String> = if cfg!(windows) {
+    let extensions = extensions(command);
+    dirs.into_iter()
+        .flat_map(|dir| {
+            extensions
+                .iter()
+                .map(move |ext| dir.join(format!("{command}{ext}")))
+        })
+        .find(|candidate| is_executable(candidate))
+}
+
+/// `command` in `dir` only (with PATHEXT on Windows), such as a project's `node_modules/.bin`.
+pub fn in_dir(command: &str, dir: &Path) -> Option<PathBuf> {
+    extensions(command)
+        .iter()
+        .map(|ext| dir.join(format!("{command}{ext}")))
+        .find(|candidate| is_executable(candidate))
+}
+
+/// The suffixes a command name is tried with.
+fn extensions(command: &str) -> Vec<String> {
+    if cfg!(windows) {
         let pathext = env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".into());
         // A bare name is never run as is: npm's bin folder keeps an extensionless sh script beside
         // each `.cmd` shim, and Windows cannot start it.
@@ -29,14 +49,7 @@ pub fn which_in(command: &str, extra: Option<&Path>) -> Option<PathBuf> {
             .collect()
     } else {
         vec![String::new()]
-    };
-    dirs.into_iter()
-        .flat_map(|dir| {
-            extensions
-                .iter()
-                .map(move |ext| dir.join(format!("{command}{ext}")))
-        })
-        .find(|candidate| is_executable(candidate))
+    }
 }
 
 /// The program to start for `name`. On Windows a bare name is looked up with PATHEXT first, so

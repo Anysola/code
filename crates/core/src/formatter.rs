@@ -260,7 +260,7 @@ impl Formatters {
                 "formatting file",
                 &[("file", &file), ("command", &argv.join(" "))],
             );
-            let status = tokio::process::Command::new(&argv[0])
+            let status = tokio::process::Command::new(crate::which::program(&argv[0]))
                 .args(&argv[1..])
                 .current_dir(directory)
                 .envs(formatter.environment.iter().cloned())
@@ -337,12 +337,18 @@ impl Place<'_> {
         which_in(name, Some(self.bin)).map(|p| p.to_string_lossy().into_owned())
     }
 
-    /// The package's bin in the nearest `node_modules/.bin` up the tree.
+    /// The package's bin in the nearest `node_modules/.bin` up the tree; on Windows its `.cmd`
+    /// shim, since the extensionless sh script beside it cannot be started there.
     fn npm_bin(&self, bin: &str) -> Option<String> {
         self.find_up("node_modules/.bin")
             .into_iter()
-            .map(|dir| dir.join(bin))
-            .find(|path| path.exists())
+            .find_map(|dir| {
+                if cfg!(windows) {
+                    crate::which::in_dir(bin, &dir)
+                } else {
+                    Some(dir.join(bin)).filter(|path| path.exists())
+                }
+            })
             .map(|p| p.to_string_lossy().into_owned())
     }
 
@@ -558,6 +564,7 @@ mod tests {
         let sub = project.join("src");
         std::fs::create_dir_all(sub.join("node_modules/.bin")).unwrap();
         std::fs::write(sub.join("node_modules/.bin/prettier"), "").unwrap();
+        std::fs::write(sub.join("node_modules/.bin/prettier.cmd"), "").unwrap();
         let place = Place {
             directory: &sub,
             worktree: project,
@@ -577,14 +584,27 @@ mod tests {
             r#"{"devDependencies": {"prettier": "3"}}"#,
         )
         .unwrap();
+        // Windows starts the `.cmd` shim (PATHEXT spells it `.CMD`), not the sh script.
         let bin = sub
             .join("node_modules/.bin")
-            .join("prettier")
+            .join(if cfg!(windows) {
+                "prettier.cmd"
+            } else {
+                "prettier"
+            })
             .to_string_lossy()
             .into_owned();
-        assert_eq!(
-            runtime.block_on(detect(&prettier, &place)),
-            Some(vec![bin, "--write".into(), "$FILE".into()])
-        );
+        let found = runtime.block_on(detect(&prettier, &place)).map(|mut argv| {
+            if cfg!(windows) {
+                argv[0] = argv[0].to_lowercase();
+            }
+            argv
+        });
+        let bin = if cfg!(windows) {
+            bin.to_lowercase()
+        } else {
+            bin
+        };
+        assert_eq!(found, Some(vec![bin, "--write".into(), "$FILE".into()]));
     }
 }
