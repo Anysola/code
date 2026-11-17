@@ -16,20 +16,28 @@ pub enum Content {
 
 /// Reads the clipboard; `Ok(None)` when it is empty or holds nothing readable.
 pub fn read() -> Result<Option<Content>, String> {
+    // A slow or failed image probe (PowerShell loading WinForms can pass the timeout) must not
+    // hide text on the clipboard; its error counts only when there is no text either.
+    let mut image_error = None;
     for (program, args) in image_tools() {
-        if let Some(bytes) = run(program, args)?
-            && bytes.starts_with(b"\x89PNG")
-        {
-            return Ok(Some(Content::Image(bytes)));
+        match run(program, args) {
+            Ok(Some(bytes)) if bytes.starts_with(b"\x89PNG") => {
+                return Ok(Some(Content::Image(bytes)));
+            }
+            Ok(_) => {}
+            Err(error) => image_error = Some(error),
         }
     }
     for (program, args) in text_tools() {
         if let Some(bytes) = run(program, args)? {
             let text = String::from_utf8_lossy(&bytes).into_owned();
-            return Ok((!text.is_empty()).then_some(Content::Text(text)));
+            if !text.is_empty() {
+                return Ok(Some(Content::Text(text)));
+            }
+            break;
         }
     }
-    Ok(None)
+    image_error.map_or(Ok(None), Err)
 }
 
 type Tool = (&'static str, &'static [&'static str]);

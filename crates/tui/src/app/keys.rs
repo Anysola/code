@@ -623,7 +623,7 @@ impl App {
         );
     }
 
-    /// `ctrl+v` and an empty bracketed paste: the clipboard's image, else its text. The paste
+    /// `ctrl+v` (also `alt+v` on Windows) and an empty bracketed paste: the clipboard's image, else its text. The paste
     /// tools run off the loop (each may take seconds to time out) and the content lands later.
     pub(super) fn paste_clipboard(&mut self) {
         if self.pasting {
