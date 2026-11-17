@@ -66,6 +66,19 @@ pub struct PermissionRequest {
     pub metadata: Value,
 }
 
+/// The metadata key that marks a request for an MCP server's tool (`{"server", "tool"}`): its
+/// action is the tool's own name, so only this tells it apart from the built-in tools'.
+pub const MCP_TOOL_KEY: &str = "mcpTool";
+
+impl PermissionRequest {
+    /// Whether this asks to run an MCP server's tool.
+    pub fn is_mcp_tool(&self) -> bool {
+        self.metadata
+            .get(MCP_TOOL_KEY)
+            .is_some_and(|marker| !marker.is_null())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PermissionError {
     /// A rule or a policy denies the request; a policy says why.

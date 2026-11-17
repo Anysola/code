@@ -3,7 +3,7 @@
 use std::sync::{Arc, Weak};
 
 use anysola_core::codemode::{Called, NamespaceTool, direct_name, sanitize};
-use anysola_core::permission::PermissionRequest;
+use anysola_core::permission::{MCP_TOOL_KEY, PermissionRequest};
 use anysola_core::tool::{ToolContent, ToolContext, ToolError};
 use base64::Engine;
 use futures_util::FutureExt;
@@ -70,7 +70,10 @@ impl NamespaceTool for McpTool {
                 action: direct_name(&sanitize(&self.server), &self.name),
                 resources: vec!["*".into()],
                 save: vec!["*".into()],
-                metadata: json!({"input": input}),
+                metadata: json!({
+                    "input": input,
+                    MCP_TOOL_KEY: {"server": self.server, "tool": self.name},
+                }),
             })
             .await?;
             let Some(runtime) = self.runtime.upgrade() else {

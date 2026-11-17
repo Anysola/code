@@ -5,7 +5,7 @@
 //!
 //! A session can also carry a [`Floor`]: what its front end wants asked even where the rules
 //! allow it (the desktop app's Ask and Edits modes). It never lifts a denial, and a saved
-//! "always" rule still answers for it.
+//! "always" rule still answers for it. A subagent's session works under its root session's floor.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -35,9 +35,10 @@ pub enum Floor {
     /// The rules alone decide.
     #[default]
     None,
-    /// Commands and work outside the project.
+    /// Commands, MCP server tools and work outside the project.
     Commands,
-    /// Everything that changes files, runs or fetches; reading and searching never ask.
+    /// Everything that changes files, runs or fetches, MCP server tools included; reading and
+    /// searching never ask.
     Changes,
 }
 
@@ -61,24 +62,51 @@ impl Floor {
         }
     }
 
-    /// The session's floor as its metadata stores it.
+    /// The floor a session works under: its root session's, as that one's metadata stores it.
+    /// Front ends set the floor on the session the user drives; subagents' sessions under it
+    /// carry none of their own.
     pub fn of(db: &Db, session_id: &str) -> Floor {
-        db.session_metadata(session_id)
+        db.session_metadata(&root(db, session_id))
             .ok()
             .and_then(|m| m.get(FLOOR_KEY).and_then(|v| v.as_str()).map(Floor::parse))
             .unwrap_or_default()
     }
 
-    fn asks(self, action: &str) -> bool {
+    /// Whether the floor asks about `action`; `mcp_tool` marks a call of an MCP server's tool
+    /// (see [`PermissionRequest::is_mcp_tool`]), which runs code outside Anysola like a command.
+    fn asks(self, action: &str, mcp_tool: bool) -> bool {
         match self {
             Floor::None => false,
-            Floor::Commands => matches!(action, "shell" | "external_directory"),
-            Floor::Changes => matches!(
-                action,
-                "shell" | "external_directory" | "edit" | "write" | "webfetch"
-            ),
+            Floor::Commands => mcp_tool || matches!(action, "shell" | "external_directory"),
+            Floor::Changes => {
+                mcp_tool
+                    || matches!(
+                        action,
+                        "shell" | "external_directory" | "edit" | "write" | "webfetch"
+                    )
+            }
         }
     }
+}
+
+/// The topmost session above `session_id` along `parent_id`; a missing parent or a cycle ends
+/// the walk at the last session found.
+fn root(db: &Db, session_id: &str) -> String {
+    let mut current = session_id.to_string();
+    let mut seen = std::collections::HashSet::new();
+    seen.insert(current.clone());
+    while let Some(parent) = db
+        .session(&current)
+        .ok()
+        .flatten()
+        .and_then(|row| row.parent_id)
+    {
+        if !seen.insert(parent.clone()) || !matches!(db.session(&parent), Ok(Some(_))) {
+            break;
+        }
+        current = parent;
+    }
+    current
 }
 
 /// What a session's requests are evaluated against.
@@ -108,7 +136,7 @@ struct Decision {
 }
 
 impl Scope {
-    fn decide(&self, db: &Db, action: &str, resources: &[String]) -> Decision {
+    fn decide(&self, db: &Db, action: &str, resources: &[String], mcp_tool: bool) -> Decision {
         let denied = resources
             .iter()
             .any(|r| evaluate(action, r, &self.configured) == Effect::Deny);
@@ -123,7 +151,8 @@ impl Scope {
         rules.extend(saved.iter().cloned());
         let ask = resources.iter().any(|r| {
             evaluate(action, r, &rules) == Effect::Ask
-                || (self.floor.asks(action) && matched(action, r, &saved) != Some(Effect::Allow))
+                || (self.floor.asks(action, mcp_tool)
+                    && matched(action, r, &saved) != Some(Effect::Allow))
         });
         if let Some(reason) = self.policies.tool_denial(action, resources) {
             return Decision {
@@ -143,6 +172,7 @@ struct Pending {
     session_id: String,
     action: String,
     resources: Vec<String>,
+    mcp_tool: bool,
     save: Vec<String>,
     scope: Arc<Scope>,
     answer: oneshot::Sender<Result<(), PermissionError>>,
@@ -229,7 +259,10 @@ impl Asks {
                     return true;
                 }
                 let (allowed, rest): (Vec<_>, Vec<_>) = pending.drain(..).partition(|p| {
-                    p.scope.decide(&self.db, &p.action, &p.resources).effect == Effect::Allow
+                    p.scope
+                        .decide(&self.db, &p.action, &p.resources, p.mcp_tool)
+                        .effect
+                        == Effect::Allow
                 });
                 *pending = rest;
                 for item in allowed {
@@ -289,9 +322,10 @@ impl PermissionGate for RuleGate {
             if self.asks.closed() {
                 return Err(PermissionError::Declined);
             }
-            let decision = self
-                .scope
-                .decide(&self.asks.db, &request.action, &request.resources);
+            let mcp_tool = request.is_mcp_tool();
+            let decision =
+                self.scope
+                    .decide(&self.asks.db, &request.action, &request.resources, mcp_tool);
             match decision.effect {
                 Effect::Allow => return Ok(()),
                 Effect::Deny => {
@@ -313,6 +347,7 @@ impl PermissionGate for RuleGate {
                     session_id: self.session_id.clone(),
                     action: request.action.clone(),
                     resources: request.resources.clone(),
+                    mcp_tool,
                     save: request.save.clone(),
                     scope: self.scope.clone(),
                     answer,
@@ -334,13 +369,21 @@ impl PermissionGate for RuleGate {
         .boxed()
     }
 
+    /// Without a request to carry the marker, an MCP tool's action is judged like any other.
     fn allows(&self, action: &str, resources: &[String]) -> bool {
         !self.asks.closed()
-            && self.scope.decide(&self.asks.db, action, resources).effect == Effect::Allow
+            && self
+                .scope
+                .decide(&self.asks.db, action, resources, false)
+                .effect
+                == Effect::Allow
     }
 
     fn denies(&self, action: &str, resources: &[String]) -> bool {
-        self.scope.decide(&self.asks.db, action, resources).effect == Effect::Deny
+        self.scope
+            .decide(&self.asks.db, action, resources, false)
+            .effect
+            == Effect::Deny
     }
 }
 
@@ -412,7 +455,9 @@ mod tests {
             floor,
         };
         let effect = |scope: &Scope, action: &str, resource: &str| {
-            scope.decide(db, action, &[resource.to_string()]).effect
+            scope
+                .decide(db, action, &[resource.to_string()], false)
+                .effect
         };
         let none = scope(Floor::None);
         assert_eq!(effect(&none, "shell", "ls"), Effect::Allow);
@@ -443,6 +488,121 @@ mod tests {
         assert_eq!(Floor::parse("anything else"), Floor::None);
         let setup = setup();
         assert_eq!(Floor::of(&setup.asks.db, "ses_missing"), Floor::None);
+    }
+
+    fn create(db: &Db, id: &str, parent: Option<&str>) {
+        db.create_session(&crate::storage::SessionRow {
+            id: id.into(),
+            project_id: "global".into(),
+            parent_id: parent.map(str::to_string),
+            fork_session_id: None,
+            fork_boundary: None,
+            slug: "s".into(),
+            directory: "/".into(),
+            title: "t".into(),
+            version: "v".into(),
+            agent: None,
+            model: None,
+            time_created: 1,
+            time_updated: 1,
+        })
+        .unwrap();
+    }
+
+    fn set_floor(db: &Db, id: &str, floor: Floor) {
+        let mut metadata = db.session_metadata(id).unwrap();
+        metadata.insert(FLOOR_KEY.into(), json!(floor.as_str()));
+        db.set_session_access(id, &[], &metadata).unwrap();
+    }
+
+    #[test]
+    fn subagents_work_under_the_root_sessions_floor() {
+        let setup = setup();
+        let db = &setup.asks.db;
+        create(db, "ses_root", None);
+        create(db, "ses_child", Some("ses_root"));
+        create(db, "ses_grandchild", Some("ses_child"));
+        create(db, "ses_orphan", Some("ses_gone"));
+        assert_eq!(Floor::of(db, "ses_grandchild"), Floor::None);
+        set_floor(db, "ses_root", Floor::Changes);
+        assert_eq!(Floor::of(db, "ses_root"), Floor::Changes);
+        assert_eq!(Floor::of(db, "ses_child"), Floor::Changes);
+        assert_eq!(Floor::of(db, "ses_grandchild"), Floor::Changes);
+        // A missing parent ends the walk at the last session found.
+        set_floor(db, "ses_orphan", Floor::Commands);
+        assert_eq!(Floor::of(db, "ses_orphan"), Floor::Commands);
+        // A cycle ends too.
+        create(db, "ses_a", Some("ses_b"));
+        create(db, "ses_b", Some("ses_a"));
+        assert_eq!(Floor::of(db, "ses_a"), Floor::None);
+    }
+
+    #[tokio::test]
+    async fn a_floor_asks_for_mcp_tools_but_not_for_built_in_reads() {
+        let mut setup = setup();
+        let rules = vec![
+            Rule::new("*", "*", Effect::Allow),
+            Rule::new("blocked_tool", "*", Effect::Deny),
+        ];
+        let mcp = |action: &str| PermissionRequest {
+            action: action.into(),
+            resources: vec!["*".into()],
+            save: vec!["*".into()],
+            metadata: json!({"input": {}, crate::permission::MCP_TOOL_KEY: {"server": "github", "tool": "x"}}),
+        };
+        for floor in [Floor::Commands, Floor::Changes] {
+            let gate = Arc::new(RuleGate {
+                session_id: "s1".into(),
+                scope: Arc::new(Scope {
+                    configured: rules.clone(),
+                    // Each floor saves its "always" answer for a project of its own.
+                    project_id: format!("prj_{}", floor.as_str()),
+                    policies: Arc::new(Policies::default()),
+                    floor,
+                }),
+                asks: setup.asks.clone(),
+            });
+            // The actions the built-in tools ask for that no floor asks about.
+            for action in [
+                "read",
+                "glob",
+                "grep",
+                "question",
+                "skill",
+                "todowrite",
+                "websearch",
+                "subagent",
+                "execute",
+                "opencode_list_mcp_resources",
+                "opencode_read_mcp_resource",
+            ] {
+                assert!(
+                    gate.ask(request(action, &["x"], &[])).await.is_ok(),
+                    "{action}"
+                );
+            }
+            // The same name without the marker is not an MCP tool.
+            assert!(gate.ask(request("github_x", &["*"], &[])).await.is_ok());
+            // A configured deny still denies.
+            assert_eq!(
+                gate.ask(mcp("blocked_tool")).await,
+                Err(PermissionError::Blocked {
+                    action: "blocked_tool".into(),
+                    reason: None
+                })
+            );
+            let asking = tokio::spawn({
+                let gate = gate.clone();
+                async move { gate.ask(mcp("github_x")).await }
+            });
+            let id = asked(&mut setup.events).await;
+            // "Always" saves the answer, and the floor then lets it through.
+            assert!(setup.asks.reply(&id, Reply::Always));
+            assert!(asking.await.unwrap().is_ok());
+            assert!(gate.ask(mcp("github_x")).await.is_ok());
+        }
+        let none = gate(&setup, "s1", rules, Policies::default());
+        assert!(none.ask(mcp("github_y")).await.is_ok());
     }
 
     #[tokio::test]
