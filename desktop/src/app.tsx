@@ -89,6 +89,7 @@ function SignIn() {
   const login = useStore((s) => s.login)
   const error = useStore((s) => s.loginError)
   const [starting, setStarting] = useState(false)
+  const [copied, setCopied] = useState(false)
   return (
     <div className="flex h-full flex-col bg-background">
       <TitleBar controls />
@@ -105,9 +106,24 @@ function SignIn() {
               <Spinner />
               Waiting for approval in your browser
             </div>
-            <button onClick={openLoginPage} className={btn("ghost", "sm", "text-muted")}>
-              Open the page again
-            </button>
+            <span className="text-dense font-mono text-muted select-all">{login.url.replace(/^https?:\/\//, "")}</span>
+            <div className="flex items-center gap-1">
+              <button onClick={openLoginPage} className={btn("ghost", "sm", "text-muted")}>
+                Open the page again
+              </button>
+              <button
+                onClick={() => {
+                  void navigator.clipboard.writeText(login.url).then(() => {
+                    setCopied(true)
+                    setTimeout(() => setCopied(false), 1500)
+                  })
+                }}
+                className={btn("ghost", "sm", "text-muted")}
+              >
+                {copied ? "Copied" : "Copy link"}
+              </button>
+            </div>
+            {error && <p className="text-dense max-w-sm text-center text-danger">{error}</p>}
           </div>
         ) : (
           <div className="flex flex-col items-center gap-4">

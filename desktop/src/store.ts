@@ -192,7 +192,10 @@ export async function installUpdate() {
   const update = state.update
   if (!update?.available) return
   if (update.manual) {
-    void bridge.openUrl(update.manual)
+    const page = update.manual
+    void bridge.openUrl(page).catch(() => {
+      if (state.update) set({ update: { ...state.update, error: `Your browser didn’t open. The download is at ${page}` } })
+    })
     return
   }
   set({ update: { ...update, installing: true, error: undefined } })
@@ -233,9 +236,9 @@ export async function signIn() {
   try {
     const login = await bridge.loginStart()
     set({ login })
-    void bridge.openUrl(login.url)
+    void openLogin(login.url)
     await bridge.loginWait()
-    set({ auth: "signed-in", login: null })
+    set({ auth: "signed-in", login: null, loginError: null })
     void loadAccount()
     await loadSessions(true)
   } catch (e) {
@@ -244,7 +247,17 @@ export async function signIn() {
 }
 
 export function openLoginPage() {
-  if (state.login) void bridge.openUrl(state.login.url)
+  if (state.login) void openLogin(state.login.url)
+}
+
+/** Opens the sign-in page. A browser that won't open says so: the address stays on screen to copy. */
+async function openLogin(url: string) {
+  try {
+    await bridge.openUrl(url)
+    if (state.login) set({ loginError: null })
+  } catch {
+    if (state.login) set({ loginError: "Your browser didn’t open. Copy the link and open it there." })
+  }
 }
 
 async function loadAccount() {
