@@ -819,9 +819,9 @@ impl App {
             return;
         }
         term::restore();
-        let mut parts = program.split_whitespace();
+        let mut parts = editor_argv(&program, |p| std::path::Path::new(p).is_file()).into_iter();
         let status = std::process::Command::new(anysola_core::which::program(
-            parts.next().unwrap_or_default(),
+            &parts.next().unwrap_or_default(),
         ))
         .args(parts)
         .arg(&file)
@@ -891,4 +891,67 @@ fn user_count(items: &[Item]) -> usize {
         .iter()
         .filter(|i| matches!(i, Item::User { .. }))
         .count()
+}
+
+/// `$VISUAL`/`$EDITOR` as program and arguments. A value naming an existing file is the program
+/// as is (`C:\Program Files\…\code.exe`); otherwise words split on whitespace, with single or
+/// double quotes grouping. Backslashes are kept: they are Windows path separators.
+fn editor_argv(value: &str, is_file: impl Fn(&str) -> bool) -> Vec<String> {
+    let value = value.trim();
+    if is_file(value) {
+        return vec![value.to_string()];
+    }
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut started = false;
+    let mut quote = None;
+    for c in value.chars() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), c) => word.push(c),
+            (None, '"' | '\'') => {
+                quote = Some(c);
+                started = true;
+            }
+            (None, c) if c.is_whitespace() => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            (None, c) => {
+                word.push(c);
+                started = true;
+            }
+        }
+    }
+    if started {
+        words.push(word);
+    }
+    words
+}
+
+#[cfg(test)]
+mod tests {
+    use super::editor_argv;
+
+    #[test]
+    fn editor_values_with_spaces() {
+        let none = |_: &str| false;
+        assert_eq!(editor_argv("code --wait", none), ["code", "--wait"]);
+        assert_eq!(
+            editor_argv(
+                r#""C:\Program Files\Microsoft VS Code\bin\code.cmd" --wait"#,
+                none
+            ),
+            [r"C:\Program Files\Microsoft VS Code\bin\code.cmd", "--wait"]
+        );
+        assert_eq!(
+            editor_argv("'/opt/my editor/ed' -n", none),
+            ["/opt/my editor/ed", "-n"]
+        );
+        let path = r"C:\Program Files\Notepad++\notepad++.exe";
+        assert_eq!(editor_argv(path, |p| p == path), [path]);
+        assert_eq!(editor_argv(&format!(" {path} "), |p| p == path), [path]);
+    }
 }
