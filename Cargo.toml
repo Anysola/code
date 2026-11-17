@@ -33,7 +33,7 @@ libc = "0.2"
 notify = "8.2"
 rand = "0.8"
 regex = "1.13"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "stream", "http2"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "stream", "http2", "system-proxy"] }
 rquickjs = { version = "0.14", default-features = false, features = ["futures", "std"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
