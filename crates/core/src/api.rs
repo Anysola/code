@@ -61,6 +61,9 @@ pub enum CoreError {
     Image(String),
     #[error("{0}")]
     InstructionEntry(String),
+    /// No models at all: not signed in, or the gateway refused the token or did not answer.
+    #[error("{0}")]
+    NoModels(String),
 }
 
 /// Which session a front end works on.
@@ -648,7 +651,10 @@ impl Core {
     /// Selects the model (and variant) for the session's next turns. A change is recorded as a
     /// `model-switched` message, which becomes an effort marker when only the effort changed.
     pub fn select_model(&self, session_id: &str, model: &ModelRef) -> Result<(), CoreError> {
-        crate::model::resolve(&self.shared.loaded().models, model)?;
+        if let Err(error) = crate::model::resolve(&self.shared.loaded().models, model) {
+            return Err(crate::session::no_models(&self.shared)
+                .map_or(CoreError::Model(error), CoreError::NoModels));
+        }
         let db = &self.shared.db;
         let session = db.session(session_id)?.ok_or(CoreError::SessionNotFound)?;
         let previous = session.model.as_ref().and_then(ModelRef::from_json);

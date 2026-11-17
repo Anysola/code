@@ -394,6 +394,41 @@ fn response(messages: &[Value]) -> Value {
 }
 
 #[test]
+fn prompts_without_models_say_why() {
+    let gateway = gateway();
+    let mut home = TestHome::new(&gateway.url);
+    home.set_env("ANYSOLA_API_URL", "http://127.0.0.1:9");
+    let cwd = common::my_app(&home);
+    let path = cwd.display().to_string();
+    let cases = [
+        (
+            true,
+            json!({"code": -32603, "message": "Internal error: Cannot reach http://127.0.0.1:9", "data": {"service": "session", "errorName": "provider.no-route"}}),
+        ),
+        (
+            false,
+            json!({"code": -32000, "message": "Authentication required: Not signed in. Run `anysola login` or set ANYSOLA_TOKEN.", "data": {}}),
+        ),
+    ];
+    for (token, error) in cases {
+        if !token {
+            home.remove_env("ANYSOLA_TOKEN");
+        }
+        let mut client = Client::start(&home, &cwd);
+        let mut none = Vec::new();
+        client.call(
+            &request(1, "initialize", json!({"protocolVersion": 1})),
+            &mut none,
+        );
+        let created = client.call(&request(2, "session/new", json!({"cwd": path})), &mut none);
+        let session = response(&created)["result"]["sessionId"].clone();
+        let prompt = json!({"sessionId": session, "prompt": [{"type": "text", "text": "hi"}]});
+        let answer = response(&client.call(&request(3, "session/prompt", prompt), &mut none));
+        assert_eq!(answer["error"], error, "{answer}");
+    }
+}
+
+#[test]
 fn scripted_client() {
     let gateway = gateway();
     let home = TestHome::new(&gateway.url);
