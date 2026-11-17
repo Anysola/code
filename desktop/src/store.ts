@@ -1028,7 +1028,10 @@ function onEvent(e: CoreEvent) {
     return
   }
   if (e.type === "lagged") {
-    if (state.open?.sessionId && state.open.directory === e.directory) void refresh(state.open.sessionId)
+    // Lost events may have started or ended turns: read busy and status back, not only the text.
+    const open = state.open
+    if (open?.sessionId && open.directory === e.directory) void reconcile(open.directory, open.sessionId)
+    void loadSessions().catch(() => {})
     return
   }
   const id = e.sessionId
