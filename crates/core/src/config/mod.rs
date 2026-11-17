@@ -793,7 +793,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(
-            project.join(".opencode/opencode.json"),
+            project.join(".opencode").join("opencode.json"),
             r#"{"agents":{"build":{"steps":3}}}"#,
         )
         .unwrap();
@@ -814,7 +814,8 @@ mod tests {
                 commands: Map::new(),
                 source: Some(
                     project
-                        .join(".opencode/opencode.json")
+                        .join(".opencode")
+                        .join("opencode.json")
                         .display()
                         .to_string()
                 ),
@@ -841,11 +842,11 @@ mod tests {
         assert_eq!(config.shell(), Some("bash"));
         assert_eq!(config.instructions, vec!["old.md"]);
         write(
-            project.join(".opencode/opencode.json"),
+            project.join(".opencode").join("opencode.json"),
             r#"{"agents":{"build":{"steps":3}}}"#,
         );
         write(
-            project.join(".anysola/anysola.json"),
+            project.join(".anysola").join("anysola.json"),
             r#"{"agents":{"build":{"steps":5}}}"#,
         );
         let config = load(&paths, &project, &LoadOptions::default());
@@ -866,7 +867,13 @@ mod tests {
             Some(&Entry::Document {
                 agents: json!({"build": {"steps": 5}}).as_object().unwrap().clone(),
                 commands: Map::new(),
-                source: Some(project.join(".anysola/anysola.json").display().to_string()),
+                source: Some(
+                    project
+                        .join(".anysola")
+                        .join("anysola.json")
+                        .display()
+                        .to_string()
+                ),
             })
         );
     }
@@ -943,7 +950,11 @@ mod tests {
         std::os::unix::fs::symlink(&real, home.join(".config/opencode")).unwrap();
         std::fs::write(real.join("opencode.json"), r#"{"shell":"zsh"}"#).unwrap();
         std::fs::create_dir_all(real.join(".opencode")).unwrap();
-        std::fs::write(real.join(".opencode/opencode.json"), r#"{"shell":"fish"}"#).unwrap();
+        std::fs::write(
+            real.join(".opencode").join("opencode.json"),
+            r#"{"shell":"fish"}"#,
+        )
+        .unwrap();
         let paths = Paths::isolated(home.clone());
         let config = load(&paths, &real, &LoadOptions::default());
         assert_eq!(config.shell(), Some("zsh"));

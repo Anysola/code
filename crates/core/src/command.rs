@@ -416,7 +416,14 @@ mod tests {
             Some("anysola/claude-haiku-5-5#high")
         );
         assert!(commit.subagent);
-        assert_eq!(commit.source, Some(command.display().to_string()));
+        // The loader joins the folders it walks: the platform's separator, not the `/` above.
+        let walked = dir
+            .path()
+            .join(".opencode")
+            .join("command")
+            .join("git")
+            .join("commit.md");
+        assert_eq!(commit.source, Some(walked.display().to_string()));
         assert_eq!(
             commands.get("init").unwrap().source.as_deref(),
             Some("/p/anysola.json")

@@ -370,7 +370,7 @@ mod tests {
             std::fs::write(path, text).unwrap();
         };
         write(
-            project.join("agent/team/reviewer.md"),
+            project.join("agent").join("team").join("reviewer.md"),
             "---\ndescription: Reviews: carefully\nmode: subagent\nmodel: anysola/claude-haiku-5-5\nvariant: high\n---\nReview the diff.\n",
         );
         write(
@@ -444,7 +444,14 @@ mod tests {
         assert_eq!(all.get("focus").unwrap().mode, Mode::Primary);
         assert_eq!(
             reviewer.source,
-            Some(project.join("agent/team/reviewer.md").display().to_string())
+            Some(
+                project
+                    .join("agent")
+                    .join("team")
+                    .join("reviewer.md")
+                    .display()
+                    .to_string()
+            )
         );
         assert_eq!(all.get("build").unwrap().source, None);
         assert!(all.get("nested/skip").is_none());
