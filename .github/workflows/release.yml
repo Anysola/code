@@ -58,7 +58,9 @@ jobs:
         include:
           - { build: linux-x64, os: ubuntu-24.04, target: x86_64-unknown-linux-musl }
           - { build: linux-arm64, os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
-          - { build: darwin-arm64, os: macos-15, target: aarch64-apple-darwin }
+          # Built on the Intel runner: the arm64 macOS runners are short of capacity and a job that
+          # gets none in 15 minutes is cancelled, which held a release up for hours (2026-11-17).
+          - { build: darwin-arm64, os: macos-15-intel, target: aarch64-apple-darwin, cross: true }
           - { build: darwin-x64, os: macos-15-intel, target: x86_64-apple-darwin }
           - { build: windows-x64, os: windows-2025, target: x86_64-pc-windows-msvc }
           - { build: windows-arm64, os: windows-11-arm, target: aarch64-pc-windows-msvc }
@@ -104,7 +106,13 @@ jobs:
         if: runner.os == 'macOS'
         run: codesign --force --sign - "$BIN"
 
+      - name: Architecture (cross-built)
+        # The runner cannot start this binary; its architecture is what can be checked here.
+        if: matrix.cross
+        run: lipo -archs "$BIN" | tee /dev/stderr | grep -qx arm64
+
       - name: Smoke test
+        if: ${{ !matrix.cross }}
         run: |
           set -euo pipefail
           out="$("$BIN" --version | tr -d '\r')"
