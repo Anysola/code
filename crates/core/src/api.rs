@@ -679,7 +679,8 @@ impl Core {
     }
 
     /// Admits the prompt and runs the session until its inbox is empty. Fails fast when another
-    /// process drives the session.
+    /// process drives the session. When a turn of this process already drives it, the prompt is
+    /// queued for that turn and this returns `Succeeded` at once.
     pub async fn prompt(
         &self,
         session_id: &str,
@@ -885,11 +886,15 @@ pub(crate) async fn prompt_session(
         .db
         .session(session_id)?
         .ok_or(CoreError::SessionNotFound)?;
-    revert::commit(shared, session_id)?;
     let prompt = normalize(shared, prompt)?;
     // The session is taken before the prompt is admitted: enqueued first, a prompt refused
-    // with `Busy` would still go out later from the process that drives the session.
-    let held = Held::acquire(shared, session_id, cancel)?;
+    // with `Busy` would still go out later from the process that drives the session. When a
+    // turn of this process already drives it, the prompt is queued for that turn instead, as
+    // `Core::enqueue` would have done.
+    let Some(held) = Held::acquire(shared, session_id, cancel, Some(&prompt))? else {
+        return Ok(Outcome::Succeeded);
+    };
+    revert::commit(shared, session_id)?;
     crate::session::inbox::enqueue(&shared.db, session_id, &prompt, Delivery::Steer)?;
     Ok(held.drain(options).await)
 }
@@ -897,28 +902,40 @@ pub(crate) async fn prompt_session(
 /// A session marked busy for this process: the heartbeat task, the cancel token registered for
 /// [`Core::interrupt`] and the marker itself are released on drop, so a turn that unwinds or is
 /// dropped cannot leave the session busy for the rest of the process's life.
+///
+/// One turn at a time drives a session in this process: taking and releasing it happen under
+/// the `turns` lock, and so does queueing a prompt for the turn that holds it, so a prompt is
+/// either seen by that turn's last look at the inbox or finds the session free.
 struct Held<'a> {
     shared: &'a Arc<Shared>,
     session_id: String,
     cancel: CancellationToken,
     heartbeat: tokio::task::JoinHandle<()>,
+    released: bool,
     _tracked: crate::teardown::Tracked,
 }
 
 impl<'a> Held<'a> {
+    /// Takes the session for this process; `None` when a turn of this process already holds it,
+    /// after queueing `queue` for that turn.
     fn acquire(
         shared: &'a Arc<Shared>,
         session_id: &str,
         cancel: CancellationToken,
-    ) -> Result<Self, CoreError> {
+        queue: Option<&Prompt>,
+    ) -> Result<Option<Self>, CoreError> {
+        let mut turns = shared.turns.lock().unwrap_or_else(|e| e.into_inner());
+        if turns.contains_key(session_id) {
+            if let Some(prompt) = queue {
+                crate::session::inbox::enqueue(&shared.db, session_id, prompt, Delivery::Queue)?;
+            }
+            return Ok(None);
+        }
         if !shared.db.acquire(session_id, &shared.owner)? {
             return Err(CoreError::Busy(session_id.to_string()));
         }
-        shared
-            .turns
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(session_id.to_string(), cancel.clone());
+        turns.insert(session_id.to_string(), cancel.clone());
+        drop(turns);
         let heartbeat = {
             let db = shared.db.clone();
             let (id, owner) = (session_id.to_string(), shared.owner.clone());
@@ -929,35 +946,61 @@ impl<'a> Held<'a> {
                 }
             })
         };
-        Ok(Held {
+        Ok(Some(Held {
             shared,
             session_id: session_id.to_string(),
             cancel,
             heartbeat,
+            released: false,
             _tracked: crate::teardown::track(format!("session {session_id} running")),
-        })
+        }))
     }
 
-    async fn drain(self, options: TurnOptions) -> Outcome {
-        crate::session::drain(
-            self.shared.clone(),
-            &self.session_id,
-            options,
-            self.cancel.clone(),
-        )
-        .await
+    /// Runs the session until its inbox is empty. Input queued while the last turn was ending
+    /// is run too; once the session is released, the next prompt starts a turn of its own. A
+    /// turn that fails or is interrupted leaves what is queued for the user to send.
+    async fn drain(mut self, options: TurnOptions) -> Outcome {
+        loop {
+            let outcome = crate::session::drain(
+                self.shared.clone(),
+                &self.session_id,
+                options,
+                self.cancel.clone(),
+            )
+            .await;
+            if outcome != Outcome::Succeeded {
+                return outcome;
+            }
+            let shared = self.shared;
+            let mut turns = shared.turns.lock().unwrap_or_else(|e| e.into_inner());
+            let next = crate::session::inbox::next(
+                &shared.db,
+                &self.session_id,
+                crate::session::inbox::Scope::Input,
+            );
+            if !matches!(next, Ok(Some(_))) {
+                self.release(&mut turns);
+                return outcome;
+            }
+        }
+    }
+
+    fn release(&mut self, turns: &mut std::collections::HashMap<String, CancellationToken>) {
+        self.heartbeat.abort();
+        turns.remove(&self.session_id);
+        let _ = self.shared.db.release(&self.session_id, &self.shared.owner);
+        self.released = true;
     }
 }
 
 impl Drop for Held<'_> {
     fn drop(&mut self) {
         self.heartbeat.abort();
-        self.shared
-            .turns
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&self.session_id);
-        let _ = self.shared.db.release(&self.session_id, &self.shared.owner);
+        if !self.released {
+            let shared = self.shared;
+            let mut turns = shared.turns.lock().unwrap_or_else(|e| e.into_inner());
+            self.release(&mut turns);
+        }
     }
 }
 
@@ -969,6 +1012,9 @@ async fn drain_session(
     options: TurnOptions,
     cancel: CancellationToken,
 ) -> Result<Outcome, CoreError> {
-    let held = Held::acquire(shared, session_id, cancel)?;
-    Ok(held.drain(options).await)
+    match Held::acquire(shared, session_id, cancel, None)? {
+        Some(held) => Ok(held.drain(options).await),
+        // The turn that holds the session takes its inbox.
+        None => Ok(Outcome::Succeeded),
+    }
 }
