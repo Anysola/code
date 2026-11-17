@@ -256,6 +256,7 @@ function Peeking({ peek }: { peek: Peek }) {
   const panel = useRef<HTMLDivElement>(null)
   useEscape(panel, closePeek)
   const view: Open = {
+    key: "peek",
     directory: peek.directory,
     sessionId: peek.sessionId,
     title: peek.title,

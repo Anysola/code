@@ -58,6 +58,8 @@ export type Status =
   | { kind: "stopped"; reason: "user" | "budget" | "declined" }
 
 export type Open = {
+  /** This view of the folder or session: a new session's requests answer to it alone. */
+  key: string
   directory: string
   /** Null until the first prompt of a new session creates it. */
   sessionId: string | null
@@ -183,10 +185,12 @@ function set(patch: Partial<State> | ((s: State) => Partial<State>)) {
   listeners.forEach((l) => l())
 }
 
-function setOpen(patch: Partial<Open> | ((o: Open) => Partial<Open>), sessionId?: string | null) {
+/** Updates the open view; with a target, only while that session (or that view) is open. */
+function setOpen(patch: Partial<Open> | ((o: Open) => Partial<Open>), target?: string | { key: string }) {
   set((s) => {
     if (!s.open) return {}
-    if (sessionId !== undefined && s.open.sessionId !== sessionId) return {}
+    if (typeof target === "string" && s.open.sessionId !== target) return {}
+    if (typeof target === "object" && s.open.key !== target.key) return {}
     return { open: { ...s.open, ...(typeof patch === "function" ? patch(s.open) : patch) } }
   })
 }
@@ -202,6 +206,21 @@ export function useStore<T>(select: (s: State) => T): T {
 }
 
 let bridge: Bridge
+
+let views = 0
+
+/** Where an answer for this view goes: its session wherever it is shown, a new one's own view. */
+function whose(open: Open): string | { key: string } {
+  return open.sessionId ?? { key: open.key }
+}
+
+/** A request's failure: on its own view while shown, else in the notice, never on another. */
+function failed(target: string | { key: string }, e: unknown) {
+  const o = state.open
+  const shown = o && (typeof target === "string" ? o.sessionId === target : o.key === target.key)
+  if (shown) setOpen({ status: { kind: "failed", error: message(e) } }, target)
+  else set({ notice: message(e) })
+}
 
 function message(e: unknown): string {
   return typeof e === "string" ? e : e instanceof Error ? e.message : "That didn’t work."
@@ -349,6 +368,7 @@ export async function openSession(row: SessionRow) {
   set({
     comments: [],
     open: {
+      key: `v${++views}`,
       directory: row.directory,
       sessionId: row.id,
       title: row.title,
@@ -390,9 +410,11 @@ export async function newSession(directory?: string) {
   if (!directory) directory = state.defaultFolder ?? (await pickFolder()) ?? undefined
   if (!directory) return
   void refreshGit(directory)
+  const view = { key: `v${++views}` }
   set({
     comments: [],
     open: {
+      ...view,
       directory,
       sessionId: null,
       title: "New session",
@@ -409,9 +431,9 @@ export async function newSession(directory?: string) {
   })
   try {
     const info = await bridge.folderInfo(directory)
-    setOpen({ info }, null)
+    setOpen({ info }, view)
   } catch (e) {
-    setOpen({ status: { kind: "failed", error: message(e) } }, null)
+    setOpen({ status: { kind: "failed", error: message(e) } }, view)
   }
 }
 
@@ -493,6 +515,7 @@ export async function send(text: string, files: Attachment[] = [], skills: strin
   set({ comments: [] })
   // The prompt makes a staged rewind final.
   setOpen({ status: { kind: "working" }, revert: null })
+  let target = whose(open)
   try {
     const draft = !open.sessionId
     const { sessionId } = await bridge.prompt(open.directory, {
@@ -506,14 +529,15 @@ export async function send(text: string, files: Attachment[] = [], skills: strin
       files,
       skills,
     })
-    if (!open.sessionId) {
-      setOpen({ sessionId }, null)
+    if (draft) {
+      setOpen({ sessionId }, target)
+      target = sessionId
       void loadSessions()
     }
     set((s) => ({ busy: toggle(s.busy, sessionId, true) }))
     await refresh(sessionId)
   } catch (e) {
-    setOpen({ status: { kind: "failed", error: message(e) } })
+    failed(target, e)
   }
 }
 
@@ -522,7 +546,7 @@ export async function chooseModel(modelId: string, variant: string | null) {
   if (!open?.info) return
   if (!open.sessionId) {
     const model = open.info.models.find((m) => m.id === modelId)
-    setOpen({ info: { ...open.info, modelId, model: model?.name ?? modelId, variant } }, null)
+    setOpen({ info: { ...open.info, modelId, model: model?.name ?? modelId, variant } }, whose(open))
     return
   }
   try {
@@ -634,6 +658,7 @@ export async function runCommand(name: string, args: string) {
   const open = state.open
   if (!open) return
   setOpen({ status: { kind: "working" }, revert: null })
+  let target = whose(open)
   try {
     const draft = !open.sessionId
     const { sessionId } = await bridge.runCommand(open.directory, {
@@ -646,13 +671,14 @@ export async function runCommand(name: string, args: string) {
       agent: draft ? (open.info?.agent ?? null) : null,
     })
     if (draft) {
-      setOpen({ sessionId }, null)
+      setOpen({ sessionId }, target)
+      target = sessionId
       void loadSessions()
     }
     set((s) => ({ busy: toggle(s.busy, sessionId, true) }))
     await refresh(sessionId)
   } catch (e) {
-    setOpen({ status: { kind: "failed", error: message(e) } })
+    failed(target, e)
   }
 }
 
@@ -676,7 +702,7 @@ export async function chooseAgent(agent: string) {
   const open = state.open
   if (!open?.info || open.info.agent === agent) return
   if (!open.sessionId) {
-    setOpen({ info: { ...open.info, agent } }, null)
+    setOpen({ info: { ...open.info, agent } }, whose(open))
     return
   }
   const sessionId = open.sessionId
