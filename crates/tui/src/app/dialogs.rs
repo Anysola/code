@@ -1528,8 +1528,9 @@ impl App {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = match super::own_exe() {
+                // The dialog already found a newer version; the child need not check again.
                 Some(exe) => tokio::process::Command::new(exe)
-                    .arg("update")
+                    .args(["update", "--force"])
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::piped())

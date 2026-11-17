@@ -72,10 +72,11 @@ pub fn update_command(platform: Platform, script: bool) -> Vec<String> {
             "-Command",
             "irm https://www.anysola.com/install.ps1 | iex",
         ],
+        // Piped straight into `sh -s`, a failed download is an empty script that exits 0.
         (true, Platform::Unix) => &[
             "sh",
             "-c",
-            "curl -fsSL https://www.anysola.com/install | sh -s -- --no-modify-path",
+            "s=$(curl -fsSL https://www.anysola.com/install) && printf '%s\\n' \"$s\" | sh -s -- --no-modify-path",
         ],
     };
     parts.iter().map(|p| p.to_string()).collect()
@@ -113,7 +114,7 @@ mod tests {
         );
         assert_eq!(
             show(Platform::Unix, true),
-            r#"sh -c "curl -fsSL https://www.anysola.com/install | sh -s -- --no-modify-path""#
+            r#"sh -c "s=$(curl -fsSL https://www.anysola.com/install) && printf '%s\\n' \"$s\" | sh -s -- --no-modify-path""#
         );
         assert_eq!(
             show(Platform::Windows, true),

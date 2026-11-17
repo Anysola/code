@@ -33,15 +33,27 @@ pub async fn update(args: UpdateArgs) -> i32 {
     let platform = Platform::current();
     let command = install::update_command(platform, install::by_script(&home));
     let shown = install::display(&command);
-    if let Some(info) = info {
-        clack::info(&format!("Installed {VERSION}, latest {}", info.latest));
-        if let Some(notes) = info.notes.filter(|n| !n.is_empty()) {
-            clack::message(&notes);
+    match info {
+        Some(info) => {
+            clack::info(&format!("Installed {VERSION}, latest {}", info.latest));
+            if let Some(notes) = info.notes.filter(|n| !n.is_empty()) {
+                clack::message(&notes);
+            }
+            if released(VERSION) && compare(&info.latest, VERSION).is_le() && !args.force {
+                clack::outro("Already up to date");
+                return 0;
+            }
         }
-        if released(VERSION) && compare(&info.latest, VERSION).is_le() && !args.force {
-            clack::outro("Already up to date");
-            return 0;
+        // Offline the installer would fail too, or reinstall the same version; --print installs
+        // nothing.
+        None if !args.force && !args.print => {
+            clack::failed(&format!(
+                "Could not check the latest version at {}. Use `anysola update --force` to install anyway.",
+                anysola_core::gateway::api_url()
+            ));
+            return 1;
         }
+        None => {}
     }
     if args.print {
         clack::message(&shown);
