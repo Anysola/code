@@ -76,6 +76,17 @@ pub enum Target {
     Id(String),
 }
 
+/// What [`Core::steer_pending`] did with a waiting item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Steered {
+    /// The running turn takes it at its next step.
+    Taken,
+    /// No turn of this process runs the session: it stays queued.
+    NoTurn,
+    /// It was promoted or removed meanwhile.
+    Gone,
+}
+
 /// What a new session is.
 enum Kind {
     Root,
@@ -136,6 +147,9 @@ pub(crate) struct Shared {
     /// `<pid>:<nonce>` for busy markers.
     pub owner: String,
     pub turns: Mutex<std::collections::HashMap<String, CancellationToken>>,
+    /// The inbox row of the prompt each held session was taken for: the one input a turn that
+    /// cannot start may drop as unsent (the desktop app).
+    pub admitted: Mutex<std::collections::HashMap<String, String>>,
     pub warming: crate::session::Warming,
     pub goals: crate::session::goal::Goals,
     /// Background summaries held until automatic compaction takes them.
@@ -199,6 +213,14 @@ impl SessionNotifier for StoreNotifier {
         );
         if admitted.is_ok() {
             wake(&shared, session_id);
+        }
+    }
+
+    fn background_changed(&self, session_id: &str) {
+        if let Some(shared) = self.shared.upgrade() {
+            let _ = shared.events.send(Event::BackgroundChanged {
+                session_id: session_id.to_string(),
+            });
         }
     }
 }
@@ -284,6 +306,7 @@ impl Core {
             snapshots,
             owner: format!("{}:{}", std::process::id(), crate::ids::part()),
             turns: Mutex::default(),
+            admitted: Mutex::default(),
             warming: Default::default(),
             goals: Default::default(),
             precomputed: Mutex::default(),
@@ -399,6 +422,21 @@ impl Core {
 
     pub fn reply_form(&self, id: &str, reply: crate::mcp::FormReply) -> bool {
         self.shared.forms.reply(id, reply)
+    }
+
+    /// Everything waiting for the user in this core, oldest first of each kind, as the events
+    /// that asked: permission asks and questions of every session, and the MCP servers' forms.
+    pub fn pending_requests(&self) -> Vec<Event> {
+        let mut out = self.shared.asks.pending_events();
+        out.extend(self.shared.questions.pending());
+        out.extend(
+            self.shared
+                .forms
+                .pending()
+                .into_iter()
+                .map(|form| Event::FormAsked { form }),
+        );
+        out
     }
 
     pub fn paths(&self) -> &Paths {
@@ -752,6 +790,26 @@ impl Core {
             .inbox_set_delivery(inbox_id, delivery.as_str())?)
     }
 
+    /// Hands a waiting item to the session's running turn at its next step. Done under the
+    /// `turns` lock, so the turn either takes it or has not ended yet: an item switched with no
+    /// turn to join would go out unseen with the next prompt.
+    pub fn steer_pending(&self, session_id: &str, inbox_id: &str) -> Result<Steered, CoreError> {
+        let turns = self.shared.turns.lock().unwrap_or_else(|e| e.into_inner());
+        if !turns.contains_key(session_id) {
+            return Ok(Steered::NoTurn);
+        }
+        let switched = self
+            .shared
+            .db
+            .inbox_set_delivery(inbox_id, Delivery::Steer.as_str())?;
+        drop(turns);
+        Ok(if switched {
+            Steered::Taken
+        } else {
+            Steered::Gone
+        })
+    }
+
     /// Cancels a pending item; false once it was promoted.
     pub fn cancel_pending(&self, inbox_id: &str) -> Result<bool, CoreError> {
         Ok(self.shared.db.inbox_remove(inbox_id)?)
@@ -761,6 +819,53 @@ impl Core {
     pub async fn compact(&self, session_id: &str) -> Result<Outcome, CoreError> {
         crate::session::inbox::enqueue_compaction(&self.shared.db, session_id)?;
         self.drain(session_id, TurnOptions::default()).await
+    }
+
+    /// Runs what waits in the session's inbox when no turn does (input left after a stop or a
+    /// failure), committing a staged revert first as a prompt would. A turn of this process that
+    /// already drives the session takes the inbox itself.
+    pub async fn send_queued(
+        &self,
+        session_id: &str,
+        options: TurnOptions,
+    ) -> Result<Outcome, CoreError> {
+        let shared = &self.shared;
+        shared
+            .db
+            .session(session_id)?
+            .ok_or(CoreError::SessionNotFound)?;
+        // Nothing waits: no turn to start (a drain would announce one and never end it).
+        if crate::session::inbox::next(&shared.db, session_id, crate::session::inbox::Scope::Input)?
+            .is_none()
+        {
+            return Ok(Outcome::Succeeded);
+        }
+        let Some(held) = Held::acquire(shared, session_id, CancellationToken::new(), None)? else {
+            return Ok(Outcome::Succeeded);
+        };
+        revert::commit(shared, session_id)?;
+        Ok(held.drain(options).await)
+    }
+
+    /// Ends a turn that a process which died under it left open (tool calls shown running, no
+    /// end), unless a process drives the session now. Returns whether there was one.
+    pub fn settle_interrupted(&self, session_id: &str) -> Result<bool, CoreError> {
+        let shared = &self.shared;
+        // Under the `turns` lock but without taking a turn's place: a prompt arriving meanwhile
+        // waits for the lock and then starts its turn as usual.
+        let turns = shared.turns.lock().unwrap_or_else(|e| e.into_inner());
+        if turns.contains_key(session_id)
+            || crate::session::subagent::is_running(shared, session_id)
+            // Read first: most sessions ended their turns, and taking one rewrites its busy time.
+            || !crate::session::interrupted(shared, session_id)
+            || !shared.db.acquire(session_id, &shared.owner)?
+        {
+            return Ok(false);
+        }
+        let settled = crate::session::settle_interrupted(shared, session_id);
+        let _ = shared.db.release(session_id, &shared.owner);
+        drop(turns);
+        Ok(settled)
     }
 
     async fn drain(&self, session_id: &str, options: TurnOptions) -> Result<Outcome, CoreError> {
@@ -774,6 +879,17 @@ impl Core {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .contains_key(session_id)
+    }
+
+    /// The sessions this process drives a turn of right now.
+    pub fn busy_sessions(&self) -> Vec<String> {
+        self.shared
+            .turns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keys()
+            .cloned()
+            .collect()
     }
 
     /// Whether this process is driving any turn of this core.
@@ -930,7 +1046,13 @@ pub(crate) async fn prompt_session(
         return Ok(Outcome::Succeeded);
     };
     revert::commit(shared, session_id)?;
-    crate::session::inbox::enqueue(&shared.db, session_id, &prompt, Delivery::Steer)?;
+    let admitted =
+        crate::session::inbox::enqueue(&shared.db, session_id, &prompt, Delivery::Steer)?;
+    shared
+        .admitted
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(session_id.to_string(), admitted);
     Ok(held.drain(options).await)
 }
 
@@ -1003,11 +1125,18 @@ impl<'a> Held<'a> {
                 self.cancel.clone(),
             )
             .await;
-            if outcome != Outcome::Succeeded {
-                return outcome;
-            }
             let shared = self.shared;
             let mut turns = shared.turns.lock().unwrap_or_else(|e| e.into_inner());
+            if outcome != Outcome::Succeeded {
+                // Held and released in one step: a prompt sent meanwhile is either among the
+                // leftovers the window shows, or finds the session free and starts its own turn.
+                // The terminal keeps them as they were: it has no way to send a queue.
+                if crate::version::client() == "desktop" {
+                    let _ = crate::session::inbox::hold_leftovers(&shared.db, &self.session_id);
+                }
+                self.release(&mut turns);
+                return outcome;
+            }
             let next = crate::session::inbox::next(
                 &shared.db,
                 &self.session_id,
@@ -1023,8 +1152,22 @@ impl<'a> Held<'a> {
     fn release(&mut self, turns: &mut std::collections::HashMap<String, CancellationToken>) {
         self.heartbeat.abort();
         turns.remove(&self.session_id);
+        self.shared
+            .admitted
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.session_id);
         let _ = self.shared.db.release(&self.session_id, &self.shared.owner);
         self.released = true;
+        // A form an MCP server asked for a stopped turn's call has nobody left to wait for it
+        // (the server may never end its request itself). Once no turn is left, nor is anyone
+        // for the rest.
+        if self.cancel.is_cancelled() {
+            let (id, idle) = (&self.session_id, turns.is_empty());
+            self.shared
+                .forms
+                .cancel_if(|form| idle || form.session.as_ref() == Some(id));
+        }
     }
 }
 

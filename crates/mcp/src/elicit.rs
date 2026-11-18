@@ -101,7 +101,13 @@ fn field(key: &str, property: &Value, required: bool) -> Value {
 }
 
 /// Asks the front ends and returns the `elicitation/create` result.
-pub async fn ask(core: &Core, server: &str, params: &Value, id: String) -> Value {
+pub async fn ask(
+    core: &Core,
+    server: &str,
+    params: &Value,
+    id: String,
+    session: Option<String>,
+) -> Value {
     let mut metadata = json!({"kind": "mcp-elicitation", "server": server});
     if let Some(elicitation) = params["elicitationId"].as_str() {
         metadata["elicitationID"] = json!(elicitation);
@@ -114,10 +120,11 @@ pub async fn ask(core: &Core, server: &str, params: &Value, id: String) -> Value
             title,
             metadata,
             fields: vec![json!({"key": URL_FIELD, "type": "external", "url": params["url"]})],
+            session,
         };
         return match core.ask_form(form).await {
             FormReply::Answered(_) => json!({"action": "accept"}),
-            FormReply::Cancelled => json!({"action": "cancel"}),
+            reply => refusal(&reply),
         };
     }
     let schema = &params["requestedSchema"];
@@ -142,13 +149,23 @@ pub async fn ask(core: &Core, server: &str, params: &Value, id: String) -> Value
             title,
             metadata,
             fields,
+            session,
         })
         .await
     {
         FormReply::Answered(answer) => {
             json!({"action": "accept", "content": Value::Object(answer.into_iter().collect::<Map<_, _>>())})
         }
-        FormReply::Cancelled => json!({"action": "cancel"}),
+        reply => refusal(&reply),
+    }
+}
+
+/// The result of a form the user did not fill in: declined (they said no) or cancelled (they
+/// dismissed it, or nobody could show it).
+fn refusal(reply: &FormReply) -> Value {
+    match reply {
+        FormReply::Declined => json!({"action": "decline"}),
+        _ => json!({"action": "cancel"}),
     }
 }
 
@@ -163,6 +180,12 @@ pub fn complete(core: &Core, form: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decline_and_cancel_reach_the_server_as_different_actions() {
+        assert_eq!(refusal(&FormReply::Declined), json!({"action": "decline"}));
+        assert_eq!(refusal(&FormReply::Cancelled), json!({"action": "cancel"}));
+    }
 
     #[test]
     fn fields() {

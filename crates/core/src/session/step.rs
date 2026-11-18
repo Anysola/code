@@ -937,6 +937,14 @@ async fn run_stream(
             }
         };
         running.data.content = assembly.parts.clone();
+        // A call about to run is stored first: a front end that reads the transcript on
+        // `ToolCalled` then finds the step's text and the call, running, while it works.
+        if actions
+            .iter()
+            .any(|action| matches!(action, Action::ToolReady { .. }))
+        {
+            running.save(shared);
+        }
         for action in actions {
             handle(
                 shared,

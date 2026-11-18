@@ -382,6 +382,23 @@ fn oauth_sign_in_storage_and_refresh() {
         rt.block_on(attempt.done).unwrap(),
         Err("OAuth state mismatch".to_string())
     );
+
+    // Giving an attempt up (dropping its `done`) closes its callback server and frees the port.
+    let attempt = rt.block_on(mcp.authorize("oauth2")).unwrap();
+    let redirect = url::Url::parse(&attempt.url)
+        .unwrap()
+        .query_pairs()
+        .find(|(k, _)| k == "redirect_uri")
+        .map(|(_, v)| url::Url::parse(&v).unwrap())
+        .unwrap();
+    let port = redirect.port().unwrap();
+    assert!(std::net::TcpListener::bind(("127.0.0.1", port)).is_err());
+    drop(attempt);
+    let freed = (0..100).any(|_| {
+        std::thread::sleep(Duration::from_millis(20));
+        std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+    });
+    assert!(freed, "the callback port stayed taken");
     rt.block_on(mcp.shutdown());
 }
 

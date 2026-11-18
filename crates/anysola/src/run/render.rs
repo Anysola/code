@@ -412,6 +412,9 @@ impl Renderer {
             | Event::TitleChanged { .. }
             | Event::GoalChanged { .. }
             | Event::FormAsked { .. }
+            | Event::FormReplied { .. }
+            | Event::QuestionReplied { .. }
+            | Event::BackgroundChanged { .. }
             | Event::McpStatusChanged { .. }
             | Event::SessionCreated { .. }
             | Event::Started { .. }

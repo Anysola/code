@@ -53,6 +53,8 @@ pub struct Runtime {
     order: Mutex<Vec<String>>,
     /// URL elicitations waiting for their completion notice: `server\0id` → form id.
     url_forms: Mutex<HashMap<String, String>>,
+    /// The sessions with tool calls in flight, per server: one entry per call.
+    calling: Arc<Mutex<HashMap<String, Vec<String>>>>,
     /// Servers an ACP editor added for the process lifetime, over the configured ones.
     added: Mutex<Vec<(String, Value)>>,
     /// The config last reconciled, which [`Runtime::add`] reconciles again.
@@ -80,6 +82,7 @@ impl Runtime {
             servers: Mutex::default(),
             order: Mutex::default(),
             url_forms: Mutex::default(),
+            calling: Arc::default(),
             added: Mutex::default(),
             config: Mutex::default(),
         });
@@ -439,6 +442,7 @@ impl Runtime {
             return Err(format!("MCP server \"{server}\" is not available"));
         }
         let (tool_name, session) = (tool.to_string(), session_id.to_string());
+        let _calling = Calling::new(&self.calling, server, session_id);
         // Unavailable servers are reported as they are, not as a failed call.
         self.connection(server).await?;
         self.recovering(server, move |connection| {
@@ -724,13 +728,16 @@ impl Mcp for Runtime {
                 .ok_or_else(|| format!("MCP server not found: {name}"))?;
             let mut attempt =
                 crate::oauth::authorize(self.core.db().clone(), name, &config).await?;
-            let (sender, done) = tokio::sync::oneshot::channel();
+            let (mut sender, done) = tokio::sync::oneshot::channel();
             let inner = std::mem::replace(&mut attempt.done, done);
             let (me, name) = (self.me.clone(), name.to_string());
             tokio::spawn(async move {
-                let result = inner
-                    .await
-                    .unwrap_or_else(|_| Err("Authorization expired".into()));
+                // Given up by its caller: dropping `inner` ends the callback server too.
+                let result = tokio::select! {
+                    result = inner => result,
+                    () = sender.closed() => return,
+                };
+                let result = result.unwrap_or_else(|_| Err("Authorization expired".into()));
                 if result.is_ok()
                     && let Some(runtime) = me.upgrade()
                 {
@@ -766,6 +773,63 @@ impl Mcp for Runtime {
             self.set_status(name, entry, Status::Disabled);
         }
     }
+}
+
+/// A tool call in flight, listed in [`Runtime::calling`] until it ends however it ends.
+struct Calling {
+    calling: Arc<Mutex<HashMap<String, Vec<String>>>>,
+    server: String,
+    session: String,
+}
+
+impl Calling {
+    fn new(
+        calling: &Arc<Mutex<HashMap<String, Vec<String>>>>,
+        server: &str,
+        session: &str,
+    ) -> Self {
+        calling
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(server.to_string())
+            .or_default()
+            .push(session.to_string());
+        Calling {
+            calling: calling.clone(),
+            server: server.to_string(),
+            session: session.to_string(),
+        }
+    }
+}
+
+impl Drop for Calling {
+    fn drop(&mut self) {
+        let mut calling = self.calling.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(sessions) = calling.get_mut(&self.server) {
+            if let Some(at) = sessions.iter().position(|s| *s == self.session) {
+                sessions.remove(at);
+            }
+            if sessions.is_empty() {
+                calling.remove(&self.server);
+            }
+        }
+    }
+}
+
+impl Runtime {
+    /// The session a server's request is for: the one with calls to it in flight, when there
+    /// is exactly one. A request no call explains (or that several sessions could have
+    /// caused) belongs to none.
+    fn caller(&self, server: &str) -> Option<String> {
+        caller(&self.calling, server)
+    }
+}
+
+fn caller(calling: &Mutex<HashMap<String, Vec<String>>>, server: &str) -> Option<String> {
+    let calling = calling.lock().unwrap_or_else(|e| e.into_inner());
+    let sessions = calling.get(server)?;
+    let first = sessions.first()?;
+    sessions.iter().all(|s| s == first).then(|| first.clone())
 }
 
 /// One connection's answers to its server and its reactions to the server's notices.
@@ -805,7 +869,9 @@ impl Handler for ServerHandler {
                             .unwrap_or_else(|e| e.into_inner())
                             .insert(key.clone(), id.clone());
                     }
-                    let result = crate::elicit::ask(&runtime.core, &server, &params, id).await;
+                    let session = runtime.caller(&server);
+                    let result =
+                        crate::elicit::ask(&runtime.core, &server, &params, id, session).await;
                     if let Some(key) = key {
                         runtime
                             .url_forms
@@ -866,5 +932,28 @@ impl Handler for ServerHandler {
         if let Some(runtime) = self.runtime.upgrade() {
             runtime.closed(&self.server, self.generation, reason);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_request_belongs_to_the_one_session_calling_its_server() {
+        let calling: Arc<Mutex<HashMap<String, Vec<String>>>> = Arc::default();
+        assert_eq!(caller(&calling, "docs"), None);
+        let first = Calling::new(&calling, "docs", "ses_a");
+        let second = Calling::new(&calling, "docs", "ses_a");
+        let _elsewhere = Calling::new(&calling, "other", "ses_b");
+        assert_eq!(caller(&calling, "docs").as_deref(), Some("ses_a"));
+        drop(first);
+        assert_eq!(caller(&calling, "docs").as_deref(), Some("ses_a"));
+        // Two sessions calling it: the request can't be told apart.
+        let third = Calling::new(&calling, "docs", "ses_b");
+        assert_eq!(caller(&calling, "docs"), None);
+        drop((second, third));
+        assert_eq!(caller(&calling, "docs"), None);
+        assert!(!calling.lock().unwrap().contains_key("docs"));
     }
 }

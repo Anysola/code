@@ -268,7 +268,7 @@ fn settle_stale(shared: &Shared, session_id: &str) {
     }
 }
 
-fn finish(shared: &Arc<Shared>, session_id: &str, outcome: &Outcome) {
+fn finish(shared: &Arc<Shared>, session_id: &str, outcome: &Outcome, unsent: bool) {
     goal::ended(shared, session_id, outcome);
     shared.usage.close_turn(session_id);
     let (outcome_label, event) = match outcome {
@@ -283,6 +283,7 @@ fn finish(shared: &Arc<Shared>, session_id: &str, outcome: &Outcome) {
             Event::Failed {
                 session_id: session_id.to_string(),
                 error: error.clone(),
+                unsent,
             },
         ),
         Outcome::Interrupted(reason) => (
@@ -294,8 +295,10 @@ fn finish(shared: &Arc<Shared>, session_id: &str, outcome: &Outcome) {
         ),
     };
     let mut idle = json!({"time": {"created": now_ms()}, "outcome": outcome_label});
-    if let Outcome::Failed(error) = outcome {
-        idle["error"] = encode(error);
+    match outcome {
+        Outcome::Failed(error) => idle["error"] = encode(error),
+        Outcome::Interrupted(reason) => idle["reason"] = json!(interrupt_label(*reason)),
+        Outcome::Succeeded => {}
     }
     let _ = shared
         .db
@@ -308,6 +311,81 @@ fn finish(shared: &Arc<Shared>, session_id: &str, outcome: &Outcome) {
     let _ = shared.events.send(event);
 }
 
+/// Why a turn was interrupted, as its `idle` row keeps it; `closed` marks a turn whose process
+/// ended under it (see [`settle_interrupted`]).
+fn interrupt_label(reason: InterruptReason) -> &'static str {
+    match reason {
+        InterruptReason::User => "user",
+        InterruptReason::Budget => "budget",
+        InterruptReason::Declined => "declined",
+    }
+}
+
+/// Whether the stored rows end in a turn nobody finished: a prompt or a model step after the
+/// last `idle` row, unless that step already ended the turn.
+fn turn_unfinished(rows: &[crate::storage::MessageRow]) -> bool {
+    let Some(last) = rows
+        .iter()
+        .rev()
+        .find(|r| matches!(r.kind.as_str(), "user" | "assistant" | "idle"))
+    else {
+        return false;
+    };
+    match last.kind.as_str() {
+        "user" => true,
+        "assistant" => match Message::decode(&last.kind, &last.data) {
+            Message::Assistant(step) => {
+                step.time.completed.is_none() || step.finish.as_deref() == Some("tool-calls")
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// The session's own rows: a fork's copied history ends wherever its source was cut, often on a
+/// prompt or a step with tool calls, and is not a turn of the fork's.
+fn own_rows(
+    session: Option<&SessionRow>,
+    mut rows: Vec<crate::storage::MessageRow>,
+) -> Vec<crate::storage::MessageRow> {
+    let through = session
+        .filter(|s| s.fork_session_id.is_some())
+        .and_then(|s| s.fork_boundary.as_ref())
+        .and_then(|b| b["messageID"].as_str());
+    if let Some(through) = through {
+        // Copied rows are named `<source row>_<seq>`.
+        let prefix = format!("{through}_");
+        if let Some(at) = rows.iter().position(|r| r.id.starts_with(&prefix)) {
+            rows.drain(..=at);
+        }
+    }
+    rows
+}
+
+/// Whether the session ends in a turn nobody finished (see [`settle_interrupted`]).
+pub(crate) fn interrupted(shared: &Shared, session_id: &str) -> bool {
+    let session = shared.db.session(session_id).ok().flatten();
+    let rows = shared.db.messages(session_id).unwrap_or_default();
+    turn_unfinished(&own_rows(session.as_ref(), rows))
+}
+
+/// For a session no process drives: settles what a process that died mid-turn left running and
+/// ends that turn with an `idle` row marked `closed`, so it reads as interrupted rather than
+/// still working. Returns whether the session had such a turn.
+pub(crate) fn settle_interrupted(shared: &Shared, session_id: &str) -> bool {
+    if !interrupted(shared, session_id) {
+        return false;
+    }
+    settle_stale(shared, session_id);
+    let idle = json!({"time": {"created": now_ms()}, "outcome": "interrupted", "reason": "closed"});
+    let _ = shared
+        .db
+        .append_message(session_id, &crate::ids::message(), "idle", &idle);
+    let _ = shared.db.set_idle(session_id, "interrupted");
+    true
+}
+
 fn storage(error: crate::storage::StorageError) -> SessionError {
     SessionError::new("unknown", error.to_string())
 }
@@ -315,13 +393,46 @@ fn storage(error: crate::storage::StorageError) -> SessionError {
 /// How long a turn waits for its auto-title before going idle without it.
 const TITLE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Removes the session's pending prompts (not control items such as a compaction).
-fn drop_pending_input(shared: &Shared, session_id: &str) {
-    for row in shared.db.inbox(session_id).unwrap_or_default() {
-        if row.kind != "compaction" {
+/// Clears the input a turn that cannot start was admitted with; left in the inbox it would go
+/// out unseen with whatever is sent next. Returns whether the user's prompt was dropped, which
+/// the front end can then give back.
+///
+/// The desktop app drops only the prompt the session was taken for (and the notes steered with
+/// it); any other message stays, queued, where the user sees it. The terminal drops every
+/// pending prompt (not control items such as a compaction), as it always has.
+fn drop_next_input(shared: &Shared, session_id: &str) -> bool {
+    let rows = shared.db.inbox(session_id).unwrap_or_default();
+    if crate::version::client() != "desktop" {
+        let mut unsent = false;
+        for row in rows.iter().filter(|r| r.kind != "compaction") {
+            if matches!(shared.db.inbox_remove(&row.id), Ok(true)) {
+                unsent |= row.kind == "user";
+            }
+        }
+        return unsent;
+    }
+    let admitted = shared
+        .admitted
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(session_id);
+    let steers = rows
+        .iter()
+        .filter(|r| r.delivery == "steer")
+        .take_while(|r| r.kind != "compaction");
+    let mut unsent = false;
+    for row in steers {
+        if row.kind != "user" {
             let _ = shared.db.inbox_remove(&row.id);
+        } else if admitted.as_deref() == Some(row.id.as_str()) {
+            unsent |= matches!(shared.db.inbox_remove(&row.id), Ok(true));
+        } else {
+            let _ = shared
+                .db
+                .inbox_set_delivery(&row.id, inbox::Delivery::Queue.as_str());
         }
     }
+    unsent
 }
 
 /// One turn: settle the context (instructions are recorded before the input that follows them),
@@ -331,6 +442,7 @@ async fn turn(
     session: &SessionRow,
     options: TurnOptions,
     cancel: &CancellationToken,
+    unsent: &mut bool,
 ) -> Outcome {
     shared.refresh().await;
     let prepare = |shared: &Arc<Shared>| {
@@ -357,9 +469,7 @@ async fn turn(
         error.message = reason;
     }
     if let Err(error) = prepared {
-        // The input that could not start is dropped with the error; left in the inbox it would
-        // go out unseen, together with whatever the user types next.
-        drop_pending_input(shared, &session.id);
+        *unsent = drop_next_input(shared, &session.id);
         return Outcome::Failed(error);
     }
     let promoted = match inbox::promote(&shared.db, &session.id, inbox::Scope::Input) {
@@ -420,6 +530,7 @@ pub(crate) async fn drain(
     });
     let mut outcome = Outcome::Succeeded;
     let mut open = false;
+    let mut unsent = false;
     loop {
         let session = match shared.db.session(session_id) {
             Ok(Some(session)) => session,
@@ -435,7 +546,7 @@ pub(crate) async fn drain(
                 if goal::idle(&shared, session_id).await {
                     continue;
                 }
-                finish(&shared, session_id, &outcome);
+                finish(&shared, session_id, &outcome, false);
             }
             return outcome;
         };
@@ -446,17 +557,17 @@ pub(crate) async fn drain(
                 _ => Outcome::Succeeded,
             };
             if open && outcome != Outcome::Succeeded {
-                finish(&shared, session_id, &outcome);
+                finish(&shared, session_id, &outcome, false);
             }
         } else {
-            outcome = turn(&shared, &session, options, &cancel).await;
+            outcome = turn(&shared, &session, options, &cancel, &mut unsent).await;
             open = outcome == Outcome::Succeeded
                 && matches!(
                     inbox::next(&shared.db, session_id, inbox::Scope::Input),
                     Ok(None)
                 );
             if !open {
-                finish(&shared, session_id, &outcome);
+                finish(&shared, session_id, &outcome, unsent);
             }
         }
         if outcome != Outcome::Succeeded {

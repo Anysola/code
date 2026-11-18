@@ -2,7 +2,6 @@
 //! [`crate::api::Core::attach_mcp`]: server statuses, server instructions for block 2, resources
 //! for the `opencode` namespace, prompts as slash commands, and the forms servers ask for.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
@@ -65,6 +64,9 @@ pub struct Form {
     pub metadata: Value,
     /// Field descriptions (`{key, type, title, …}`); a URL elicitation has one `external` field.
     pub fields: Vec<Value>,
+    /// The session whose tool call the server was answering when it asked, when only one
+    /// session had calls to it in flight.
+    pub session: Option<String>,
 }
 
 /// An OAuth sign-in in progress: open `url`; `done` settles when the browser comes back.
@@ -77,6 +79,9 @@ pub struct SignIn {
 #[derive(Debug, Clone, PartialEq)]
 pub enum FormReply {
     Answered(Map<String, Value>),
+    /// The user said no to what the server asked.
+    Declined,
+    /// The user dismissed the form without answering (or nobody could show it).
     Cancelled,
 }
 
@@ -126,10 +131,31 @@ pub trait Mcp: Send + Sync {
     fn authorize<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<SignIn, String>>;
 }
 
-/// Forms waiting for a front end.
+/// Forms waiting for a front end, in the order they were asked.
 #[derive(Default)]
 pub struct Forms {
-    pending: Mutex<HashMap<String, oneshot::Sender<FormReply>>>,
+    pending: Mutex<Vec<(Form, oneshot::Sender<FormReply>)>>,
+}
+
+/// Takes the form out of the list however its wait ends (answered, or the server's request went
+/// away) and says so once.
+struct Settle<'a> {
+    forms: &'a Forms,
+    events: &'a broadcast::Sender<Event>,
+    id: String,
+}
+
+impl Drop for Settle<'_> {
+    fn drop(&mut self) {
+        self.forms
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|(form, _)| form.id != self.id);
+        let _ = self.events.send(Event::FormReplied {
+            id: std::mem::take(&mut self.id),
+        });
+    }
 }
 
 impl Forms {
@@ -138,24 +164,53 @@ impl Forms {
         self.pending
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(form.id.clone(), sender);
-        let id = form.id.clone();
+            .push((form.clone(), sender));
+        let _settle = Settle {
+            forms: self,
+            events,
+            id: form.id.clone(),
+        };
         let _ = events.send(Event::FormAsked { form });
-        let reply = receiver.await.unwrap_or(FormReply::Cancelled);
-        self.pending
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&id);
-        reply
+        receiver.await.unwrap_or(FormReply::Cancelled)
     }
 
     pub fn reply(&self, id: &str, reply: FormReply) -> bool {
-        let sender = self
-            .pending
+        let sender = {
+            let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+            pending
+                .iter()
+                .position(|(form, _)| form.id == id)
+                .map(|at| pending.remove(at).1)
+        };
+        sender.is_some_and(|s| s.send(reply).is_ok())
+    }
+
+    /// Every form still waiting, oldest first.
+    pub fn pending(&self) -> Vec<Form> {
+        self.pending
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .remove(id);
-        sender.is_some_and(|s| s.send(reply).is_ok())
+            .iter()
+            .map(|(form, _)| form.clone())
+            .collect()
+    }
+
+    /// Cancels every form still waiting.
+    pub fn cancel_all(&self) {
+        self.cancel_if(|_| true);
+    }
+
+    /// Cancels the waiting forms `which` picks.
+    pub fn cancel_if(&self, which: impl Fn(&Form) -> bool) {
+        let picked: Vec<_> = {
+            let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+            let (picked, kept) = pending.drain(..).partition(|(form, _)| which(form));
+            *pending = kept;
+            picked
+        };
+        for (_, sender) in picked {
+            let _ = sender.send(FormReply::Cancelled);
+        }
     }
 }
 
@@ -268,4 +323,94 @@ pub(crate) fn instructions_update(previous: &Value, current: &Value) -> Option<S
         ));
     }
     Some(lines.join("\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn form(id: &str) -> Form {
+        Form {
+            id: id.into(),
+            title: "x is requesting input".into(),
+            metadata: serde_json::json!({"server": "x"}),
+            fields: Vec::new(),
+            session: (id == "frm_s").then(|| "ses_1".to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn forms_wait_listed_and_settle_once_whatever_ends_them() {
+        let forms = Arc::new(Forms::default());
+        let (events, mut receiver) = broadcast::channel(16);
+        let ask = |id: &'static str| {
+            let (forms, events) = (forms.clone(), events.clone());
+            tokio::spawn(async move { forms.ask(&events, form(id)).await })
+        };
+        let answered = ask("frm_a");
+        let declined = ask("frm_b");
+        let dropped = ask("frm_c");
+        for _ in 0..3 {
+            assert!(matches!(receiver.recv().await, Ok(Event::FormAsked { .. })));
+        }
+        let ids = |forms: &Forms| {
+            forms
+                .pending()
+                .into_iter()
+                .map(|f| f.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&forms), ["frm_a", "frm_b", "frm_c"]);
+        assert!(forms.reply("frm_a", FormReply::Answered(Map::new())));
+        assert_eq!(answered.await.unwrap(), FormReply::Answered(Map::new()));
+        assert!(forms.reply("frm_b", FormReply::Declined));
+        assert_eq!(declined.await.unwrap(), FormReply::Declined);
+        // The server's request went away.
+        dropped.abort();
+        let _ = dropped.await;
+        let mut settled = Vec::new();
+        for _ in 0..3 {
+            match receiver.recv().await {
+                Ok(Event::FormReplied { id }) => settled.push(id),
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        settled.sort();
+        assert_eq!(settled, ["frm_a", "frm_b", "frm_c"]);
+        assert!(forms.pending().is_empty());
+        assert!(!forms.reply("frm_a", FormReply::Cancelled));
+    }
+
+    #[tokio::test]
+    async fn cancel_all_cancels_what_waits() {
+        let forms = Arc::new(Forms::default());
+        let (events, mut receiver) = broadcast::channel(16);
+        let waiting = {
+            let (forms, events) = (forms.clone(), events.clone());
+            tokio::spawn(async move { forms.ask(&events, form("frm_a")).await })
+        };
+        assert!(matches!(receiver.recv().await, Ok(Event::FormAsked { .. })));
+        forms.cancel_all();
+        assert_eq!(waiting.await.unwrap(), FormReply::Cancelled);
+        assert!(forms.pending().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancel_if_cancels_only_what_it_picks() {
+        let forms = Arc::new(Forms::default());
+        let (events, mut receiver) = broadcast::channel(16);
+        let ask = |id: &'static str| {
+            let (forms, events) = (forms.clone(), events.clone());
+            tokio::spawn(async move { forms.ask(&events, form(id)).await })
+        };
+        let tagged = ask("frm_s");
+        let _other = ask("frm_o");
+        for _ in 0..2 {
+            assert!(matches!(receiver.recv().await, Ok(Event::FormAsked { .. })));
+        }
+        forms.cancel_if(|form| form.session.as_deref() == Some("ses_1"));
+        assert_eq!(tagged.await.unwrap(), FormReply::Cancelled);
+        let left: Vec<_> = forms.pending().into_iter().map(|f| f.id).collect();
+        assert_eq!(left, ["frm_o"]);
+    }
 }

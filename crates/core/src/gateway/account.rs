@@ -144,7 +144,7 @@ impl Gateway {
         loop {
             tokio::time::sleep(Duration::from_secs_f64(wait)).await;
             if Instant::now() >= login.deadline {
-                return Err("The login code expired. Run `anysola login` again.".into());
+                return Err(expired("The login code expired."));
             }
             let body = json!({"device_code": login.device_code});
             let reply = self
@@ -160,7 +160,7 @@ impl Gateway {
                         Some("authorization_pending") => {}
                         Some("slow_down") => wait += 5.0,
                         Some("expired_token") => {
-                            return Err("The code expired before it was approved. Run `anysola login` again.".into());
+                            return Err(expired("The code expired before it was approved."));
                         }
                         Some("access_denied") => return Err("Login was denied.".into()),
                         _ => return Err(format!("Login failed: {message}")),
@@ -206,6 +206,15 @@ fn usable(token: &str) -> bool {
     token
         .strip_prefix("asc_")
         .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_alphanumeric()))
+}
+
+/// A sign-in code that ran out: start again, from the window in the desktop app.
+fn expired(what: &str) -> String {
+    if crate::version::client() == "desktop" {
+        format!("{what} Sign in again.")
+    } else {
+        format!("{what} Run `anysola login` again.")
+    }
 }
 
 #[cfg(test)]

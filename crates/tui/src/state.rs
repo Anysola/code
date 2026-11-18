@@ -123,8 +123,8 @@ pub struct Question {
     pub answers: Vec<Vec<String>>,
     /// Text typed into the "Type your own answer" row, while editing it.
     pub custom: Option<String>,
-    /// An MCP server's form: the `(key, type)` of each field, in question order.
-    pub form: Option<Vec<(String, String)>>,
+    /// An MCP server's form: each field as its answer is read back, in question order.
+    pub form: Option<Vec<crate::form::Field>>,
     /// When the prompt appeared (ms): keys typed just before are not taken as answers.
     pub shown: u64,
 }

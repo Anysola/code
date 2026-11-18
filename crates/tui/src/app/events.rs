@@ -312,6 +312,28 @@ impl App {
                 }
             }
             Event::FormAsked { form } => self.form(form),
+            // The server ended a form still shown.
+            Event::FormReplied { id: form } => {
+                for session in self.state.sessions.values_mut() {
+                    if session
+                        .question
+                        .as_ref()
+                        .is_some_and(|q| q.request_id == *form)
+                    {
+                        session.question = None;
+                    }
+                }
+                let quiet: Vec<String> = self
+                    .state
+                    .sessions
+                    .values()
+                    .filter(|s| s.permission.is_none() && s.question.is_none())
+                    .map(|s| s.id.clone())
+                    .collect();
+                for session in quiet {
+                    self.attention(&session, false);
+                }
+            }
             Event::McpStatusChanged { server } => self.mcp_status(server),
             Event::Succeeded { .. } | Event::Failed { .. } | Event::Interrupted { .. } => {
                 if let Some(session) = self.state.sessions.get_mut(&id) {

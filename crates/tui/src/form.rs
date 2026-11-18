@@ -13,8 +13,46 @@ fn text(field: &Value, key: &str) -> String {
         .to_string()
 }
 
-/// The questions and each field's `(key, type)`.
-pub fn questions(form: &Form) -> (Vec<Question>, Vec<(String, String)>) {
+/// A form field as its answer is read back: its key, its type and, for a closed list, each
+/// option's label and the value it stands for.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Field {
+    pub key: String,
+    pub kind: String,
+    pub options: Vec<(String, Value)>,
+}
+
+/// A closed list's `(label, value)` pairs: `options` as the runtime describes fields, else a
+/// plain `enum`.
+fn options(field: &Value) -> Vec<(String, Value)> {
+    let label = |v: &Value| match v {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    if let Some(options) = field.get("options").and_then(Value::as_array) {
+        return options
+            .iter()
+            .map(|o| {
+                let value = o.get("value").cloned().unwrap_or(Value::Null);
+                let shown = o
+                    .get("label")
+                    .filter(|l| l.as_str().is_some_and(|l| !l.is_empty()))
+                    .unwrap_or(&value);
+                (label(shown), value)
+            })
+            .collect();
+    }
+    field
+        .get("enum")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|v| (label(v), v.clone()))
+        .collect()
+}
+
+/// The questions and each field as its answer is read back.
+pub fn questions(form: &Form) -> (Vec<Question>, Vec<Field>) {
     let message = form
         .metadata
         .get("message")
@@ -28,22 +66,21 @@ pub fn questions(form: &Form) -> (Vec<Question>, Vec<(String, String)>) {
         let title = Some(text(field, "title"))
             .filter(|t| !t.is_empty())
             .unwrap_or_else(|| key.clone());
-        let options = match (kind.as_str(), field.get("enum").and_then(Value::as_array)) {
-            ("boolean", _) => ["Yes", "No"]
+        let listed = options(field);
+        let options = match kind.as_str() {
+            "boolean" => ["Yes", "No"]
                 .map(|l| QuestionOption {
                     label: l.into(),
                     description: String::new(),
                 })
                 .to_vec(),
-            (_, Some(values)) => values
+            _ => listed
                 .iter()
-                .filter_map(Value::as_str)
-                .map(|v| QuestionOption {
-                    label: v.into(),
+                .map(|(label, _)| QuestionOption {
+                    label: label.clone(),
                     description: String::new(),
                 })
                 .collect(),
-            _ => Vec::new(),
         };
         let description = text(field, "description");
         let question = if description.is_empty() {
@@ -55,21 +92,36 @@ pub fn questions(form: &Form) -> (Vec<Question>, Vec<(String, String)>) {
             question,
             header: title,
             options,
-            multiple: None,
+            multiple: (kind == "multiselect").then_some(true),
         });
-        fields.push((key, kind));
+        fields.push(Field {
+            key,
+            kind,
+            options: listed,
+        });
     }
     (questions, fields)
 }
 
 /// The answers as the form's values; unanswered fields are left out.
-pub fn values(fields: &[(String, String)], answers: &[Vec<String>]) -> Map<String, Value> {
+pub fn values(fields: &[Field], answers: &[Vec<String>]) -> Map<String, Value> {
     let mut out = Map::new();
-    for ((key, kind), answer) in fields.iter().zip(answers) {
+    for (field, answer) in fields.iter().zip(answers) {
         let Some(first) = answer.first() else {
             continue;
         };
+        let (key, kind) = (&field.key, &field.kind);
+        // A chosen option answers with its value; typed text stays text.
+        let pick = |label: &String| {
+            field
+                .options
+                .iter()
+                .find(|(shown, _)| shown == label)
+                .map_or_else(|| Value::String(label.clone()), |(_, v)| v.clone())
+        };
         let value = match kind.as_str() {
+            "multiselect" => Value::Array(answer.iter().map(pick).collect()),
+            _ if !field.options.is_empty() => pick(first),
             "boolean" => Value::Bool(first == "Yes"),
             "integer" => first
                 .parse::<i64>()
@@ -99,17 +151,30 @@ mod tests {
             metadata: json!({"message": "Confirm the deploy"}),
             fields: vec![
                 json!({"key": "env", "type": "string", "enum": ["staging", "prod"]}),
+                json!({"key": "region", "type": "string", "custom": false,
+                       "options": [{"value": "eu-1", "label": "Europe"}, {"value": "us-1", "label": "US"}]}),
+                json!({"key": "tags", "type": "multiselect",
+                       "options": [{"value": "a", "label": "A"}, {"value": "b", "label": "B"}]}),
                 json!({"key": "force", "type": "boolean", "title": "Force"}),
                 json!({"key": "count", "type": "integer"}),
             ],
+            session: None,
         };
         let (questions, fields) = questions(&form);
         assert_eq!(questions[0].options.len(), 2);
-        assert_eq!(questions[1].header, "Force");
-        let answers = vec![vec!["prod".into()], vec!["Yes".into()], vec!["3".into()]];
+        assert_eq!(questions[1].options[0].label, "Europe");
+        assert_eq!(questions[2].multiple, Some(true));
+        assert_eq!(questions[3].header, "Force");
+        let answers = vec![
+            vec!["prod".into()],
+            vec!["US".into()],
+            vec!["A".into(), "B".into()],
+            vec!["Yes".into()],
+            vec!["3".into()],
+        ];
         assert_eq!(
             Value::Object(values(&fields, &answers)),
-            json!({"env": "prod", "force": true, "count": 3})
+            json!({"env": "prod", "region": "us-1", "tags": ["a", "b"], "force": true, "count": 3})
         );
     }
 }

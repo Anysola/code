@@ -85,6 +85,8 @@ pub struct BackgroundShell {
     pub command: String,
     /// Where its output streams.
     pub file: PathBuf,
+    /// When it moved to the background (ms).
+    pub started: u64,
     stop: tokio_util::sync::CancellationToken,
 }
 
@@ -437,8 +439,10 @@ fn notify_when_done(started: Started, command: String, ctx: &ToolContext) {
         id: started.id.clone(),
         command: command.clone(),
         file: started.file.clone(),
+        started: crate::time::now_ms(),
         stop: stop.clone(),
     });
+    notifier.background_changed(&session_id);
     tokio::spawn(async move {
         let Started {
             id,
@@ -457,6 +461,7 @@ fn notify_when_done(started: Started, command: String, ctx: &ToolContext) {
             .unwrap_or_else(|e| e.into_inner())
             .push((id.clone(), end));
         background().retain(|shell| shell.entry != entry);
+        notifier.background_changed(&session_id);
         let (state, text) = match Finished::read(&file, ended, limits, timeout) {
             Ok(finished) => ("completed", finished.content().join("\n\n")),
             Err(error) => ("error", error.to_string()),

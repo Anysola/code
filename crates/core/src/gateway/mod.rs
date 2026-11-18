@@ -280,7 +280,7 @@ impl Gateway {
         let token = self
             .token
             .as_ref()
-            .ok_or("Web search needs an Anysola sign-in. Run `anysola login`.")?;
+            .ok_or_else(|| signed_out_search(false))?;
         let response = self
             .http
             .post(self.url("/search"))
@@ -315,9 +315,7 @@ impl Gateway {
                 .and_then(error::error_of)
                 .unwrap_or_else(|| format!("HTTP {status}"));
             return Err(match status {
-                401 => {
-                    "Your Anysola sign-in has expired or was revoked. Run `anysola login`.".into()
-                }
+                401 => signed_out_search(true),
                 429 => format!("Anysola web search is limited: {detail}"),
                 _ => format!("Anysola web search failed (HTTP {status}): {detail}"),
             });
@@ -429,4 +427,20 @@ fn decode_search(body: Option<Value>) -> Option<Vec<SearchResult>> {
         });
     }
     Some(out)
+}
+
+/// The web search error without a usable sign-in, which the model passes on: the desktop app
+/// signs in from its window, the terminal with `anysola login`.
+fn signed_out_search(expired: bool) -> String {
+    let desktop = crate::version::client() == "desktop";
+    match (expired, desktop) {
+        (false, false) => "Web search needs an Anysola sign-in. Run `anysola login`.".into(),
+        (true, false) => {
+            "Your Anysola sign-in has expired or was revoked. Run `anysola login`.".into()
+        }
+        (false, true) => "Web search needs an Anysola sign-in. Sign in from the app.".into(),
+        (true, true) => {
+            "Your Anysola sign-in has expired or was revoked. Sign in again from the app.".into()
+        }
+    }
 }

@@ -649,8 +649,16 @@ pub async fn authorize(db: Arc<Db>, name: &str, server: &Value) -> Result<SignIn
         redirect,
         resource: discovery.resource,
     };
+    let mut sender = sender;
     tokio::spawn(async move {
-        let _ = sender.send(serve(listener, &path, &state, &exchange).await);
+        // Nobody waits for it any more (the sign-in was given up): stop listening now, so the
+        // port is free for the next attempt.
+        tokio::select! {
+            result = serve(listener, &path, &state, &exchange) => {
+                let _ = sender.send(result);
+            }
+            () = sender.closed() => {}
+        }
     });
     Ok(SignIn {
         url: authorization.to_string(),

@@ -171,6 +171,17 @@ pub fn promote(db: &Db, session_id: &str, scope: Scope) -> Result<Option<usize>>
     ))
 }
 
+/// After a turn that did not succeed: the prompts sent to steer it stay for the user to send or
+/// drop, as queued items, so they never join the next prompt's turn unseen.
+pub fn hold_leftovers(db: &Db, session_id: &str) -> Result<()> {
+    for row in db.inbox(session_id)? {
+        if row.kind == "user" && row.delivery == "steer" {
+            db.inbox_set_delivery(&row.id, Delivery::Queue.as_str())?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,5 +269,27 @@ mod tests {
         assert!(db.inbox_remove(&id).unwrap());
         assert!(!db.inbox_remove(&id).unwrap());
         assert!(texts(&db, Scope::Input).is_empty());
+    }
+
+    #[test]
+    fn leftovers_wait_behind_the_next_prompt_instead_of_joining_it() {
+        let (_dir, db) = db();
+        enqueue(&db, "ses_1", &prompt("steered"), Delivery::Steer).unwrap();
+        enqueue(&db, "ses_1", &prompt("queued"), Delivery::Queue).unwrap();
+        enqueue_synthetic(&db, "ses_1", "done", None, None, Delivery::Steer).unwrap();
+        hold_leftovers(&db, "ses_1").unwrap();
+        let rows = db.inbox("ses_1").unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|r| (r.kind.as_str(), r.delivery.as_str()))
+                .collect::<Vec<_>>(),
+            [("user", "queue"), ("user", "queue"), ("synthetic", "steer")]
+        );
+        // The next prompt is a steer: it runs with the background notice, the leftovers after it
+        // one at a time, in the order they were sent.
+        enqueue(&db, "ses_1", &prompt("new"), Delivery::Steer).unwrap();
+        assert_eq!(texts(&db, Scope::Input), vec!["done", "new"]);
+        assert_eq!(texts(&db, Scope::Input), vec!["steered"]);
+        assert_eq!(texts(&db, Scope::Input), vec!["queued"]);
     }
 }

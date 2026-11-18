@@ -167,6 +167,9 @@ pub enum Event {
     Failed {
         session_id: String,
         error: SessionError,
+        /// The turn never started and the user's prompt it would have run was dropped, not
+        /// stored: a front end can give its text back.
+        unsent: bool,
     },
     Interrupted {
         session_id: String,
@@ -176,6 +179,20 @@ pub enum Event {
     /// [`crate::mcp::GLOBAL`].
     FormAsked {
         form: crate::mcp::Form,
+    },
+    /// A form left waiting: answered, or dropped because its server ended the request or went
+    /// away. Session [`crate::mcp::GLOBAL`].
+    FormReplied {
+        id: String,
+    },
+    /// A question left waiting: answered, or dropped with the turn that asked it.
+    QuestionReplied {
+        session_id: String,
+        request_id: String,
+    },
+    /// One of the session's background commands started or ended.
+    BackgroundChanged {
+        session_id: String,
     },
     /// An MCP server's status changed. Session [`crate::mcp::GLOBAL`].
     McpStatusChanged {
@@ -236,6 +253,8 @@ impl Event {
             | Event::RetryScheduled { session_id, .. }
             | Event::PermissionAsked { session_id, .. }
             | Event::QuestionAsked { session_id, .. }
+            | Event::QuestionReplied { session_id, .. }
+            | Event::BackgroundChanged { session_id }
             | Event::PermissionReplied { session_id, .. }
             | Event::TitleChanged { session_id, .. }
             | Event::Succeeded { session_id }
@@ -248,7 +267,9 @@ impl Event {
             | Event::CompactionEnded { session_id, .. }
             | Event::CompactionFailed { session_id, .. } => session_id,
             Event::Usage(snapshot) => &snapshot.session_id,
-            Event::FormAsked { .. } | Event::McpStatusChanged { .. } => crate::mcp::GLOBAL,
+            Event::FormAsked { .. }
+            | Event::FormReplied { .. }
+            | Event::McpStatusChanged { .. } => crate::mcp::GLOBAL,
         }
     }
 }

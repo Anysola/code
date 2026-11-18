@@ -1345,7 +1345,7 @@ fn question_step(q: &mut crate::state::Question, stroke: &Stroke) -> Option<Ques
 /// Replies to a question, or to the MCP form it stands for.
 fn answer(
     core: &anysola_core::api::Core,
-    form: Option<&[(String, String)]>,
+    form: Option<&[crate::form::Field]>,
     id: &str,
     reply: QuestionReply,
 ) {

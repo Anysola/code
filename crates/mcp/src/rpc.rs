@@ -95,6 +95,10 @@ pub trait Handler: Send + Sync + 'static {
 
 type Pending = Mutex<HashMap<u64, oneshot::Sender<Result<Value, Error>>>>;
 
+/// The server's requests being answered, by their id as JSON: a `notifications/cancelled` or a
+/// closed connection ends the answer (an elicitation form then leaves the window).
+type Answering = Mutex<HashMap<String, tokio::task::AbortHandle>>;
+
 pub struct Peer {
     transport: Arc<dyn Transport>,
     pending: Arc<Pending>,
@@ -126,6 +130,7 @@ impl Peer {
             peer.last_error.clone(),
             peer.modern.clone(),
         );
+        let answering: Arc<Answering> = Arc::default();
         tokio::spawn(async move {
             while let Some(item) = incoming.recv().await {
                 match item {
@@ -133,13 +138,16 @@ impl Peer {
                         if modern.load(Ordering::SeqCst) && is_request(&message) {
                             continue;
                         }
-                        dispatch(&transport, &pending, &handler, message);
+                        dispatch(&transport, &pending, &answering, &handler, message);
                     }
                     Incoming::Error(error) => {
                         *last_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(error);
                     }
                     Incoming::Closed => break,
                 }
+            }
+            for (_, answer) in answering.lock().unwrap_or_else(|e| e.into_inner()).drain() {
+                answer.abort();
             }
             let cause = last_error.lock().unwrap_or_else(|e| e.into_inner()).clone();
             let waiting: Vec<_> = pending
@@ -192,11 +200,17 @@ impl Peer {
             .unwrap_or_else(|e| e.into_inner())
             .insert(id, sender);
         let message = json!({"method": method, "params": params, "jsonrpc": "2.0", "id": id});
+        let mut outstanding = Outstanding {
+            peer: self,
+            id,
+            done: false,
+        };
         let exchange = async {
             self.transport.send(message).await?;
             receiver.await.unwrap_or(Err(Error::Closed(None)))
         };
         let result = tokio::time::timeout(timeout, exchange).await;
+        outstanding.done = true;
         let forget = || {
             self.pending
                 .lock()
@@ -249,6 +263,42 @@ impl Peer {
     }
 }
 
+/// A request whose caller may stop waiting (a stopped turn drops its tool call): the server is
+/// told, so it can end what the request started, an elicitation form included.
+struct Outstanding<'a> {
+    peer: &'a Peer,
+    id: u64,
+    done: bool,
+}
+
+impl Drop for Outstanding<'_> {
+    fn drop(&mut self) {
+        if self.done {
+            return;
+        }
+        let waiting = self
+            .peer
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.id);
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        if waiting.is_some() {
+            let params = self
+                .peer
+                .enveloped(json!({"requestId": self.id, "reason": "The request was cancelled."}));
+            let message =
+                json!({"method": "notifications/cancelled", "jsonrpc": "2.0", "params": params});
+            let transport = self.peer.transport.clone();
+            runtime.spawn(async move {
+                let _ = transport.send(message).await;
+            });
+        }
+    }
+}
+
 /// Adds `envelope`'s keys to `params._meta`; keys the caller set win.
 pub fn with_meta(params: Value, envelope: Value) -> Value {
     let mut params = match params {
@@ -270,6 +320,7 @@ fn is_request(message: &Value) -> bool {
 fn dispatch(
     transport: &Arc<dyn Transport>,
     pending: &Pending,
+    answering: &Arc<Answering>,
     handler: &Arc<dyn Handler>,
     message: Value,
 ) {
@@ -298,7 +349,11 @@ fn dispatch(
         (Some(method), Some(id)) => {
             let answer = handler.request(method, message["params"].clone());
             let transport = transport.clone();
-            tokio::spawn(async move {
+            let key = id.to_string();
+            // Held while the task is registered, so a quick answer cannot unregister first.
+            let mut map = answering.lock().unwrap_or_else(|e| e.into_inner());
+            let done = (answering.clone(), key.clone());
+            let task = tokio::spawn(async move {
                 let reply = match answer.await {
                     Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
                     Err(Error::Rpc { code, message, .. }) => {
@@ -308,10 +363,141 @@ fn dispatch(
                         json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32603, "message": error.to_string()}})
                     }
                 };
+                done.0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&done.1);
                 let _ = transport.send(reply).await;
             });
+            map.insert(key, task.abort_handle());
+        }
+        (Some("notifications/cancelled"), None) => {
+            let key = message["params"]["requestId"].to_string();
+            let answer = answering
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&key);
+            if let Some(answer) = answer {
+                answer.abort();
+            }
         }
         (Some(method), None) => handler.notification(method, message["params"].clone()),
         (None, None) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::FutureExt;
+
+    /// Records what the client sends.
+    #[derive(Default)]
+    struct Sent(Mutex<Vec<Value>>);
+
+    impl Transport for Sent {
+        fn send(&self, message: Value) -> BoxFuture<'_, Result<(), Error>> {
+            self.0.lock().unwrap().push(message);
+            async { Ok(()) }.boxed()
+        }
+
+        fn close(&self) -> BoxFuture<'_, ()> {
+            async {}.boxed()
+        }
+    }
+
+    /// Answers every server request with a wait that never ends and counts the waits dropped.
+    #[derive(Default)]
+    struct Waits(Arc<AtomicU64>);
+
+    struct Dropped(Arc<AtomicU64>);
+
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl Handler for Waits {
+        fn request(&self, _: &str, _: Value) -> BoxFuture<'static, Result<Value, Error>> {
+            let dropped = Dropped(self.0.clone());
+            async move {
+                let _dropped = dropped;
+                std::future::pending::<()>().await;
+                Ok(Value::Null)
+            }
+            .boxed()
+        }
+
+        fn notification(&self, _: &str, _: Value) {}
+
+        fn closed(&self, _: String) {}
+    }
+
+    async fn settle() {
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    fn start() -> (
+        Arc<Sent>,
+        mpsc::UnboundedSender<Incoming>,
+        Arc<AtomicU64>,
+        Arc<Peer>,
+    ) {
+        let sent = Arc::new(Sent::default());
+        let (tx, rx) = mpsc::unbounded_channel();
+        let dropped = Arc::new(AtomicU64::new(0));
+        let peer = Peer::start(sent.clone(), rx, Arc::new(Waits(dropped.clone())));
+        (sent, tx, dropped, peer)
+    }
+
+    fn ask(id: Value) -> Incoming {
+        Incoming::Message(
+            json!({"jsonrpc": "2.0", "id": id, "method": "elicitation/create", "params": {}}),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_server_request_ends_its_answer() {
+        let (sent, tx, dropped, _peer) = start();
+        tx.send(ask(json!(7))).unwrap();
+        tx.send(ask(json!("b"))).unwrap();
+        settle().await;
+        tx.send(Incoming::Message(
+            json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+            "params": {"requestId": "b"}}),
+        ))
+        .unwrap();
+        settle().await;
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+        // No answer goes out for a cancelled request.
+        assert!(sent.0.lock().unwrap().is_empty());
+        // A closed connection ends the rest.
+        tx.send(Incoming::Closed).unwrap();
+        settle().await;
+        assert_eq!(dropped.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_request_dropped_by_its_caller_is_cancelled_at_the_server() {
+        let (sent, _tx, _dropped, peer) = start();
+        let call = {
+            let peer = peer.clone();
+            tokio::spawn(async move {
+                peer.request("tools/call", json!({}), Duration::from_secs(60))
+                    .await
+            })
+        };
+        settle().await;
+        call.abort();
+        let _ = call.await;
+        settle().await;
+        let sent = sent.0.lock().unwrap();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[1]["method"], "notifications/cancelled");
+        assert_eq!(sent[1]["params"]["requestId"], sent[0]["id"]);
+        assert!(peer.pending.lock().unwrap().is_empty());
     }
 }

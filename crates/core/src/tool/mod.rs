@@ -210,6 +210,9 @@ impl Default for OutputLimits {
 /// message wakes an idle session.
 pub trait SessionNotifier: Send + Sync {
     fn synthetic(&self, session_id: &str, text: String, description: Option<String>);
+
+    /// One of the session's background commands started or ended.
+    fn background_changed(&self, _session_id: &str) {}
 }
 
 /// Session services behind the agent-facing tools: asking the user, skills, child sessions.

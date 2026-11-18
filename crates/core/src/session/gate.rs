@@ -174,6 +174,8 @@ struct Pending {
     resources: Vec<String>,
     mcp_tool: bool,
     save: Vec<String>,
+    /// What the ask showed with it (an edit's diffs), for [`Asks::pending_events`].
+    metadata: serde_json::Value,
     scope: Arc<Scope>,
     answer: oneshot::Sender<Result<(), PermissionError>>,
 }
@@ -292,6 +294,23 @@ impl Asks {
     fn closed(&self) -> bool {
         self.closed.load(Ordering::SeqCst)
     }
+
+    /// Every ask still waiting, as the events that asked them, oldest first.
+    pub fn pending_events(&self) -> Vec<Event> {
+        self.pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|p| Event::PermissionAsked {
+                session_id: p.session_id.clone(),
+                request_id: p.id.clone(),
+                action: p.action.clone(),
+                resources: p.resources.clone(),
+                save: p.save.clone(),
+                metadata: p.metadata.clone(),
+            })
+            .collect()
+    }
 }
 
 /// Drops a pending ask whose waiter went away (an interrupted turn drops the tool call).
@@ -302,11 +321,17 @@ struct Forget<'a> {
 
 impl Drop for Forget<'_> {
     fn drop(&mut self) {
-        self.asks
-            .pending
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .retain(|p| p.id != self.id);
+        let dropped = {
+            let mut pending = self.asks.pending.lock().unwrap_or_else(|e| e.into_inner());
+            pending
+                .iter()
+                .position(|p| p.id == self.id)
+                .map(|at| pending.remove(at))
+        };
+        // Front ends showing it take it down.
+        if let Some(dropped) = dropped {
+            self.asks.replied(&dropped, PermissionReply::Reject);
+        }
     }
 }
 
@@ -349,6 +374,7 @@ impl PermissionGate for RuleGate {
                     resources: request.resources.clone(),
                     mcp_tool,
                     save: request.save.clone(),
+                    metadata: request.metadata.clone(),
                     scope: self.scope.clone(),
                     answer,
                 });
@@ -719,5 +745,55 @@ mod tests {
             one.ask(request("read", &["x"], &[])).await,
             Err(PermissionError::Declined)
         );
+    }
+
+    #[tokio::test]
+    async fn pending_asks_keep_what_they_showed_until_answered_or_dropped() {
+        let mut setup = setup();
+        let gate = Arc::new(gate(&setup, "s1", Vec::new(), Policies::default()));
+        let ask = |gate: &Arc<RuleGate>| {
+            let gate = gate.clone();
+            tokio::spawn(async move {
+                let mut asked = request("edit", &["a.rs"], &["a.rs"]);
+                asked.metadata = json!({"files": [{"file": "a.rs"}]});
+                gate.ask(asked).await
+            })
+        };
+        let answered = ask(&gate);
+        let id = asked(&mut setup.events).await;
+        let dropped = ask(&gate);
+        let dropped_id = asked(&mut setup.events).await;
+        let pending = setup.asks.pending_events();
+        assert_eq!(pending.len(), 2);
+        let Event::PermissionAsked {
+            session_id,
+            request_id,
+            action,
+            resources,
+            save,
+            metadata,
+        } = &pending[0]
+        else {
+            panic!("not a permission ask");
+        };
+        assert_eq!(
+            (session_id.as_str(), request_id, action.as_str()),
+            ("s1", &id, "edit")
+        );
+        assert_eq!(
+            (resources.as_slice(), save.as_slice()),
+            (
+                ["a.rs".to_string()].as_slice(),
+                ["a.rs".to_string()].as_slice()
+            )
+        );
+        assert_eq!(metadata, &json!({"files": [{"file": "a.rs"}]}));
+        assert!(setup.asks.reply(&id, Reply::Once));
+        assert!(answered.await.unwrap().is_ok());
+        // An interrupted turn drops its tool call and the ask with it.
+        dropped.abort();
+        let _ = dropped.await;
+        assert!(setup.asks.pending_events().is_empty());
+        assert!(!setup.asks.reply(&dropped_id, Reply::Once));
     }
 }
