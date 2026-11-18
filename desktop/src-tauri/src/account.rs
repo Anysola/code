@@ -1,5 +1,5 @@
 //! Signing in and out, the account's plan and windows (`GET /me`), its devices, usage and banked
-//! resets, as the CLI's `login`, `logout`, `status`, `devices`, `usage` and `limits` do them.
+//! resets.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -21,7 +21,7 @@ const ENV_REJECTED: &str = "ANYSOLA_TOKEN is set on this computer and was reject
 
 const OFFLINE: &str = "Can’t reach Anysola. Check your connection.";
 
-/// The core words its account errors for the terminal: as the window says them.
+/// The core's account errors as the window says them.
 fn for_window(error: String) -> String {
     if error.starts_with("Cannot reach ") || error == "Login failed: network error" {
         return OFFLINE.into();
@@ -29,7 +29,7 @@ fn for_window(error: String) -> String {
     if let Some(why) = error.strip_prefix("Could not start login: ") {
         return format!("Couldn’t start signing in: {why}");
     }
-    error.replace("Run `anysola login` again.", "Sign in again.")
+    error
 }
 
 #[tauri::command]
@@ -315,7 +315,7 @@ pub async fn limits_redeem(app: State<'_, App>) -> Answer {
     account(app).await
 }
 
-/// Revokes the stored login and removes it, as `anysola logout`; `ANYSOLA_TOKEN` stays in use.
+/// Revokes the stored login and removes it; `ANYSOLA_TOKEN` stays in use.
 #[tauri::command]
 pub async fn logout(app: State<'_, App>) -> Answer {
     let db = app.db()?;
@@ -413,10 +413,6 @@ mod tests {
             OFFLINE
         );
         assert_eq!(for_window("Login failed: network error".into()), OFFLINE);
-        assert_eq!(
-            for_window("The login code expired. Run `anysola login` again.".into()),
-            "The login code expired. Sign in again."
-        );
         assert_eq!(
             for_window("Could not start login: busy".into()),
             "Couldn’t start signing in: busy"

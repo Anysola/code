@@ -60,7 +60,7 @@ pub(crate) fn read(paths: &Paths) -> Result<(String, Map<String, Value>), String
     }
 }
 
-/// Writes the file in place, as `anysola mcp add` does: a symlinked file stays a link and keeps
+/// Writes the file in place: a symlinked file stays a link and keeps
 /// its permissions (it can hold MCP headers with secrets). Text that doesn't parse back as an
 /// object is never written.
 pub(crate) fn write(file: &Path, text: &str) -> Result<(), String> {

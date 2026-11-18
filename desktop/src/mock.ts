@@ -1225,7 +1225,7 @@ export function mockBridge(): Bridge {
                     : kind === "model"
                       ? "Opus 5.5 isn’t available on your plan right now."
                       : kind === "elsewhere"
-                        ? "This session is open in Anysola Code in a terminal, which is running it now."
+                        ? "This session is running in another Anysola Code app."
                         : "Anysola Code is temporarily unavailable. Try again shortly.",
           })
         if (state === "hooks")

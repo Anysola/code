@@ -559,7 +559,7 @@ impl Core {
         self.shared.refresh_remote().await
     }
 
-    /// `Run \`anysola login\` to sign in to Anysola` after `/config` answered 401.
+    /// [`SIGNED_OUT`](crate::gateway::config::SIGNED_OUT) after `/config` answered 401.
     pub fn connection_status(&self) -> Option<&'static str> {
         self.shared
             .remote()

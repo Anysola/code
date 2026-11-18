@@ -208,13 +208,9 @@ fn usable(token: &str) -> bool {
         .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_alphanumeric()))
 }
 
-/// A sign-in code that ran out: start again, from the window in the desktop app.
+/// A sign-in code that ran out: start again.
 fn expired(what: &str) -> String {
-    if crate::version::client() == "desktop" {
-        format!("{what} Sign in again.")
-    } else {
-        format!("{what} Run `anysola login` again.")
-    }
+    format!("{what} Sign in again.")
 }
 
 #[cfg(test)]

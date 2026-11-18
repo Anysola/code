@@ -1,5 +1,4 @@
-//! Updates: the version Admin marks latest (`GET /v1/code/version`, as `anysola update` reads
-//! it), installed from that version's GitHub release, whose `latest-desktop.json` is signed with
+//! Updates: the version Admin marks latest (`GET /v1/code/version`), installed from that version's GitHub release, whose `latest-desktop.json` is signed with
 //! the key in tauri.conf.json. A version without that release is never offered.
 
 use std::time::Duration;

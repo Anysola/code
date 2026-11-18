@@ -1,6 +1,5 @@
-//! Anysola Code for the desktop: the agent runs in this process (the core crate, as the TUI and
-//! `anysola acp` run it) and the window drives it through these commands. Sessions live in the
-//! same database as the CLI's, so either can continue the other's.
+//! Anysola Code for the desktop: the agent runs in this process (the core crate) and the window
+//! drives it through these commands. Sessions live in `~/.anysola/anysola.db`.
 
 // No console window behind the app on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -1040,7 +1039,7 @@ fn main() {
     path_repair::repair();
     anysola_core::version::set_desktop_client();
     let paths = Paths::from_env();
-    // The same file the CLI appends to, each line marked `role=desktop`; nothing on stdout.
+    // Core's log file, each line marked `role=desktop`; nothing on stdout.
     anysola_core::log::init_as(&paths, None, false, "desktop");
     path_repair::report();
     let (db, db_fault) = match Db::open(&paths.database()) {

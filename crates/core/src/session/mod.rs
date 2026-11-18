@@ -519,8 +519,8 @@ pub(crate) fn no_models(shared: &Shared) -> Option<String> {
     })
 }
 
-/// The turn error without a credential (`anysola run`, ACP, the TUI).
-pub const NOT_SIGNED_IN: &str = "Not signed in. Run `anysola login` or set ANYSOLA_TOKEN.";
+/// The turn error without a credential.
+pub const NOT_SIGNED_IN: &str = "Not signed in. Sign in to Anysola, or set ANYSOLA_TOKEN.";
 
 /// Runs the session until its inbox is empty: a manual compaction or a turn per pending item,
 /// queued prompts one at a time. Stops at the first turn that does not succeed. A turn that

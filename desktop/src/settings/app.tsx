@@ -117,7 +117,7 @@ function DefaultModel() {
               <span className="text-danger">{error}</span>
             ) : (
               <>
-                Kept in <span className="font-mono">{tilde(c.file)}</span>, which the terminal app reads too.
+                Kept in <span className="font-mono">{tilde(c.file)}</span>.
               </>
             )
           }

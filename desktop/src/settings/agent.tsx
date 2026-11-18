@@ -479,7 +479,7 @@ function Personal() {
           aside={<OpenPath path={p.path} small />}
           note={
             <>
-              <span className="font-mono">{tilde(p.path)}</span>. Applies to every folder, in the terminal app too.
+              <span className="font-mono">{tilde(p.path)}</span>. Applies to every folder.
             </>
           }
         >
@@ -611,7 +611,7 @@ function Advanced({ directory }: { directory: string }) {
                 </>
               }
               aside={<OpenPath path={c.file} label="Open config file" small />}
-              note={error ? <span className="text-danger">{error}</span> : "The terminal app reads the same file."}
+              note={error ? <span className="text-danger">{error}</span> : undefined}
             >
               <ConfigToggle id="websearch" label="Web search" hint={over("websearch")} checked={c.websearch} onChange={(websearch) => change({ websearch })} />
               <ConfigToggle id="todo" label="Task list" hint={over("todo") ?? "The agent keeps a list of steps for longer work"} checked={c.todo} onChange={(todo) => change({ todo })} />

@@ -26,7 +26,7 @@ const FILE_LIST: usize = 20_000;
 const STOP_WAIT: Duration = Duration::from_secs(15);
 
 /// Interrupts a running turn and waits for it to end: a revert must not race the turn's last
-/// step (the TUI's undo waits the same way).
+/// step.
 async fn stop_and_wait(core: &Core, session_id: &str) -> Result<(), String> {
     if !core.is_busy(session_id) {
         return Ok(());

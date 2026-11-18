@@ -2007,7 +2007,7 @@ function hookFailure(command: string, message: string) {
 
 /**
  * A turn that ran with queued messages ended `failed` + `unsent`: the core removed one message and
- * doesn't say which. As the terminal app works it out: of the messages this window sent for the
+ * doesn't say which. It is, of the messages this window sent for the
  * turn, the one in neither the conversation nor the queue now. Put back only when exactly one is.
  */
 async function findUnsent(directory: string, sessionId: string) {

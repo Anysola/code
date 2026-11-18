@@ -277,7 +277,7 @@ fn file_name(title: &str) -> String {
     }
 }
 
-/// Asks where to save the session (as `anysola session export` writes it); `null` when the
+/// Asks where to save the session (0.5.1's `{info, messages}` export); `null` when the
 /// dialog was cancelled.
 #[tauri::command]
 pub async fn export_session(

@@ -12,7 +12,7 @@ use crate::storage::Db;
 pub const CACHE_KEY: &str = "anysola:config";
 pub const REFRESH_EVERY: Duration = Duration::from_secs(10 * 60);
 /// The connection status after a `401`.
-pub const SIGNED_OUT: &str = "Run `anysola login` to sign in to Anysola";
+pub const SIGNED_OUT: &str = "Signed out of Anysola. Sign in again.";
 
 /// The remote document's body and the connection status it left.
 #[derive(Debug, Clone, Default, PartialEq)]

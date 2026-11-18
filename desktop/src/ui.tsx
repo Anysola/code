@@ -286,7 +286,7 @@ export function folderName(directory: string) {
 }
 
 /**
- * One key per folder however it is spelled (the CLI, the picker and a terminal differ on
+ * One key per folder however it is spelled (the picker, a stored session and a terminal differ on
  * Windows): Windows paths (drive letter or UNC) ignore case and treat `/` as `\`; any path
  * ignores a trailing separator. Shown and passed on, a folder keeps its first spelling.
  */

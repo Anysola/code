@@ -181,7 +181,7 @@ export type Prefs = {
   }
 }
 
-/** The agent's settings in `~/.anysola/config.json`, which the terminal app reads too. */
+/** The agent's settings in `~/.anysola/config.json`. */
 export type AgentConfig = {
   file: string
   /** `model`; null follows the account's default. */

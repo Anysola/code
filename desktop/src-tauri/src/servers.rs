@@ -1,6 +1,6 @@
 //! MCP servers in Settings: the folder's merged servers with their live status, and adding,
 //! removing, turning off and signing in. Servers of the global config file are changed in that
-//! file (as `anysola mcp add --global` does); others only for this run of the app.
+//! file; others only for this run of the app.
 //!
 //! Nothing here waits for a server to connect: the list comes back as it stands and `mcp` events
 //! tell the window when a status changes.
@@ -340,7 +340,7 @@ pub async fn mcp_list(handle: AppHandle, app: State<'_, App>, directory: String)
     list(&app, &core, &runtime)
 }
 
-/// Adds a server to the global file, as `anysola mcp add --global` writes it.
+/// Adds a server to the global file, in the shape core's config reads.
 #[tauri::command]
 pub async fn mcp_add(
     handle: AppHandle,
@@ -583,7 +583,7 @@ pub async fn mcp_sign_in_wait(
     list(&app, &core, &runtime)
 }
 
-/// Removes the server's stored sign-in, as `anysola mcp logout`, and reconnects so its status
+/// Removes the server's stored sign-in and reconnects so its status
 /// says so.
 #[tauri::command]
 pub async fn mcp_sign_out(
