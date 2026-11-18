@@ -1,10 +1,12 @@
 //! The model runs programs through `execute`; the tool results sent back have 0.5.1's format.
 
 mod common;
+mod replay;
 
+use anysola_core::session::Outcome;
 use anysola_testkit::sse::Stream;
-use anysola_testkit::{FakeGateway, Recorded, Reply, TestHome};
-use common::*;
+use anysola_testkit::{FakeGateway, Recorded, Reply};
+use replay::Run;
 use serde_json::{Value, json};
 
 const PROGRAMS: [&str; 3] = [
@@ -44,9 +46,12 @@ fn programs_run_through_execute() {
             body: stream.finish(&model, Some(1)),
         }
     });
-    let home = TestHome::new(&gateway.url);
-    let out = home.run(BIN, &["run", "go"], None, None);
-    assert_eq!(out.code, 0, "{}", out.stderr);
+    let env = common::env(&gateway.url);
+    let home = &env.home;
+    assert_eq!(
+        Run::default().go(&home.project(), "go"),
+        Ok(Outcome::Succeeded)
+    );
     let last = gateway
         .messages()
         .into_iter()

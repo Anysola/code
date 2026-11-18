@@ -1,11 +1,13 @@
-//! Compaction against the fake gateway: the overflow path replays 0.5.1's captured summary request
+//! Compaction against the fake gateway, one headless turn at a time: the overflow path replays 0.5.1's captured summary request
 //! and the checkpoint request after it; auto compaction runs at the ceiling.
 
 mod common;
+mod replay;
 
+use anysola_core::session::Outcome;
 use anysola_testkit::sse::Stream;
 use anysola_testkit::{FakeGateway, Recorded, Reply};
-use common::*;
+use replay::*;
 use serde_json::json;
 
 fn summary() -> String {
@@ -55,18 +57,20 @@ fn overflow_compaction() {
             too_long()
         }
     });
-    let home = anysola_testkit::TestHome::new(&gateway.url);
-    let dir = proj(&home);
-    let output = run(&home, &dir, &["run", "OVERFLOW test"]);
-    assert_eq!(output.code, 0, "{}", output.stderr);
-    assert_eq!(output.stdout, "Continued.\n");
+    let env = common::env(&gateway.url);
+    let home = &env.home;
+    let dir = proj(home);
+    assert_eq!(
+        Run::default().go(&dir, "OVERFLOW test"),
+        Ok(Outcome::Succeeded)
+    );
     let main: Vec<_> = gateway
         .messages()
         .into_iter()
         .filter(|r| !r.is_title())
         .collect();
     assert_eq!(main.len(), 3);
-    let places = our_places(&home, &dir);
+    let places = our_places(home, &dir);
     assert_request(
         "summary",
         &main[1],
@@ -92,15 +96,15 @@ fn second_overflow_surfaces() {
             too_long()
         }
     });
-    let home = anysola_testkit::TestHome::new(&gateway.url);
-    let dir = proj(&home);
-    let output = run(&home, &dir, &["run", "--format", "json", "big"]);
-    assert_eq!(output.code, 1);
-    assert!(
-        output.stdout.contains("prompt is too long"),
-        "{}",
-        output.stdout
-    );
+    let env = common::env(&gateway.url);
+    let home = &env.home;
+    let dir = proj(home);
+    match Run::default().go(&dir, "big") {
+        Ok(Outcome::Failed(error)) => {
+            assert!(error.message.contains("prompt is too long"), "{error:?}")
+        }
+        other => panic!("{other:?}"),
+    }
 }
 
 #[test]
@@ -125,10 +129,15 @@ fn auto_compaction_at_the_ceiling() {
                 .finish(&model, Some(1)),
         }
     });
-    let home = anysola_testkit::TestHome::new(&gateway.url);
-    let dir = proj(&home);
-    assert_eq!(run(&home, &dir, &["run", "first"]).code, 0);
-    assert_eq!(run(&home, &dir, &["run", "-c", "second"]).code, 0);
+    let env = common::env(&gateway.url);
+    let home = &env.home;
+    let dir = proj(home);
+    assert_eq!(Run::default().go(&dir, "first"), Ok(Outcome::Succeeded));
+    let resume = Run {
+        resume: true,
+        ..Run::default()
+    };
+    assert_eq!(resume.go(&dir, "second"), Ok(Outcome::Succeeded));
     let main: Vec<_> = gateway
         .messages()
         .into_iter()

@@ -1,12 +1,16 @@
-//! `run` with stdio MCP servers: a Code Mode call whose server asks for input (the form is
-//! cancelled and the run exits 1), and a `codemode: false` server whose tools are direct tools.
+//! A headless turn with stdio MCP servers: a Code Mode call whose server asks for input (nobody
+//! answers, the form is cancelled and the model sees that), and a `codemode: false` server whose
+//! tools are direct tools.
 #![cfg(unix)]
 
 mod common;
 
+use anysola_core::api::{Core, Prompt, Target};
+use anysola_core::events::Event;
+use anysola_core::mcp::FormReply;
+use anysola_core::session::{Outcome, TurnOptions};
 use anysola_testkit::sse::Stream;
-use anysola_testkit::{FakeGateway, Recorded, Reply, TestHome};
-use common::BIN;
+use anysola_testkit::{FakeGateway, Recorded, Reply};
 use serde_json::json;
 
 /// A server in `sh`: one tool `ask` whose call asks the client for a name and returns the
@@ -61,7 +65,8 @@ fn elicitation_is_cancelled_and_direct_tools_are_advertised() {
         }
         reply(request, Stream::new().text("done"))
     });
-    let home = TestHome::new(&gateway.url);
+    let env = common::env(&gateway.url);
+    let home = &env.home;
     let server = json!({"type": "local", "command": ["sh", "-c", SERVER]});
     let mut direct = server.clone();
     direct["codemode"] = json!(false);
@@ -70,14 +75,47 @@ fn elicitation_is_cancelled_and_direct_tools_are_advertised() {
         ".anysola/config.json",
         &json!({"mcp": {"servers": {"f": server, "direct": direct}}}).to_string(),
     );
-    let out = home.run(BIN, &["run", "go"], None, None);
+    let runtime = common::runtime();
+    let outcome = runtime.block_on(async {
+        let core = Core::start(&home.project()).await.expect("core starts");
+        let mcp = anysola_mcp::Runtime::attach(&core);
+        let (session, _) = core.open(&Target::New, false).unwrap();
+        let mut events = core.subscribe();
+        let answering = tokio::spawn({
+            let core = core.clone();
+            async move {
+                loop {
+                    match events.recv().await {
+                        Ok(Event::FormAsked { form }) => {
+                            core.reply_form(&form.id, FormReply::Cancelled);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                        _ => {}
+                    }
+                }
+            }
+        });
+        let prompt = Prompt {
+            text: "go".into(),
+            files: Vec::new(),
+            skills: Vec::new(),
+            command: None,
+        };
+        let outcome = core
+            .prompt(&session.id, prompt, TurnOptions::default())
+            .await;
+        answering.abort();
+        anysola_core::mcp::Mcp::shutdown(mcp.as_ref()).await;
+        core.shutdown();
+        outcome
+    });
     let last = gateway
         .messages()
         .into_iter()
         .rev()
         .find(|r| !r.is_title())
         .unwrap();
-    assert_eq!(out.code, 1, "{}\n{}", out.stderr, last.body);
+    assert_eq!(outcome.unwrap(), Outcome::Succeeded, "{}", last.body);
     assert!(
         last.body
             .contains(r#"\"result\": {\n    \"action\": \"cancel\"\n  }"#),

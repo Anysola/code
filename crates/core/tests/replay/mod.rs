@@ -1,17 +1,26 @@
-//! Shared helpers for the integration tests: the scripted gateway behaviour of 0.5.1's capture
-//! logger, the project fixtures of the captures, and the normalization applied before comparing
-//! with a capture.
+//! Request replay: the scripted gateway behaviour of 0.5.1's capture logger, the project fixtures
+//! of the captures, the normalization applied before comparing with a capture, and [`run`], one
+//! headless turn the way a front end drives core.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use anysola_core::api::{Core, Prompt, Target};
+use anysola_core::events::Event;
+use anysola_core::model::ModelRef;
+use anysola_core::session::gate::Reply as Permission;
+use anysola_core::session::{Outcome, TurnOptions};
+use anysola_core::tool::question::QuestionReply;
 use anysola_testkit::sse::Stream;
-use anysola_testkit::{FakeGateway, Output, Recorded, Reply, TestHome};
+use anysola_testkit::{FakeGateway, Recorded, Reply, TestHome};
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
-pub const BIN: &str = env!("CARGO_BIN_EXE_anysola");
+/// What a headless turn answers a question with (the captures were made with this text).
+pub const QUESTION_CANCELLED: &str = "This non-interactive run cannot ask the user questions, so the question was cancelled. Continue without an answer; make reasonable assumptions and state them.";
+/// What a headless turn answers a permission ask with, unless it runs with `auto`.
+pub const PERMISSION_REJECTED: &str = "This non-interactive run cannot ask the user for permission, so the request was rejected. Continue without this action.";
 
 pub fn spec(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -184,8 +193,84 @@ pub fn proj(home: &TestHome) -> PathBuf {
     dir
 }
 
-pub fn run(home: &TestHome, cwd: &Path, args: &[&str]) -> Output {
-    home.run(BIN, args, Some(cwd), None)
+/// One headless turn in `directory`, as its own process would run it: a core of its own on a
+/// runtime of its own, nobody to answer (permission asks are rejected unless `auto`, questions are
+/// dismissed, forms cancelled), then shut down. The environment must already be the test home's.
+#[derive(Default)]
+pub struct Run<'a> {
+    pub model: Option<&'a str>,
+    pub agent: Option<&'a str>,
+    /// Continue the directory's latest session instead of starting one.
+    pub resume: bool,
+    pub auto: bool,
+}
+
+impl Run<'_> {
+    pub fn go(&self, directory: &Path, text: &str) -> Result<Outcome, String> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let core = Core::start(directory).await.map_err(|e| e.to_string())?;
+            let target = if self.resume {
+                Target::Continue
+            } else {
+                Target::New
+            };
+            let (session, _) = core.open(&target, false).map_err(|e| e.to_string())?;
+            if let Some(agent) = self.agent {
+                core.select_agent(&session.id, agent)
+                    .map_err(|e| e.to_string())?;
+            }
+            if let Some(model) = self.model {
+                let model = ModelRef::parse(model).expect("model reference");
+                core.select_model(&session.id, &model)
+                    .map_err(|e| e.to_string())?;
+            }
+            let answering = tokio::spawn(answer(core.clone(), self.auto));
+            let prompt = Prompt {
+                text: text.into(),
+                files: Vec::new(),
+                skills: Vec::new(),
+                command: None,
+            };
+            let outcome = core
+                .prompt(&session.id, prompt, TurnOptions::default())
+                .await
+                .map_err(|e| e.to_string());
+            answering.abort();
+            core.shutdown();
+            outcome
+        })
+    }
+}
+
+async fn answer(core: Core, auto: bool) {
+    let mut events = core.subscribe();
+    loop {
+        match events.recv().await {
+            Ok(Event::QuestionAsked { request_id, .. }) => {
+                core.reply_question(
+                    &request_id,
+                    QuestionReply::Dismissed(Some(QUESTION_CANCELLED.into())),
+                );
+            }
+            Ok(Event::FormAsked { form }) => {
+                core.reply_form(&form.id, anysola_core::mcp::FormReply::Cancelled);
+            }
+            Ok(Event::PermissionAsked { request_id, .. }) => {
+                let reply = if auto {
+                    Permission::Once
+                } else {
+                    Permission::Reject(Some(PERMISSION_REJECTED.into()))
+                };
+                core.reply_permission(&request_id, reply);
+            }
+            Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+        }
+    }
 }
 
 /// Text replacements that turn absolute locations of one environment into placeholders.

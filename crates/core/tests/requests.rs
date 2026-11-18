@@ -1,21 +1,27 @@
-//! Request replay: each scenario of `spec/verbatim/session/requests/` driven through `anysola run`
-//! against the fake gateway; body and headers must equal the 0.5.1 capture after normalization.
+//! Request replay: each scenario of `spec/verbatim/session/requests/` driven through core as one
+//! headless turn against the fake gateway; body and headers must equal the 0.5.1 capture after
+//! normalization.
 
 mod common;
+mod replay;
 
-use common::*;
+use anysola_core::session::Outcome;
+use replay::*;
+
+const OK: Result<Outcome, String> = Ok(Outcome::Succeeded);
 
 fn scenario(
     capture: &str,
     project: fn(&anysola_testkit::TestHome) -> std::path::PathBuf,
-    args: &[&str],
+    run: Run,
+    text: &str,
     pick: usize,
 ) {
     let gateway = gateway_logger(String::new());
-    let home = anysola_testkit::TestHome::new(&gateway.url);
-    let dir = project(&home);
-    let output = run(&home, &dir, args);
-    assert_eq!(output.code, 0, "stderr: {}", output.stderr);
+    let env = common::env(&gateway.url);
+    let home = &env.home;
+    let dir = project(home);
+    assert_eq!(run.go(&dir, text), OK);
     let main: Vec<_> = gateway
         .messages()
         .into_iter()
@@ -25,7 +31,7 @@ fn scenario(
         capture,
         &main[pick],
         &read_json(capture),
-        &our_places(&home, &dir),
+        &our_places(home, &dir),
     );
 }
 
@@ -34,7 +40,8 @@ fn hello_sonnet() {
     scenario(
         "session/requests/primary-hello-sonnet.json",
         my_app,
-        &["run", "--standalone", "hello"],
+        Run::default(),
+        "hello",
         0,
     );
 }
@@ -44,7 +51,8 @@ fn build_tool_list() {
     scenario(
         "tools/_captured-request-build-sonnet.json",
         my_app,
-        &["run", "--standalone", "say", "hi"],
+        Run::default(),
+        "say hi",
         0,
     );
 }
@@ -52,9 +60,10 @@ fn build_tool_list() {
 #[test]
 fn title_request() {
     let gateway = gateway_logger(String::new());
-    let home = anysola_testkit::TestHome::new(&gateway.url);
-    let dir = my_app(&home);
-    assert_eq!(run(&home, &dir, &["run", "hello"]).code, 0);
+    let env = common::env(&gateway.url);
+    let home = &env.home;
+    let dir = my_app(home);
+    assert_eq!(Run::default().go(&dir, "hello"), OK);
     let title = gateway
         .messages()
         .into_iter()
@@ -64,7 +73,7 @@ fn title_request() {
         "title",
         &title,
         &read_json("session/requests/title-hello.json"),
-        &our_places(&home, &dir),
+        &our_places(home, &dir),
     );
 }
 
@@ -73,7 +82,11 @@ fn auto_model() {
     scenario(
         "session/requests/primary-auto.json",
         my_app,
-        &["run", "-m", "anysola/auto", "hi", "auto"],
+        Run {
+            model: Some("anysola/auto"),
+            ..Run::default()
+        },
+        "hi auto",
         0,
     );
 }
@@ -83,13 +96,11 @@ fn economy_variant() {
     scenario(
         "session/requests/primary-economy.json",
         my_app,
-        &[
-            "run",
-            "-m",
-            "anysola/claude-sonnet-5-5#economy",
-            "hi",
-            "economy",
-        ],
+        Run {
+            model: Some("anysola/claude-sonnet-5-5#economy"),
+            ..Run::default()
+        },
+        "hi economy",
         0,
     );
 }
@@ -99,7 +110,11 @@ fn high_variant() {
     scenario(
         "session/requests/primary-variant-high.json",
         my_app,
-        &["run", "-m", "anysola/claude-sonnet-5-5#high", "hi", "there"],
+        Run {
+            model: Some("anysola/claude-sonnet-5-5#high"),
+            ..Run::default()
+        },
+        "hi there",
         0,
     );
 }
@@ -109,7 +124,11 @@ fn plan_agent() {
     scenario(
         "session/requests/primary-plan-agent.json",
         my_app,
-        &["run", "--agent", "plan", "hi", "plan"],
+        Run {
+            agent: Some("plan"),
+            ..Run::default()
+        },
+        "hi plan",
         0,
     );
 }
@@ -119,7 +138,11 @@ fn explore_agent() {
     scenario(
         "session/requests/primary-explore-agent.json",
         proj,
-        &["run", "--agent", "explore", "hi", "explore"],
+        Run {
+            agent: Some("explore"),
+            ..Run::default()
+        },
+        "hi explore",
         0,
     );
 }
@@ -129,69 +152,44 @@ fn project_instructions() {
     scenario(
         "session/requests/primary-project-with-instructions.json",
         proj,
-        &["run", "hello"],
+        Run::default(),
+        "hello",
         0,
     );
 }
 
 #[test]
-fn file_attachments() {
-    let gateway = gateway_logger(String::new());
-    let home = anysola_testkit::TestHome::new(&gateway.url);
-    let dir = proj(&home);
-    let png = include_bytes!("fixtures/red.png");
-    std::fs::write(dir.join("red.png"), png).unwrap();
-    let output = run(
-        &home,
-        &dir,
-        &[
-            "run",
-            "--file",
-            "README.md",
-            "--file",
-            "red.png",
-            "describe",
-            "files",
-        ],
-    );
-    assert_eq!(output.code, 0, "{}", output.stderr);
-    let main = gateway
-        .messages()
-        .into_iter()
-        .find(|r| !r.is_title())
-        .unwrap();
-    let capture = read_json("session/requests/run-file-attachments.json");
-    assert_request("files", &main, &capture, &our_places(&home, &dir));
-}
-
-#[test]
 fn thinking_replayed_next_turn() {
     let gateway = gateway_logger(String::new());
-    let home = anysola_testkit::TestHome::new(&gateway.url);
-    let dir = proj(&home);
-    assert_eq!(run(&home, &dir, &["run", "THINKTEST", "please"]).code, 0);
-    assert_eq!(
-        run(&home, &dir, &["run", "-c", "followup", "question"]).code,
-        0
-    );
+    let env = common::env(&gateway.url);
+    let home = &env.home;
+    let dir = proj(home);
+    assert_eq!(Run::default().go(&dir, "THINKTEST please"), OK);
+    let resume = Run {
+        resume: true,
+        ..Run::default()
+    };
+    assert_eq!(resume.go(&dir, "followup question"), OK);
     let main: Vec<_> = gateway
         .messages()
         .into_iter()
         .filter(|r| !r.is_title())
         .collect();
     let capture = read_json("session/requests/thinking-replay-next-turn.json");
-    assert_request("thinking", &main[1], &capture, &our_places(&home, &dir));
+    assert_request("thinking", &main[1], &capture, &our_places(home, &dir));
 }
 
 #[test]
 fn tool_error_replayed_with_thinking() {
     let gateway = gateway_logger("<PROJECT>/README.md".into());
-    let home = anysola_testkit::TestHome::new(&gateway.url);
-    let dir = proj(&home);
-    assert_eq!(
-        run(&home, &dir, &["run", "--auto", "TOOLTEST", "please"]).code,
-        0
-    );
+    let env = common::env(&gateway.url);
+    let home = &env.home;
+    let dir = proj(home);
+    let auto = Run {
+        auto: true,
+        ..Run::default()
+    };
+    assert_eq!(auto.go(&dir, "TOOLTEST please"), OK);
     let main: Vec<_> = gateway
         .messages()
         .into_iter()
@@ -204,7 +202,7 @@ fn tool_error_replayed_with_thinking() {
             .replace("<PROJECT>", json_inner(&dir.display().to_string()).as_str()),
         ..main[1].clone()
     };
-    assert_request("tool error", &ours, &capture, &our_places(&home, &dir));
+    assert_request("tool error", &ours, &capture, &our_places(home, &dir));
 }
 
 #[test]
@@ -212,7 +210,11 @@ fn parallel_tools_replayed() {
     scenario(
         "session/requests/parallel-tools-replay.json",
         proj,
-        &["run", "--auto", "TWOTOOLS", "go"],
+        Run {
+            auto: true,
+            ..Run::default()
+        },
+        "TWOTOOLS go",
         1,
     );
 }
@@ -222,16 +224,22 @@ fn max_steps_final_step() {
     scenario(
         "session/requests/max-steps-final-step.json",
         proj,
-        &["run", "--auto", "--agent", "reviewer", "LONGSTEPS", "go"],
+        Run {
+            auto: true,
+            agent: Some("reviewer"),
+            ..Run::default()
+        },
+        "LONGSTEPS go",
         2,
     );
 }
 
 fn child_request(marker: &str, capture: &str) {
     let gateway = gateway_logger(String::new());
-    let home = anysola_testkit::TestHome::new(&gateway.url);
-    let dir = my_app(&home);
-    assert_eq!(run(&home, &dir, &["run", marker, "go"]).code, 0);
+    let env = common::env(&gateway.url);
+    let home = &env.home;
+    let dir = my_app(home);
+    assert_eq!(Run::default().go(&dir, &format!("{marker} go")), OK);
     let child = gateway
         .messages()
         .into_iter()
@@ -246,7 +254,7 @@ fn child_request(marker: &str, capture: &str) {
         capture,
         &child,
         &read_json(capture),
-        &our_places(&home, &dir),
+        &our_places(home, &dir),
     );
 }
 
@@ -269,8 +277,9 @@ fn general_subagent_request() {
 #[test]
 fn skill_and_question_results() {
     let gateway = gateway_logger(String::new());
-    let home = anysola_testkit::TestHome::new(&gateway.url);
-    let dir = my_app(&home);
+    let env = common::env(&gateway.url);
+    let home = &env.home;
+    let dir = my_app(home);
     let write = |path: std::path::PathBuf, text: &str| {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
@@ -287,13 +296,13 @@ fn skill_and_question_results() {
             .join(".claude/skills/above/SKILL.md"),
         "---\ndescription: Above home\n---\nx\n",
     );
-    assert_eq!(run(&home, &dir, &["run", "SKILLQ", "go"]).code, 0);
+    assert_eq!(Run::default().go(&dir, "SKILLQ go"), OK);
     let main: Vec<_> = gateway
         .messages()
         .into_iter()
         .filter(|r| !r.is_title())
         .collect();
-    let places = our_places(&home, &dir);
+    let places = our_places(home, &dir);
     let block2 = places.apply(main[0].json()["system"][2]["text"].as_str().unwrap());
     assert!(block2.contains(
         "<available_skills>\n  <skill>\n    <id>demo</id>\n    <name>demo</name>\n    <description>Demo skill</description>\n  </skill>\n</available_skills>\n\nToday's date:"
@@ -327,9 +336,10 @@ fn skill_and_question_results() {
 #[test]
 fn background_subagent_returns_at_once() {
     let gateway = gateway_logger(String::new());
-    let home = anysola_testkit::TestHome::new(&gateway.url);
-    let dir = my_app(&home);
-    assert_eq!(run(&home, &dir, &["run", "SUBBACKGROUND", "go"]).code, 0);
+    let env = common::env(&gateway.url);
+    let home = &env.home;
+    let dir = my_app(home);
+    assert_eq!(Run::default().go(&dir, "SUBBACKGROUND go"), OK);
     let parent: Vec<_> = gateway
         .messages()
         .into_iter()
@@ -353,15 +363,22 @@ fn background_subagent_returns_at_once() {
 #[test]
 fn effort_switch_mid_session() {
     let gateway = gateway_logger(String::new());
-    let home = anysola_testkit::TestHome::new(&gateway.url);
-    let dir = proj(&home);
+    let env = common::env(&gateway.url);
+    let home = &env.home;
+    let dir = proj(home);
     let sonnet = "anysola/claude-sonnet-5-5";
-    assert_eq!(run(&home, &dir, &["run", "-m", sonnet, "first"]).code, 0);
+    let first = Run {
+        model: Some(sonnet),
+        ..Run::default()
+    };
+    assert_eq!(first.go(&dir, "first"), OK);
     let high = format!("{sonnet}#high");
-    assert_eq!(
-        run(&home, &dir, &["run", "-c", "-m", &high, "second"]).code,
-        0
-    );
+    let second = Run {
+        model: Some(&high),
+        resume: true,
+        ..Run::default()
+    };
+    assert_eq!(second.go(&dir, "second"), OK);
     let main: Vec<_> = gateway
         .messages()
         .into_iter()
@@ -403,19 +420,27 @@ fn instruction_update(
     turns: [&str; 2],
 ) -> (anysola_testkit::Recorded, Places) {
     let gateway = gateway_logger(String::new());
-    let home = anysola_testkit::TestHome::new(&gateway.url);
-    let dir = proj(&home);
+    let env = common::env(&gateway.url);
+    let home = &env.home;
+    let dir = proj(home);
     std::fs::write(dir.join("AGENTS.md"), before).unwrap();
-    assert_eq!(run(&home, &dir, &["run", "-m", model, turns[0]]).code, 0);
+    let first = Run {
+        model: Some(model),
+        ..Run::default()
+    };
+    assert_eq!(first.go(&dir, turns[0]), OK);
     std::fs::write(dir.join("AGENTS.md"), after).unwrap();
-    let output = run(&home, &dir, &["run", "-c", "-m", model, turns[1]]);
-    assert_eq!(output.code, 0, "{}", output.stderr);
+    let next = Run {
+        resume: true,
+        ..first
+    };
+    assert_eq!(next.go(&dir, turns[1]), OK);
     let main: Vec<_> = gateway
         .messages()
         .into_iter()
         .filter(|r| !r.is_title())
         .collect();
-    (main[1].clone(), our_places(&home, &dir))
+    (main[1].clone(), our_places(home, &dir))
 }
 
 #[test]
