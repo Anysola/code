@@ -4,8 +4,36 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
-## Unreleased
+## 1.0.9 (2026-11-18)
 
+Hooks: commands of your own that run around the agent's work, in the terminal, the desktop app and `anysola run`.
+
+- Hooks. A hook is a command you configure under `hooks` in your config; it gets the moment as JSON on stdin and
+  answers with its exit code and what it prints.
+  - Five moments: before a tool runs (it can stop the call), after a tool runs (it can tell the agent what it
+    found), when you send a message (it can stop it or add context), when the agent would finish (it can keep it
+    working, for example until the tests pass) and when a session starts (it can add context).
+  - The contract is Claude Code's, so hook scripts written for it run unchanged: the same `hooks` block, the same
+    JSON on stdin and stdout, exit code 2 blocks. Tools are named both ways (`shell` is also `Bash`, `path` is also
+    `file_path`).
+  - Hooks only tighten. A hook can block, ask you, add context or keep a turn going; it cannot allow something your
+    rules, your organization's policies or the session's mode would not.
+  - They cover every route to a tool: calls from Code Mode programs and from subagents fire them too, and they see
+    the input the tool actually runs.
+  - A project's hooks run only after you allowed them, and again after they change. Until you answer a change, the
+    version you allowed keeps running, so the agent cannot switch a project's guard off by editing the file. Hooks
+    in your own config (`~/.anysola/config.json`) run without asking; a guard that must hold against the agent
+    belongs there.
+  - Desktop: Settings → Hooks adds, edits and removes your hooks with a form (three starters to begin from), shows
+    a project's hooks with their state, and turns hooks off. The conversation asks about a project's hooks before
+    your first message, shows what a hook did under the tool it ran for, and puts a message a hook stopped back in
+    the message box.
+  - Terminal: the same lines under each tool, a dialog for a project's hooks, `/hooks` to see and decide, and
+    `anysola hooks` / `anysola hooks trust` / `anysola hooks deny` outside the TUI. `anysola run` skips hooks that
+    are not allowed and says so once.
+  - Not in this release: other moments (before a compaction, when a subagent finishes, …), hooks that are not
+    commands, a hook allowing a call or rewriting its input, and reading `.claude/settings.json`.
+- Changing a file under `~/.anysola` (your config, the database) always asks first, whatever the rules allow.
 - A session forks as often as you like. The second fork of the same session failed with
   `UNIQUE constraint failed: message.id` and left an empty "(fork #2)" session behind; a fork that cannot be made
   now leaves nothing.
