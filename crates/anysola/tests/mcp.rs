@@ -10,20 +10,19 @@ use common::BIN;
 use serde_json::json;
 
 /// A server in `sh`: one tool `ask` whose call asks the client for a name and returns the
-/// client's answer as text. It reads by position, so a request the client gave up on (its
-/// `notifications/cancelled`) is skipped rather than taken for the next one.
-const SERVER: &str = r#"next() { while read l; do case "$l" in *notifications/cancelled*) ;; *) return 0;; esac; done; return 1; }
-next
-echo '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"f","version":"1"}}}'
-next
-next
-echo '{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"ask","inputSchema":{"type":"object","properties":{}}}]}}'
-next
-echo '{"jsonrpc":"2.0","id":"e1","method":"elicitation/create","params":{"mode":"form","message":"Name?","requestedSchema":{"type":"object","properties":{"name":{"type":"string"}}}}}'
-next
-r=$(printf '%s' "$l" | sed 's/"/\\"/g')
-echo '{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"'"$r"'"}]}}'
-cat >/dev/null
+/// client's answer as text. It answers by method and echoes the request's id, as a real server
+/// does: the client may list tools again or give a request up, in any order.
+const SERVER: &str = r#"while read l; do
+id=$(printf '%s' "$l" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+case "$l" in
+*'"method":"initialize"'*) echo '{"jsonrpc":"2.0","id":'"$id"',"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"f","version":"1"}}}' ;;
+*'"method":"tools/list"'*) echo '{"jsonrpc":"2.0","id":'"$id"',"result":{"tools":[{"name":"ask","inputSchema":{"type":"object","properties":{}}}]}}' ;;
+*'"method":"tools/call"'*) call=$id
+echo '{"jsonrpc":"2.0","id":"e1","method":"elicitation/create","params":{"mode":"form","message":"Name?","requestedSchema":{"type":"object","properties":{"name":{"type":"string"}}}}}' ;;
+*'"id":"e1"'*) r=$(printf '%s' "$l" | sed 's/"/\\"/g')
+echo '{"jsonrpc":"2.0","id":'"$call"',"result":{"content":[{"type":"text","text":"'"$r"'"}]}}' ;;
+esac
+done
 "#;
 
 fn reply(request: &Recorded, stream: Stream) -> Reply {
