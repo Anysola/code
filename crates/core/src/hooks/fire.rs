@@ -168,7 +168,13 @@ impl Context {
         let ran = futures_util::future::join_all(runs).await;
         let mut fired = notices;
         for (handler, ran) in handlers.iter().zip(ran) {
-            let verdict = output::interpret(event, &ran);
+            let verdict = match output::unrunnable(event, &handler.command, &ran) {
+                Some(reason) => Verdict {
+                    block: Some(reason),
+                    ..Verdict::default()
+                },
+                None => output::interpret(event, &ran),
+            };
             self.record(event, handler, verdict, &mut fired);
         }
         fired
@@ -330,6 +336,29 @@ impl ToolHooks {
                 || approved.any(Event::PreToolUse)
                 || approved.any(Event::PostToolUse)
         })
+    }
+
+    /// Whether `target` is a file a hook command that can run here names (its script): a write
+    /// to it always asks.
+    pub(crate) fn guards(&self, target: &std::path::Path) -> bool {
+        let Some(scope) = &self.0 else {
+            return false;
+        };
+        let context = &scope.context;
+        let places = super::scripts::Places {
+            home: &context.home,
+            project: &context.project_dir,
+            session: &context.cwd,
+        };
+        let target = crate::config::real_path(target);
+        super::guarded_files(
+            &context.config.hooks,
+            &context.db,
+            &context.approved,
+            &places,
+        )
+        .iter()
+        .any(|file| crate::config::real_path(file) == target)
     }
 
     /// The `stopReason` of a tool hook that said `continue: false` during this step.

@@ -88,6 +88,31 @@ fn text(map: &Map<String, Value>, key: &str) -> Option<String> {
         .map(cap)
 }
 
+/// A PreToolUse hook that could not be run at all (it did not start, or the shell exited 126 or
+/// 127: not executable, not found) blocks the call: the model can cause that (by moving the
+/// project, for one), so a guard must not fail open. The reason names the command, so a user with
+/// a broken hook sees what to fix. `None` for everything else, which [`interpret`] reads.
+pub fn unrunnable(event: Event, command: &str, ran: &Ran) -> Option<String> {
+    if event != Event::PreToolUse {
+        return None;
+    }
+    let detail = match ran {
+        Ran::NotStarted(error) => error.clone(),
+        Ran::Exited {
+            code: Some(code @ (126 | 127)),
+            stderr,
+            ..
+        } => match first_line(stderr) {
+            "" => format!("exit code {code}"),
+            line => format!("exit code {code}: {line}"),
+        },
+        _ => return None,
+    };
+    Some(cap(&format!(
+        "The PreToolUse hook \"{command}\" could not be run ({detail}), so the call was blocked."
+    )))
+}
+
 pub fn interpret(event: Event, ran: &Ran) -> Verdict {
     let mut verdict = Verdict::default();
     let (code, stdout, stderr) = match ran {
@@ -346,6 +371,22 @@ mod tests {
         assert!(pre.block.unwrap().contains("too large"));
         let post = interpret(Event::PostToolUse, &Ran::OutputTooLarge);
         assert!(post.block.is_none() && post.error.is_some());
+    }
+
+    #[test]
+    fn a_guard_that_cannot_run_blocks_only_tool_calls() {
+        let missing = exited(127, "", "sh: ./g16.sh: not found\n");
+        let reason = unrunnable(Event::PreToolUse, "./g16.sh", &missing).unwrap();
+        assert!(
+            reason.contains("\"./g16.sh\"") && reason.contains("not found"),
+            "{reason}"
+        );
+        assert!(unrunnable(Event::PreToolUse, "x", &exited(126, "", "")).is_some());
+        assert!(unrunnable(Event::PreToolUse, "x", &Ran::NotStarted("no shell".into())).is_some());
+        assert!(unrunnable(Event::PreToolUse, "x", &exited(1, "", "")).is_none());
+        assert!(unrunnable(Event::PreToolUse, "x", &Ran::TimedOut { seconds: 1 }).is_none());
+        assert!(unrunnable(Event::PostToolUse, "x", &missing).is_none());
+        assert!(unrunnable(Event::Stop, "x", &Ran::NotStarted("e".into())).is_none());
     }
 
     #[test]

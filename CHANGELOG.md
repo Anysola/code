@@ -18,12 +18,13 @@ Hooks: commands of your own that run around the agent's work, in the terminal, t
     `file_path`).
   - Hooks only tighten. A hook can block, ask you, add context or keep a turn going; it cannot allow something your
     rules, your organization's policies or the session's mode would not.
-  - They cover every route to a tool: calls from Code Mode programs and from subagents fire them too, and they see
-    the input the tool actually runs.
-  - A project's hooks run only after you allowed them, and again after they change. Until you allow a change, the
-    version you allowed before keeps running (refusing the change does not switch it off), so the agent cannot
-    remove a project's guard by editing the file. Hooks in your own config (`~/.anysola/config.json`) run without
-    asking; a guard that must hold against the agent belongs there.
+  - They cover every route to a tool: calls from Code Mode programs and from subagents fire them too. They see
+    the input the tool actually runs, with `file_path` resolved through symlinks, and a `PreToolUse` hook that
+    cannot be run (its command or script is missing) blocks the call instead of letting it through.
+  - A project's hooks run only after you allowed them, and again after they change. In the open session the
+    version you allowed keeps running until you allow the change (refusing it does not switch the guard off), so
+    the agent cannot drop a project's guard mid-session by editing the file. Hooks in your own config
+    (`~/.anysola/config.json`) run without asking; a guard that must hold against the agent belongs there.
   - Desktop: Settings → Hooks adds, edits and removes your hooks with a form (three starters to begin from), shows
     a project's hooks with their state, and turns hooks off. The conversation asks about a project's hooks before
     your first message, shows what a hook did under the tool it ran for, and puts a message a hook stopped back in
@@ -33,8 +34,8 @@ Hooks: commands of your own that run around the agent's work, in the terminal, t
     are not allowed and says so once.
   - Not in this release: other moments (before a compaction, when a subagent finishes, …), hooks that are not
     commands, a hook allowing a call or rewriting its input, and reading `.claude/settings.json`.
-- The agent changing your config (`~/.anysola/config.json`), the database or the desktop app's preferences always
-  asks first, whatever the rules allow.
+- The agent's edit and write tools always ask before changing your config files, the files your hook commands
+  run, the database or the desktop app's preferences, whatever the rules allow.
 - A session forks as often as you like. The second fork of the same session failed with
   `UNIQUE constraint failed: message.id` and left an empty "(fork #2)" session behind; a fork that cannot be made
   now leaves nothing.

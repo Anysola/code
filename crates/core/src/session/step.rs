@@ -1401,10 +1401,10 @@ fn handle(
 }
 
 /// The tool a call names (`bash` runs as `shell`): our name and the one hooks match.
-const GLOBAL_CONFIG: &str = "This call changes Anysola Code's own configuration or data, which needs the user's approval, and nobody can approve it here.";
+const GLOBAL_CONFIG: &str = "This call changes Anysola Code's own configuration, data or hook scripts, which needs the user's approval, and nobody can approve it here.";
 
-/// An `edit` or `write` of a file under the global config roots (data dir and database, legacy
-/// config dir, system dir).
+/// An `edit` or `write` of a file that changes what runs without asking: a global or user config
+/// document, the database ([`crate::config::Config::protects`]), or a script a hook runs.
 fn writes_global_config(anysola: &str, input: &Value, ctx: &ToolContext) -> bool {
     if !matches!(anysola, "edit" | "write") {
         return false;
@@ -1413,7 +1413,7 @@ fn writes_global_config(anysola: &str, input: &Value, ctx: &ToolContext) -> bool
         return false;
     };
     let target = crate::tool::access::resolve_path(ctx, path);
-    crate::config::protected(&ctx.paths, &target)
+    ctx.host.config().protects(&ctx.paths, &target) || ctx.hooks.guards(&target)
 }
 
 fn hook_identity(tools: &[Arc<dyn Tool>], name: &str) -> Option<(String, String)> {

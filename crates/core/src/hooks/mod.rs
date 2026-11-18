@@ -12,6 +12,7 @@ pub(crate) mod fire;
 pub mod matcher;
 pub mod output;
 mod run;
+pub mod scripts;
 pub mod tool;
 
 use std::collections::{HashMap, HashSet};
@@ -418,6 +419,32 @@ pub(crate) fn matching(
         }
     }
     (runs.into_iter().map(|(h, _)| h).collect(), stood)
+}
+
+/// The existing files the commands of every hook that can run in this process name: user and
+/// managed hooks, approved project documents and the approved versions standing in for a change.
+pub(crate) fn guarded_files(
+    configured: &Configured,
+    db: &Db,
+    approved: &Approved,
+    places: &scripts::Places<'_>,
+) -> Vec<std::path::PathBuf> {
+    let mut decisions = decisions(db);
+    let mut commands: Vec<String> = Vec::new();
+    for document in &configured.documents {
+        if document.scope != HookScope::Project || decisions.of(document) == Some(true) {
+            commands.extend(document.handlers.iter().map(|h| h.command.clone()));
+        }
+    }
+    for snapshot in lock(&approved.documents).values() {
+        commands.extend(snapshot.handlers.iter().map(|h| h.command.clone()));
+    }
+    commands.sort();
+    commands.dedup();
+    commands
+        .iter()
+        .flat_map(|command| scripts::files(command, places))
+        .collect()
 }
 
 /// The digest of a project document that no longer defines hooks (or no longer exists).

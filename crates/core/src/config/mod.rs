@@ -110,6 +110,9 @@ pub struct Config {
     managed_policies: Vec<Policy>,
     /// `hooks` of every local document, each with its source and scope (never in `values`).
     pub hooks: crate::hooks::Configured,
+    /// Files of user and managed documents the loader read, and the `ANYSOLA_CONFIG` file even
+    /// when it does not exist yet: writing them changes what runs without asking.
+    pub own_documents: Vec<PathBuf>,
 }
 
 impl Config {
@@ -537,6 +540,23 @@ pub fn protected(paths: &Paths, path: &Path) -> bool {
     files.iter().any(|file| resolve(file) == target)
 }
 
+impl Config {
+    /// [`protected`], plus every user or managed document this config was read from.
+    pub fn protects(&self, paths: &Paths, path: &Path) -> bool {
+        let target = resolve(path);
+        protected(paths, path)
+            || self
+                .own_documents
+                .iter()
+                .any(|file| resolve(file) == target)
+    }
+}
+
+/// `path` with symlinks resolved as far as it exists: the file a write through it changes.
+pub fn real_path(path: &Path) -> PathBuf {
+    resolve(path)
+}
+
 /// A path with symlinks resolved as far as it exists, so a symlinked global root is recognized.
 fn resolve(path: &Path) -> PathBuf {
     if let Ok(real) = crate::paths::canonicalize(path) {
@@ -650,6 +670,9 @@ impl Loader<'_> {
 
     fn file(&mut self, path: &Path) {
         if let Ok(text) = std::fs::read_to_string(path) {
+            if !self.project {
+                self.config.own_documents.push(path.to_path_buf());
+            }
             let dir = path.parent().unwrap_or(Path::new("/")).to_path_buf();
             self.text(&text, &dir, &path.display().to_string());
         }
@@ -698,6 +721,10 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
     loader.directory(&paths.data, &["config.json"]);
     if let Some(file) = crate::env::var_os("CONFIG").filter(|v| !v.is_empty()) {
         loader.file(Path::new(&file));
+        let file = PathBuf::from(file);
+        if !loader.config.own_documents.contains(&file) {
+            loader.config.own_documents.push(file);
+        }
     }
     let project_disabled =
         crate::env::flag("DISABLE_PROJECT_CONFIG") || crate::env::flag("CONFIG_PROJECT_DISABLE");

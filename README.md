@@ -101,15 +101,24 @@ Put them under `hooks` in any config file:
 ```
 
 Hooks can only make the agent more careful: a hook can block a call or have you asked about it, never allow
-something your permissions would not. Hooks from `~/.anysola/config.json` run right away. Hooks from a project run
-only after you approve them, and a change to them waits for your approval again (until you allow it, the hooks you
-already approved keep running in the open session, even if you refuse the change). `anysola hooks` lists every hook and whether it runs, `anysola hooks trust` approves the
+something your permissions would not. Hooks see the call the tool will actually run, and
+`tool_input.file_path` follows symlinks to the real file. A `PreToolUse` hook that cannot be run (the command or
+script is missing or not executable) blocks the call and names the hook, so a broken guard never lets a call
+through silently; other hooks that fail, and any hook that times out, only show an error.
+
+Hooks from `~/.anysola/config.json` run right away. Hooks from a project run only after you approve them, and a
+change to them waits for your approval again; in the session that is open, the hooks you already approved keep
+running until you allow the change, even if you refuse it. A new session runs a changed file's hooks only once
+they are approved. `anysola hooks` lists every hook and whether it runs, `anysola hooks trust` approves the
 project's hooks and `anysola hooks deny` refuses them. `anysola run` never asks: it skips hooks nobody approved and
 says so. `"disable_hooks": true` in `~/.anysola/config.json` or `ANYSOLA_DISABLE_HOOKS=1` turns hooks off; hooks from
 managed settings always run.
 
-Approval covers a hook's command line, not the scripts it runs. A guard that must hold against the agent belongs in
-your own config (`~/.anysola/config.json`) or in managed config, not in a file the agent can edit.
+Changes the agent makes to your own config files, to the files your hook commands run (the scripts named on the
+command line) and to Anysola Code's database always need your approval, even where your permissions would allow
+the edit. This covers the edit and write tools; a shell command you allowed can still change them. A guard that
+must hold against the agent therefore belongs in your own config (`~/.anysola/config.json`) or in managed config,
+with shell commands set to ask: a project's file is the project's, and the agent works in it.
 
 Not in this version: other events (`PreCompact`, `SubagentStop`, `Notification`, …), hook types other than
 `command`, `allow` decisions and rewriting a call's input or output, and reading `.claude/settings.json`.

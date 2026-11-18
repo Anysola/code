@@ -27,10 +27,11 @@ pub fn mcp_name(server: &str, tool: &str) -> String {
     format!("mcp__{server}__{tool}")
 }
 
-/// How a call's tool resolves its `path`, so `file_path` names the file the tool touches.
+/// How a call's tool resolves its `path`, then through symlinks as far as the path exists, so
+/// `file_path` names the file the tool actually changes (a project's `notes.md` may link outside).
 pub(crate) fn resolver(ctx: &crate::tool::ToolContext) -> impl Fn(&str) -> String + '_ {
     |path| {
-        crate::tool::access::resolve_path(ctx, path)
+        crate::config::real_path(&crate::tool::access::resolve_path(ctx, path))
             .display()
             .to_string()
     }
@@ -115,12 +116,25 @@ mod tests {
     #[test]
     fn file_path_is_the_path_the_tool_resolves() {
         let dir = tempfile::tempdir().unwrap();
-        let test = crate::tool::test_support::context(dir.path());
+        let root = crate::paths::canonicalize(dir.path()).unwrap();
+        let test = crate::tool::test_support::context(&root);
         let resolve = resolver(&test.ctx);
         assert_eq!(
             resolve("src/../a.rs"),
-            dir.path().join("a.rs").display().to_string()
+            root.join("a.rs").display().to_string()
         );
+        #[cfg(unix)]
+        {
+            std::fs::create_dir(root.join("outside")).unwrap();
+            std::fs::write(root.join("outside/real.md"), "x").unwrap();
+            std::os::unix::fs::symlink(root.join("outside/real.md"), root.join("notes.md"))
+                .unwrap();
+            assert_eq!(
+                resolve("notes.md"),
+                root.join("outside/real.md").display().to_string(),
+                "through the symlink"
+            );
+        }
         assert_eq!(
             resolve("~/notes.txt"),
             test.ctx.paths.home.join("notes.txt").display().to_string()

@@ -814,13 +814,17 @@ fn switches_turn_off_user_and_project_hooks() {
 }
 
 #[test]
-fn timeouts_and_missing_commands_are_non_blocking_errors() {
+fn timeouts_and_missing_commands_elsewhere_are_non_blocking_errors() {
     let gateway = calls_once("shell", json!({"command": "touch made"}));
     let env = env(&gateway.url);
-    let config = json!({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
-        {"type": "command", "command": "sleep 10", "timeout": 1},
-        {"type": "command", "command": "/no/such/hook-command"},
-    ]}]}});
+    let config = json!({"hooks": {
+        "PreToolUse": [{"matcher": "Bash", "hooks": [
+            {"type": "command", "command": "sleep 10", "timeout": 1},
+        ]}],
+        "PostToolUse": [{"matcher": "Bash", "hooks": [
+            {"type": "command", "command": "/no/such/hook-command"},
+        ]}],
+    }});
     user_config(&env, config);
     let runtime = runtime();
     let core = runtime.block_on(common::core(&env));
@@ -1130,6 +1134,15 @@ fn approved_project_hooks_survive_an_edit_until_it_is_reviewed() {
 /// A `write` of `target(home)` with every action allowed by rules: the permission asks it
 /// raised (each rejected) and whether the file was written.
 fn write_asks(target: fn(&Path) -> PathBuf, agent: Option<&str>) -> (Vec<String>, bool) {
+    write_asks_with(target, agent, |_| json!({}))
+}
+
+/// [`write_asks`] with `prepare(home)` run first; what it returns joins the user config.
+fn write_asks_with(
+    target: fn(&Path) -> PathBuf,
+    agent: Option<&str>,
+    prepare: fn(&Path) -> Value,
+) -> (Vec<String>, bool) {
     let path: Arc<std::sync::OnceLock<String>> = Arc::default();
     let shared = path.clone();
     let gateway = FakeGateway::start(move |request, _| {
@@ -1145,10 +1158,9 @@ fn write_asks(target: fn(&Path) -> PathBuf, agent: Option<&str>) -> (Vec<String>
     let env = env(&gateway.url);
     let file = target(&env.home.home());
     path.set(file.display().to_string()).unwrap();
-    user_config(
-        &env,
-        json!({"permissions": [{"action": "*", "resource": "*", "effect": "allow"}]}),
-    );
+    let mut config = prepare(&env.home.home());
+    config["permissions"] = json!([{"action": "*", "resource": "*", "effect": "allow"}]);
+    user_config(&env, config);
     let runtime = runtime();
     let core = runtime.block_on(common::core(&env));
     let (session, _) = core.open(&Target::New, false).unwrap();
@@ -1318,4 +1330,115 @@ fn code_mode_hooks_see_the_repaired_input() {
         .unwrap();
     assert!(!marker.exists());
     assert!(last(&model_requests(&gateway)[1]).contains("not that one"));
+}
+
+#[test]
+fn a_pre_tool_use_guard_that_cannot_run_blocks() {
+    let gateway = calls_once("shell", json!({"command": "touch made"}));
+    let env = env(&gateway.url);
+    user_config(
+        &env,
+        json!({"hooks": hooks(&[("PreToolUse", Some("Bash"), "/no/such/hook-command")])}),
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    assert!(!env.home.project().join("made").exists());
+    let result = last(&model_requests(&gateway)[1]);
+    assert!(
+        result.contains("could not be run") && result.contains("/no/such/hook-command"),
+        "{result}"
+    );
+}
+
+#[test]
+fn a_moved_project_does_not_let_a_relative_guard_fail_open() {
+    let gateway = calls_once(
+        "shell",
+        json!({"command": "touch /tmp/never-made-by-anysola-test"}),
+    );
+    let env = env(&gateway.url);
+    let script = env.home.write("proj/guard.sh", "#!/bin/sh\nexit 0\n");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    user_config(
+        &env,
+        json!({"hooks": hooks(&[("PreToolUse", Some("Bash"), "./guard.sh")])}),
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    std::fs::rename(env.home.project(), env.home.home().join("proj-moved")).unwrap();
+    let _ = runtime.block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()));
+    let requests = model_requests(&gateway);
+    assert!(requests.len() >= 2);
+    assert!(
+        last(&requests[1]).contains("could not be run"),
+        "{}",
+        last(&requests[1])
+    );
+}
+
+#[test]
+fn hook_scripts_are_always_asked_before_a_write() {
+    let (asked, written) = write_asks_with(
+        |home| home.join("hooks/guard.sh"),
+        None,
+        |home| {
+            std::fs::create_dir_all(home.join("hooks")).unwrap();
+            std::fs::write(home.join("hooks/guard.sh"), "exit 2\n").unwrap();
+            json!({"hooks": hooks(&[("PreToolUse", Some("Glob"), "sh ~/hooks/guard.sh --strict")])})
+        },
+    );
+    assert!(!asked.is_empty(), "the user was asked");
+    assert!(!written);
+}
+
+#[test]
+fn the_anysola_config_file_is_always_asked_before_a_write() {
+    let (asked, written) = write_asks_with(
+        |home| home.join("custom.json"),
+        None,
+        |home| {
+            // SAFETY: tests in this binary hold the environment lock while they run.
+            unsafe { std::env::set_var("ANYSOLA_CONFIG", home.join("custom.json")) };
+            json!({})
+        },
+    );
+    unsafe { std::env::remove_var("ANYSOLA_CONFIG") };
+    assert!(
+        !asked.is_empty(),
+        "asked although the file did not exist yet"
+    );
+    assert!(!written);
+}
+
+#[test]
+fn hooks_see_the_file_a_symlink_points_to() {
+    let gateway = calls_once(
+        "write",
+        json!({"path": "notes.md", "content": "overwritten"}),
+    );
+    let env = env(&gateway.url);
+    let outside = env.home.write("outside.txt", "original");
+    std::os::unix::fs::symlink(&outside, env.home.project().join("notes.md")).unwrap();
+    let project = env.home.project().display().to_string();
+    let guard = format!(
+        r#"grep -q '"file_path":"{project}/' || {{ echo 'only inside the project' >&2; exit 2; }}"#
+    );
+    user_config(
+        &env,
+        json!({"hooks": hooks(&[("PreToolUse", Some("Write"), &guard)])}),
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&outside).unwrap(), "original");
+    assert!(last(&model_requests(&gateway)[1]).contains("only inside the project"));
 }
