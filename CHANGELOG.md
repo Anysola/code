@@ -4,6 +4,62 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.0.8 (2026-11-18)
+
+Anysola Code Desktop for everyday use: nothing waits out of sight, nothing typed is lost, and nothing needs a
+terminal.
+
+- Nothing waits out of sight.
+  - A permission, a question or a form that is waiting comes back when you reopen its session or the app catches
+    up; it used to be gone while the turn waited for it forever.
+  - MCP servers can ask with a form (elicitation): the conversation shows it with a control per field, and you
+    submit, decline or dismiss it. Forms were declined without being shown.
+  - A message sent while a turn runs shows as a chip above the message box: send it now (it joins the running
+    turn), edit it, or remove it. After a stop or a failure, what was still waiting stays there with Send.
+  - Commands the agent left running in the background are listed above the message box, each with Stop.
+  - While it works, the conversation says what runs now and for how long; a finished turn says how long it took;
+    Stop answers at once and leaves "Stopped." in the conversation. A long-running command shows as a row while
+    it runs.
+  - The footer shows how full the model's context is, with Compact when it fills.
+  - Closing the window while a turn runs asks first. An update waits for the running turn, shows its download,
+    and stops MCP servers and background commands before it restarts.
+- Nothing typed is lost.
+  - The draft, its images and its review comments belong to their session and survive a restart.
+  - A message that could not be sent goes back into the message box.
+  - Arrow up recalls what you sent; a long paste folds into a chip; Escape stops a turn on the second press.
+- Errors say what to do. A full usage window shows when it starts over, with "Use a saved reset" and "See usage"
+  at the message box; a lost connection says so and retries; an expired sign-in offers Sign in again; a model
+  that is not available opens the model list. A database that cannot be opened has its own screen.
+- Files and folders open in your editor: VS Code, Cursor, Windsurf, Zed, the JetBrains IDEs, Sublime Text and
+  Notepad++ are found on their own; Settings › General picks one. Paths in the conversation, in Review and in
+  links open there; each also has Reveal in folder and Copy path. With no editor, a file is shown in its folder.
+- Programs are found when the app starts from the Start menu or a desktop launcher: the app reads your shell's
+  PATH (Linux) or the registry's (Windows), so `npx`, `uvx`, `git` and `gh` are found as they are in a terminal.
+- Git without a terminal.
+  - Commit lists the changed files with checkboxes and names where the commit goes.
+  - Conflicts are listed, each opens in the editor, and committing waits for them: Commit used to commit the
+    conflict markers.
+  - A missing name and email are asked for in place; Pull appears when the remote is ahead; a missing Git says so
+    with a link.
+  - Errors are sentences (no credentials, a rejected push, a signing failure, a locked index), and nothing waits
+    forever on a prompt no one can see.
+  - Open pull request works for GitLab, Bitbucket and Azure remotes, picks the branch's own remote, and opens
+    the existing pull request when there is one.
+- Finding your way.
+  - The sign-in and home screens say what the app is; a new session offers starters and names its mode.
+  - Shortcuts: Ctrl B folds the sidebar, Ctrl L goes to the message box, Ctrl . stops, Alt Up/Down moves between
+    sessions, Ctrl Shift N starts a session in the same folder, Ctrl Shift D opens Review, Ctrl plus/minus zooms,
+    and Ctrl / lists them all.
+  - Icon buttons have tooltips; menus work from the keyboard and stay inside the window at any size.
+  - The session's header has a menu (rename, open in the editor, open folder, copy path, export, delete);
+    deleting a session can be undone for a few seconds.
+  - The account menu links to help, feedback and what's new.
+  - A reply can be copied; sent images show as thumbnails and open full size.
+- MCP: signing in can be cancelled (the browser step no longer holds its port), a server that fails or needs a
+  sign-in says so in the conversation, and a command that is not found says which program is missing.
+- The terminal app answers an MCP form's choices with the option's value and supports forms with several
+  choices.
+
 ## 1.0.7 (2026-11-17)
 
 Settings for Anysola Code Desktop, and a conversation that starts folded.
