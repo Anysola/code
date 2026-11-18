@@ -111,7 +111,7 @@ impl Groups {
         if !open {
             self.hidden.extend(
                 run.iter()
-                    .filter(|(_, p)| !matches!(p, Part::Tool(t) if t.awaiting))
+                    .filter(|(_, p)| !matches!(p, Part::Tool(t) if t.awaiting || hooked(t)))
                     .map(|(at, _)| *at),
             );
         }
@@ -122,6 +122,13 @@ impl Groups {
             open,
         });
     }
+}
+
+/// A hook stopped the call, failed, or told the user something: the call stays in view.
+fn hooked(tool: &Tool) -> bool {
+    super::tools::hook_entries(tool.metadata.get("hooks"))
+        .iter()
+        .any(|(outcome, _)| super::tools::loud(outcome))
 }
 
 fn exploring(tool: &Tool) -> bool {

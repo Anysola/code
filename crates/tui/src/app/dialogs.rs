@@ -85,6 +85,7 @@ impl App {
                 self.push(Dialog::Select(select));
             }
             "opencode.status" => self.push(Dialog::Body(lists::status(&self.mcp_rows()))),
+            "hooks.list" => self.open_hooks(),
             "provider.connect" => {
                 let connection = if anysola_core::gateway::env_token().is_some() {
                     Connection::Env
@@ -452,6 +453,12 @@ impl App {
                 if close {
                     return self.close_dialog();
                 }
+                // Keys typed as an approval appears were meant for something else.
+                if let BodyKind::HookTrust { shown, .. } = &b.kind
+                    && super::keys::settling(*shown, now())
+                {
+                    return;
+                }
                 match key {
                     "up" | "k" => b.scroll = b.scroll.saturating_sub(1),
                     "down" | "j" => b.scroll = (b.scroll + 1).min(b.lines.len().saturating_sub(1)),
@@ -607,6 +614,11 @@ impl App {
                     lists::mcp_actions(s, &rows);
                 }
             }
+            Kind::Hooks => {
+                if let Some(s) = self.top_select() {
+                    lists::hook_actions(s);
+                }
+            }
             _ => {}
         }
     }
@@ -701,6 +713,7 @@ impl App {
                 let session = session.clone();
                 if let Some(id) = value {
                     let _ = self.core.cancel_pending(&id);
+                    self.steered.remove(&id);
                     if let Some(s) = self.state.sessions.get_mut(&session) {
                         s.queued.retain(|q| *q != id);
                     }
@@ -882,6 +895,7 @@ impl App {
                     let _ = self.core.set_delivery(&inbox, Delivery::Queue);
                 } else {
                     let _ = self.core.cancel_pending(&inbox);
+                    self.steered.remove(&inbox);
                     if let Some(s) = self.state.sessions.get_mut(&session) {
                         s.queued.retain(|q| *q != inbox);
                         let item = s.items.iter().position(|i| {
@@ -917,6 +931,7 @@ impl App {
                     _ => self.run_command("session.move", None),
                 }
             }
+            Kind::Hooks => self.review_hooks(&value),
             Kind::DiffSource => self.diff_source_chosen(&value),
             Kind::DiffBase => self.diff_base_chosen(value),
             Kind::Skills => {
@@ -1180,6 +1195,9 @@ impl App {
             (BodyKind::Exported { path: text } | BodyKind::Error { details: text }, "c") => {
                 term::copy(&text);
                 self.toast(None, "Copied to clipboard".into(), Variant::Success);
+            }
+            (BodyKind::HookTrust { path, digest, .. }, "return") => {
+                self.decide_hooks(&path, &digest, button.as_deref() == Some("Allow"));
             }
             (BodyKind::Update, "return") => match button.as_deref() {
                 Some("Update") => self.install_update(),

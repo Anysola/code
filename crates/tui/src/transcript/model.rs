@@ -322,6 +322,15 @@ pub fn from_messages(
                 )));
             }
             Message::Skill(data) => items.push(Item::Notice(format!("→ Skill {}", data.name))),
+            Message::Synthetic(data) => {
+                if let Some(notice) = data
+                    .description
+                    .as_deref()
+                    .and_then(|d| hook_notice(d, &data.text))
+                {
+                    items.push(Item::Notice(notice));
+                }
+            }
             Message::Compaction(data) => items.push(Item::Compaction {
                 running: data.status == "running" || data.status == "pending",
                 summary: data.summary,
@@ -331,6 +340,35 @@ pub fn from_messages(
         }
     }
     items
+}
+
+/// Descriptions of the synthetic rows that carry hook text to the model (`hooks::fire::CONTEXT`
+/// and `STOP`, not exported by the core).
+pub const HOOK_CONTEXT: &str = "Hook context";
+pub const STOP_HOOK: &str = "Stop hook";
+
+/// The notice a hook's synthetic row shows (other synthetic rows stay hidden): what the hook
+/// did and the first line of what it said.
+pub fn hook_notice(description: &str, text: &str) -> Option<String> {
+    let label = match description {
+        HOOK_CONTEXT => "Hook added context",
+        STOP_HOOK => "Stop hook kept the turn going",
+        _ => return None,
+    };
+    let first = crate::text::strip_ansi(text)
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(|l| {
+            let words = l.split_whitespace().collect::<Vec<_>>().join(" ");
+            crate::text::truncate(&crate::text::visible(&words), 200)
+        })
+        .unwrap_or_default();
+    Some(if first.is_empty() {
+        format!("↳ {label}")
+    } else {
+        format!("↳ {label}: {first}")
+    })
 }
 
 fn assistant<'a>(items: &'a mut [Item], message_id: &str) -> Option<&'a mut Assistant> {
@@ -616,5 +654,49 @@ pub fn clear_awaiting(items: &mut [Item]) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anysola_core::session::message::{Created, SyntheticData};
+
+    fn synthetic(text: &str, description: Option<&str>) -> Message {
+        Message::Synthetic(SyntheticData {
+            time: Created { created: 1 },
+            text: text.into(),
+            description: description.map(str::to_string),
+            extra: Map::new(),
+        })
+    }
+
+    #[test]
+    fn hook_rows_show_and_other_synthetic_rows_stay_hidden() {
+        let name = |id: &str| id.to_string();
+        let items = from_messages(
+            vec![
+                (
+                    "a".into(),
+                    synthetic("branch is main\nmore", Some(HOOK_CONTEXT)),
+                ),
+                ("b".into(), synthetic("\n  tests fail: 3", Some(STOP_HOOK))),
+                ("c".into(), synthetic("plan reminder", Some("Plan"))),
+                ("d".into(), synthetic("note", None)),
+            ],
+            None,
+            &name,
+        );
+        assert_eq!(
+            items,
+            vec![
+                Item::Notice("↳ Hook added context: branch is main".into()),
+                Item::Notice("↳ Stop hook kept the turn going: tests fail: 3".into()),
+            ]
+        );
+        assert_eq!(
+            hook_notice(STOP_HOOK, ""),
+            Some("↳ Stop hook kept the turn going".into())
+        );
     }
 }

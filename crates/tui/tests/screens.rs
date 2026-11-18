@@ -996,10 +996,10 @@ fn slash_list_home_context() {
         server: &server,
     };
     let (rows, pad) = anysola_tui::complete::slash_rows(&scope);
-    // `/reset` is new in 1.0.1.
+    // `/reset` is new in 1.0.1, `/hooks` in 1.0.9.
     let ours: Vec<String> = rows
         .iter()
-        .filter(|r| r.display != "/reset")
+        .filter(|r| r.display != "/reset" && r.display != "/hooks")
         .map(|r| {
             format!("┃ {:width$}{}", r.display, r.description, width = pad + 1)
                 .trim_end()
@@ -1027,8 +1027,8 @@ fn slash_popup_scroll_series() {
         server: &server,
     };
     let (mut rows, pad) = anysola_tui::complete::slash_rows(&scope);
-    // `/reset` is new in 1.0.1, so not in the 0.5.1 captures.
-    rows.retain(|r| r.display != "/reset");
+    // `/reset` (1.0.1) and `/hooks` (1.0.9) are new, so not in the 0.5.1 captures.
+    rows.retain(|r| r.display != "/reset" && r.display != "/hooks");
     // `/plugins` is not carried over (decision 5) but sits in the 0.5.1 captures.
     let at = rows.iter().position(|r| r.display == "/project").unwrap();
     rows.insert(
@@ -1071,8 +1071,9 @@ fn command_palette_scroll_series() {
     // `Toggle console` and `Plugins` are not carried over but sit in the 0.5.1 captures.
     let list = || {
         let mut list = palette::dialog(&keymap, &cx);
-        // New in 1.0.1, so not in the 0.5.1 captures.
-        list.options.retain(|o| o.title != "Use a banked reset");
+        // New in 1.0.1 and 1.0.9, so not in the 0.5.1 captures.
+        list.options
+            .retain(|o| o.title != "Use a banked reset" && o.title != "Hooks");
         let at = list
             .options
             .iter()
@@ -2045,4 +2046,317 @@ fn slash_popup_over_transcript() {
         );
         assert_eq!(line.trim_start().chars().next(), Some('┃'), "{line}");
     }
+}
+
+fn hooked(tool: &mut Tool, entries: serde_json::Value) {
+    tool.metadata.insert("hooks".into(), entries);
+}
+
+#[test]
+fn hook_rows_under_tools() {
+    // A shell call a PreToolUse hook blocked: the hook's reason, once, inside the block.
+    let mut shell = tool("shell", json!({"command": "rm -rf build"}), Status::Failed);
+    shell.error = Some("A PreToolUse hook blocked this call: no deleting build/".into());
+    hooked(
+        &mut shell,
+        json!([{"event": "PreToolUse", "command": "./guard.sh", "outcome": "blocked", "message": "no deleting build/\nsee CONTRIBUTING"}]),
+    );
+    // An edit whose lint hook answered: its feedback, and the notes cut from the error.
+    let mut edit = tool(
+        "edit",
+        json!({"filePath": "/home/user/my-app/hello.txt"}),
+        Status::Completed,
+    );
+    edit.metadata = json!({"files": [{"patch": PATCH}]})
+        .as_object()
+        .unwrap()
+        .clone();
+    hooked(
+        &mut edit,
+        json!([{"event": "PostToolUse", "command": "npm run lint", "outcome": "feedback", "message": "\u{1b}[31m2 lint errors\u{1b}[0m"}]),
+    );
+    // A read inside a closed exploration group: a failed hook keeps it in view.
+    let mut read = tool(
+        "read",
+        json!({"filePath": "/home/user/my-app/a.txt"}),
+        Status::Completed,
+    );
+    hooked(
+        &mut read,
+        json!([{"event": "PostToolUse", "command": "./audit", "outcome": "error", "message": "./audit: not found"}]),
+    );
+    let quiet = tool("glob", json!({"pattern": "*.md"}), Status::Completed);
+    let mut other = tool("deploy", json!({"target": "staging"}), Status::Failed);
+    other.error = Some("HTTP 500\n\nPostToolUse hook context: retry later".into());
+    hooked(
+        &mut other,
+        json!([{"event": "PostToolUse", "command": "./ctx", "outcome": "context", "message": "retry later"}]),
+    );
+    let items = vec![Item::Assistant(Assistant {
+        id: "msg_a".into(),
+        agent: "build".into(),
+        model: "Claude Sonnet 5.5".into(),
+        created: now(),
+        turn_start: now(),
+        parts: vec![
+            Part::Tool(shell),
+            Part::Tool(edit),
+            Part::Tool(read),
+            Part::Tool(quiet),
+            Part::Text {
+                text: "next".into(),
+                done: true,
+            },
+            Part::Tool(other),
+        ],
+        ..Assistant::default()
+    })];
+    let mut state = session(120, 50, items);
+    state.settings.grouping = true;
+    let screen = render(&state);
+    println!("{screen}");
+    assert_eq!(screen.matches("no deleting build/").count(), 1, "{screen}");
+    assert!(
+        screen.contains("↳ Blocked by hook: no deleting build/"),
+        "{screen}"
+    );
+    assert!(!screen.contains("A PreToolUse hook blocked"), "{screen}");
+    assert!(!screen.contains("CONTRIBUTING"), "{screen}");
+    assert!(
+        screen.contains("↳ Hook feedback: 2 lint errors"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("↳ Hook failed: ./audit: not found"),
+        "{screen}"
+    );
+    assert!(screen.contains("Read a.txt"), "{screen}");
+    assert!(
+        screen.contains("↳ Hook added context: retry later"),
+        "{screen}"
+    );
+    assert_eq!(screen.matches("retry later").count(), 1, "{screen}");
+}
+
+#[test]
+fn hook_rows_under_execute_calls() {
+    let mut execute = tool("execute", json!({"code": "..."}), Status::Completed);
+    execute.metadata = json!({
+        "toolCalls": [
+            {"tool": "shell", "status": "error", "input": {}, "hooks": [
+                {"event": "PreToolUse", "command": "./guard.sh", "outcome": "blocked", "message": "nope"}
+            ]},
+            {"tool": "read", "status": "completed", "input": {}}
+        ],
+        "hooks": [
+            {"event": "PreToolUse", "command": "./guard.sh", "outcome": "blocked", "message": "nope"},
+            {"event": "PostToolUse", "command": "./log", "outcome": "notice", "message": "logged"}
+        ]
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    let items = vec![Item::Assistant(Assistant {
+        id: "msg_a".into(),
+        agent: "build".into(),
+        model: "Claude Sonnet 5.5".into(),
+        created: now(),
+        turn_start: now(),
+        parts: vec![Part::Tool(execute)],
+        ..Assistant::default()
+    })];
+    let screen = render(&session(120, 30, items));
+    println!("{screen}");
+    // The nested entry under its call, execute's own under execute: none shown twice.
+    assert_eq!(
+        screen.matches("Blocked by hook: nope").count(),
+        1,
+        "{screen}"
+    );
+    assert!(screen.contains("↳ Hook: logged"), "{screen}");
+    let lines: Vec<&str> = screen.lines().collect();
+    let call = lines.iter().position(|l| l.contains("✗ shell")).unwrap();
+    assert!(
+        lines[call + 1].contains("Blocked by hook: nope"),
+        "{screen}"
+    );
+}
+
+fn hook(
+    event: &str,
+    matcher: Option<&str>,
+    command: &str,
+    source: &str,
+) -> anysola_core::api::HookInfo {
+    anysola_core::api::HookInfo {
+        event: event.into(),
+        matcher: matcher.map(str::to_string),
+        command: command.into(),
+        timeout: 600,
+        source: source.into(),
+        scope: anysola_core::api::HookScope::User,
+        active: true,
+    }
+}
+
+fn project_document(decision: Option<bool>) -> anysola_core::api::HookDocument {
+    let mut lint = hook(
+        "PostToolUse",
+        Some("Edit|Write"),
+        "npm run lint --silent",
+        "/home/user/my-app/anysola.json",
+    );
+    lint.scope = anysola_core::api::HookScope::Project;
+    lint.active = decision == Some(true);
+    let mut guard = lint.clone();
+    guard.event = "PreToolUse".into();
+    guard.matcher = Some("Bash".into());
+    guard.command = "./scripts/guard.sh --strict --log /tmp/guard.log --deny 'rm -rf' --deny 'git push --force' --deny 'curl | sh'".into();
+    anysola_core::api::HookDocument {
+        path: "/home/user/my-app/anysola.json".into(),
+        digest: "abc".into(),
+        decision,
+        hooks: vec![guard, lint],
+    }
+}
+
+#[test]
+fn hook_trust_dialog() {
+    let document = project_document(None);
+    let body = lists::hook_trust(&document, "anysola.json", false, 0);
+    assert_eq!(body.buttons, ["Not now", "Allow"]);
+    assert_eq!(body.active, 0, "an Enter typed by mistake does not allow");
+    let screen = render(&dialog(under(1), Dialog::Body(body)));
+    println!("{screen}");
+    assert!(
+        screen.contains("The hooks in anysola.json are waiting for your answer"),
+        "{screen}"
+    );
+    assert!(screen.contains("PreToolUse Bash"), "{screen}");
+    assert!(screen.contains("PostToolUse Edit|Write"), "{screen}");
+    // Every command shown whole, wrapped rather than cut.
+    assert!(screen.contains("'curl | sh'"), "{screen}");
+    assert!(screen.contains("npm run lint --silent"), "{screen}");
+    assert!(
+        screen.contains("Not now") && screen.contains("Allow"),
+        "{screen}"
+    );
+    let review = lists::hook_trust(&project_document(Some(true)), "anysola.json", true, 0);
+    assert_eq!(review.buttons, ["Refuse", "Allow"]);
+    assert!(
+        review
+            .lines
+            .iter()
+            .flatten()
+            .any(|(t, _)| t == "They run now."),
+        "{:?}",
+        review.lines
+    );
+}
+
+#[test]
+fn hooks_list() {
+    let document = project_document(None);
+    let mut all = vec![hook(
+        "Stop",
+        None,
+        "say done",
+        "/home/user/.anysola/config.json",
+    )];
+    all.extend(document.hooks.clone());
+    let show = |p: &str| {
+        p.replace("/home/user/my-app/", "")
+            .replace("/home/user", "~")
+    };
+    let select = lists::hooks(&all, &[document], &show, "~/.anysola/config.json", None);
+    // The user file's row has nothing to review; a project file's row does.
+    assert!(select.actions.is_empty());
+    let mut moved = select.clone();
+    moved.step(1, 10);
+    lists::hook_actions(&mut moved);
+    assert_eq!(moved.actions[0].title, "review");
+    assert_eq!(
+        moved.current().unwrap().value,
+        "doc:/home/user/my-app/anysola.json"
+    );
+    let screen = render(&dialog(under(1), Dialog::Select(select)));
+    println!("{screen}");
+    assert!(screen.contains("~/.anysola/config.json · user"), "{screen}");
+    assert!(
+        screen.contains("anysola.json · project, not approved"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("PostToolUse Edit|Write npm run lint --silent"),
+        "{screen}"
+    );
+    assert!(screen.contains("not approved"), "{screen}");
+    assert!(screen.contains("runs"), "{screen}");
+    assert!(screen.contains("Edit hooks in the files above"), "{screen}");
+    let empty = lists::hooks(
+        &[],
+        &[],
+        &show,
+        "~/.anysola/config.json",
+        Some("off: disable_hooks"),
+    );
+    let screen = render(&dialog(under(1), Dialog::Select(empty)));
+    assert!(screen.contains("No hooks configured"), "{screen}");
+    assert!(
+        screen.contains("Add hooks in ~/.anysola/config.json"),
+        "{screen}"
+    );
+    assert!(screen.contains("off: disable_hooks"), "{screen}");
+}
+
+#[test]
+fn hook_approval_edge_cases() {
+    // A file whose approved hooks were removed: asks whether to accept that.
+    let mut gone = project_document(None);
+    gone.hooks.clear();
+    let body = lists::hook_trust(&gone, "anysola.json", false, 0);
+    let screen = render(&dialog(under(1), Dialog::Body(body)));
+    println!("{screen}");
+    assert!(
+        screen.contains("anysola.json no longer defines hooks."),
+        "{screen}"
+    );
+    assert!(screen.contains("still run until you answer"), "{screen}");
+    // Repository text never reaches the terminal raw; a timeout off the default is shown.
+    let mut tricky = project_document(None);
+    tricky.hooks[0].command = "echo hi\u{1b}]0;pwned\u{7}; rm -rf ~\u{202e}".into();
+    tricky.hooks[0].matcher = Some("Ba\u{1b}[2Jsh".into());
+    tricky.hooks[0].timeout = 10;
+    let body = lists::hook_trust(&tricky, "anysola.json", false, 0);
+    let text: String = body
+        .lines
+        .iter()
+        .flatten()
+        .map(|(t, _)| t.as_str())
+        .collect();
+    assert!(
+        !text.chars().any(|c| c.is_control() || c == '\u{202e}'),
+        "{text}"
+    );
+    assert!(text.contains("\\u{1b}]0;pwned\\u{7}"), "{text}");
+    assert!(text.contains("timeout 10 s"), "{text}");
+    // `/hooks` shows the same text made visible, the timeout, and lists an emptied file so it
+    // can be answered there.
+    let show = |p: &str| p.replace("/home/user/my-app/", "");
+    let select = lists::hooks(
+        &tricky.hooks,
+        std::slice::from_ref(&tricky),
+        &show,
+        "c",
+        None,
+    );
+    let row = &select.options[0];
+    assert!(!row.title.chars().any(char::is_control), "{}", row.title);
+    assert!(row.footer.starts_with("timeout 10 s · "), "{}", row.footer);
+    let mut other = gone.clone();
+    other.path = "/home/user/my-app/.anysola/anysola.json".into();
+    let select = lists::hooks(&[], &[other], &show, "c", None);
+    assert_eq!(select.options[0].title, "No hooks defined now");
+    assert_eq!(select.options[0].footer, "waiting for your answer");
+    assert_eq!(select.actions[0].title, "review");
 }

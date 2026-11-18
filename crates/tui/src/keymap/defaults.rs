@@ -340,6 +340,7 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
         "Previous favorite model",
     ),
     ("mcp.list", "none", "List MCP servers"),
+    ("hooks.list", "none", "List hooks"),
     ("usage.show", "none", "View usage limits"),
     ("provider.connect", "none", "Connect integration"),
     ("agent.list", "<leader>a", "List agents"),

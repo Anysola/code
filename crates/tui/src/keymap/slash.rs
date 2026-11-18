@@ -87,6 +87,16 @@ pub const SLASH: &[Slash] = &[
         arguments: false,
     },
     Slash {
+        name: "hooks",
+        aliases: &[],
+        title: "Hooks",
+        description: Some("Hooks and whether they run"),
+        id: "hooks.list",
+        group: "Agent",
+        session: false,
+        arguments: false,
+    },
+    Slash {
         name: "variants",
         aliases: &["thinking", "effort"],
         title: "Switch model variant",

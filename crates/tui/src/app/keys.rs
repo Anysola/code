@@ -106,6 +106,9 @@ const EDITING: &[&str] = &[
 
 impl App {
     pub(super) fn input(&mut self, event: Event) {
+        if matches!(event, Event::Key(_) | Event::Paste(_)) {
+            self.typed = now();
+        }
         match event {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
                 if let Some(stroke) = Stroke::from_event(&key) {
@@ -1235,7 +1238,7 @@ impl App {
 const PROMPT_SETTLE_MS: u64 = 300;
 
 /// The prompt shown at `shown` appeared too recently to take a key at `now`.
-fn settling(shown: u64, now: u64) -> bool {
+pub(super) fn settling(shown: u64, now: u64) -> bool {
     now < shown.saturating_add(PROMPT_SETTLE_MS)
 }
 

@@ -114,7 +114,7 @@ pub fn render(tool: &Tool, ctx: &Ctx) -> Vec<Vec<Row>> {
         .unwrap_or_default();
     let pending = tool.status == Status::Streaming;
     let rows = match name {
-        "shell" => return vec![shell(tool, ctx)],
+        "shell" => shell(tool, ctx),
         "read" if pending => inline("→", "Reading file…".into(), tool, ctx),
         "read" => {
             let mut text = format!("Read {path}");
@@ -222,15 +222,163 @@ pub fn render(tool: &Tool, ctx: &Ctx) -> Vec<Vec<Row>> {
     };
     let mut groups = vec![rows];
     if tool.status == Status::Failed
-        && let Some(error) = &tool.error
+        && let Some(error) = shown_error(tool)
         && !denied(error)
         && name != "shell"
         && name != "todowrite"
     {
         let style = Style::new().fg(ctx.theme.fg("text.feedback.error.base"));
-        groups[0].push(Row::text(5, vec![Span::styled(error.clone(), style)]));
+        groups[0].push(Row::text(5, vec![Span::styled(error.to_string(), style)]));
     }
+    let entries = match name {
+        "execute" => own_hooks(tool),
+        _ => hook_entries(tool.metadata.get("hooks")),
+    };
+    add_hook_rows(&mut groups[0], &entries, ctx);
     groups
+}
+
+/// Prefixes of the notes the core adds for the model next to a tool's result; the hooks are
+/// shown on their own rows, so the notes are cut from what the row shows.
+const HOOK_NOTES: [&str; 3] = [
+    "PreToolUse hook context: ",
+    "PostToolUse hook feedback: ",
+    "PostToolUse hook context: ",
+];
+/// How the core words a call a PreToolUse hook blocked (`hooks::fire::blocked`).
+const HOOK_BLOCKED: &str = "A PreToolUse hook blocked this call";
+
+/// `text` without the hook notes appended after `separator`.
+fn without_notes<'a>(text: &'a str, separator: &str) -> &'a str {
+    HOOK_NOTES
+        .iter()
+        .filter_map(|note| text.find(&format!("{separator}{note}")))
+        .min()
+        .map_or(text, |at| &text[..at])
+}
+
+/// The tool's error as its row shows it: none when a hook blocked the call (the hook row says
+/// why), and without the hook notes.
+fn shown_error(tool: &Tool) -> Option<&str> {
+    let error = tool.error.as_deref()?;
+    if tool.metadata.contains_key("hooks") {
+        if error.starts_with(HOOK_BLOCKED) {
+            return None;
+        }
+        return Some(without_notes(error, "\n\n"));
+    }
+    Some(error)
+}
+
+/// The tool's output without the hook notes the core appended as their own content.
+fn shown_output(tool: &Tool) -> &str {
+    if tool.metadata.contains_key("hooks") {
+        without_notes(&tool.output, "\n")
+    } else {
+        &tool.output
+    }
+}
+
+/// What a hook did to a call: `(outcome, message)` of each `metadata.hooks` entry.
+pub fn hook_entries(hooks: Option<&Value>) -> Vec<(String, String)> {
+    hooks
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|entry| {
+            let text = |key: &str| {
+                entry
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            (text("outcome"), text("message"))
+        })
+        .collect()
+}
+
+/// `execute`'s own entries: its `hooks` array lists the nested calls' entries first.
+fn own_hooks(tool: &Tool) -> Vec<(String, String)> {
+    let nested: usize = tool
+        .metadata
+        .get("toolCalls")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|call| hook_entries(call.get("hooks")).len())
+        .sum();
+    let mut all = hook_entries(tool.metadata.get("hooks"));
+    all.drain(..nested.min(all.len()));
+    all
+}
+
+/// Whether an entry keeps its tool in view inside a closed group: the user should see it.
+pub fn loud(outcome: &str) -> bool {
+    outcome != "context"
+}
+
+/// One line for a hook entry: what happened, the first line of what the hook said, and the
+/// theme colour (warning when the call was stopped or the hook failed).
+pub fn hook_line(outcome: &str, message: &str) -> (String, &'static str) {
+    let first = crate::text::visible(
+        &crate::text::strip_ansi(message)
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or_default()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+    let (label, path) = match outcome {
+        "blocked" => ("Blocked by hook", "text.feedback.warning.base"),
+        "error" => ("Hook failed", "text.feedback.warning.base"),
+        "feedback" => ("Hook feedback", "text.muted"),
+        "context" => ("Hook added context", "text.muted"),
+        _ => ("Hook", "text.muted"),
+    };
+    let text = if first.is_empty() {
+        label.to_string()
+    } else {
+        format!("{label}: {first}")
+    };
+    (text, path)
+}
+
+/// One `↳` row per entry under the tool: inside its block when it has one, else under its text.
+fn add_hook_rows(rows: &mut Vec<Row>, entries: &[(String, String)], ctx: &Ctx) {
+    if entries.is_empty() {
+        return;
+    }
+    let block = rows.last().filter(|r| r.bg.is_some()).cloned();
+    let indent = if block.is_some() { 3 } else { 5 };
+    let room = ctx.width.saturating_sub(indent as usize + 3).max(10);
+    let lines: Vec<Row> = entries
+        .iter()
+        .map(|(outcome, message)| {
+            let (text, path) = hook_line(outcome, message);
+            let style = Style::new().fg(ctx.theme.fg(path));
+            let text = crate::text::truncate(&text, room);
+            Row::text(indent, vec![Span::styled(format!("↳ {text}"), style)])
+        })
+        .collect();
+    match block {
+        // Before the block's closing padding row, in its colours, after a blank line.
+        Some(padding) => {
+            let at = rows.len() - 1;
+            let fill = |row: Row| Row {
+                rail: padding.rail,
+                bg: padding.bg,
+                group: padding.group.clone(),
+                ..row
+            };
+            let mut inside = vec![fill(Row::default())];
+            inside.extend(lines.into_iter().map(fill));
+            rows.splice(at..at, inside);
+        }
+        None => rows.extend(lines),
+    }
 }
 
 /// The shell ID of a command moved to the background (`metadata.status = running`).
@@ -275,7 +423,7 @@ fn shell(tool: &Tool, ctx: &Ctx) -> Vec<Row> {
         }
         Some(view) => crate::text::strip_ansi(view.output.trim()),
         None if tool.status == Status::Running => String::new(),
-        None => tool.output.clone(),
+        None => shown_output(tool).to_string(),
     };
     let collapsed = collapsed_output(&output, ctx);
     let overflow = collapsed.get(1).is_some_and(|l| {
@@ -297,11 +445,11 @@ fn shell(tool: &Tool, ctx: &Ctx) -> Vec<Row> {
         lines.extend(collapsed);
     }
     if tool.status == Status::Failed
-        && let Some(error) = &tool.error
+        && let Some(error) = shown_error(tool)
     {
         lines.push(Vec::new());
         let style = Style::new().fg(ctx.theme.fg("text.feedback.error.base"));
-        lines.push(vec![Span::styled(error.clone(), style)]);
+        lines.push(vec![Span::styled(error.to_string(), style)]);
     }
     if background.is_some() {
         let raised = ctx.theme.get("background.raised.base");
@@ -375,6 +523,7 @@ fn execute_calls(tool: &Tool, ctx: &Ctx) -> Vec<Row> {
             row.group = Some(hit.clone());
         }
         rows.push(row);
+        add_hook_rows(&mut rows, &hook_entries(call.get("hooks")), ctx);
         let Some(fields) = fields.filter(|_| expanded) else {
             continue;
         };

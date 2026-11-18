@@ -257,6 +257,7 @@ impl App {
         self.count_mcp(&rows);
         self.refresh_recent();
         self.fetch_account();
+        self.refresh_hook_asks();
         match session {
             Some(id) => {
                 if adopt && let Err(error) = self.core.adopt_session(&id) {

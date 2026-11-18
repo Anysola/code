@@ -159,7 +159,8 @@ fn select(c: &mut Canvas, s: &Select) -> Option<(u16, u16)> {
     };
     let list = f.top + 5;
     let mut bottom = list + shown as u16;
-    if !s.actions.is_empty() {
+    let footer = !s.actions.is_empty() || !s.note.is_empty();
+    if footer {
         bottom += 2;
     }
     let panel_bottom = if s.tall {
@@ -219,8 +220,20 @@ fn select(c: &mut Canvas, s: &Select) -> Option<(u16, u16)> {
             }
         }
     }
-    if !s.actions.is_empty() {
+    if footer {
         actions(c, &f, bottom - 1, &s.actions);
+    }
+    if !s.note.is_empty() {
+        let used: usize = s
+            .actions
+            .iter()
+            .map(|a| width(&a.title) + width(&a.key) + 3)
+            .sum();
+        let room = f.room().saturating_sub(used);
+        let note = truncate(&s.note, room);
+        let x = f.right.saturating_sub(width(&note) as u16);
+        let style = tone(c, Tone::Muted);
+        c.put(x, bottom - 1, &note, style, room);
     }
     Some(cursor)
 }

@@ -266,3 +266,26 @@ fn usage_offers_the_banked_reset_as_a_click() {
     assert_click(&state, "Cancel", Hit::Button(0));
     assert_click_at(&state, "Use banked reset", true, Hit::Button(1));
 }
+
+#[test]
+fn hook_approval_buttons() {
+    let mut state = base(120, 36);
+    let document = anysola_core::api::HookDocument {
+        path: "/w/anysola.json".into(),
+        digest: "abc".into(),
+        decision: None,
+        hooks: vec![anysola_core::api::HookInfo {
+            event: "Stop".into(),
+            matcher: None,
+            command: "say done".into(),
+            timeout: 600,
+            source: "/w/anysola.json".into(),
+            scope: anysola_core::api::HookScope::Project,
+            active: false,
+        }],
+    };
+    let body = anysola_tui::menus::lists::hook_trust(&document, "anysola.json", false, 0);
+    state.dialogs.push(Dialog::Body(body));
+    assert_click(&state, "Not now", Hit::Button(0));
+    assert_click_at(&state, "Allow", true, Hit::Button(1));
+}

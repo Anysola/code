@@ -416,3 +416,35 @@ mod path_tests {
         );
     }
 }
+
+/// Text a repository controls (a hook's command, matcher, file path) as it may reach the
+/// terminal: control characters, bidirectional overrides and invisible characters are shown as
+/// `\u{…}` escapes (`\n`, `\t` as such), so nothing in it can move the cursor, recolour the
+/// screen or hide what it says.
+pub fn visible(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        let hidden = c.is_control()
+            || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2069}' | '\u{feff}');
+        if hidden {
+            out.extend(c.escape_default());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod visible_tests {
+    #[test]
+    fn controls_and_overrides_are_shown_not_sent() {
+        assert_eq!(super::visible("ls -la"), "ls -la");
+        assert_eq!(super::visible("a\nb\tc"), "a\\nb\\tc");
+        assert_eq!(super::visible("x\u{1b}[2Jy"), "x\\u{1b}[2Jy");
+        assert_eq!(super::visible("ok\u{202e}gpj.exe"), "ok\\u{202e}gpj.exe");
+        assert_eq!(super::visible("\u{9b}31m"), "\\u{9b}31m");
+        assert_eq!(super::visible("zero\u{200b}width"), "zero\\u{200b}width");
+        assert_eq!(super::visible("çağrı ✓"), "çağrı ✓");
+    }
+}

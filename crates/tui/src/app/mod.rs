@@ -31,6 +31,7 @@ mod dock;
 mod goal;
 pub use goal::status as goal_status;
 mod events;
+mod hooks;
 mod keys;
 mod models;
 mod pane;
@@ -159,6 +160,15 @@ pub struct App {
     connect_generation: u64,
     /// The core in use, shared with `run` so a crash restart picks up a swapped one.
     current: Arc<Mutex<Core>>,
+    /// Project files whose hooks wait for an answer, and `(path, digest)` of those already
+    /// shown this run (dismissed with Esc, they are not asked again until they change).
+    hook_asks: Vec<anysola_core::api::HookDocument>,
+    hook_asked: std::collections::HashSet<(String, String)>,
+    /// When a key or paste last came in.
+    typed: u64,
+    /// The drafts of prompts sent into a running turn, by inbox id, with their session: a hook
+    /// that blocks one gives its text back.
+    steered: std::collections::HashMap<String, (String, crate::composer::Composer)>,
 }
 
 fn now() -> u64 {
@@ -363,6 +373,10 @@ async fn run_once(core: Core, options: Options, current: Arc<Mutex<Core>>) -> Re
         connect: None,
         connect_generation: 0,
         current,
+        hook_asks: Vec::new(),
+        hook_asked: Default::default(),
+        typed: 0,
+        steered: Default::default(),
     };
     app.init(&paths, &options);
     if let Some((title, message)) = failure {
@@ -386,6 +400,7 @@ async fn run_once(core: Core, options: Options, current: Arc<Mutex<Core>>) -> Re
     #[cfg(not(unix))]
     let mut terminate: Option<()> = None;
     loop {
+        app.offer_hooks();
         app.draw(&mut terminal);
         if app.quit {
             break;
@@ -525,6 +540,7 @@ impl App {
         self.restore_tabs();
         self.load_layout();
         self.open_target(options);
+        self.refresh_hook_asks();
     }
 
     /// Agents and the default model from the loaded config.
@@ -607,6 +623,7 @@ impl App {
             || self.session_search.is_some()
             || self.polling_shells()
             || crate::preview::decoding()
+            || self.hook_ask_waiting()
     }
 
     /// `draw` still has shell output to read: the open Shell output dialog until it saw the

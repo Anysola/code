@@ -506,3 +506,233 @@ pub fn worktrees(current: &str, others: &[String], in_session: bool) -> Select {
     ]);
     select
 }
+
+/// A hook's timeout when it is not the default (600 s; 30 s for `UserPromptSubmit`).
+pub fn hook_timeout(hook: &anysola_core::api::HookInfo) -> Option<String> {
+    let default = if hook.event == "UserPromptSubmit" {
+        30
+    } else {
+        600
+    };
+    (hook.timeout != default).then(|| format!("timeout {} s", hook.timeout))
+}
+
+/// A hook's matcher as shown (repository text, made visible), none when it matches everything.
+fn hook_matcher(hook: &anysola_core::api::HookInfo) -> String {
+    hook.matcher
+        .as_deref()
+        .filter(|m| !m.is_empty() && *m != "*")
+        .map(crate::text::visible)
+        .unwrap_or_default()
+}
+
+/// Where a configured hook's file sits for `/hooks`, and the user's answer for a project file.
+fn hook_state(
+    hook: &anysola_core::api::HookInfo,
+    decision: Option<Option<bool>>,
+) -> (&'static str, Tone) {
+    use anysola_core::api::HookScope;
+    match (hook.active, hook.scope, decision) {
+        (true, _, _) => ("runs", Tone::Success),
+        (false, HookScope::Project, Some(None)) => ("not approved", Tone::Warning),
+        (false, HookScope::Project, Some(Some(false))) => ("refused", Tone::Muted),
+        _ => ("off", Tone::Muted),
+    }
+}
+
+/// `/hooks`: every configured hook in run order, grouped by the file it comes from (`show` turns
+/// a path into what the user reads, made visible). A project file's rows open its approval; a
+/// project file that no longer defines hooks but waits for an answer gets a row of its own.
+/// `off`: why hooks are turned off, if they are.
+pub fn hooks(
+    hooks: &[anysola_core::api::HookInfo],
+    documents: &[anysola_core::api::HookDocument],
+    show: &dyn Fn(&str) -> String,
+    config: &str,
+    off: Option<&str>,
+) -> Select {
+    use anysola_core::api::HookScope;
+    let longest = hooks.iter().map(|h| width(&h.event)).max().unwrap_or(0);
+    let matchers = hooks
+        .iter()
+        .map(|h| width(&hook_matcher(h)))
+        .max()
+        .unwrap_or(0);
+    let mut options: Vec<Opt> = hooks
+        .iter()
+        .enumerate()
+        .map(|(i, h)| {
+            let document = documents.iter().find(|d| d.path == h.source);
+            let decision = document.map(|d| d.decision);
+            let scope = match (h.scope, decision) {
+                (HookScope::Project, Some(Some(true))) => "project, allowed",
+                (HookScope::Project, Some(Some(false))) => "project, refused",
+                (HookScope::Project, _) => "project, not approved",
+                (scope, _) => scope.as_str(),
+            };
+            let command = crate::text::visible(&h.command);
+            let title = format!(
+                "{} {}{command}",
+                crate::text::pad_right(&h.event, longest),
+                if matchers > 0 {
+                    format!("{} ", crate::text::pad_right(&hook_matcher(h), matchers))
+                } else {
+                    String::new()
+                }
+            );
+            let (state, tone) = hook_state(h, decision);
+            let footer = match hook_timeout(h) {
+                Some(timeout) => format!("{timeout} · {state}"),
+                None => state.to_string(),
+            };
+            let value = match document {
+                Some(d) => format!("doc:{}", d.path),
+                None => format!("hook:{i}"),
+            };
+            let mut opt = Opt::new(title, value)
+                .category(format!("{} · {scope}", show(&h.source)))
+                .footer(footer);
+            opt.footer_tone = Some(tone);
+            opt.search = format!("{} {} {}", hook_matcher(h), h.command, h.source);
+            opt
+        })
+        .collect();
+    for d in documents
+        .iter()
+        .filter(|d| d.hooks.is_empty() && !hooks.iter().any(|h| h.source == d.path))
+    {
+        let mut opt = Opt::new("No hooks defined now", format!("doc:{}", d.path))
+            .category(format!("{} · project", show(&d.path)))
+            .footer(if d.decision.is_none() {
+                "waiting for your answer"
+            } else {
+                "nothing runs"
+            });
+        opt.footer_tone = Some(if d.decision.is_none() {
+            Tone::Warning
+        } else {
+            Tone::Muted
+        });
+        opt.search = d.path.clone();
+        options.push(opt);
+    }
+    let mut select = Select::new(Kind::Hooks, "Hooks", options);
+    select.selected = 0;
+    select.size = Size::Large;
+    select.empty = "No hooks configured";
+    if let Some(off) = off {
+        select.suffix = format!(" · {off}");
+    }
+    select.note = if select.options.is_empty() {
+        format!("Add hooks in {config}")
+    } else {
+        "Edit hooks in the files above".into()
+    };
+    hook_actions(&mut select);
+    select
+}
+
+/// `review enter` while a project file's row has focus.
+pub fn hook_actions(select: &mut Select) {
+    let project = select
+        .current()
+        .is_some_and(|o| o.value.starts_with("doc:"));
+    select.actions = if project {
+        vec![Action::left("review", "enter")]
+    } else {
+        Vec::new()
+    };
+}
+
+/// Asks whether a project file's hooks may run: names the file, lists every hook with its whole
+/// command (repository text, made visible) and any timeout that is not the default, and offers
+/// `Not now` (focused) and `Allow`. A file that no longer defines hooks asks whether to accept
+/// that (the hooks approved earlier stop). `shown`: the file as the user reads it, already made
+/// visible. `review`: opened from `/hooks`.
+pub fn hook_trust(
+    document: &anysola_core::api::HookDocument,
+    shown: &str,
+    review: bool,
+    now: u64,
+) -> Body {
+    const ROOM: usize = 80;
+    let text = |lines: &mut Vec<Line>, text: &str, tone: Tone| {
+        lines.extend(
+            crate::text::wrap(text, ROOM)
+                .into_iter()
+                .map(|l| line(l, tone)),
+        );
+    };
+    let mut lines: Vec<Line> = Vec::new();
+    if document.hooks.is_empty() {
+        text(
+            &mut lines,
+            &format!("{shown} no longer defines hooks."),
+            Tone::Base,
+        );
+        lines.push(Vec::new());
+        let state = match (review, document.decision) {
+            (true, Some(_)) => "Nothing from it runs.",
+            _ => {
+                "The hooks you approved earlier still run until you answer. Allow accepts the change: they stop running."
+            }
+        };
+        text(&mut lines, state, Tone::Muted);
+    } else {
+        text(
+            &mut lines,
+            &format!(
+                "The hooks in {shown} are waiting for your answer. They run these commands on this computer:"
+            ),
+            Tone::Base,
+        );
+        if review && document.decision.is_some() {
+            lines.clear();
+            text(
+                &mut lines,
+                &format!("The hooks in {shown} run these commands on this computer:"),
+                Tone::Base,
+            );
+        }
+        for hook in &document.hooks {
+            lines.push(Vec::new());
+            let mut head = vec![(hook.event.clone(), Tone::Bold)];
+            let matcher = hook_matcher(hook);
+            if !matcher.is_empty() {
+                head.push((format!(" {matcher}"), Tone::Muted));
+            }
+            if let Some(timeout) = hook_timeout(hook) {
+                head.push((format!(" · {timeout}"), Tone::Muted));
+            }
+            lines.push(head);
+            for part in crate::text::wrap(&crate::text::visible(&hook.command), ROOM - 2) {
+                lines.push(line(format!("  {part}"), Tone::Base));
+            }
+        }
+        lines.push(Vec::new());
+        let state = match (review, document.decision) {
+            (true, Some(true)) => "They run now.",
+            (true, Some(false)) => "They do not run: you refused them.",
+            _ => "They run only if you allow them. You can change this later in /hooks.",
+        };
+        text(&mut lines, state, Tone::Muted);
+    }
+    let mut body = Body::new(
+        BodyKind::HookTrust {
+            path: document.path.clone(),
+            digest: document.digest.clone(),
+            review,
+            shown: now,
+        },
+        "Project hooks",
+        lines,
+    );
+    body.size = Size::Large;
+    let refuse = if review { "Refuse" } else { "Not now" };
+    body.buttons = vec![refuse.into(), "Allow".into()];
+    body.active = 0;
+    if body.lines.len() > 12 {
+        body.actions = vec![Action::left("scroll", "↑/↓")];
+    }
+    body
+}

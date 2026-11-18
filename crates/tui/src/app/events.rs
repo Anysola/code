@@ -8,6 +8,7 @@ use crate::sound::Sound;
 use crate::state::{Permission, Question, Variant};
 use crate::transcript::model;
 use anysola_core::gateway::error::USAGE_LIMIT_KIND;
+use anysola_core::hooks::BLOCKED;
 
 /// Walks a session up its parents to the nearest one that is open (`Ok`), or else the root
 /// it reached (`Err`). Stops after a few dozen steps should the parents form a loop.
@@ -335,6 +336,14 @@ impl App {
                 }
             }
             Event::McpStatusChanged { server } => self.mcp_status(server),
+            Event::Hook {
+                event: hook,
+                command,
+                outcome,
+                message,
+                ..
+            } => self.hook_event(&id, hook, command, *outcome, message),
+            Event::HooksChanged => self.refresh_hook_asks(),
             Event::Succeeded { .. } | Event::Failed { .. } | Event::Interrupted { .. } => {
                 if let Some(session) = self.state.sessions.get_mut(&id) {
                     session.busy = false;
@@ -346,10 +355,17 @@ impl App {
                 if let Some(tab) = self.state.tabs.iter_mut().find(|t| t.session_id == id) {
                     tab.unread = !shown;
                 }
+                let blocked =
+                    matches!(&event, Event::Failed { error, .. } if error.kind == BLOCKED);
                 match &event {
                     Event::Failed { error, .. } if error.kind == USAGE_LIMIT_KIND => {
                         self.usage_limit(&id, error.message.clone());
                     }
+                    Event::Failed { error, .. } if error.kind == BLOCKED => self.toast(
+                        Some("Prompt blocked by a hook".into()),
+                        error.message.clone(),
+                        Variant::Warning,
+                    ),
                     Event::Failed { error, .. } => {
                         self.toast(
                             Some("Session failed".into()),
@@ -375,6 +391,7 @@ impl App {
                     _ => {}
                 }
                 self.reload(&id);
+                self.settle_steered(&id, blocked);
                 self.refresh_recent();
                 self.resume_undo(&id);
             }

@@ -273,11 +273,11 @@ mod tests {
             .map(|l| l.split_whitespace().next().unwrap_or_default().to_string())
             .filter(|name| name != "/plugins")
             .collect();
-        // `/reset` is new in 1.0.1.
+        // `/reset` is new in 1.0.1, `/hooks` in 1.0.9.
         let actual: Vec<String> = rows
             .iter()
             .map(|r| r.display.clone())
-            .filter(|name| name != "/reset")
+            .filter(|name| name != "/reset" && name != "/hooks")
             .collect();
         assert_eq!(actual, expected);
         assert_eq!(pad, 12);

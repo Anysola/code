@@ -52,6 +52,7 @@ const ENTRIES: &[(&str, &str, &str, When)] = &[
     ("model.list", "", "", When::Always),
     ("agent.list", "", "", When::Always),
     ("mcp.list", "", "", When::Always),
+    ("hooks.list", "", "", When::Always),
     ("variant.cycle", "Variant cycle", "Agent", When::Always),
     ("variant.list", "", "", When::Variants),
     ("provider.connect", "", "", When::Always),

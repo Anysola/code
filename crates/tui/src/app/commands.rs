@@ -671,7 +671,10 @@ impl App {
                 Delivery::Steer
             };
             match self.core.enqueue(&id, prompt, delivery) {
-                Ok(pending) => session.queued.push(pending),
+                Ok(pending) => {
+                    session.queued.push(pending.clone());
+                    self.steered.insert(pending, (id.clone(), draft));
+                }
                 Err(error) => {
                     session.items.pop();
                     self.state.composer = draft;
@@ -695,6 +698,9 @@ impl App {
                 Ok(anysola_core::session::Outcome::Succeeded
                     | anysola_core::session::Outcome::Interrupted(_))
             );
+            let blocked = matches!(&result,
+                Ok(anysola_core::session::Outcome::Failed(error))
+                    if error.kind == anysola_core::hooks::BLOCKED);
             let error = result.err().map(|e| e.to_string());
             let _ = tx.send(Msg::Done {
                 session_id: id.clone(),
@@ -703,24 +709,62 @@ impl App {
             if failed {
                 // After `Done` reloaded the transcript from storage.
                 let _ = tx.send(Msg::Apply(Box::new(move |app: &mut App| {
-                    app.restore_unsent(&id, users, draft);
+                    app.restore_unsent(&id, users, draft, blocked);
                 })));
             }
         });
     }
 
     /// Puts a failed prompt back when it never reached the session (no new turn stored, none
-    /// pending), into the composer if it is still empty, or the tab's draft.
-    fn restore_unsent(&mut self, id: &str, users: usize, draft: Composer) {
+    /// pending), into the composer if it is still empty, or the tab's draft. A prompt a hook
+    /// blocked comes back even with other prompts pending: the core leaves those queued.
+    fn restore_unsent(&mut self, id: &str, users: usize, draft: Composer, blocked: bool) {
         let stored = self
             .state
             .sessions
             .get(id)
             .is_some_and(|s| user_count(&s.items) > users);
-        let pending = self.core.pending(id).map_or(true, |p| !p.is_empty());
+        let pending = !blocked && self.core.pending(id).map_or(true, |p| !p.is_empty());
         if stored || pending {
             return;
         }
+        self.give_back(id, draft);
+    }
+
+    /// After a turn ends: forgets the drafts of steered prompts that left the inbox. With
+    /// `blocked`, the one that left without being stored is the prompt the hook blocked, and
+    /// its text comes back.
+    pub(super) fn settle_steered(&mut self, id: &str, blocked: bool) {
+        let Ok(rows) = self.core.pending(id) else {
+            return;
+        };
+        let pending: Vec<String> = rows.into_iter().map(|r| r.id).collect();
+        let stored: Vec<String> = self.state.sessions.get(id).map_or(Vec::new(), |s| {
+            s.items
+                .iter()
+                .filter_map(|i| match i {
+                    Item::User { id, .. } if !id.is_empty() => Some(id.clone()),
+                    _ => None,
+                })
+                .collect()
+        });
+        let tracked: Vec<String> = self
+            .steered
+            .iter()
+            .filter(|(_, (session, _))| session == id)
+            .map(|(inbox, _)| inbox.clone())
+            .collect();
+        for (inbox, unsent) in left_inbox(&tracked, &pending, &stored) {
+            if let Some((_, draft)) = self.steered.remove(&inbox)
+                && blocked
+                && unsent
+            {
+                self.give_back(id, draft);
+            }
+        }
+    }
+
+    fn give_back(&mut self, id: &str, draft: Composer) {
         if self.state.route == Route::Session(id.to_string()) {
             if self.state.composer.is_empty() {
                 self.state.composer = draft;
@@ -932,9 +976,34 @@ fn editor_argv(value: &str, is_file: impl Fn(&str) -> bool) -> Vec<String> {
     words
 }
 
+/// The steered prompts of `tracked` that left the inbox, each with whether it left unsent:
+/// promoting a prompt stores it under its inbox id, so one neither pending nor stored was
+/// dropped.
+fn left_inbox(tracked: &[String], pending: &[String], stored: &[String]) -> Vec<(String, bool)> {
+    tracked
+        .iter()
+        .filter(|inbox| !pending.contains(inbox))
+        .map(|inbox| (inbox.clone(), !stored.contains(inbox)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::editor_argv;
+
+    #[test]
+    fn a_blocked_steer_is_the_one_neither_pending_nor_stored() {
+        let ids = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let left = super::left_inbox(
+            &ids(&["in_a", "in_b", "in_c"]),
+            &ids(&["in_c"]),
+            &ids(&["msg_1", "in_a"]),
+        );
+        assert_eq!(
+            left,
+            [("in_a".to_string(), false), ("in_b".to_string(), true)]
+        );
+    }
 
     #[test]
     fn editor_values_with_spaces() {

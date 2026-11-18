@@ -157,6 +157,8 @@ pub enum Kind {
     DiffSource,
     DiffBase,
     WorkingDirectory,
+    /// `/hooks`: every configured hook; a project file's rows open its approval.
+    Hooks,
 }
 
 /// One drawn row of a list dialog.
@@ -191,6 +193,8 @@ pub struct Select {
     pub grouped_search: bool,
     /// The panel keeps the height of a full list (`Worktrees`).
     pub tall: bool,
+    /// Muted text on the actions row, against the right edge (`/hooks`: where hooks are edited).
+    pub note: String,
 }
 
 /// Rows a list may use: `floor(height / 2) − 6`.
@@ -226,6 +230,7 @@ impl Select {
             empty: "No items available",
             grouped_search: false,
             tall: false,
+            note: String::new(),
         }
     }
 
@@ -422,6 +427,15 @@ pub enum BodyKind {
     },
     DiffHelp,
     Goal,
+    /// A project file's hooks waiting for an answer, as shown (`digest` is what was shown, so
+    /// a later change is asked about again). `review`: opened from `/hooks`, which it returns
+    /// to. `shown`: when it appeared, as keys typed just before are not an answer.
+    HookTrust {
+        path: String,
+        digest: String,
+        review: bool,
+        shown: u64,
+    },
 }
 
 /// A dialog with a title, free rows and a footer.
