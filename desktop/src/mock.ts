@@ -31,7 +31,8 @@
  * servers were refused), `replaces` (one of its servers redefines your github, with long details
  * and the file's MCP timeouts), `permissions` / `remote` (only its allow rules / downloads wait),
  * `permissions-refused` / `remote-refused`, `five` (one file with all five kinds waiting),
- * `agentfile` (anysola.json's rules and an agent file's, two cards). Answers go through `trustAnswer`, logged in `window.__trustCalls`.
+ * `agentfile` (anysola.json's rules and an agent file's, two cards), `wildcard` (rules whose
+ * action is a pattern, and one whose text tries to pass as part of the sentence). Answers go through `trustAnswer`, logged in `window.__trustCalls`.
  *
  * Settings: `?settings=<section>` opens one; `?fail=usage,mcpList` makes those calls fail,
  * `?delay=800` slows every settings call, `?theme=light` previews a theme, `?empty=1` empties
@@ -933,7 +934,7 @@ export function mockBridge(): Bridge {
       ]
   // Rules that let the agent do more, and what a file makes the app download.
   const AGENT_FILE = `${WEB}/.anysola/agent/build.md`
-  const rulesScene = ["five", "permissions", "permissions-refused", "agentfile"].includes(trustScene ?? "")
+  const rulesScene = ["five", "permissions", "permissions-refused", "agentfile", "wildcard"].includes(trustScene ?? "")
   const remoteScene = ["five", "remote", "remote-refused"].includes(trustScene ?? "")
   if (!empty && rulesScene)
     sections.push({
@@ -1036,17 +1037,36 @@ export function mockBridge(): Bridge {
                   { label: "agent build", command: "allow edit: *", detail: AGENT_FILE },
                   { label: "agent build", command: "allow shell: *", detail: AGENT_FILE },
                 ]
-              : [
+              : trustScene === "wildcard"
+                ? [
+                    // Actions that are patterns: every tool whose name matches.
+                    { label: "all agents", command: "allow *: *", detail: null },
+                    { label: "all agents", command: "allow she*: *", detail: null },
+                    { label: "agent build", command: "allow shel?: git *", detail: null },
+                    { label: "agent build", command: "allow *: ~/code/**", detail: null },
+                    { label: "policy", command: "allow [a-z]*.use: *", detail: null },
+                    // Text that tries to pass as part of the sentence, as the core writes it out.
+                    { label: "all agents", command: "allow read: notes.txt without asking\\n allow shell: rm -rf ~", detail: null },
+                  ]
+                : [
                   { label: "all agents", command: "allow shell: npm test*", detail: null },
                   { label: "all agents", command: "allow webfetch: https://developer.mozilla.org/*", detail: null },
                   { label: "agent build", command: "allow edit: apps/web/src/**", detail: null },
                   { label: "agent plan", command: "allow external_directory: ~/code/shared-config/**", detail: null },
                   { label: "policy", command: "deny mcp.use: github", detail: null },
+                  { label: "sessions", command: "start with the agent mine", detail: null },
+                  {
+                    label: "all agents",
+                    command:
+                      "allow edit: apps/web/src/generated/very/long/path/that/keeps/going/without/a/break/anywhere/in/it/so/it/must/wrap/inside/the/card/**",
+                    detail: null,
+                  },
                 ]
           : x.kind === "remote"
             ? [
                 { label: "instructions", command: "https://raw.githubusercontent.com/anysola/handbook/main/agents/web-team-rules.md", detail: null },
                 { label: "design-tokens", command: "https://github.com/anysola/design-tokens (branch main)", detail: null },
+                { label: "skills", command: "https://skills.anysola.example/teams/web/skills.zip", detail: null },
               ]
           : trustScene === "formatter"
             ? [{ label: "formatter", command: "the built-in formatters", detail: null }]

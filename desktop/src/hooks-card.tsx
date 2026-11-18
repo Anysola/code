@@ -194,25 +194,55 @@ function hookLabel(label: string): ReactNode {
   return when(m[1] as HookEvent, m[2] ?? null)
 }
 
-/** Where a project's rule applies, as the core labels it: `all agents`, `agent build`, `policy`. */
+/** Where a project's rule applies, as the core labels it: `all agents`, `agent build`, `policy`, `sessions`. */
 export function scopeLabel(label: string) {
   if (label === "all agents") return "Every agent"
   if (label === "policy") return "Project policy"
+  if (label === "sessions") return "New sessions"
   const agent = /^agent (.+)$/.exec(label)
   return agent ? `The ${agent[1].charAt(0).toUpperCase()}${agent[1].slice(1)} agent` : label
 }
 
-const Code = ({ children }: { children: ReactNode }) => <span className="font-mono text-xs break-all">{children}</span>
+/** A download's label: `instructions` and `skills` are the app's words, anything else a repository's name. */
+export function remoteLabel(label: string) {
+  return label === "instructions" ? "Instructions" : label === "skills" ? "Skills" : label
+}
+
+/**
+ * The project's own text inside a sentence: on a tint of its own, so nothing in it (a line
+ * break, the words "without asking") can pass as part of the sentence around it. A long one wraps.
+ */
+const Code = ({ children }: { children: ReactNode }) => (
+  <span className="rounded-sm bg-default px-1 py-px font-mono text-xs break-all whitespace-pre-wrap [box-decoration-break:clone]">
+    {children}
+  </span>
+)
+
+/** The widest a project can ask for: said in the warning tone, like a server it would replace. */
+const Wide = ({ children }: { children: ReactNode }) => <span className="text-warning">{children}</span>
+
+const PATTERN = /[*?[]/
 
 /**
  * A project rule as a person reads it: `allow shell: npm test*` is "Run npm test* without
- * asking", a policy `deny mcp.use: github` is "Turn off your server github". Anything the app
- * has no words for is shown as the core wrote it.
+ * asking", a policy `deny mcp.use: github` is "Turn off your server github". `label` is where it
+ * applies (`sessions`: which agent new sessions start with). Anything the app has no words for
+ * is shown as the core wrote it.
  */
-export function ruleText(rule: string): ReactNode {
-  const m = /^(allow|deny|ask) ([\w.]+):? ?(.*)$/.exec(rule.trim())
-  if (!m) return <Code>{rule}</Code>
-  const [, effect, action, resource] = m
+export function ruleText(rule: string, label?: string): ReactNode {
+  if (label === "sessions") {
+    const agent = /^start with the agent (.+)$/s.exec(rule)
+    if (agent) return <>Start new sessions with this project’s agent <Code>{agent[1]}</Code></>
+    return <Code>{rule}</Code>
+  }
+  // `<effect> <action>: <resource>`; the resource is the rest, whatever it holds.
+  const head = /^(allow|deny|ask) /.exec(rule)
+  if (!head) return <Code>{rule}</Code>
+  const effect = head[1]
+  const tail = rule.slice(head[0].length)
+  const colon = tail.indexOf(": ")
+  const action = colon < 0 ? tail.replace(/:$/, "") : tail.slice(0, colon)
+  const resource = colon < 0 ? "" : tail.slice(colon + 2)
   const any = resource === "" || resource === "*"
   const what = <Code>{resource}</Code>
   if (effect === "deny") {
@@ -223,10 +253,17 @@ export function ruleText(rule: string): ReactNode {
   }
   if (effect !== "allow") return <Code>{rule}</Code>
   const without = " without asking"
+  // A pattern for the action covers every tool whose name it matches: no tool's words fit it.
+  if (action === "*")
+    return <Wide>{any ? <>Do anything{without}</> : <>Do anything on {what}{without}</>}</Wide>
+  if (PATTERN.test(action)) {
+    const tools = <>Use any tool matching <Code>{action}</Code></>
+    return any ? <Wide>{tools} on anything{without}</Wide> : <>{tools} on {what}{without}</>
+  }
   switch (action) {
     case "shell":
     case "bash":
-      return any ? <>Run any command{without}</> : <>Run {what}{without}</>
+      return any ? <Wide>Run any command{without}</Wide> : <>Run {what}{without}</>
     case "edit":
     case "write":
       return any ? <>Change any file{without}</> : <>Change {what}{without}</>
@@ -243,14 +280,15 @@ export function ruleText(rule: string): ReactNode {
     case "tool.use":
       return any ? <>Use any tool{without}</> : <>Use the tool {what}{without}</>
     default:
-      return any ? <>Use {action}{without}</> : <>Use {action} on {what}{without}</>
+      return any ? <>Use <Code>{action}</Code>{without}</> : <>Use <Code>{action}</Code> on {what}{without}</>
   }
 }
 
 /** An address a project makes the app fetch, said as what happens. */
 export function remoteText(e: TrustEntry): ReactNode {
-  const repo = /^(.*) \(branch (.+)\)$/.exec(e.command)
   if (e.label === "instructions") return <>Reads instructions from <Code>{e.command}</Code> each time</>
+  if (e.label === "skills") return <>Downloads skills from <Code>{e.command}</Code></>
+  const repo = /^(.*) \(branch (.+)\)$/s.exec(e.command)
   return repo ? (
     <>
       Downloads the repository <Code>{repo[1]}</Code>, branch <Code>{repo[2]}</Code>
@@ -279,7 +317,7 @@ function Entries({ kind, entries }: { kind: TrustKind; entries: TrustEntry[] }) 
         // "the built-in formatters": words, not a command line.
         const words = kind === "formatter" && /^the built-in /.test(e.command)
         // Rules and downloads are said as sentences, with the rule's or the address's own text in them.
-        const sentence = kind === "permissions" ? ruleText(e.command) : kind === "remote" ? remoteText(e) : null
+        const sentence = kind === "permissions" ? ruleText(e.command, e.label) : kind === "remote" ? remoteText(e) : null
         // A rule's detail is the agent file it comes from: the card already names its file.
         const parts = e.detail && kind !== "permissions" ? detailParts(e.detail) : []
         const replaces = parts[0]?.startsWith(REPLACES)
@@ -290,9 +328,7 @@ function Entries({ kind, entries }: { kind: TrustKind; entries: TrustEntry[] }) 
               {kind === "permissions"
                 ? scopeLabel(e.label)
                 : kind === "remote"
-                  ? e.label === "instructions"
-                    ? "Instructions"
-                    : e.label
+                  ? remoteLabel(e.label)
                   : kind === "hooks"
                 ? hookLabel(e.label)
                 : kind === "formatter" && e.label === "formatter"

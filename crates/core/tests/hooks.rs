@@ -1196,6 +1196,7 @@ fn global_config_and_database_writes_are_always_asked() {
         (|home: &Path| home.join(".anysola/config.json")) as fn(&Path) -> PathBuf,
         |home: &Path| home.join(".anysola/anysola.db"),
         |home: &Path| home.join(".anysola/agent/x.md"),
+        |home: &Path| home.join(".anysola/AGENTS.md"),
     ] {
         let (asked, written) = write_asks(target, None);
         assert!(!asked.is_empty(), "the user was asked");

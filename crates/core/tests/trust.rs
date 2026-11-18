@@ -554,14 +554,14 @@ fn a_project_file_placeholder_never_reads_a_device() {
     env.home.write("proj/name.txt", "notes-from-file");
     env.home.write(
         "proj/anysola.json",
-        r#"{"instructions": ["{file:name.txt}"], "default_agent": "{file:/dev/zero}"}"#,
+        r#"{"instructions": ["{file:name.txt}"], "theme": "{file:/dev/zero}"}"#,
     );
     let runtime = runtime();
     let started = Instant::now();
     let core = runtime.block_on(common::core(&env));
     assert!(started.elapsed() < Duration::from_secs(10));
     let config = core.loaded().config.clone();
-    assert_eq!(config.default_agent(), Some("{file:/dev/zero}"));
+    assert_eq!(config.get("theme"), Some(&json!("{file:/dev/zero}")));
     assert!(config.instructions.contains(&"notes-from-file".to_string()));
     assert!(
         config
@@ -571,4 +571,153 @@ fn a_project_file_placeholder_never_reads_a_device() {
         "{:?}",
         config.warnings
     );
+}
+
+#[test]
+fn a_project_skill_url_is_not_downloaded_until_approved() {
+    let gateway = anysola_testkit::FakeGateway::start(|request, _| text(request, "ok"));
+    let env = env(&gateway.url);
+    let url = format!("{}/s/", gateway.url);
+    env.home.write(
+        "proj/anysola.json",
+        &json!({"skills": [url, "local-skills"]}).to_string(),
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let asked = || gateway.requests().iter().any(|r| r.path.starts_with("/s/"));
+    assert!(!asked(), "nothing downloaded before approval");
+    let waiting = item(&core, TrustKind::Remote);
+    assert_eq!(waiting.entries[0].label, "skills");
+    assert_eq!(waiting.entries[0].command, url);
+    approve_all(&runtime, &core, TrustKind::Remote);
+    assert!(asked(), "downloaded once approved");
+}
+
+#[test]
+fn a_project_s_instructions_stay_inside_the_project() {
+    let gateway = anysola_testkit::FakeGateway::start(|request, _| text(request, "ok"));
+    let env = env(&gateway.url);
+    env.home.write("secret-notes.txt", "PRIVATE-NOTES");
+    env.home.write("outside.md", "OUTSIDE-FILE");
+    env.home.write("proj/inside.md", "INSIDE-FILE");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        env.home.home().join("outside.md"),
+        env.home.project().join("link.md"),
+    )
+    .unwrap();
+    let absolute = env.home.home().join("outside.md").display().to_string();
+    env.home.write(
+        "proj/anysola.json",
+        &json!({"instructions": ["~/secret-notes.txt", "../outside.md", absolute, "inside.md", "link.md"]})
+            .to_string(),
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let warnings = core.loaded().config.warnings.clone();
+    assert_eq!(
+        warnings
+            .iter()
+            .filter(|w| w.contains("can only name files inside the project"))
+            .count(),
+        3,
+        "{warnings:?}"
+    );
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    let prompt = anysola_core::api::Prompt {
+        text: "go".into(),
+        ..Default::default()
+    };
+    runtime
+        .block_on(core.prompt(
+            &session.id,
+            prompt.clone(),
+            anysola_core::session::TurnOptions::default(),
+        ))
+        .unwrap();
+    let body = gateway.messages().last().unwrap().body.clone();
+    assert!(body.contains("INSIDE-FILE"));
+    assert!(!body.contains("PRIVATE-NOTES"));
+    assert!(!body.contains("OUTSIDE-FILE"), "not even through a symlink");
+    drop(core);
+    // The user's own config may name any file.
+    env.home.write(
+        ".anysola/config.json",
+        r#"{"instructions": ["~/secret-notes.txt"]}"#,
+    );
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(
+            &session.id,
+            prompt,
+            anysola_core::session::TurnOptions::default(),
+        ))
+        .unwrap();
+    let body = gateway.messages().last().unwrap().body.clone();
+    assert!(body.contains("PRIVATE-NOTES"));
+}
+
+#[test]
+fn a_project_default_agent_of_its_own_waits_for_approval() {
+    let gateway = anysola_testkit::FakeGateway::start(|request, _| text(request, "ok"));
+    let env = env(&gateway.url);
+    env.home.write(
+        "proj/anysola.json",
+        r#"{"default_agent": "mine", "agents": {"mine": {"mode": "primary"}}}"#,
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let default = |core: &Core| core.loaded().agents.default_agent().unwrap().id.clone();
+    assert_eq!(default(&core), "build");
+    let waiting = item(&core, TrustKind::Permissions);
+    assert_eq!(waiting.entries[0].label, "sessions");
+    assert_eq!(waiting.entries[0].command, "start with the agent mine");
+    approve_all(&runtime, &core, TrustKind::Permissions);
+    assert_eq!(default(&core), "mine");
+}
+
+#[cfg(unix)]
+#[test]
+fn project_files_linked_to_a_device_are_skipped() {
+    let gateway = anysola_testkit::FakeGateway::start(|request, _| text(request, "ok"));
+    let env = env(&gateway.url);
+    let project = env.home.project();
+    let link = |path: std::path::PathBuf| {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink("/dev/zero", path).unwrap();
+    };
+    link(project.join("anysola.json"));
+    link(project.join("AGENTS.md"));
+    link(project.join(".anysola/agent/zero.md"));
+    link(project.join(".anysola/command/zero.md"));
+    link(project.join(".anysola/skills/zero/SKILL.md"));
+    env.home
+        .write("proj/.anysola/anysola.json", r#"{"default_agent": "plan"}"#);
+    let runtime = runtime();
+    let started = Instant::now();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    let prompt = anysola_core::api::Prompt {
+        text: "go".into(),
+        ..Default::default()
+    };
+    runtime
+        .block_on(core.prompt(
+            &session.id,
+            prompt,
+            anysola_core::session::TurnOptions::default(),
+        ))
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(20));
+    let config = core.loaded().config.clone();
+    assert!(
+        config
+            .warnings
+            .iter()
+            .any(|w| w.contains("anysola.json") && w.contains("not a regular file")),
+        "{:?}",
+        config.warnings
+    );
+    assert_eq!(config.default_agent(), Some("plan"), "the rest still loads");
 }

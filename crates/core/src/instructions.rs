@@ -259,10 +259,24 @@ fn has_glob(text: &str) -> bool {
 
 /// Adds the file unless it is missing or already listed. `Err` when it exists but cannot be read.
 fn push(out: &mut Vec<InstructionFile>, path: &Path) -> Result<(), ()> {
-    let content = match std::fs::read_to_string(path) {
+    let content = match crate::paths::read_text(path, crate::paths::TEXT_CAP) {
         Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return Err(()),
-        Err(_) => return Ok(()),
+        Err(crate::paths::Unread::Io(error))
+            if error.kind() == std::io::ErrorKind::PermissionDenied =>
+        {
+            return Err(());
+        }
+        Err(crate::paths::Unread::Io(_)) => return Ok(()),
+        Err(reason) => {
+            crate::log::warn(
+                "skipped an instruction file that is not a regular file of at most 4 MiB",
+                &[
+                    ("path", &path.display().to_string()),
+                    ("reason", &format!("{reason:?}")),
+                ],
+            );
+            return Ok(());
+        }
     };
     let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     if !out.iter().any(|f| {
@@ -332,6 +346,20 @@ pub fn discover(
     configured: &[String],
     remote: &[InstructionFile],
 ) -> Observed {
+    discover_scoped(paths, directory, worktree, configured, remote, &[])
+}
+
+/// [`discover`] where the `project` entries (named by project documents only) find only files
+/// inside the project root, symlinks and globs resolved.
+pub fn discover_scoped(
+    paths: &Paths,
+    directory: &Path,
+    worktree: &Path,
+    configured: &[String],
+    remote: &[InstructionFile],
+    project: &[String],
+) -> Observed {
+    let root = crate::paths::canonicalize(worktree).unwrap_or_else(|_| worktree.to_path_buf());
     let mut out = Vec::new();
     let _ = push(&mut out, &paths.legacy_config_dir().join("AGENTS.md"));
     let _ = push(&mut out, &paths.data.join("AGENTS.md"));
@@ -378,7 +406,17 @@ pub fn discover(
             }
             found.sort();
         }
+        let scoped = project.contains(entry);
         for path in found {
+            if scoped
+                && !crate::paths::canonicalize(&path).is_ok_and(|real| real.starts_with(&root))
+            {
+                crate::log::warn(
+                    "ignored a project instruction file outside the project",
+                    &[("path", &path.display().to_string())],
+                );
+                continue;
+            }
             let _ = push(&mut out, &path);
         }
     }

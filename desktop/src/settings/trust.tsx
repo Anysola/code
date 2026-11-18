@@ -6,7 +6,7 @@
 import { useState, type ReactNode } from "react"
 
 import type { TrustItem } from "../bridge"
-import { answerTrust, remoteText, ruleText, scopeLabel, useTrust } from "../hooks-card"
+import { answerTrust, remoteLabel, remoteText, ruleText, scopeLabel, useTrust } from "../hooks-card"
 import { btn, cn, Spinner } from "../ui"
 import { OpenPath } from "./agent"
 import { Group, message, Row } from "./controls"
@@ -79,8 +79,8 @@ function ProjectItem({ item, directory }: { item: TrustItem; directory: string }
       {item.entries.map((e, i) => (
         <EntryRow
           key={i}
-          scope={kind === "permissions" ? scopeLabel(e.label) : e.label === "instructions" ? "Instructions" : e.label}
-          text={kind === "permissions" ? ruleText(e.command) : remoteText(e)}
+          scope={kind === "permissions" ? scopeLabel(e.label) : remoteLabel(e.label)}
+          text={kind === "permissions" ? ruleText(e.command, e.label) : remoteText(e)}
         />
       ))}
       {error && <p className="text-dense px-4 py-2.5 text-danger select-text">{error}</p>}

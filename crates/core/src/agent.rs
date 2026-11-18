@@ -7,6 +7,12 @@ use crate::config::{Config, Entry};
 use crate::paths::Paths;
 use crate::permission::{Effect, Rule};
 
+/// An agent definition as a source gives it: `(id, definition, file)`.
+pub(crate) type Defined = (String, Value, Option<String>);
+
+/// The built-in agents' ids.
+pub const BUILT_IN: [&str; 6] = ["build", "plan", "general", "explore", "compaction", "title"];
+
 /// The folders of a config directory that hold markdown agents (`mode`/`modes`: primary ones).
 pub const FOLDERS: [&str; 4] = ["agent", "agents", "mode", "modes"];
 
@@ -185,21 +191,18 @@ impl Agents {
             agent.permissions.extend(global.iter().cloned());
         }
         let defined = config.entries.iter().flat_map(|entry| match entry {
-            Entry::Directory(dir) => markdown_agents(dir),
+            // A project's markdown agents as the loader read and judged them (unapproved
+            // loosening rules already left out); other folders are read here.
+            Entry::Directory(dir) => match config.project_agents.iter().find(|(d, _)| d == dir) {
+                Some((_, agents)) => agents.clone(),
+                None => markdown_agents(dir),
+            },
             Entry::Document { agents, source, .. } => agents
                 .iter()
                 .map(|(id, item)| (id.clone(), item.clone(), source.clone()))
                 .collect(),
         });
-        for (id, mut item, source) in defined {
-            // A project's markdown agent loosens nothing until approved.
-            if source
-                .as_ref()
-                .is_some_and(|s| config.withheld_agent_files.contains(s))
-                && let Some(Value::Array(rules)) = item.get_mut("permissions")
-            {
-                rules.retain(|r| !crate::trust::loosens(r));
-            }
+        for (id, item, source) in defined {
             if item.get("disabled").and_then(Value::as_bool) == Some(true) {
                 list.retain(|a| a.id != id);
                 continue;
@@ -257,7 +260,7 @@ impl Agents {
 
 /// `{agent,agents}/**/*.md` (mode from frontmatter) and `{mode,modes}/*.md` (always primary) of a
 /// config directory; the id is the path below that folder without `.md`.
-pub(crate) fn markdown_agents(dir: &std::path::Path) -> Vec<(String, Value, Option<String>)> {
+pub(crate) fn markdown_agents(dir: &std::path::Path) -> Vec<Defined> {
     let mut out = Vec::new();
     for folder in FOLDERS {
         let primary = folder.starts_with("mode");
@@ -276,7 +279,7 @@ pub(crate) fn markdown_agents(dir: &std::path::Path) -> Vec<(String, Value, Opti
             .collect();
         files.sort();
         for file in files {
-            let Ok(text) = std::fs::read_to_string(&file) else {
+            let Some(text) = crate::paths::read_markdown(&file) else {
                 continue;
             };
             let Some((meta, body)) = crate::markdown::parse(&text) else {

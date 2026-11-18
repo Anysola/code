@@ -94,12 +94,13 @@ fn instructions(
 ) -> Result<String, SessionError> {
     let directory = std::path::PathBuf::from(&session.directory);
     let worktree = shared.project.worktree.clone();
-    let files = instructions::discover(
+    let files = instructions::discover_scoped(
         &shared.paths,
         &directory,
         &worktree,
         &sources.config.instructions,
         &sources.remote_instructions,
+        &sources.config.project_instructions,
     );
     let environment = Environment {
         git: shared.project.vcs == Some("git"),

@@ -92,7 +92,7 @@ fn markdown_commands(dir: &Path) -> Vec<Command> {
     files
         .into_iter()
         .filter_map(|(file, root)| {
-            let text = std::fs::read_to_string(&file).ok()?;
+            let text = crate::paths::read_markdown(&file)?;
             let (mut meta, body) = crate::markdown::parse(&text)?;
             meta.insert("template".into(), Value::String(body.trim().to_string()));
             let name = file.strip_prefix(&root).ok()?.with_extension("");

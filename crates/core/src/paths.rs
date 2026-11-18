@@ -145,6 +145,61 @@ pub fn canonicalize(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
     Ok(real)
 }
 
+/// The most read from a markdown or instruction file (agents, commands, skills, `AGENTS.md`).
+pub const TEXT_CAP: u64 = 4 << 20;
+/// The most read from a project's config document.
+pub const DOCUMENT_CAP: u64 = 1 << 20;
+
+/// Why [`read_text`] skipped a file.
+#[derive(Debug)]
+pub enum Unread {
+    /// Not a regular file after following symlinks (a device, a pipe, a folder).
+    NotAFile,
+    TooLarge,
+    Io(std::io::Error),
+}
+
+/// A text file that must be a regular file (symlinks followed) of at most `cap` bytes: a
+/// repository's `AGENTS.md` linked to `/dev/zero` must not exhaust memory.
+pub fn read_text(path: &Path, cap: u64) -> Result<String, Unread> {
+    use std::io::Read;
+    let meta = std::fs::metadata(path).map_err(Unread::Io)?;
+    if !meta.is_file() {
+        return Err(Unread::NotAFile);
+    }
+    if meta.len() > cap {
+        return Err(Unread::TooLarge);
+    }
+    let file = std::fs::File::open(path).map_err(Unread::Io)?;
+    let mut bytes = Vec::new();
+    file.take(cap + 1)
+        .read_to_end(&mut bytes)
+        .map_err(Unread::Io)?;
+    if bytes.len() as u64 > cap {
+        return Err(Unread::TooLarge);
+    }
+    String::from_utf8(bytes)
+        .map_err(|e| Unread::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))
+}
+
+/// [`read_text`] with [`TEXT_CAP`]; a file it skips for its type or size is logged once.
+pub fn read_markdown(path: &Path) -> Option<String> {
+    match read_text(path, TEXT_CAP) {
+        Ok(text) => Some(text),
+        Err(Unread::Io(_)) => None,
+        Err(reason) => {
+            crate::log::warn(
+                "skipped a file that is not a regular file of at most 4 MiB",
+                &[
+                    ("path", &path.display().to_string()),
+                    ("reason", &format!("{reason:?}")),
+                ],
+            );
+            None
+        }
+    }
+}
+
 /// Lexically normalizes `.` and `..` without touching the filesystem.
 pub fn normalize(path: &Path) -> PathBuf {
     use std::path::Component;

@@ -130,8 +130,13 @@ pub struct Config {
     pub trust: Vec<crate::trust::Section>,
     /// Project documents whose `mcp` section was not applied.
     withheld_mcp: Vec<String>,
-    /// Project markdown agent files whose loosening rules are withheld.
-    pub(crate) withheld_agent_files: Vec<String>,
+    /// `instructions` entries only project documents name: what they find must lie inside the
+    /// project ([`crate::instructions::discover_scoped`]).
+    pub project_instructions: Vec<String>,
+    /// The markdown agents of each project directory as read once at load, `(id, agent, file)`,
+    /// with the loosening rules of unapproved files left out: the rules applied are the rules
+    /// judged.
+    pub(crate) project_agents: Vec<(PathBuf, Vec<crate::agent::Defined>)>,
 }
 
 impl Config {
@@ -281,6 +286,9 @@ impl Config {
         }
         let mut statements = policy_statements(&mut data);
         if document.withheld.permissions {
+            if crate::trust::loosening_default(&data).is_some() {
+                data.remove("default_agent");
+            }
             statements.retain(|p| !crate::trust::loosening_policy(p));
             if let Some(Value::Array(rules)) = data.get_mut("permissions") {
                 rules.retain(|r| !crate::trust::loosens(r));
@@ -294,8 +302,10 @@ impl Config {
             }
         }
         if document.withheld.remote {
-            if let Some(Value::Array(items)) = data.get_mut("instructions") {
-                items.retain(|i| !i.as_str().is_some_and(crate::trust::remote_instruction));
+            for key in ["instructions", "skills"] {
+                if let Some(Value::Array(items)) = data.get_mut(key) {
+                    items.retain(|i| !i.as_str().is_some_and(crate::trust::remote_instruction));
+                }
             }
             if let Some(Value::Object(references)) = data.get_mut("references") {
                 references.retain(|_, r| crate::trust::remote_reference(r).is_none());
@@ -313,6 +323,45 @@ impl Config {
                     .into_iter()
                     .filter_map(|r| serde_json::from_value(r).ok()),
             );
+        }
+        if let Some(Value::Array(items)) = data.get_mut("instructions") {
+            let source = document.source.as_deref().unwrap_or_default();
+            if document.project {
+                // A project names files inside the project only: `~`, absolute paths and `..`
+                // would read the user's private files into the prompt with no ask.
+                items.retain(|item| {
+                    let Some(entry) = item.as_str() else {
+                        return false;
+                    };
+                    let outside = !crate::trust::remote_instruction(entry)
+                        && (entry.starts_with('~')
+                            || Path::new(entry).is_absolute()
+                            || entry.starts_with('/')
+                            || entry.starts_with('\\')
+                            || Path::new(entry)
+                                .components()
+                                .any(|c| c == std::path::Component::ParentDir));
+                    if outside {
+                        self.warnings.push(format!(
+                            "Ignoring the instruction \"{entry}\" in {source}: a project's instructions can only name files inside the project; put it in your own config."
+                        ));
+                    }
+                    !outside
+                });
+                for entry in items.iter().filter_map(Value::as_str) {
+                    if !crate::trust::remote_instruction(entry)
+                        && !self.instructions.iter().any(|i| i == entry)
+                        && !self.project_instructions.iter().any(|i| i == entry)
+                    {
+                        self.project_instructions.push(entry.to_string());
+                    }
+                }
+            } else {
+                // The user's own config names it too: any file it names is the user's choice.
+                for entry in items.iter().filter_map(Value::as_str) {
+                    self.project_instructions.retain(|i| i != entry);
+                }
+            }
         }
         for (key, list) in [
             ("instructions", &mut self.instructions),
@@ -610,7 +659,13 @@ pub fn protected(paths: &Paths, path: &Path) -> bool {
         return true;
     }
     let database = paths.database().display().to_string();
-    let mut files = vec![paths.config_file(), paths.desktop_prefs()];
+    // The global instructions join every project's system prompt.
+    let mut files = vec![
+        paths.config_file(),
+        paths.desktop_prefs(),
+        paths.data.join("AGENTS.md"),
+        paths.legacy_config_dir().join("AGENTS.md"),
+    ];
     files.extend(["", "-wal", "-shm", "-journal"].map(|s| PathBuf::from(format!("{database}{s}"))));
     files.extend(NAMES.map(|name| paths.legacy_config_dir().join(name)));
     files.iter().any(|file| resolve(file) == target)
@@ -746,7 +801,12 @@ impl Loader<'_> {
         match parsed {
             Some(data) => {
                 let withheld = if self.project {
-                    self.withhold(&data, source)
+                    // The document as written, for showing placeholders in the approval text.
+                    let raw = match jsonc::parse(text) {
+                        Ok(Value::Object(map)) => Some(normalize::normalize(map)),
+                        _ => None,
+                    };
+                    self.withhold(&data, raw.as_ref(), source)
                 } else {
                     Withheld::default()
                 };
@@ -772,11 +832,16 @@ impl Loader<'_> {
 
     /// Records the project document's MCP and formatter sections with the decisions on them;
     /// what is not approved is withheld.
-    fn withhold(&mut self, data: &Map<String, Value>, source: &str) -> Withheld {
+    fn withhold(
+        &mut self,
+        data: &Map<String, Value>,
+        raw: Option<&Map<String, Value>>,
+        source: &str,
+    ) -> Withheld {
         use crate::trust::{Section, TrustKind};
         let mut withheld = Withheld::default();
         for (kind, section) in [
-            (TrustKind::Mcp, crate::trust::mcp_section(data)),
+            (TrustKind::Mcp, crate::trust::mcp_section_written(data, raw)),
             (TrustKind::Formatter, crate::trust::formatter_section(data)),
             (
                 TrustKind::Permissions,
@@ -809,7 +874,27 @@ impl Loader<'_> {
     }
 
     fn file(&mut self, path: &Path) {
-        if let Ok(text) = std::fs::read_to_string(path) {
+        // A project's documents must be regular files of a sane size (a symlink to a device must
+        // not exhaust memory); the user's own are read as they always were.
+        let read = if self.project {
+            match crate::paths::read_text(path, crate::paths::DOCUMENT_CAP) {
+                Ok(text) => Ok(text),
+                Err(crate::paths::Unread::Io(error)) => Err(error),
+                Err(reason) => {
+                    let why = match reason {
+                        crate::paths::Unread::TooLarge => "it is larger than 1 MiB",
+                        _ => "it is not a regular file",
+                    };
+                    self.config
+                        .warnings
+                        .push(format!("Ignoring {}: {why}.", path.display()));
+                    return;
+                }
+            }
+        } else {
+            std::fs::read_to_string(path)
+        };
+        if let Ok(text) = read {
             if !self.project {
                 self.config.own_documents.push(path.to_path_buf());
             }
@@ -822,26 +907,29 @@ impl Loader<'_> {
     /// rules that loosen what the agent may do; unapproved, those rules are withheld.
     fn agent_files(&mut self, dir: &Path) {
         use crate::trust::{Section, TrustKind};
-        for (id, agent, file) in crate::agent::markdown_agents(dir) {
+        let mut agents = crate::agent::markdown_agents(dir);
+        for (id, agent, file) in &mut agents {
             let Some(file) = file else {
                 continue;
             };
-            let Some((digest, entries)) = crate::trust::agent_file_section(&id, &agent, &file)
-            else {
+            let Some((digest, entries)) = crate::trust::agent_file_section(id, agent, file) else {
                 continue;
             };
-            let decision = self.decisions.of(&file, TrustKind::Permissions, &digest);
-            if decision != Some(true) {
-                self.config.withheld_agent_files.push(file.clone());
+            let decision = self.decisions.of(file, TrustKind::Permissions, &digest);
+            if decision != Some(true)
+                && let Some(Value::Array(rules)) = agent.get_mut("permissions")
+            {
+                rules.retain(|r| !crate::trust::loosens(r));
             }
             self.config.trust.push(Section {
-                path: file,
+                path: file.clone(),
                 kind: TrustKind::Permissions,
                 digest,
                 decision,
                 entries,
             });
         }
+        self.config.project_agents.push((dir.to_path_buf(), agents));
     }
 
     fn directory(&mut self, dir: &Path, files: &[&str]) {
@@ -1034,12 +1122,12 @@ mod tests {
         std::fs::create_dir_all(home.join(".config/opencode")).unwrap();
         std::fs::write(
             home.join(".config/opencode/opencode.json"),
-            r#"{"default_agent":"zsh","permissions":[{"action":"a","resource":"*","effect":"deny"}]}"#,
+            r#"{"theme":"zsh","permissions":[{"action":"a","resource":"*","effect":"deny"}]}"#,
         )
         .unwrap();
         std::fs::write(
             project.join("opencode.jsonc"),
-            "{\"default_agent\": \"bash\", // c\n \"instructions\": [\"x.md\",],}",
+            "{\"theme\": \"bash\", // c\n \"instructions\": [\"x.md\",],}",
         )
         .unwrap();
         std::fs::write(
@@ -1049,12 +1137,12 @@ mod tests {
         .unwrap();
         std::fs::write(
             root.path().join("opencode.json"),
-            r#"{"default_agent":"never-read-above-home"}"#,
+            r#"{"theme":"never-read-above-home"}"#,
         )
         .unwrap();
         let paths = Paths::isolated(home.clone());
         let config = load(&paths, &project, &LoadOptions::default());
-        assert_eq!(config.default_agent(), Some("bash"));
+        assert_eq!(config.get("theme").and_then(Value::as_str), Some("bash"));
         assert_eq!(config.instructions, vec!["x.md"]);
         assert_eq!(config.permissions.len(), 1);
         assert_eq!(
@@ -1084,12 +1172,12 @@ mod tests {
         };
         write(
             project.join("opencode.json"),
-            r#"{"default_agent":"zsh","instructions":["old.md"]}"#,
+            r#"{"theme":"zsh","instructions":["old.md"]}"#,
         );
-        write(project.join("anysola.jsonc"), r#"{"default_agent":"bash"}"#);
+        write(project.join("anysola.jsonc"), r#"{"theme":"bash"}"#);
         let paths = Paths::isolated(home.clone());
         let config = load(&paths, &project, &LoadOptions::default());
-        assert_eq!(config.default_agent(), Some("bash"));
+        assert_eq!(config.get("theme").and_then(Value::as_str), Some("bash"));
         assert_eq!(config.instructions, vec!["old.md"]);
         write(
             project.join(".opencode").join("opencode.json"),
@@ -1203,6 +1291,30 @@ mod tests {
         assert_eq!(config.mcp_source("shared"), Some(local.as_str()));
         assert_eq!(shared(&config), Some(json!(["c"])));
         assert_eq!(config.trust[0].decision, Some(true));
+    }
+
+    #[test]
+    fn project_agent_files_apply_the_rules_that_were_judged() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let project = home.join("proj");
+        std::fs::create_dir_all(project.join(".anysola/agent")).unwrap();
+        let file = project.join(".anysola/agent/mine.md");
+        std::fs::write(
+            &file,
+            "---\npermission:\n  bash: ask\n  edit: allow\n---\nMine.\n",
+        )
+        .unwrap();
+        let paths = Paths::isolated(home.clone());
+        let config = load(&paths, &project, &LoadOptions::default());
+        // Rewritten after the loader judged it: what applies is what was judged.
+        std::fs::write(&file, "---\nmode: primary\n---\nMine.\n").unwrap();
+        let agents = crate::agent::Agents::load(&config, &paths);
+        let mine = agents.get("mine").unwrap();
+        let effect = |action: &str| crate::permission::evaluate(action, "x", &mine.permissions);
+        assert_eq!(effect("shell"), crate::permission::Effect::Ask);
+        assert_eq!(config.trust.len(), 1);
+        assert_eq!(config.trust[0].entries[0].command, "allow edit: *");
     }
 
     #[test]
@@ -1329,21 +1441,23 @@ mod tests {
         std::fs::create_dir_all(&real).unwrap();
         std::fs::create_dir_all(home.join(".config")).unwrap();
         std::os::unix::fs::symlink(&real, home.join(".config/opencode")).unwrap();
-        std::fs::write(real.join("opencode.json"), r#"{"default_agent":"zsh"}"#).unwrap();
+        std::fs::write(real.join("opencode.json"), r#"{"theme":"zsh"}"#).unwrap();
         std::fs::create_dir_all(real.join(".opencode")).unwrap();
         std::fs::write(
             real.join(".opencode").join("opencode.json"),
-            r#"{"default_agent":"fish"}"#,
+            r#"{"theme":"fish"}"#,
         )
         .unwrap();
         let paths = Paths::isolated(home.clone());
         let config = load(&paths, &real, &LoadOptions::default());
-        assert_eq!(config.default_agent(), Some("zsh"));
+        assert_eq!(config.get("theme").and_then(Value::as_str), Some("zsh"));
         let project = home.join("proj");
         std::fs::create_dir_all(&project).unwrap();
-        std::fs::write(project.join("opencode.json"), r#"{"default_agent":"bash"}"#).unwrap();
+        std::fs::write(project.join("opencode.json"), r#"{"theme":"bash"}"#).unwrap();
         assert_eq!(
-            load(&paths, &project, &LoadOptions::default()).default_agent(),
+            load(&paths, &project, &LoadOptions::default())
+                .get("theme")
+                .and_then(Value::as_str),
             Some("bash")
         );
     }
@@ -1365,6 +1479,8 @@ mod protected_tests {
             paths.legacy_config_dir().join("opencode.jsonc"),
             system_dir().join("opencode.json"),
             paths.data.join("agent/x.md"),
+            paths.data.join("AGENTS.md"),
+            paths.legacy_config_dir().join("AGENTS.md"),
             paths.data.join("skills/s/SKILL.md"),
             paths.legacy_config_dir().join("command/c.md"),
         ] {

@@ -16,12 +16,20 @@ branch.
   files that would let the agent act without asking (and its policies that would turn off your own servers or
   providers) wait for your approval, in the same question; its rules that ask or deny apply at once. Settings →
   Permissions lists what waits, and no longer shows a project's unapproved rules as if they were in effect.
-- A project's config makes the app download nothing until you allow it: instruction URLs are not fetched and git
-  references are not cloned before that. Settings → Instructions lists what waits.
+- A project's config makes the app download nothing until you allow it: instruction URLs and skill URLs are not
+  fetched and git references are not cloned before that. Settings → Instructions lists what waits. A project's
+  instructions can only name files inside the project; your own config may still name any file.
+- A project starting sessions on an agent of its own is asked about with its rules.
+- Opening a folder no longer reads a project file that is not a regular file or is larger than 1 MiB (config) or
+  4 MiB (instructions, agents, commands, skills): a config linked to a device used to exhaust memory.
 - A project's config can no longer choose the shell that runs commands: `shell` only works in your own config.
-- The agent's edit and write tools also ask before changing the agent, command and skill folders in your config
-  directory. `{file:…}` in a config reads at most 1 MiB, and only regular files from a project's config.
-- Names and commands from a project are shown with invisible and direction-changing characters written out.
+- The agent's edit and write tools also ask before changing your global `AGENTS.md` and the agent, command and
+  skill folders in your config directory. `{file:…}` in a config reads at most 1 MiB, and only regular files from a project's config.
+- Names and commands from a project are shown with invisible and direction-changing characters written out, and
+  a header or environment value that takes one of your files or variables is shown as the project wrote it
+  (`{file:…}`, `{env:…}`).
+- Known limit: a project's rule that asks can still turn one of your denials into a question, because the last
+  matching rule decides.
 
 ## 1.0.9 (2026-11-18)
 

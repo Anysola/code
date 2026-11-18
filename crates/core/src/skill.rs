@@ -138,7 +138,7 @@ fn scan(root: &Path) -> Vec<PathBuf> {
 
 fn load_directory(root: &Path, into: &mut Vec<Skill>) {
     for file in scan(root) {
-        let Ok(content) = std::fs::read_to_string(&file) else {
+        let Some(content) = crate::paths::read_markdown(&file) else {
             continue;
         };
         if content.is_empty() {
