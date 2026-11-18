@@ -20,14 +20,16 @@ import {
   RotateCcw,
   SquareSlash,
   Undo2,
+  Webhook,
 } from "lucide-react"
 import { createContext, memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import Markdown, { type Components, type ExtraProps } from "react-markdown"
 import remarkGfm from "remark-gfm"
 
-import type { FileDiff, FormRequest, Item } from "./bridge"
+import type { FileDiff, FormRequest, HookRun, Item } from "./bridge"
 import { duration, Elapsed } from "./conversation"
 import { FormCard } from "./form-card"
+import { HookTrustCards } from "./hooks-card"
 import { copyPath } from "./header"
 import { getPrefs, isSendKey, sendKeyLabel, usePrefs } from "./prefs"
 import {
@@ -67,7 +69,8 @@ function blocks(items: Item[]): Block[] {
   const out: Block[] = []
   for (const item of items) {
     const last = out[out.length - 1]
-    if (item.kind === "tool" && EXPLORE.has(item.name)) {
+    // A lookup a hook spoke about stands alone: folded into the group, its line would hide.
+    if (item.kind === "tool" && EXPLORE.has(item.name) && !item.hooks?.length) {
       if (last?.kind === "explore") last.tools.push(item)
       else out.push({ kind: "explore", id: item.id, tools: [item] })
     } else out.push({ kind: "item", item })
@@ -141,6 +144,7 @@ export function Transcript({
         {/* Reasoning isn't shown: the gateway sends it summarized or empty, so a "Thought" row
             opened onto nothing. The status line says the model is at work meanwhile. */}
         {open.live.map((l) => l.kind === "text" && <Prose key={l.key} text={l.text} />)}
+        {!readOnly && <HookTrustCards directory={open.directory} className="flex flex-col gap-5" />}
         {permissions.map((p, i) => (
           // Enter and Escape answer the first ask; the keys show on that one only.
           <PermissionCard key={p.requestId} permission={p} keys={i === 0} />
@@ -793,7 +797,7 @@ const FILE_TOOLS = new Set(["read", "write", "edit", "list"])
 const OPENS = new Set(["grep", "glob", "websearch", "webfetch"])
 
 /** A row is running only while its turn is: a stopped turn can leave one that never heard its end. */
-function useToolState(tool: Tool): "running" | "waiting" | "declined" | "stopped" | "error" | "done" {
+function useToolState(tool: Tool): "running" | "waiting" | "declined" | "blocked" | "stopped" | "error" | "done" {
   const { live, sessionId } = useContext(WhereContext)
   // A call held by a permission card isn't running yet: the card under it asks.
   const held = useStore(
@@ -808,6 +812,7 @@ function useToolState(tool: Tool): "running" | "waiting" | "declined" | "stopped
   if (tool.status === "running" || tool.status === "streaming")
     return !live ? "stopped" : held ? "waiting" : "running"
   if (tool.status === "error" && tool.error === DECLINED) return "declined"
+  if (hookBlocked(tool)) return "blocked"
   if (cutShort(tool)) return "stopped"
   return tool.status === "error" ? "error" : "done"
 }
@@ -817,16 +822,99 @@ const CUT_SHORT = "Tool execution interrupted"
 /** And on a call the user answered Deny to. */
 const DECLINED = "The user declined this tool call"
 
-/** Ended by the user, by a stop or a Deny: the row says so itself, with no error under it. */
+/** Ended by the user, by a stop, a Deny or their hook: the row says so itself, with no error under it. */
 function cutShort(tool: Tool) {
   // A call settled after the app died reads "Tool execution interrupted: <tool>".
-  return tool.status === "error" && (!!tool.error?.startsWith(CUT_SHORT) || tool.error === DECLINED)
+  return tool.status === "error" && (!!tool.error?.startsWith(CUT_SHORT) || tool.error === DECLINED || hookBlocked(tool))
+}
+
+/** A PreToolUse hook stopped the call: its line under the row gives the reason the error repeats. */
+function hookBlocked(tool: Tool) {
+  return tool.status === "error" && !!tool.hooks?.some((h) => h.event === "PreToolUse" && h.outcome === "blocked")
+}
+
+/** What a call would have done, for a row whose call never ran. */
+const intents: Record<string, string> = {
+  read: "Read",
+  write: "Write",
+  edit: "Edit",
+  list: "List",
+  grep: "Search",
+  glob: "Find files",
+  webfetch: "Fetch",
+  websearch: "Search the web",
+  skill: "Use a skill",
+  execute: "Run a script",
+}
+
+/** What the user's hooks did around a call, under its row whether or not the row is open. */
+function HookLines({ runs, className }: { runs?: HookRun[]; className?: string }) {
+  if (!runs?.length) return null
+  return (
+    <div className={cn("flex flex-col", className)}>
+      {runs.map((r, i) => (
+        <HookLine key={i} run={r} />
+      ))}
+    </div>
+  )
+}
+
+const HOOK_SAYS: Record<HookRun["outcome"], string> = {
+  blocked: "Blocked by a hook",
+  feedback: "A hook told the agent something",
+  context: "A hook added context for the agent",
+  error: "A hook failed; the work went on",
+  notice: "A hook says",
+}
+
+function HookLine({ run }: { run: HookRun }) {
+  const [open, setOpen] = useState(false)
+  const icon = (
+    <Webhook
+      className={cn(
+        "mt-[0.2rem] size-3 shrink-0",
+        run.outcome === "blocked" ? "text-danger" : run.outcome === "error" ? "text-warning" : "text-muted"
+      )}
+      strokeWidth={1.75}
+    />
+  )
+  const title = run.command ? `Hook: ${run.command}` : undefined
+  // Said to the agent: one click away. Said to the user (a block's reason, a failure, a notice): in the line.
+  if (run.outcome === "feedback" || run.outcome === "context")
+    return (
+      <div title={title}>
+        <button
+          onClick={() => setOpen(!open)}
+          aria-expanded={open}
+          className="text-2xs flex min-h-6 items-start gap-2 rounded-md py-1 pr-1 text-left text-muted hover:text-foreground focus-visible:status-focused-field"
+        >
+          {icon}
+          <span>{HOOK_SAYS[run.outcome]}</span>
+          {open ? <ChevronDown className="mt-px size-3 shrink-0" /> : <ChevronRight className="mt-px size-3 shrink-0" />}
+        </button>
+        {open && (
+          <pre className="mt-1 mb-1 max-h-60 overflow-auto rounded-lg bg-background/60 px-3 py-2.5 font-mono text-xs leading-relaxed whitespace-pre-wrap text-foreground/75 select-text">
+            {run.message}
+          </pre>
+        )}
+      </div>
+    )
+  return (
+    <div title={title} className="text-2xs flex min-h-6 items-start gap-2 py-1">
+      {icon}
+      <span className="max-h-24 min-w-0 overflow-y-auto whitespace-pre-wrap select-text">
+        <span className={run.outcome === "notice" ? "text-muted" : "text-foreground/85"}>{HOOK_SAYS[run.outcome]}</span>
+        {run.message && <span className={run.outcome === "notice" ? "text-foreground/85" : "text-muted"}>{` · ${run.message}`}</span>}
+      </span>
+    </div>
+  )
 }
 
 function ToolState({ state }: { state: ReturnType<typeof useToolState> }) {
   if (state === "running") return <Spinner className="size-3" />
   if (state === "waiting") return <span>Waiting for you</span>
   if (state === "declined") return <span>Declined</span>
+  if (state === "blocked") return <span>Blocked</span>
   if (state === "stopped") return <span>Stopped</span>
   if (state === "error") return <span className="text-danger">Failed</span>
   return null
@@ -843,7 +931,9 @@ function ToolRow({ tool, verb, icon }: { tool: Tool; verb?: string; icon?: typeo
   const head = (
     <>
       <Icon className="size-3.5 shrink-0 text-muted" strokeWidth={1.75} />
-      <span className="shrink-0 text-foreground/80">{verb ?? verbs[tool.name] ?? tool.name}</span>
+      <span className="shrink-0 text-foreground/80">
+        {verb ?? (state === "blocked" ? intents[tool.name] : verbs[tool.name]) ?? tool.name}
+      </span>
       <span className="min-w-0 truncate font-mono text-xs text-muted">{tool.target}</span>
     </>
   )
@@ -875,6 +965,7 @@ function ToolRow({ tool, verb, icon }: { tool: Tool; verb?: string; icon?: typeo
           {output && (open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />)}
         </span>
       </div>
+      <HookLines runs={tool.hooks} className="pl-8" />
       {open && output && (
         <pre
           className={cn(
@@ -936,6 +1027,7 @@ function Subagent({ tool, directory }: { tool: Tool; directory: string }) {
           {child && <ChevronRight className="size-3.5" />}
         </span>
       </button>
+      <HookLines runs={tool.hooks} className="pl-8" />
     </div>
   )
 }
@@ -965,13 +1057,16 @@ function Command({ tool }: { tool: Tool }) {
         className="text-dense group flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left hover:bg-default/60 focus-visible:status-focused-field"
       >
         <SquareTerminal className="size-3.5 shrink-0 text-muted" strokeWidth={1.75} />
-        <span className="shrink-0 text-foreground/80">{state === "running" ? "Running" : state === "waiting" || state === "declined" ? "Run" : "Ran"}</span>
+        <span className="shrink-0 text-foreground/80">
+          {state === "running" ? "Running" : state === "waiting" || state === "declined" || state === "blocked" ? "Run" : "Ran"}
+        </span>
         <span className="min-w-0 truncate font-mono text-xs text-muted">{tool.target}</span>
         <span className="ml-auto flex shrink-0 items-center gap-2 text-2xs text-muted">
           <ToolState state={state} />
           {output && (open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />)}
         </span>
       </button>
+      <HookLines runs={tool.hooks} className="pl-8" />
       {open && output && (
         <pre className="mx-2 mt-1 max-h-80 overflow-auto rounded-lg bg-background/60 px-3 py-2.5 font-mono text-xs leading-relaxed whitespace-pre-wrap text-foreground/75">
           {output}
@@ -985,8 +1080,9 @@ function Edits({ tool }: { tool: Tool }) {
   return (
     <div className="flex flex-col gap-2">
       {tool.files!.map((f) => (
-        <EditCard key={f.file} file={f} status={tool.status} error={tool.error} />
+        <EditCard key={f.file} file={f} status={tool.status} error={cutShort(tool) ? null : tool.error} />
       ))}
+      <HookLines runs={tool.hooks} className="-mt-1 pl-9" />
     </div>
   )
 }
@@ -1290,6 +1386,17 @@ function StatusLine({ open, waiting, streaming }: { open: Open; waiting: boolean
       )
     case "failed":
       if (status.errorKind && BANNERED.has(status.errorKind)) return null
+      // The user's own hook said no: their rule at work, not a failure. The text is back in the box.
+      if (status.hook)
+        return (
+          <div className="text-dense flex items-start gap-2">
+            <Webhook className="mt-0.5 size-3.5 shrink-0 text-muted" strokeWidth={1.75} />
+            <span className="flex min-w-0 flex-col gap-0.5">
+              <span>A hook stopped this message. It’s back in the message box.</span>
+              <span className="max-h-40 overflow-y-auto whitespace-pre-wrap text-muted select-text">{status.error}</span>
+            </span>
+          </div>
+        )
       return (
         // Running elsewhere isn't an error to fix here: said plainly, not in red.
         <div className={cn("text-dense flex items-start gap-2", status.errorKind === "elsewhere" ? "text-muted" : "text-danger")}>

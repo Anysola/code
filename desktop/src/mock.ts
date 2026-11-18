@@ -19,6 +19,11 @@
  * those calls throw. `?slow=1500` makes a new session's first prompt take that long; `?hang=1`
  * makes Stop send nothing while the turn goes on. `window.__mockEmit(event)` sends a core event.
  *
+ * Hooks: `?hooks=none|user|waiting|allowed|refused|managed|all|off|locked|emptied` picks what the folder has (`user`
+ * by default; `emptied`: a project file whose allowed hooks were removed; `locked`: off through a variable, so the switch can't turn them on; `waiting` shows the card for a project's hooks). `?state=hooks` has tool rows a hook
+ * blocked, spoke about or failed on, and a hook's error notice; in `hook-blocked` a hook stops
+ * the message sent (`&blocks=2`: two hooks do).
+ *
  * Settings: `?settings=<section>` opens one; `?fail=usage,mcpList` makes those calls fail,
  * `?delay=800` slows every settings call, `?theme=light` previews a theme, `?empty=1` empties
  * every settings list, `?changes=open&commands=open&lookups=listed` start with those preferences.
@@ -35,6 +40,10 @@ import type {
   ErrorKind,
   FileDiff,
   FormRequest,
+  Hook,
+  HookDraft,
+  HookFile,
+  Hooks,
   Info,
   Item,
   McpServer,
@@ -613,6 +622,153 @@ function data0(): DataInfo {
 
 const about: About = { version: "1.0.6", os: "Linux 6.8 (Ubuntu 24.04)", arch: "x86_64" }
 
+// ---------------------------------------------------------------------------
+// Hooks
+// ---------------------------------------------------------------------------
+
+type MockHook = Omit<Hook, "active">
+
+const userHooks0: MockHook[] = [
+  {
+    id: "hk_1",
+    event: "PreToolUse",
+    matcher: "Bash",
+    command: "if grep -qE 'git push.*(-f|--force)'; then echo 'Force-pushing is off for the agent.' >&2; exit 2; fi",
+    timeout: 600,
+    source: CONFIG,
+    scope: "user",
+  },
+  {
+    id: "hk_2",
+    event: "PostToolUse",
+    matcher: "Edit|Write",
+    command: "pnpm --filter @anysola/web lint --quiet >&2 || exit 2",
+    timeout: 120,
+    source: CONFIG,
+    scope: "user",
+  },
+  { id: "hk_3", event: "SessionStart", matcher: "startup", command: "git log --oneline -5", timeout: 600, source: CONFIG, scope: "user" },
+]
+
+/** Set through a variable, so not this screen's to change. */
+const envHook: MockHook = {
+  id: null,
+  event: "UserPromptSubmit",
+  matcher: null,
+  command: "~/bin/redact-secrets",
+  timeout: 30,
+  source: "ANYSOLA_CONFIG",
+  scope: "user",
+}
+
+function projectFile(decision: HookFile["decision"]): Omit<HookFile, "hooks"> & { hooks: MockHook[] } {
+  const path = `${WEB}/.anysola/anysola.json`
+  const at = { source: path, scope: "project" as const, id: null }
+  return {
+    path,
+    digest: "9f2c4e0b7a1d5c3e8f6a2b4d0c9e7f1a3b5d8c2e4f6a0b9c7d1e3f5a8b2c4d6e",
+    decision,
+    hooks: [
+      { ...at, event: "PreToolUse", matcher: "Edit|Write", command: "node scripts/hooks/protect-generated.mjs", timeout: 600 },
+      {
+        ...at,
+        event: "UserPromptSubmit",
+        matcher: null,
+        command: `node scripts/hooks/context.mjs --branch "$(git rev-parse --abbrev-ref HEAD)" --changed "$(git diff --name-only HEAD | tr '\\n' ',')" --limit 40`,
+        timeout: 30,
+      },
+      { ...at, event: "Stop", matcher: null, command: "pnpm --filter @anysola/web test --run >&2 || exit 2", timeout: 300 },
+    ],
+  }
+}
+
+/** A file above the project folder that defines hooks too. */
+function parentFile(decision: HookFile["decision"]): Omit<HookFile, "hooks"> & { hooks: MockHook[] } {
+  const path = `${HOME}/code/anysola.json`
+  return {
+    path,
+    digest: "1b3d5f7a9c2e4f6a8b0d2c4e6f8a1b3d5c7e9f2a4b6d8c0e2f4a6b8d1c3e5f7a",
+    decision,
+    hooks: [{ source: path, scope: "project", id: null, event: "SessionStart", matcher: null, command: "./tools/doctor.sh --quiet", timeout: 600 }],
+  }
+}
+
+const managedHooks: MockHook[] = [
+  {
+    id: null,
+    event: "PreToolUse",
+    matcher: "mcp__.*",
+    command: "/opt/acme/bin/audit-tool-call --policy strict",
+    timeout: 10,
+    source: "/etc/anysola/managed.json",
+    scope: "managed",
+  },
+]
+
+const hookItems: Item[] = [
+  { kind: "user", id: "h1", text: "Fix the unused import the linter keeps flagging, then push the branch.", images: 0, time: now - 4 * 60_000 },
+  tool("h2", "edit", planCard.file, {
+    files: [planCard],
+    hooks: [
+      {
+        event: "PostToolUse",
+        command: "pnpm --filter @anysola/web lint --quiet >&2 || exit 2",
+        outcome: "feedback",
+        message:
+          "apps/web/src/components/plan-card.tsx\n  14:7  error  'Cycle' is defined but never used  @typescript-eslint/no-unused-vars\n\n✖ 1 problem (1 error, 0 warnings)",
+      },
+    ],
+  }),
+  tool("h3", "read", "apps/web/src/lib/plans.ts", {
+    output: "88 lines",
+    hooks: [
+      {
+        event: "PostToolUse",
+        command: "node scripts/hooks/generated-note.mjs",
+        outcome: "context",
+        message: "plans.ts is generated from plans.yaml. Edit the YAML and run pnpm gen instead.",
+      },
+    ],
+  }),
+  tool("h4", "edit", "apps/web/src/lib/plans.gen.ts", {
+    status: "error",
+    error: "A PreToolUse hook blocked this call: plans.gen.ts is generated. Edit plans.yaml and run pnpm gen.",
+    hooks: [
+      {
+        event: "PreToolUse",
+        command: "node scripts/hooks/protect-generated.mjs",
+        outcome: "blocked",
+        message: "plans.gen.ts is generated. Edit plans.yaml and run pnpm gen.",
+      },
+    ],
+  }),
+  { kind: "text", id: "h5:0", text: "The linter is clean now. Pushing the branch." },
+  tool("h6", "shell", "git push --force origin fix/yearly-price", {
+    status: "error",
+    error: "A PreToolUse hook blocked this call: Force-pushing is off for the agent.",
+    hooks: [
+      {
+        event: "PreToolUse",
+        command: "if grep -qE 'git push.*(-f|--force)'; then echo 'Force-pushing is off for the agent.' >&2; exit 2; fi",
+        outcome: "blocked",
+        message: "Force-pushing is off for the agent.",
+      },
+    ],
+  }),
+  tool("h7", "shell", "git push origin fix/yearly-price", {
+    output: "To github.com:anysola/web.git\n   4f2a9c1..8d0e3b7  fix/yearly-price -> fix/yearly-price",
+    hooks: [
+      {
+        event: "PostToolUse",
+        command: "~/bin/notify-push.sh",
+        outcome: "error",
+        message: "The hook exited with code 127: sh: 1: ~/bin/notify-push.sh: not found",
+      },
+    ],
+  }),
+  { kind: "text", id: "h8:0", text: "Pushed without force: the branch only had new commits on top, so a plain push was enough." },
+]
+
 const planItems: Item[] = [
   { kind: "user", id: "p1", text: "Plan how to add yearly prices to the team plan.", images: 0 },
   tool("p2", "read", "apps/web/src/lib/plans.ts", { output: "88 lines" }),
@@ -658,6 +814,7 @@ export function mockBridge(): Bridge {
   ])
   if (state === "plan") transcripts.set("ses_pricing", planItems)
   if (state === "long") transcripts.set("ses_pricing", longItems)
+  if (state === "hooks") transcripts.set("ses_pricing", hookItems)
   if (state === "images" || state === "done") transcripts.set("ses_pricing", [...earlierItems, ...pricingItems])
   if (state === "done")
     transcripts.set(
@@ -706,6 +863,43 @@ export function mockBridge(): Bridge {
   let saved = empty ? [] : [...saved0]
   let config = config0()
   let data = empty ? { ...data0(), imported: null, sessions: 0 } : data0()
+  // What the folder's hooks are: `?hooks=` picks the scene, the calls below change it.
+  const hookScene = empty ? "none" : (params.get("hooks") ?? "user")
+  let userHooks: MockHook[] = hookScene === "none" ? [] : hookScene === "all" ? [...userHooks0, envHook] : [...userHooks0]
+  let hookFiles = (
+    {
+      waiting: [projectFile(null)],
+      allowed: [projectFile("allowed")],
+      refused: [projectFile("denied")],
+      off: [projectFile("allowed")],
+      all: [projectFile(null), parentFile("allowed")],
+      emptied: [{ ...projectFile(null), digest: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", hooks: [] }],
+    } as Record<string, ReturnType<typeof projectFile>[]>
+  )[hookScene] ?? []
+  const managed = hookScene === "managed" || hookScene === "all" ? managedHooks : []
+  let hooksOff = hookScene === "off" || hookScene === "locked"
+  let hookIds = 10
+  const hooksNow = (): Hooks => {
+    const active = (h: MockHook): Hook => ({
+      ...h,
+      active: h.scope === "managed" || (!hooksOff && (h.scope === "user" || hookFiles.some((f) => f.path === h.source && f.decision === "allowed"))),
+    })
+    const files = hookFiles.map((f) => ({ ...f, hooks: f.hooks.map(active) }))
+    return {
+      hooks: [...managed, ...userHooks, ...hookFiles.flatMap((f) => f.hooks)].map(active),
+      files,
+      disabled: hooksOff,
+    }
+  }
+  const hookOf = (draft: HookDraft, id: string): MockHook => ({
+    id,
+    event: draft.event,
+    matcher: draft.matcher || null,
+    command: draft.command,
+    timeout: draft.timeout ?? (draft.event === "UserPromptSubmit" ? 30 : 600),
+    source: CONFIG,
+    scope: "user",
+  })
   let personal = "Reply in short, plain sentences.\nUse pnpm, never npm, in the web repos.\nRun the tests that cover a change before saying it is done.\n"
   const view = (sessionId: string): View => {
     const items = transcripts.get(sessionId) ?? []
@@ -847,6 +1041,19 @@ export function mockBridge(): Bridge {
                         ? "This session is open in Anysola Code in a terminal, which is running it now."
                         : "Anysola Code is temporarily unavailable. Try again shortly.",
           })
+        if (state === "hooks")
+          setTimeout(
+            () =>
+              emit({
+                type: "hook",
+                sessionId: session.id,
+                event: "SessionStart",
+                command: "git log --oneline -5",
+                outcome: "error",
+                message: "The hook exited with code 128: fatal: not a git repository (or any of the parent directories): .git",
+              }),
+            500
+          )
         if (state === "queue-stopped") emit({ type: "interrupted", sessionId: session.id, reason: "user" })
         if (state === "closing") setTimeout(() => emit({ type: "closeRequested", busy: 2 }), 400)
         if (state === "running" || state === "background" || state === "context") {
@@ -1029,6 +1236,19 @@ export function mockBridge(): Bridge {
         return { sessionId: id, queued: false }
       }
       if (state === "stuck") return { sessionId: id, queued: false }
+      if (state === "hook-blocked") {
+        // The hook ran as the message entered the session: it never became part of it.
+        await wait(300)
+        // Two hooks say no: one event each, and `failed` carries both reasons.
+        const reasons = [
+          "This message has what looks like an API key (sk-…). Remove it and send again.",
+          "Messages in this project stay under 2,000 characters.",
+        ].slice(0, params.get("blocks") === "2" ? 2 : 1)
+        for (const message of reasons)
+          emit({ type: "hook", sessionId: id, event: "UserPromptSubmit", command: "~/bin/redact-secrets", outcome: "blocked", message })
+        emit({ type: "failed", sessionId: id, unsent: true, kind: "other", error: reasons.join("\n") })
+        return { sessionId: id, queued: false }
+      }
       if (state === "unsent" || (state === "offline" && !running.has(id))) {
         // The turn never started: the message wasn't kept, the window puts it back.
         await wait(300)
@@ -1293,6 +1513,36 @@ export function mockBridge(): Bridge {
       settle("permissionForgetAll", () => {
         saved = saved.filter((p) => p.projectId !== projectId)
         return saved
+      }),
+    hooks: () => settle("hooks", hooksNow),
+    hookAdd: (_directory, draft) =>
+      settle("hookAdd", () => {
+        userHooks = [...userHooks, hookOf(draft, `hk_${++hookIds}`)]
+        return hooksNow()
+      }),
+    hookUpdate: (_directory, id, draft) =>
+      settle("hookUpdate", () => {
+        if (!userHooks.some((h) => h.id === id)) throw new Error("That hook isn’t in your config file any more.")
+        userHooks = userHooks.map((h) => (h.id === id ? hookOf(draft, id) : h))
+        return hooksNow()
+      }),
+    hookRemove: (_directory, id) =>
+      settle("hookRemove", () => {
+        userHooks = userHooks.filter((h) => h.id !== id)
+        return hooksNow()
+      }),
+    hooksTrust: (directory, path, digest, allow) =>
+      settle("hooksTrust", () => {
+        const file = hookFiles.find((f) => f.path === path)
+        if (!file || file.digest !== digest) throw new Error("That file’s hooks changed since they were shown. Look at them again.")
+        hookFiles = hookFiles.map((f) => (f.path === path ? { ...f, decision: allow ? "allowed" : "denied" } : f))
+        emit({ type: "hooks", directory })
+        return hooksNow()
+      }),
+    hooksDisable: (_directory, disabled) =>
+      settle("hooksDisable", () => {
+        hooksOff = disabled || hookScene === "locked"
+        return hooksNow()
       }),
     dataInfo: () => settle("dataInfo", () => data),
     dataClear: (id) =>

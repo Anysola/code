@@ -18,6 +18,7 @@ import {
   type FormAnswer,
   type FormRequest,
   type GitStatus,
+  type Hooks,
   type Info,
   type Item,
   type Mode,
@@ -64,7 +65,7 @@ export type Status =
   | { kind: "retrying"; attempt: number; until: number; error: string }
   /** `retry`: the latest turn failed, so sending its message again makes sense. `errorKind` picks
    * the words and the way out (a limit, no connection, a lost sign-in…). */
-  | { kind: "failed"; error: string; retry?: boolean; errorKind?: ErrorKind }
+  | { kind: "failed"; error: string; retry?: boolean; errorKind?: ErrorKind; hook?: boolean }
   | { kind: "stopped"; reason: "user" | "budget" | "declined" }
 
 /** A long paste, kept folded in the composer and sent as part of the message. */
@@ -136,6 +137,7 @@ export type SettingsSection =
   | "notifications"
   | "keyboard"
   | "permissions"
+  | "hooks"
   | "mcp"
   | "skills"
   | "commands"
@@ -189,6 +191,10 @@ export type State = {
   settings: SettingsSection | null
   /** Counts the core's `mcp` events: Settings reads the servers again when it changes. */
   mcpChanged: number
+  /** Counts the core's `hooks` events: the folder's hooks are read again when it changes. */
+  hooksChanged: number
+  /** Each folder's hooks as last read (by `folderKey`), shared by Settings and the conversation. */
+  hooks: Record<string, Hooks>
   /** Sessions kept at the top of the sidebar, and project groups folded shut (by `folderKey`). */
   pinned: Set<string>
   collapsed: Set<string>
@@ -233,7 +239,7 @@ function saveSet(key: string, value: Set<string>) {
 
 const SECTIONS = new Set<string>([
   "account", "usage", "billing", "general", "appearance", "conversation", "notifications", "keyboard",
-  "permissions", "mcp", "skills", "commands", "instructions", "advanced", "discord", "data", "about",
+  "permissions", "hooks", "mcp", "skills", "commands", "instructions", "advanced", "discord", "data", "about",
 ])
 
 /** `?settings=<section>` outside Tauri, for screenshots. */
@@ -260,6 +266,8 @@ let state: State = {
   noticeLink: null,
   settings: readSettingsParam(),
   mcpChanged: 0,
+  hooksChanged: 0,
+  hooks: {},
   scratch: null,
   pinned: readSet("anysola.pinned"),
   // Folded projects by folder key; older entries were stored as spelled.
@@ -1961,6 +1969,17 @@ function directoryOf(sessionId: string) {
   return state.sessions.find((s) => s.id === sessionId)?.directory ?? ""
 }
 
+/** UserPromptSubmit hooks' reasons, by session, until the `failed` + `unsent` they explain arrives. */
+const promptBlocked = new Map<string, string[]>()
+
+/** A hook that failed outside a tool call, for the notice; the core's message names the cause. */
+function hookFailure(command: string, message: string) {
+  const short = command.length > 60 ? `${command.slice(0, 59)}…` : command
+  // "The hook exited with code 1: …" reads on from "A hook failed" as "It exited…".
+  const why = message.replace(/^The hook (?=exited|timed out|could not start|was ended|printed)/, "It ").replace(/\.?$/, ".")
+  return `${short ? `A hook failed (${short}).` : "A hook failed."} ${why} The work went on.`
+}
+
 /** Kinds of failure that sending the same message again won't fix. */
 const NO_RETRY = new Set<ErrorKind>(["limit", "auth", "model", "elsewhere"])
 
@@ -1977,6 +1996,18 @@ function onEvent(e: CoreEvent) {
       return
     case "mcp":
       set((s) => ({ mcpChanged: s.mcpChanged + 1 }))
+      return
+    case "hooks":
+      set((s) => ({ hooksChanged: s.hooksChanged + 1 }))
+      return
+    case "hook":
+      // A blocked message comes back as `failed` + `unsent` right after: its line says why.
+      // Several hooks can block one message: each sends its reason, `failed` has them all.
+      if (e.event === "UserPromptSubmit" && e.outcome === "blocked")
+        promptBlocked.set(e.sessionId, [...(promptBlocked.get(e.sessionId) ?? []), e.message])
+      // Blocks, feedback and context reach the transcript as notes; these two are for the user.
+      if (e.outcome === "notice") set({ notice: e.message, noticeLink: null })
+      if (e.outcome === "error") set({ notice: hookFailure(e.command, e.message), noticeLink: "hooks" })
       return
     case "lagged": {
       // Lost events may have started or ended turns, or asked something: read busy, status and
@@ -2086,6 +2117,8 @@ function onEvent(e: CoreEvent) {
     case "interrupted": {
       // A message that never started goes back where it was typed; any other was delivered.
       const back = e.type === "failed" && e.unsent ? putBack(id) : (settleUnsent(id), false)
+      const hook = e.type === "failed" && !!e.unsent && promptBlocked.has(id)
+      if (e.type === "failed") promptBlocked.delete(id)
       // Its asks end with it.
       for (const p of state.permissions) if (p.sessionId === id || p.rootId === id) closed.add(p.requestId)
       for (const q of state.questions) if (q.sessionId === id || q.rootId === id) closed.add(q.requestId)
@@ -2111,6 +2144,7 @@ function onEvent(e: CoreEvent) {
                       error: e.error,
                       retry: !back && !e.unsent && !(e.kind && NO_RETRY.has(e.kind)),
                       errorKind: e.kind,
+                      hook,
                     }
                   : { kind: "stopped", reason: e.reason },
           },
@@ -2152,6 +2186,11 @@ function onEvent(e: CoreEvent) {
       void loadSessions()
       break
   }
+}
+
+/** A folder's hooks as just read or changed, for every view that shows them. */
+export function setHooks(directory: string, hooks: Hooks) {
+  set((s) => ({ hooks: { ...s.hooks, [folderKey(directory)]: hooks } }))
 }
 
 export function dismissNotice() {

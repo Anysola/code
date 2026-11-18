@@ -11,6 +11,7 @@ import { btn, cn, Kbd, TitleBar, useEscape } from "../ui"
 import { AccountSection, BillingSection, UsageSection } from "./account"
 import { AdvancedSection, CommandsSection, InstructionsSection, PermissionsSection, SkillsSection } from "./agent"
 import { AppearanceSection, ConversationSection, GeneralSection, KeyboardSection, NotificationsSection } from "./app"
+import { HooksSection } from "./hooks"
 import { McpSection } from "./mcp"
 import { AboutSection, DataSection, DiscordSection } from "./system"
 
@@ -37,6 +38,7 @@ const NAV: { group: string; items: { id: SettingsSection; label: string; view: C
     group: "Agent",
     items: [
       { id: "permissions", label: "Permissions", view: PermissionsSection },
+      { id: "hooks", label: "Hooks", view: HooksSection },
       { id: "mcp", label: "MCP servers", view: McpSection },
       { id: "skills", label: "Skills", view: SkillsSection },
       { id: "commands", label: "Commands", view: CommandsSection },

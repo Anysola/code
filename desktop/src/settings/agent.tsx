@@ -67,7 +67,7 @@ export function OpenPath({ path, label = "Open file", small = false }: { path: s
 }
 
 /** A section that reads one folder: the folder line, then its content once known. */
-function FolderSection({ title, children }: { title: string; children: (directory: string) => ReactNode }) {
+export function FolderSection({ title, children }: { title: string; children: (directory: string) => ReactNode }) {
   const folder = useFolder()
   return (
     <Section title={title}>

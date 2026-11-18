@@ -169,12 +169,15 @@ export function Choice<T extends string | null>({
   onChange,
   label,
   disabled = false,
+  align = "end",
 }: {
   value: T
   options: { id: T; label: string; note?: string | null }[]
   onChange: (v: T) => void
   label: string
   disabled?: boolean
+  /** The list's edge that meets the button's: the end for a control at a row's right. */
+  align?: "start" | "end"
 }) {
   const [show, setShow] = useState(false)
   const close = useCallback(() => setShow(false), [])
@@ -191,7 +194,7 @@ export function Choice<T extends string | null>({
         <span className="min-w-0 truncate">{current?.label ?? "None"}</span>
         <ChevronDown className="size-3.5 shrink-0 text-muted" />
       </button>
-      <Popover open={show} onClose={close} side="bottom" align="end" className="w-64">
+      <Popover open={show} onClose={close} side="bottom" align={align} className="w-64">
         <div role="listbox" aria-label={label} className="flex max-h-[min(20rem,50vh)] flex-col overflow-y-auto">
           {options.map((o) => (
             <button type="button"

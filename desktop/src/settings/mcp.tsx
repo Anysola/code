@@ -428,10 +428,10 @@ function AddForm({
   )
 }
 
-const input =
+export const input =
   "text-dense h-8 w-full min-w-0 rounded-lg bg-default px-2.5 outline-none placeholder:font-sans placeholder:text-field-placeholder focus-visible:status-focused-field aria-invalid:bg-danger/10"
 
-function Field({ label, error, children }: { label: string; error: string | null; children: React.ReactNode }) {
+export function Field({ label, error, children }: { label: string; error: string | null; children: React.ReactNode }) {
   return (
     <label className="flex flex-col gap-1.5">
       <span className="text-2xs text-muted">{label}</span>

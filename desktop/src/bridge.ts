@@ -51,6 +51,8 @@ export type Item =
       child?: string | null
       /** How long it ran (ms), once it ended. */
       elapsed?: number | null
+      /** What the user's hooks did around this call; absent when they did nothing worth showing. */
+      hooks?: HookRun[]
     }
   /** `retry`: sending again can work (false for a full limit, a missing model, a lost sign-in). */
   | { kind: "error"; id: string; message: string; errorKind?: ErrorKind; retry?: boolean }
@@ -244,6 +246,57 @@ export type Sources = {
   instructions: { path: string; bytes: number; origin: Origin }[]
   /** Every place that is looked in, found or not: the answer to "where from". */
   places: { path: string; holds: "skills" | "commands" | "agents" | "instructions" | "config"; origin: Origin; exists: boolean }[]
+}
+
+/** The moments a hook can run at. */
+export type HookEvent = "PreToolUse" | "PostToolUse" | "UserPromptSubmit" | "Stop" | "SessionStart"
+
+/**
+ * Something a hook did that the user should see. `blocked`: it stopped a tool call or a message;
+ * `feedback`: it told the agent something after a tool ran, or kept the turn going; `context`: it
+ * added context; `error`: the hook itself failed (the work went on); `notice`: it has a message
+ * for the user.
+ */
+export type HookRun = {
+  event: HookEvent
+  command: string
+  outcome: "blocked" | "feedback" | "context" | "error" | "notice"
+  message: string
+}
+
+/** A command the user configured to run around the agent's work. */
+export type Hook = {
+  event: HookEvent
+  /** Which tools (or, for SessionStart, which start) it applies to; null for all. */
+  matcher: string | null
+  command: string
+  /** Seconds. */
+  timeout: number
+  /** The file that defines it. */
+  source: string
+  scope: "user" | "project" | "managed"
+  /** Whether it runs: a project hook needs its file approved, and hooks can be turned off. */
+  active: boolean
+  /** Set for a hook in `~/.anysola/config.json`: it can be changed and removed here by this id. */
+  id: string | null
+}
+
+/** `matcher` null or empty applies to everything; `timeout` null keeps the default. */
+export type HookDraft = { event: HookEvent; matcher: string | null; command: string; timeout: number | null }
+
+/**
+ * A project file that defines hooks. They run only once the user allowed this content: `digest`
+ * names it, and `decision` is null until the user answered for this digest.
+ */
+export type HookFile = { path: string; digest: string; decision: "allowed" | "denied" | null; hooks: Hook[] }
+
+export type Hooks = {
+  /** Every hook configured for the folder, in the order they run. */
+  hooks: Hook[]
+  /** The project's files that define hooks. */
+  files: HookFile[]
+  /** The user turned hooks off (managed hooks still run). */
+  disabled: boolean
 }
 
 /** A saved "always allow" answer; they are kept per project. */
@@ -441,6 +494,13 @@ export type CoreEvent =
   | { type: "lagged"; directory: string }
   /** A folder's MCP server changed state (connected, failed, signed in). */
   | { type: "mcp"; directory: string }
+  /**
+   * A hook did something outside a tool call (a tool's hooks arrive on its item): the window
+   * shows `message`. A blocked message arrives as `failed` with `unsent`.
+   */
+  | ({ type: "hook"; sessionId: string } & HookRun)
+  /** The folder's hooks changed, or a project file's hooks now wait for the user's answer. */
+  | { type: "hooks"; directory: string }
   | { type: "notice"; message: string }
   /** The user closed the window while `busy` turns run; the window asks, then calls `quit`. */
   | { type: "closeRequested"; busy: number }
@@ -577,6 +637,16 @@ export type Bridge = {
   personalInstructions(): Promise<{ path: string; text: string }>
   savePersonalInstructions(text: string): Promise<void>
 
+  hooks(directory: string): Promise<Hooks>
+  /** Adds a hook to `~/.anysola/config.json`. */
+  hookAdd(directory: string, hook: HookDraft): Promise<Hooks>
+  hookUpdate(directory: string, id: string, hook: HookDraft): Promise<Hooks>
+  hookRemove(directory: string, id: string): Promise<Hooks>
+  /** Records the user's answer for a project file's hooks as they are now (`digest`). */
+  hooksTrust(directory: string, path: string, digest: string, allow: boolean): Promise<Hooks>
+  /** Turns the user's and the project's hooks off or back on. */
+  hooksDisable(directory: string, disabled: boolean): Promise<Hooks>
+
   permissions(directory: string): Promise<{ saved: SavedPermission[]; rules: PermissionRule[] }>
   permissionForget(projectId: string, action: string, resource: string): Promise<SavedPermission[]>
   /** Every saved answer of one project. */
@@ -679,6 +749,12 @@ function tauriBridge(): Bridge {
     mcpSignInWait: (directory, name) => invoke("mcp_sign_in_wait", { directory, name }),
     mcpSignInCancel: (directory, name) => invoke("mcp_sign_in_cancel", { directory, name }),
     mcpSignOut: (directory, name) => invoke("mcp_sign_out", { directory, name }),
+    hooks: (directory) => invoke("hooks", { directory }),
+    hookAdd: (directory, hook) => invoke("hook_add", { directory, hook }),
+    hookUpdate: (directory, id, hook) => invoke("hook_update", { directory, id, hook }),
+    hookRemove: (directory, id) => invoke("hook_remove", { directory, id }),
+    hooksTrust: (directory, path, digest, allow) => invoke("hooks_trust", { directory, path, digest, allow }),
+    hooksDisable: (directory, disabled) => invoke("hooks_disable", { directory, disabled }),
     sources: (directory) => invoke("sources", { directory }),
     personalInstructions: () => invoke("personal_instructions"),
     savePersonalInstructions: (text) => invoke("save_personal_instructions", { text }),

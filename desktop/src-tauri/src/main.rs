@@ -13,6 +13,7 @@ mod discord;
 mod editor;
 mod events;
 mod git;
+mod hooks;
 mod path_repair;
 mod prefs;
 mod servers;
@@ -49,6 +50,8 @@ pub(crate) type Answer = Result<Value, String>;
 const SESSION_LIST: u64 = 200;
 /// How long closing the window waits for MCP servers to stop.
 const EXIT_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+/// How long stopping a core waits for its interrupted turns to end.
+const STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// A folder's core, its MCP runtime and the task that sends its events to the window.
 struct Running {
@@ -58,9 +61,16 @@ struct Running {
 }
 
 impl Running {
-    /// Ends what the core has going: its turns, its MCP servers, its background commands.
+    /// Ends what the core has going: its turns (and the hook commands they run), its MCP
+    /// servers, its background commands.
     async fn stop(&self) {
         self.core.interrupt_all();
+        // A stopped turn kills its hook commands as it sees the stop: give it the moment, or an
+        // exit right after (the updater's on Windows) can leave them running.
+        let start = std::time::Instant::now();
+        while self.core.any_busy() && start.elapsed() < STOP_WAIT {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
         if let Some(mcp) = self.core.mcp() {
             mcp.shutdown().await;
         }
@@ -123,6 +133,10 @@ impl App {
     /// A core reads the token when it starts: after signing in or out, start them afresh.
     pub(crate) async fn drop_cores(&self) {
         let cells: Vec<_> = self.cores.lock().await.drain().map(|(_, c)| c).collect();
+        // Every folder's turns stop at once: their waits in `stop` overlap.
+        for running in cells.iter().filter_map(|cell| cell.get()) {
+            running.core.interrupt_all();
+        }
         for cell in cells {
             if let Some(running) = cell.get() {
                 running.stop().await;
@@ -1173,6 +1187,12 @@ fn main() {
             servers::mcp_sign_in_wait,
             servers::mcp_sign_in_cancel,
             servers::mcp_sign_out,
+            hooks::hooks,
+            hooks::hook_add,
+            hooks::hook_update,
+            hooks::hook_remove,
+            hooks::hooks_trust,
+            hooks::hooks_disable,
             sources::sources,
             sources::personal_instructions,
             sources::save_personal_instructions,

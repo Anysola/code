@@ -134,6 +134,22 @@ pub fn to_json(event: &Event, directory: &str) -> Option<Value> {
         } => {
             json!({"type": "created", "sessionId": session_id, "title": title, "directory": directory})
         }
+        // A tool's hooks reach the window on its item. A blocked prompt's comes just before its
+        // `failed`, whose `error` is the same reason: the window tells a hook's stop by that.
+        Event::Hook {
+            session_id,
+            event,
+            command,
+            outcome,
+            message,
+        } => {
+            if matches!(event.as_str(), "PreToolUse" | "PostToolUse") {
+                return None;
+            }
+            json!({"type": "hook", "sessionId": session_id, "event": event, "command": command,
+                   "outcome": outcome.as_str(), "message": message})
+        }
+        Event::HooksChanged => json!({"type": "hooks", "directory": directory}),
         // The window re-reads the folder's server list.
         Event::McpStatusChanged { .. } => json!({"type": "mcp", "directory": directory}),
         // The forwarder names the root session the window has open.
@@ -227,6 +243,8 @@ pub fn error_kind(kind: &str, message: &str) -> (&'static str, bool) {
         "provider.no-route" if message.starts_with("Cannot reach ") => ("offline", true),
         "provider.no-route" => ("model", false),
         "busy" => ("elsewhere", true),
+        // The same message would be blocked again.
+        anysola_core::hooks::BLOCKED => ("other", false),
         _ => ("other", true),
     }
 }
@@ -274,6 +292,7 @@ pub fn core_error(error: &CoreError) -> (&'static str, String) {
 mod tests {
     use super::*;
     use anysola_core::gateway::error::SessionError;
+    use anysola_core::hooks::HookOutcome;
 
     fn failed(kind: &str, message: &str, unsent: bool) -> Value {
         let event = Event::Failed {
@@ -353,6 +372,53 @@ mod tests {
             ))
             .0,
             "auth"
+        );
+    }
+
+    #[test]
+    fn hooks_outside_tool_calls_reach_the_window() {
+        let hook = |event: &str, outcome| Event::Hook {
+            session_id: "ses_1".into(),
+            event: event.into(),
+            command: "./guard.sh".into(),
+            outcome,
+            message: "Tests fail".into(),
+        };
+        assert_eq!(
+            to_json(&hook("Stop", HookOutcome::Blocked), "/p").unwrap(),
+            json!({"type": "hook", "sessionId": "ses_1", "event": "Stop", "command": "./guard.sh",
+                   "outcome": "blocked", "message": "Tests fail"})
+        );
+        assert_eq!(
+            to_json(&hook("UserPromptSubmit", HookOutcome::Context), "/p").unwrap()["outcome"],
+            "context"
+        );
+        // On the tool's item.
+        assert_eq!(
+            to_json(&hook("PreToolUse", HookOutcome::Blocked), "/p"),
+            None
+        );
+        assert_eq!(
+            to_json(&hook("PostToolUse", HookOutcome::Error), "/p"),
+            None
+        );
+        assert_eq!(
+            to_json(&hook("UserPromptSubmit", HookOutcome::Blocked), "/p").unwrap()["message"],
+            "Tests fail"
+        );
+        assert_eq!(
+            to_json(&Event::HooksChanged, "/p").unwrap(),
+            json!({"type": "hooks", "directory": "/p"})
+        );
+        let blocked = failed(anysola_core::hooks::BLOCKED, "No secrets in prompts", true);
+        assert_eq!(
+            blocked,
+            json!({"type": "failed", "sessionId": "ses_1", "kind": "other", "unsent": true,
+                   "error": "No secrets in prompts"})
+        );
+        assert_eq!(
+            error_kind(anysola_core::hooks::BLOCKED, "x"),
+            ("other", false)
         );
     }
 

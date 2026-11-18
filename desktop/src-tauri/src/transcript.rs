@@ -315,6 +315,18 @@ pub fn items(entries: Vec<Entry>, directory: &str) -> Vec<Value> {
                     }));
                 }
             }
+            // Other synthetic rows (background notices, a skill's text) are for the model only.
+            Message::Synthetic(data) => {
+                if let Some(text) = hook_note(data.description.as_deref(), &data.text) {
+                    // A hook with several contexts, or several hooks, wrote one row each.
+                    let repeated = out
+                        .last()
+                        .is_some_and(|last| last["kind"] == "note" && last["text"] == text);
+                    if !repeated {
+                        out.push(json!({"kind": "note", "id": id, "text": text, "failed": false}));
+                    }
+                }
+            }
             Message::Compaction(data) => {
                 let (text, failed) = match data.status.as_str() {
                     "completed" => ("Compacted the conversation so far".to_string(), false),
@@ -333,6 +345,22 @@ pub fn items(entries: Vec<Entry>, directory: &str) -> Vec<Value> {
         }
     }
     out
+}
+
+/// The descriptions the core gives the synthetic rows hooks write (`hooks::fire`, private there).
+const HOOK_CONTEXT: &str = "Hook context";
+const STOP_HOOK: &str = "Stop hook";
+
+/// The note a synthetic row written by a hook leaves in the conversation.
+fn hook_note(description: Option<&str>, text: &str) -> Option<String> {
+    match description? {
+        HOOK_CONTEXT => Some("A hook added context.".into()),
+        STOP_HOOK => Some(match text.lines().map(str::trim).find(|l| !l.is_empty()) {
+            Some(line) => format!("A hook kept the agent going: {line}"),
+            None => "A hook kept the agent going.".into(),
+        }),
+        _ => None,
+    }
 }
 
 fn tool(call: &str, name: &str, state: ToolState, directory: &str) -> Value {
@@ -359,7 +387,7 @@ fn tool(call: &str, name: &str, state: ToolState, directory: &str) -> Value {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    json!({
+    let mut item = json!({
         "kind": "tool",
         "id": call,
         "name": name,
@@ -370,6 +398,24 @@ fn tool(call: &str, name: &str, state: ToolState, directory: &str) -> Value {
         "child": metadata.get("sessionID").cloned().unwrap_or(Value::Null),
         "output": clip(&output),
         "error": error,
+    });
+    // What the user's hooks did around the call; absent when they said nothing.
+    if let Some(hooks) = metadata.get("hooks").and_then(Value::as_array)
+        && !hooks.is_empty()
+    {
+        item["hooks"] = Value::Array(hooks.iter().map(hook_run).collect());
+    }
+    item
+}
+
+/// A `metadata.hooks` entry as `HookRun`, each field present.
+fn hook_run(entry: &Value) -> Value {
+    let field = |key: &str| entry[key].as_str().unwrap_or_default();
+    json!({
+        "event": field("event"),
+        "command": field("command"),
+        "outcome": field("outcome"),
+        "message": field("message"),
     })
 }
 
@@ -586,6 +632,56 @@ mod tests {
         let second = json!([{"content": "a", "status": "completed"}]);
         assert_eq!(todos(&[list(first), list(second.clone())]), second);
         assert_eq!(todos(&[]), json!([]));
+    }
+
+    #[test]
+    fn hooks_show_on_tool_items_and_as_notes() {
+        let synthetic = |id: &str, description: &str, text: &str| {
+            entry(
+                id,
+                "synthetic",
+                json!({"time": {"created": 1}, "text": text, "description": description}),
+            )
+        };
+        let hooks = json!([{"event": "PreToolUse", "command": "./guard.sh", "outcome": "blocked",
+                            "message": "No rm -rf"}]);
+        let call = |id: &str, metadata: Value| {
+            entry(
+                id,
+                "assistant",
+                json!({"time": {"created": 1}, "agent": "build", "model": {"id": "m", "providerID": "anysola"},
+                       "content": [{"type": "tool", "id": id, "name": "shell",
+                                    "state": {"status": "error", "input": {"command": "rm -rf /"},
+                                              "error": {"type": "tool", "message": "No rm -rf"},
+                                              "content": [], "metadata": metadata},
+                                    "time": {"created": 1}}]}),
+            )
+        };
+        let entries = vec![
+            synthetic("s1", "Hook context", "Branch: main"),
+            synthetic("s2", "Hook context", "Node 26"),
+            user("u1", 2),
+            call("c1", json!({"hooks": hooks})),
+            call("c2", json!({})),
+            synthetic("s3", "Stop hook", "\nTests fail: 3\nmore"),
+            synthetic("s4", "Background", "<shell> done"),
+        ];
+        let items = items(entries, "/p");
+        let notes: Vec<_> = items
+            .iter()
+            .filter(|i| i["kind"] == "note")
+            .map(|i| (i["id"].as_str().unwrap(), i["text"].as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            notes,
+            [
+                ("s1", "A hook added context."),
+                ("s3", "A hook kept the agent going: Tests fail: 3")
+            ]
+        );
+        let tool = |id: &str| items.iter().find(|i| i["id"] == id).unwrap().clone();
+        assert_eq!(tool("c1")["hooks"], hooks);
+        assert!(tool("c2").get("hooks").is_none());
     }
 
     #[test]
