@@ -28,7 +28,42 @@ fn substitute_env(text: &str, escape: bool) -> String {
     out
 }
 
-fn substitute_files(text: &str, dir: &Path, home: &Path) -> String {
+/// The most a `{file:…}` placeholder reads.
+const MAX_FILE: u64 = 1 << 20;
+
+/// A placeholder's file: missing reads as empty (as always); too large, or not a regular file in
+/// a project document (a device or a pipe could hang the load), is refused with the reason.
+fn read(path: &Path, project: bool) -> Result<String, &'static str> {
+    use std::io::Read;
+    let Ok(meta) = std::fs::metadata(path) else {
+        return Ok(String::new());
+    };
+    if project && !meta.is_file() {
+        return Err("it is not a regular file");
+    }
+    if meta.is_file() && meta.len() > MAX_FILE {
+        return Err("it is larger than 1 MiB");
+    }
+    let Ok(file) = std::fs::File::open(path) else {
+        return Ok(String::new());
+    };
+    let mut bytes = Vec::new();
+    if file.take(MAX_FILE + 1).read_to_end(&mut bytes).is_err() {
+        return Ok(String::new());
+    }
+    if bytes.len() as u64 > MAX_FILE {
+        return Err("it is larger than 1 MiB");
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn substitute_files(
+    text: &str,
+    dir: &Path,
+    home: &Path,
+    project: bool,
+    problems: &mut Vec<String>,
+) -> String {
     let mut out = String::new();
     let mut cursor = 0;
     while let Some(found) = text[cursor..].find("{file:") {
@@ -49,25 +84,88 @@ fn substitute_files(text: &str, dir: &Path, home: &Path) -> String {
             Some(rest) => home.join(rest),
             None => dir.join(reference),
         };
-        let content = std::fs::read_to_string(&path).unwrap_or_default();
-        out.push_str(&json_escape(content.trim()));
+        match read(&path, project) {
+            Ok(content) => out.push_str(&json_escape(content.trim())),
+            Err(reason) => {
+                let problem = format!("left {token} as written: {reason}");
+                if !problems.contains(&problem) {
+                    problems.push(problem);
+                }
+                out.push_str(token);
+            }
+        }
     }
     out.push_str(&text[cursor..]);
     out
 }
 
 /// Substitutes variables; env values are JSON-escaped only when the raw result does not parse.
-pub fn substitute(text: &str, dir: &Path, home: &Path) -> String {
-    let raw = substitute_files(&substitute_env(text, false), dir, home);
+#[cfg(test)]
+fn substitute(text: &str, dir: &Path, home: &Path) -> String {
+    checked(text, dir, home, false, &mut Vec::new())
+}
+
+/// [`substitute`] with the `{file:…}` limits of a project (`project`) or user document; what it
+/// left as written is added to `problems`.
+pub(crate) fn checked(
+    text: &str,
+    dir: &Path,
+    home: &Path,
+    project: bool,
+    problems: &mut Vec<String>,
+) -> String {
+    let raw = substitute_files(&substitute_env(text, false), dir, home, project, problems);
     if !text.contains("{env:") || super::jsonc::parse(&raw).is_ok() {
         return raw;
     }
-    substitute_files(&substitute_env(text, true), dir, home)
+    substitute_files(&substitute_env(text, true), dir, home, project, problems)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_placeholders_are_capped_and_projects_read_regular_files_only() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("small.txt"), "ok").unwrap();
+        std::fs::write(
+            dir.path().join("big.txt"),
+            "x".repeat(MAX_FILE as usize + 1),
+        )
+        .unwrap();
+        std::fs::create_dir(dir.path().join("folder")).unwrap();
+        let text = r#"{"a": "{file:small.txt}", "b": "{file:big.txt}", "c": "{file:folder}"}"#;
+        let mut problems = Vec::new();
+        let out = checked(text, dir.path(), dir.path(), true, &mut problems);
+        assert_eq!(
+            out,
+            r#"{"a": "ok", "b": "{file:big.txt}", "c": "{file:folder}"}"#
+        );
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        let mut problems = Vec::new();
+        let out = checked(text, dir.path(), dir.path(), false, &mut problems);
+        assert!(
+            out.contains(r#""b": "{file:big.txt}""#),
+            "the cap holds for users too"
+        );
+        assert_eq!(problems.len(), 1, "{problems:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_device_is_never_read_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = r#"{"a": "{file:/dev/zero}"}"#;
+        let started = std::time::Instant::now();
+        for project in [true, false] {
+            let mut problems = Vec::new();
+            let out = checked(text, dir.path(), dir.path(), project, &mut problems);
+            assert_eq!(out, text);
+            assert_eq!(problems.len(), 1);
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
 
     #[test]
     fn env_and_file() {

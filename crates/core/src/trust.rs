@@ -17,16 +17,29 @@ pub enum TrustKind {
     Hooks,
     Mcp,
     Formatter,
+    /// Permission rules that loosen what the agent may do (allow rules, and policy statements
+    /// that allow or that switch off the user's MCP servers, providers or integrations).
+    Permissions,
+    /// What the app downloads for the project: `instructions` URLs and git `references`.
+    Remote,
 }
 
 impl TrustKind {
-    pub const ALL: [TrustKind; 3] = [TrustKind::Hooks, TrustKind::Mcp, TrustKind::Formatter];
+    pub const ALL: [TrustKind; 5] = [
+        TrustKind::Hooks,
+        TrustKind::Mcp,
+        TrustKind::Formatter,
+        TrustKind::Permissions,
+        TrustKind::Remote,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             TrustKind::Hooks => "hooks",
             TrustKind::Mcp => "mcp",
             TrustKind::Formatter => "formatter",
+            TrustKind::Permissions => "permissions",
+            TrustKind::Remote => "remote",
         }
     }
 
@@ -292,6 +305,191 @@ pub fn formatter_section(document: &Map<String, Value>) -> Option<(String, Vec<T
     Some((digest(value), entries))
 }
 
+/// A permission rule a project document may not apply without approval: one that allows.
+pub(crate) fn loosens(rule: &Value) -> bool {
+    rule.get("effect").and_then(Value::as_str) == Some("allow")
+}
+
+/// A policy statement a project document may not apply without approval: one that allows, and
+/// any that decides on MCP servers, providers or integrations (the user's own setup).
+pub(crate) fn loosening_policy(policy: &crate::permission::policy::Policy) -> bool {
+    policy.allow
+        || matches!(
+            policy.action.as_str(),
+            "mcp.use" | "provider.use" | "integration.use" | "integration.connect"
+        )
+}
+
+fn effect(allow: bool) -> &'static str {
+    if allow { "allow" } else { "deny" }
+}
+
+fn rule_entry(label: String, rule: &Value, detail: Option<String>) -> TrustEntry {
+    let text = |key: &str| rule.get(key).and_then(Value::as_str).unwrap_or_default();
+    TrustEntry {
+        label,
+        command: format!(
+            "{} {}: {}",
+            text("effect"),
+            text("action"),
+            text("resource")
+        ),
+        detail,
+    }
+}
+
+/// Permission entries of a set of rules and statements, and their digest (of what is withheld
+/// only: adding an `ask` rule does not change it).
+fn permission_entries(
+    withheld: Vec<(String, Value)>,
+    detail: Option<String>,
+) -> Option<(String, Vec<TrustEntry>)> {
+    if withheld.is_empty() {
+        return None;
+    }
+    let digest = digest(&Value::Array(
+        withheld
+            .iter()
+            .map(|(label, rule)| json!([label, rule]))
+            .collect(),
+    ));
+    let entries = withheld
+        .into_iter()
+        .map(|(label, rule)| rule_entry(label, &rule, detail.clone()))
+        .collect();
+    Some((digest, entries))
+}
+
+/// The loosening permission rules of a (normalized) document: its own rules (`all agents`), its
+/// agents' rules (`agent <id>`) and its policy statements (`policy`).
+pub fn permissions_section(document: &Map<String, Value>) -> Option<(String, Vec<TrustEntry>)> {
+    let mut withheld: Vec<(String, Value)> = Vec::new();
+    for rule in document
+        .get("permissions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|r| loosens(r))
+    {
+        withheld.push(("all agents".into(), rule.clone()));
+    }
+    for (id, agent) in document
+        .get("agents")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+    {
+        for rule in agent
+            .get("permissions")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|r| loosens(r))
+        {
+            withheld.push((format!("agent {id}"), rule.clone()));
+        }
+    }
+    let mut copy = document.clone();
+    for policy in crate::config::policy_statements(&mut copy)
+        .into_iter()
+        .filter(loosening_policy)
+    {
+        withheld.push((
+            "policy".into(),
+            json!({"effect": effect(policy.allow), "action": policy.action, "resource": policy.resource}),
+        ));
+    }
+    permission_entries(withheld, None)
+}
+
+/// The loosening rules of a markdown agent file (`agent <id>`, detail: the file).
+pub fn agent_file_section(
+    id: &str,
+    agent: &Value,
+    file: &str,
+) -> Option<(String, Vec<TrustEntry>)> {
+    let withheld = agent
+        .get("permissions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|r| loosens(r))
+        .map(|rule| (format!("agent {id}"), rule.clone()))
+        .collect();
+    permission_entries(withheld, Some(file.to_string()))
+}
+
+/// A `references` entry that is a git remote: `(repository, branch)`.
+pub(crate) fn remote_reference(entry: &Value) -> Option<(String, Option<String>)> {
+    let branch = entry
+        .get("branch")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    match entry {
+        Value::String(text) if !text.starts_with(['.', '/', '~']) => Some((text.clone(), None)),
+        Value::Object(_) if entry.get("path").is_none() => entry
+            .get("repository")
+            .and_then(Value::as_str)
+            .map(|r| (r.to_string(), branch)),
+        _ => None,
+    }
+}
+
+/// An `instructions` entry that is fetched from the network.
+pub(crate) fn remote_instruction(entry: &str) -> bool {
+    entry.starts_with("http://") || entry.starts_with("https://")
+}
+
+/// What a document makes the app download: `instructions` URLs and git `references`.
+pub fn remote_section(document: &Map<String, Value>) -> Option<(String, Vec<TrustEntry>)> {
+    let urls: Vec<&str> = document
+        .get("instructions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|e| remote_instruction(e))
+        .collect();
+    let references: Vec<(&String, (String, Option<String>))> = document
+        .get("references")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter_map(|(name, entry)| remote_reference(entry).map(|r| (name, r)))
+        .collect();
+    if urls.is_empty() && references.is_empty() {
+        return None;
+    }
+    let digest = digest(&json!({
+        "instructions": urls,
+        "references": references
+            .iter()
+            .map(|(name, (repository, branch))| json!([name, repository, branch]))
+            .collect::<Vec<_>>(),
+    }));
+    let mut entries: Vec<TrustEntry> = urls
+        .iter()
+        .map(|url| TrustEntry {
+            label: "instructions".into(),
+            command: url.to_string(),
+            detail: None,
+        })
+        .collect();
+    entries.extend(
+        references
+            .into_iter()
+            .map(|(name, (repository, branch))| TrustEntry {
+                label: name.clone(),
+                command: match branch {
+                    Some(branch) => format!("{repository} (branch {branch})"),
+                    None => repository,
+                },
+                detail: None,
+            }),
+    );
+    Some((digest, entries))
+}
+
 fn hook_entries(document: &crate::hooks::HookDocument) -> Vec<TrustEntry> {
     document
         .hooks
@@ -360,53 +558,6 @@ pub(crate) fn items_with(
         config,
         crate::hooks::documents_with(&config.hooks, db, approved),
     )
-}
-
-/// What `anysola run` skips: per kind, how many things wait for a first decision (refused ones
-/// are not counted: the user answered).
-pub fn waiting(config: &Config, db: &Db) -> Vec<(TrustKind, usize)> {
-    let mut counts: Vec<(TrustKind, usize)> = Vec::new();
-    let hooks = crate::hooks::unapproved(&config.hooks, db);
-    if hooks > 0 {
-        counts.push((TrustKind::Hooks, hooks));
-    }
-    for kind in [TrustKind::Mcp, TrustKind::Formatter] {
-        let count: usize = config
-            .trust
-            .iter()
-            .filter(|s| s.kind == kind && s.decision.is_none())
-            .map(|s| s.entries.len())
-            .sum();
-        if count > 0 {
-            counts.push((kind, count));
-        }
-    }
-    counts
-}
-
-/// The one line `anysola run` prints for [`waiting`]; `None` when nothing waits.
-pub fn skipped_line(waiting: &[(TrustKind, usize)]) -> Option<String> {
-    let total: usize = waiting.iter().map(|(_, n)| n).sum();
-    if total == 0 {
-        return None;
-    }
-    let kinds: Vec<&str> = waiting
-        .iter()
-        .map(|(kind, _)| match kind {
-            TrustKind::Hooks => "hooks",
-            TrustKind::Mcp => "MCP servers",
-            TrustKind::Formatter => "formatters",
-        })
-        .collect();
-    let (things, are) = if total == 1 {
-        ("thing", "is")
-    } else {
-        ("things", "are")
-    };
-    Some(format!(
-        "Skipped {total} {things} this project's config wants to run ({}) that {are} not approved. Run `anysola trust` to review them.",
-        kinds.join(", ")
-    ))
 }
 
 #[cfg(test)]
@@ -499,6 +650,85 @@ mod tests {
     }
 
     #[test]
+    fn permission_and_remote_entries() {
+        let entry = |label: &str, command: &str, detail: Option<&str>| TrustEntry {
+            label: label.into(),
+            command: command.into(),
+            detail: detail.map(str::to_string),
+        };
+        let document = map(json!({
+            "permissions": [
+                {"action": "shell", "resource": "npm test*", "effect": "allow"},
+                {"action": "read", "resource": "*", "effect": "deny"},
+            ],
+            "agents": {"build": {"permissions": [
+                {"action": "edit", "resource": "*", "effect": "allow"},
+                {"action": "edit", "resource": "x", "effect": "ask"},
+            ]}},
+            "policies": [
+                {"action": "mcp.use", "resource": "github", "effect": "deny"},
+                {"action": "tool.use", "resource": "shell:rm*", "effect": "deny"},
+            ],
+        }));
+        let (digest, entries) = permissions_section(&document).unwrap();
+        assert_eq!(
+            entries,
+            [
+                entry("all agents", "allow shell: npm test*", None),
+                entry("agent build", "allow edit: *", None),
+                entry("policy", "deny mcp.use: github", None),
+            ]
+        );
+        // Only what is withheld counts: another ask or deny is no new question.
+        let mut more = document.clone();
+        more["permissions"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"action": "webfetch", "resource": "*", "effect": "ask"}));
+        assert_eq!(permissions_section(&more).unwrap().0, digest);
+        assert!(
+            permissions_section(&map(json!({"permissions": [
+                {"action": "shell", "resource": "*", "effect": "ask"}]})))
+            .is_none()
+        );
+        let (_, entries) = agent_file_section(
+            "build",
+            &json!({"permissions": [{"action": "shell", "resource": "*", "effect": "allow"}]}),
+            "/p/.anysola/agent/build.md",
+        )
+        .unwrap();
+        assert_eq!(
+            entries,
+            [entry(
+                "agent build",
+                "allow shell: *",
+                Some("/p/.anysola/agent/build.md")
+            )]
+        );
+        let (_, entries) = remote_section(&map(json!({
+            "instructions": ["https://x/rules.md", "LOCAL.md"],
+            "references": {
+                "lib": {"repository": "https://github.com/a/b", "branch": "main"},
+                "short": "github.com/a/c",
+                "docs": "./docs",
+                "near": {"path": "../near"},
+            },
+        })))
+        .unwrap();
+        assert_eq!(
+            entries,
+            [
+                entry("instructions", "https://x/rules.md", None),
+                entry("lib", "https://github.com/a/b (branch main)", None),
+                entry("short", "github.com/a/c", None),
+            ]
+        );
+        assert!(remote_section(&map(json!({"instructions": ["A.md"]}))).is_none());
+        assert_eq!(TrustKind::Permissions.as_str(), "permissions");
+        assert_eq!(TrustKind::parse("remote"), Some(TrustKind::Remote));
+    }
+
+    #[test]
     fn formatter_sections() {
         let (digest, entries) = formatter_section(&map(json!({"formatter": true}))).unwrap();
         assert_eq!(entries[0].command, "the built-in formatters");
@@ -562,18 +792,5 @@ mod tests {
             "1.0.9 records"
         );
         assert_eq!(decisions.of("/q/anysola.json", TrustKind::Mcp, "d1"), None);
-    }
-
-    #[test]
-    fn the_skipped_line_names_what_waits() {
-        assert_eq!(skipped_line(&[]), None);
-        assert_eq!(
-            skipped_line(&[(TrustKind::Mcp, 1)]).unwrap(),
-            "Skipped 1 thing this project's config wants to run (MCP servers) that is not approved. Run `anysola trust` to review them."
-        );
-        assert_eq!(
-            skipped_line(&[(TrustKind::Hooks, 2), (TrustKind::Formatter, 1)]).unwrap(),
-            "Skipped 3 things this project's config wants to run (hooks, formatters) that are not approved. Run `anysola trust` to review them."
-        );
     }
 }

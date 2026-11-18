@@ -60,6 +60,10 @@ struct Document {
 struct Withheld {
     mcp: bool,
     formatter: bool,
+    /// Loosening permission rules and policy statements ([`crate::trust::loosens`]).
+    permissions: bool,
+    /// `instructions` URLs and git `references`.
+    remote: bool,
 }
 
 /// A config source as `anysola debug config` lists it.
@@ -126,6 +130,8 @@ pub struct Config {
     pub trust: Vec<crate::trust::Section>,
     /// Project documents whose `mcp` section was not applied.
     withheld_mcp: Vec<String>,
+    /// Project markdown agent files whose loosening rules are withheld.
+    pub(crate) withheld_agent_files: Vec<String>,
 }
 
 impl Config {
@@ -273,7 +279,28 @@ impl Config {
                 &mut self.warnings,
             );
         }
-        let statements = policy_statements(&mut data);
+        let mut statements = policy_statements(&mut data);
+        if document.withheld.permissions {
+            statements.retain(|p| !crate::trust::loosening_policy(p));
+            if let Some(Value::Array(rules)) = data.get_mut("permissions") {
+                rules.retain(|r| !crate::trust::loosens(r));
+            }
+            if let Some(Value::Object(agents)) = data.get_mut("agents") {
+                for agent in agents.values_mut() {
+                    if let Some(Value::Array(rules)) = agent.get_mut("permissions") {
+                        rules.retain(|r| !crate::trust::loosens(r));
+                    }
+                }
+            }
+        }
+        if document.withheld.remote {
+            if let Some(Value::Array(items)) = data.get_mut("instructions") {
+                items.retain(|i| !i.as_str().is_some_and(crate::trust::remote_instruction));
+            }
+            if let Some(Value::Object(references)) = data.get_mut("references") {
+                references.retain(|_, r| crate::trust::remote_reference(r).is_none());
+            }
+        }
         let list = if document.managed {
             &mut self.managed_policies
         } else {
@@ -392,7 +419,7 @@ fn merge_formatter(values: &mut Map<String, Value>, next: Value) {
 
 /// A document's policy statements in its own order: those generated from the legacy
 /// `enabled_providers`/`disabled_providers` lists, then `experimental.policies`, then `policies`.
-fn policy_statements(data: &mut Map<String, Value>) -> Vec<Policy> {
+pub(crate) fn policy_statements(data: &mut Map<String, Value>) -> Vec<Policy> {
     let provider = |resource: &str, effect: &str| {
         Policy::parse(
             &serde_json::json!({"action": "provider.use", "resource": resource, "effect": effect}),
@@ -570,6 +597,18 @@ pub fn protected(paths: &Paths, path: &Path) -> bool {
     if target.starts_with(resolve(&system_dir())) {
         return true;
     }
+    // Definitions in the global roots that change what the agent may do or runs.
+    const DEFINITIONS: [&str; 8] = [
+        "agent", "agents", "mode", "modes", "command", "commands", "skill", "skills",
+    ];
+    let roots = [paths.data.clone(), paths.legacy_config_dir()];
+    if roots.iter().any(|root| {
+        DEFINITIONS
+            .iter()
+            .any(|folder| target.starts_with(resolve(&root.join(folder))))
+    }) {
+        return true;
+    }
     let database = paths.database().display().to_string();
     let mut files = vec![paths.config_file(), paths.desktop_prefs()];
     files.extend(["", "-wal", "-shm", "-journal"].map(|s| PathBuf::from(format!("{database}{s}"))));
@@ -672,7 +711,19 @@ struct Loader<'a> {
 /// One local document as the loader takes it: variables substituted, the 0.5.x keys moved to
 /// their current names, and the provider lock applied. `None` when it isn't a JSON object.
 pub fn document(text: &str, dir: &Path, paths: &Paths) -> Option<Map<String, Value>> {
-    let text = substitute::substitute(text, dir, &paths.home);
+    checked_document(text, dir, paths, false, &mut Vec::new())
+}
+
+/// [`document`] with the `{file:…}` limits of a project or user document; what substitution left
+/// as written goes to `problems`.
+fn checked_document(
+    text: &str,
+    dir: &Path,
+    paths: &Paths,
+    project: bool,
+    problems: &mut Vec<String>,
+) -> Option<Map<String, Value>> {
+    let text = substitute::checked(text, dir, &paths.home, project, problems);
     match jsonc::parse(&text) {
         Ok(Value::Object(map)) => {
             let mut data = normalize::normalize(map);
@@ -685,7 +736,14 @@ pub fn document(text: &str, dir: &Path, paths: &Paths) -> Option<Map<String, Val
 
 impl Loader<'_> {
     fn text(&mut self, text: &str, dir: &Path, source: &str) {
-        match document(text, dir, self.paths) {
+        let mut problems = Vec::new();
+        let parsed = checked_document(text, dir, self.paths, self.project, &mut problems);
+        for problem in problems {
+            self.config
+                .warnings
+                .push(format!("In {source}, {problem}."));
+        }
+        match parsed {
             Some(data) => {
                 let withheld = if self.project {
                     self.withhold(&data, source)
@@ -720,6 +778,11 @@ impl Loader<'_> {
         for (kind, section) in [
             (TrustKind::Mcp, crate::trust::mcp_section(data)),
             (TrustKind::Formatter, crate::trust::formatter_section(data)),
+            (
+                TrustKind::Permissions,
+                crate::trust::permissions_section(data),
+            ),
+            (TrustKind::Remote, crate::trust::remote_section(data)),
         ] {
             let Some((digest, entries)) = section else {
                 continue;
@@ -728,7 +791,10 @@ impl Loader<'_> {
             if decision != Some(true) {
                 match kind {
                     TrustKind::Mcp => withheld.mcp = true,
-                    _ => withheld.formatter = true,
+                    TrustKind::Formatter => withheld.formatter = true,
+                    TrustKind::Permissions => withheld.permissions = true,
+                    TrustKind::Remote => withheld.remote = true,
+                    TrustKind::Hooks => {}
                 }
             }
             self.config.trust.push(Section {
@@ -752,11 +818,40 @@ impl Loader<'_> {
         }
     }
 
+    /// A project directory's markdown agents: each file is its own document for approval of the
+    /// rules that loosen what the agent may do; unapproved, those rules are withheld.
+    fn agent_files(&mut self, dir: &Path) {
+        use crate::trust::{Section, TrustKind};
+        for (id, agent, file) in crate::agent::markdown_agents(dir) {
+            let Some(file) = file else {
+                continue;
+            };
+            let Some((digest, entries)) = crate::trust::agent_file_section(&id, &agent, &file)
+            else {
+                continue;
+            };
+            let decision = self.decisions.of(&file, TrustKind::Permissions, &digest);
+            if decision != Some(true) {
+                self.config.withheld_agent_files.push(file.clone());
+            }
+            self.config.trust.push(Section {
+                path: file,
+                kind: TrustKind::Permissions,
+                digest,
+                decision,
+                entries,
+            });
+        }
+    }
+
     fn directory(&mut self, dir: &Path, files: &[&str]) {
         if dir.is_dir() {
             self.config
                 .sources
                 .push(Source::Directory(dir.to_path_buf()));
+            if self.project {
+                self.agent_files(dir);
+            }
         }
         for name in files {
             self.file(&dir.join(name));
@@ -1269,6 +1364,9 @@ mod protected_tests {
             paths.desktop_prefs(),
             paths.legacy_config_dir().join("opencode.jsonc"),
             system_dir().join("opencode.json"),
+            paths.data.join("agent/x.md"),
+            paths.data.join("skills/s/SKILL.md"),
+            paths.legacy_config_dir().join("command/c.md"),
         ] {
             assert!(protected(&paths, &path), "{}", path.display());
         }
@@ -1277,7 +1375,7 @@ mod protected_tests {
             paths.tool_output_dir().join("x"),
             paths.state_dir().join("x"),
             paths.data.join("other.json"),
-            paths.legacy_config_dir().join("agent/a.md"),
+            paths.data.join("agentx/a.md"),
         ] {
             assert!(!protected(&paths, &path), "{}", path.display());
         }

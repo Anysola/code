@@ -191,7 +191,15 @@ impl Agents {
                 .map(|(id, item)| (id.clone(), item.clone(), source.clone()))
                 .collect(),
         });
-        for (id, item, source) in defined {
+        for (id, mut item, source) in defined {
+            // A project's markdown agent loosens nothing until approved.
+            if source
+                .as_ref()
+                .is_some_and(|s| config.withheld_agent_files.contains(s))
+                && let Some(Value::Array(rules)) = item.get_mut("permissions")
+            {
+                rules.retain(|r| !crate::trust::loosens(r));
+            }
             if item.get("disabled").and_then(Value::as_bool) == Some(true) {
                 list.retain(|a| a.id != id);
                 continue;
@@ -249,7 +257,7 @@ impl Agents {
 
 /// `{agent,agents}/**/*.md` (mode from frontmatter) and `{mode,modes}/*.md` (always primary) of a
 /// config directory; the id is the path below that folder without `.md`.
-fn markdown_agents(dir: &std::path::Path) -> Vec<(String, Value, Option<String>)> {
+pub(crate) fn markdown_agents(dir: &std::path::Path) -> Vec<(String, Value, Option<String>)> {
     let mut out = Vec::new();
     for folder in FOLDERS {
         let primary = folder.starts_with("mode");

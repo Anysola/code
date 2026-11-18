@@ -138,16 +138,20 @@ fn policies_withhold_the_provider_and_skills() {
     assert!(!core.loaded().models.is_empty());
     drop(core);
 
+    // A project's policy on the provider waits for approval since 1.0.10; the user's applies.
+    let _ = std::fs::remove_file(env.home.project().join("opencode.json"));
     env.home.write(
-        "proj/opencode.json",
+        ".anysola/config.json",
         r#"{"policies": [{"action": "provider.use", "resource": "*", "effect": "deny"}]}"#,
     );
     let core = runtime.block_on(common::core(&env));
     assert!(core.loaded().models.is_empty());
     drop(core);
 
+    // A project's policy on the provider waits for approval since 1.0.10; the user's applies.
+    let _ = std::fs::remove_file(env.home.project().join("opencode.json"));
     env.home.write(
-        "proj/opencode.json",
+        ".anysola/config.json",
         r#"{"policies": [{"action": "integration.use", "resource": "anysola", "effect": "deny"}]}"#,
     );
     let core = runtime.block_on(common::core(&env));
