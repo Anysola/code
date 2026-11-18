@@ -106,7 +106,7 @@ fn codemode_retry_transient_errors_and_session_expiry() {
     let port = gateway.url.rsplit(':').next().unwrap().to_string();
     let url = format!("http://[::ffff:127.0.0.1]:{port}/mcp");
     env.home.write(
-        "proj/opencode.json",
+        ".anysola/config.json",
         &json!({"mcp": {"servers": {"remote": {"type": "remote", "url": url, "oauth": false}}}})
             .to_string(),
     );
@@ -251,7 +251,7 @@ fn oauth_sign_in_storage_and_refresh() {
     let url = format!("{}/mcp", gateway.url);
     let url2 = format!("{}/mcp2", gateway.url);
     env.home.write(
-        "proj/opencode.json",
+        ".anysola/config.json",
         &json!({"mcp": {"servers": {
             "oauth1": {"type": "remote", "url": url},
             "oauth2": {"type": "remote", "url": url2},
@@ -441,7 +441,7 @@ fn protocol_auto_and_pinned_negotiate_with_server_discover() {
     let env = env(&gateway.url);
     let server = |path: &str, protocol: &str| json!({"type": "remote", "url": format!("{}{path}", gateway.url), "oauth": false, "protocol": protocol});
     env.home.write(
-        "proj/opencode.json",
+        ".anysola/config.json",
         &json!({"mcp": {"servers": {
             "modern": server("/modern", "auto"),
             "legacy": server("/legacy", "auto"),

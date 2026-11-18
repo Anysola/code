@@ -165,6 +165,23 @@ impl Db {
         })
     }
 
+    /// Every record whose key starts with `prefix`: `(key, value)`, in key order.
+    pub fn kv_prefixed(&self, prefix: &str) -> Result<Vec<(String, Value)>> {
+        self.with(|c| {
+            let mut statement =
+                c.prepare("SELECT key, value FROM kv WHERE substr(key, 1, ?2) = ?1 ORDER BY key")?;
+            let rows = statement.query_map(params![prefix, prefix.len() as i64], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .map(|rows| {
+            rows.into_iter()
+                .filter_map(|(key, value)| Some((key, serde_json::from_str(&value).ok()?)))
+                .collect()
+        })
+    }
+
     pub fn kv_remove(&self, key: &str) -> Result<()> {
         self.with(|c| c.execute("DELETE FROM kv WHERE key = ?1", [key]).map(drop))
     }

@@ -61,7 +61,7 @@ fn server_through_the_stack() {
         "bad1": {"type": "local", "command": ["/nonexistent/cmd", "--flag"]},
         "off": {"type": "local", "command": ["x"], "disabled": true},
     }}});
-    env.home.write("proj/opencode.json", &config.to_string());
+    env.home.write(".anysola/config.json", &config.to_string());
     let rt = runtime();
     let (core, mcp): (Core, Arc<Runtime>) = rt.block_on(async {
         let core = Core::start(&env.home.project()).await.unwrap();
@@ -195,7 +195,7 @@ fn config_changes_restart_only_changed_servers() {
     let write = |echo: serde_json::Value| {
         let config =
             json!({"mcp": {"servers": {"testsrv": fake_server("fake_mcp"), "glob1": echo}}});
-        env.home.write("proj/opencode.json", &config.to_string());
+        env.home.write(".anysola/config.json", &config.to_string());
     };
     write(json!({"type": "local", "command": ["echo", "hi"]}));
     let rt = runtime();

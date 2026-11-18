@@ -40,6 +40,11 @@ pub fn local_server(
     Ok(server)
 }
 
+/// A document's MCP section as approval sees it: `(timeout, servers)`, normalized.
+pub(crate) fn section(document: &Map<String, Value>) -> (Map<String, Value>, Map<String, Value>) {
+    normalize_quietly(document, true)
+}
+
 /// The `mcp` key of one document, normalized: `(timeout, servers)`.
 fn normalize(document: &Map<String, Value>) -> (Map<String, Value>, Map<String, Value>) {
     normalize_quietly(document, false)

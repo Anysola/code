@@ -73,6 +73,10 @@ pub fn serve_if_asked() {
     if std::env::var("FAKE_MCP").is_err() {
         return;
     }
+    // Proves the server process started.
+    if let Some(marker) = std::env::var_os("FAKE_MCP_MARKER") {
+        std::fs::write(marker, "started").unwrap();
+    }
     let mut extra = false;
     let stdin = std::io::stdin();
     let mut out = std::io::stdout().lock();

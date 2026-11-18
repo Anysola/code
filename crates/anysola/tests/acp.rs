@@ -289,9 +289,14 @@ fn replay(name: &str) {
     std::fs::write(
         cwd.join("opencode.json"),
         // The capture's config asked before reads.
-        json!({"mcp": {"testsrv": server}, "permission": {"read": "ask"}}).to_string(),
+        json!({"permission": {"read": "ask"}}).to_string(),
     )
     .unwrap();
+    // A project's MCP servers wait for approval since 1.0.10; the user's run at once.
+    home.write(
+        ".anysola/config.json",
+        &json!({"mcp": {"testsrv": server}}).to_string(),
+    );
     let cwd = cwd.display().to_string();
     let mut client = Client::start(&home, std::path::Path::new(&cwd));
     let entries = transcript(name);

@@ -36,6 +36,7 @@ mod revert;
 mod state;
 
 pub use crate::hooks::{HookDocument, HookInfo, HookScope};
+pub use crate::trust::{TrustEntry, TrustItem, TrustKind};
 pub use state::Loaded;
 
 #[derive(Debug, thiserror::Error)]
@@ -158,6 +159,8 @@ pub(crate) struct Shared {
     /// Set once the front end shuts down: background completions no longer wake sessions.
     pub closing: std::sync::atomic::AtomicBool,
     pub hooks: crate::hooks::fire::State,
+    /// The runtime the core started on: work a synchronous call starts runs there.
+    pub runtime: tokio::runtime::Handle,
 }
 
 impl crate::codemode::Host for Shared {
@@ -258,7 +261,8 @@ impl Core {
         let token = Token::resolve(&db)?;
         let gateway = Arc::new(Gateway::new(token));
         let remote = crate::gateway::config::fetch(&gateway, &db).await;
-        let loaded = Loaded::load(&paths, &gateway, directory, &remote, None).await;
+        let trust = crate::trust::Decisions::read(&db);
+        let loaded = Loaded::load(&paths, &gateway, directory, &remote, None, trust).await;
         let project = crate::project::identify(directory);
         let snapshots = (project.vcs == Some("git")
             && loaded.config.get("snapshots") != Some(&Value::Bool(false)))
@@ -314,6 +318,7 @@ impl Core {
             precomputed: Mutex::default(),
             closing: Default::default(),
             hooks: Default::default(),
+            runtime: tokio::runtime::Handle::current(),
         });
         shared.arm_watch(&shared.loaded());
         shared
@@ -511,6 +516,41 @@ impl Core {
             .approved
             .sync(&self.loaded().config.hooks, &self.shared.db);
         self.emit(Event::HooksChanged);
+        self.emit(Event::TrustChanged);
+        Ok(())
+    }
+
+    /// What every project document wants to run, per kind (hooks, MCP servers, formatters), with
+    /// the user's decision on its current content; documents in load order.
+    pub fn trust_items(&self) -> Vec<crate::trust::TrustItem> {
+        crate::trust::items_with(
+            &self.loaded().config,
+            &self.shared.db,
+            &self.shared.hooks.approved,
+        )
+    }
+
+    /// Records the user's decision on one project document's `kind` as it is now (`digest` from
+    /// [`crate::trust::TrustItem::digest`]). It takes effect at once: the config reloads, MCP
+    /// servers it approved start and those it refused stop. Sends [`Event::TrustChanged`] (and
+    /// [`Event::HooksChanged`] for hooks).
+    pub fn trust(
+        &self,
+        path: &str,
+        kind: crate::trust::TrustKind,
+        digest: &str,
+        allow: bool,
+    ) -> Result<(), CoreError> {
+        if kind == crate::trust::TrustKind::Hooks {
+            return self.trust_hooks(path, digest, allow);
+        }
+        crate::trust::record(&self.shared.db, path, kind, digest, allow)?;
+        self.shared.changes.mark();
+        let shared = self.shared.clone();
+        self.shared
+            .runtime
+            .spawn(async move { shared.refresh().await });
+        self.emit(Event::TrustChanged);
         Ok(())
     }
 

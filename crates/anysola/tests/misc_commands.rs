@@ -282,7 +282,7 @@ fn mcp_add_validation() {
 fn mcp_logout_removes_the_servers_credentials() {
     let home = TestHome::new("http://127.0.0.1:9");
     home.write(
-        "proj/opencode.json",
+        ".anysola/config.json",
         r#"{"mcp": {"servers": {
             "remote": {"type": "remote", "url": "https://mcp.example.com/mcp"},
             "anonymous": {"type": "remote", "url": "https://a/mcp", "oauth": false},
@@ -324,7 +324,7 @@ fn mcp_list_shows_live_statuses_and_auth_refuses_without_a_server() {
     let out = anysola(&home, &project, &["mcp", "list"]);
     assert_eq!(out.stdout, "No MCP servers configured\n");
     home.write(
-        "proj/opencode.json",
+        ".anysola/config.json",
         r#"{"mcp": {"servers": {
             "glob1": {"type": "local", "command": ["echo", "hi"]},
             "bad1": {"type": "local", "command": ["/nonexistent/cmd", "--flag"]},

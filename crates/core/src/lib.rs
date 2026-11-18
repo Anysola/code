@@ -35,6 +35,7 @@ pub mod teardown;
 pub mod text;
 pub mod time;
 pub mod tool;
+pub mod trust;
 pub mod usage;
 pub mod version;
 pub mod watch;

@@ -34,16 +34,19 @@ pub struct Loaded {
 
 impl Loaded {
     /// Loads every source; `previous` keeps the fetched instruction URLs when they did not change.
+    /// `trust`: the decisions on project documents' MCP and formatter sections.
     pub async fn load(
         paths: &Paths,
         gateway: &Gateway,
         directory: &Path,
         remote: &Remote,
         previous: Option<&Loaded>,
+        trust: crate::trust::Decisions,
     ) -> Loaded {
         let options = LoadOptions {
             remote: remote.body.clone(),
             api_url: gateway.base().to_string(),
+            trust,
         };
         let config = crate::config::load(paths, directory, &options);
         for warning in &config.warnings {
@@ -119,6 +122,7 @@ impl Shared {
             &self.directory,
             &remote,
             Some(&previous),
+            crate::trust::Decisions::read(&self.db),
         )
         .await;
         self.arm_watch(&next);
@@ -134,10 +138,21 @@ impl Shared {
             crate::hooks::undecided_with(&config.hooks, &self.db, &self.hooks.approved)
         };
         let hooks_changed = asked(&previous.config) != asked(&config);
+        let waiting = |config: &crate::config::Config| -> Vec<(String, String, String)> {
+            crate::trust::items_with(config, &self.db, &self.hooks.approved)
+                .into_iter()
+                .filter(|item| item.decision.is_none())
+                .map(|item| (item.path, item.kind.as_str().to_string(), item.digest))
+                .collect()
+        };
+        let trust_changed = waiting(&previous.config) != waiting(&config);
         *self.loaded.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(next);
         self.applied.store(generation, Ordering::SeqCst);
         if hooks_changed {
             let _ = self.events.send(crate::events::Event::HooksChanged);
+        }
+        if trust_changed {
+            let _ = self.events.send(crate::events::Event::TrustChanged);
         }
         if let Some(mcp) = self.mcp.get() {
             mcp.reconcile(config);

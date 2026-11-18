@@ -22,6 +22,7 @@ pub async fn models() -> i32 {
         Ok::<_, anysola_core::storage::StorageError>(LoadOptions {
             remote: remote.body,
             api_url: gateway.base().to_string(),
+            ..LoadOptions::default()
         })
     };
     let options = match loaded.await {

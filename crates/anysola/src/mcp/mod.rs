@@ -10,6 +10,7 @@ use anysola_core::config::{self, LoadOptions};
 use anysola_core::mcp::{Mcp, Status};
 use anysola_core::paths::Paths;
 use anysola_core::storage::Db;
+use anysola_core::trust::TrustKind;
 use anysola_mcp::{Runtime, oauth};
 use serde_json::{Map, Value, json};
 
@@ -127,18 +128,32 @@ async fn start() -> Result<(Core, Arc<Runtime>), String> {
 }
 
 async fn list() -> Result<String, String> {
-    let (_core, runtime) = start().await?;
+    let (core, runtime) = start().await?;
     let servers = runtime.servers();
     runtime.shutdown().await;
-    if servers.is_empty() {
+    // A project's servers that wait for approval are not started; they are listed by name.
+    let waiting: Vec<(String, bool)> = core
+        .loaded()
+        .config
+        .trust
+        .iter()
+        .filter(|s| s.kind == TrustKind::Mcp && s.decision != Some(true))
+        .flat_map(|s| s.entries.iter().filter(|e| e.label != "MCP timeouts"))
+        .map(|e| {
+            let defined = servers.iter().any(|s| s.name == e.label);
+            (anysola_core::hooks::display(&e.label), defined)
+        })
+        .collect();
+    if servers.is_empty() && waiting.is_empty() {
         return Ok("No MCP servers configured".into());
     }
     let width = servers
         .iter()
         .map(|s| s.name.chars().count())
+        .chain(waiting.iter().map(|(n, _)| n.chars().count()))
         .max()
         .unwrap_or(0);
-    let lines: Vec<String> = servers
+    let mut lines: Vec<String> = servers
         .iter()
         .map(|server| {
             let (icon, describe) = match &server.status {
@@ -151,6 +166,13 @@ async fn list() -> Result<String, String> {
             format!("{icon} {:<width$}  {describe}", server.name)
         })
         .collect();
+    for (name, defined) in waiting {
+        lines.push(if defined {
+            format!("⚠ {name:<width$}  this project's change to it needs approval")
+        } else {
+            format!("⚠ {name:<width$}  needs approval")
+        });
+    }
     Ok(lines.join("\n"))
 }
 

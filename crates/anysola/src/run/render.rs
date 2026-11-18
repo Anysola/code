@@ -444,7 +444,8 @@ impl Renderer {
             | Event::CompactionStarted { .. }
             | Event::CompactionEnded { .. }
             | Event::CompactionFailed { .. }
-            | Event::HooksChanged => {}
+            | Event::HooksChanged
+            | Event::TrustChanged => {}
         }
         false
     }

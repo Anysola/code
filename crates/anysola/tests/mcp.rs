@@ -65,8 +65,9 @@ fn elicitation_is_cancelled_and_direct_tools_are_advertised() {
     let server = json!({"type": "local", "command": ["sh", "-c", SERVER]});
     let mut direct = server.clone();
     direct["codemode"] = json!(false);
+    // A project's servers wait for approval since 1.0.10; the user's run at once.
     home.write(
-        "proj/opencode.json",
+        ".anysola/config.json",
         &json!({"mcp": {"servers": {"f": server, "direct": direct}}}).to_string(),
     );
     let out = home.run(BIN, &["run", "go"], None, None);

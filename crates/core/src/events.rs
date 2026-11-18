@@ -247,6 +247,10 @@ pub enum Event {
     /// ([`crate::api::Core::hook_documents`]); also sent after [`crate::api::Core::trust_hooks`].
     /// Session [`crate::mcp::GLOBAL`].
     HooksChanged,
+    /// What waits for the user's approval in project documents changed (a config load found new
+    /// or changed hooks, MCP servers or formatters), or a decision was made
+    /// ([`crate::api::Core::trust_items`]). Session [`crate::mcp::GLOBAL`].
+    TrustChanged,
 }
 
 impl Event {
@@ -286,7 +290,8 @@ impl Event {
             Event::FormAsked { .. }
             | Event::FormReplied { .. }
             | Event::McpStatusChanged { .. }
-            | Event::HooksChanged => crate::mcp::GLOBAL,
+            | Event::HooksChanged
+            | Event::TrustChanged => crate::mcp::GLOBAL,
         }
     }
 }

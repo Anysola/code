@@ -12,7 +12,7 @@
 //! `ANYSOLA_*` variable falls back to its `OPENCODE_*` name ([`crate::env`]).
 
 pub mod jsonc;
-mod mcp;
+pub(crate) mod mcp;
 
 pub use mcp::{local_server, remote_server};
 mod normalize;
@@ -52,6 +52,14 @@ struct Document {
     source: Option<String>,
     /// Found by the upward walk from the session directory (its hooks need approval).
     project: bool,
+    /// Sections of a project document nobody approved: not applied.
+    withheld: Withheld,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct Withheld {
+    mcp: bool,
+    formatter: bool,
 }
 
 /// A config source as `anysola debug config` lists it.
@@ -113,6 +121,11 @@ pub struct Config {
     /// Files of user and managed documents the loader read, and the `ANYSOLA_CONFIG` file even
     /// when it does not exist yet: writing them changes what runs without asking.
     pub own_documents: Vec<PathBuf>,
+    /// The `mcp` and `formatter` sections of project documents, with the decision on each (see
+    /// [`crate::trust`]); those not approved were not applied.
+    pub trust: Vec<crate::trust::Section>,
+    /// Project documents whose `mcp` section was not applied.
+    withheld_mcp: Vec<String>,
 }
 
 impl Config {
@@ -188,6 +201,7 @@ impl Config {
     /// The last local document that defines MCP server `name`.
     pub fn mcp_source(&self, name: &str) -> Option<&str> {
         self.documents()
+            .filter(|(path, _)| !self.withheld_mcp.iter().any(|w| w == path))
             .filter(|(_, data)| mcp::defines(data, name))
             .last()
             .map(|(path, _)| path)
@@ -223,6 +237,7 @@ impl Config {
                 dir: None,
                 source: None,
                 project: false,
+                withheld: Withheld::default(),
             });
         }
         config
@@ -311,9 +326,21 @@ impl Config {
                 "Plugins are not supported since Anysola Code 1.0; ignoring \"plugins\".".into(),
             );
         }
-        self.mcp.apply(&data);
+        if document.withheld.mcp {
+            // Not approved: as if the document had no MCP section (its legacy timeout included).
+            if let Some(Value::Object(experimental)) = data.get_mut("experimental") {
+                experimental.remove("mcp_timeout");
+            }
+            if let Some(source) = &document.source {
+                self.withheld_mcp.push(source.clone());
+            }
+        } else {
+            self.mcp.apply(&data);
+        }
         data.remove("mcp");
-        if let Some(formatter) = data.remove("formatter") {
+        if let Some(formatter) = data.remove("formatter")
+            && !document.withheld.formatter
+        {
             merge_formatter(&mut self.values, formatter);
         }
         for (key, value) in data {
@@ -491,6 +518,9 @@ pub struct LoadOptions {
     /// Body of the gateway's `/config` (live or cached).
     pub remote: Option<Value>,
     pub api_url: String,
+    /// The decisions on project documents' sections ([`crate::trust::Decisions::read`]). The
+    /// default holds none: no project MCP server or formatter is applied.
+    pub trust: crate::trust::Decisions,
 }
 
 /// Directories walked upward from `start`: through home (inclusive) when `start` is inside home,
@@ -629,6 +659,7 @@ struct Loader<'a> {
     managed: bool,
     /// Loading the documents of the upward project walk.
     project: bool,
+    decisions: &'a crate::trust::Decisions,
 }
 
 /// One local document as the loader takes it: variables substituted, the 0.5.x keys moved to
@@ -649,6 +680,11 @@ impl Loader<'_> {
     fn text(&mut self, text: &str, dir: &Path, source: &str) {
         match document(text, dir, self.paths) {
             Some(data) => {
+                let withheld = if self.project {
+                    self.withhold(&data, source)
+                } else {
+                    Withheld::default()
+                };
                 self.config.sources.push(Source::Document {
                     path: source.to_string(),
                     data: data.clone(),
@@ -659,6 +695,7 @@ impl Loader<'_> {
                     dir: Some(dir.to_path_buf()),
                     source: Some(source.to_string()),
                     project: self.project,
+                    withheld,
                 });
             }
             _ => self
@@ -666,6 +703,36 @@ impl Loader<'_> {
                 .warnings
                 .push(format!("Ignoring malformed config {source}")),
         }
+    }
+
+    /// Records the project document's MCP and formatter sections with the decisions on them;
+    /// what is not approved is withheld.
+    fn withhold(&mut self, data: &Map<String, Value>, source: &str) -> Withheld {
+        use crate::trust::{Section, TrustKind};
+        let mut withheld = Withheld::default();
+        for (kind, section) in [
+            (TrustKind::Mcp, crate::trust::mcp_section(data)),
+            (TrustKind::Formatter, crate::trust::formatter_section(data)),
+        ] {
+            let Some((digest, entries)) = section else {
+                continue;
+            };
+            let decision = self.decisions.of(source, kind, &digest);
+            if decision != Some(true) {
+                match kind {
+                    TrustKind::Mcp => withheld.mcp = true,
+                    _ => withheld.formatter = true,
+                }
+            }
+            self.config.trust.push(Section {
+                path: source.to_string(),
+                kind,
+                digest,
+                decision,
+                entries,
+            });
+        }
+        withheld
     }
 
     fn file(&mut self, path: &Path) {
@@ -702,6 +769,7 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
         config: Config::default(),
         managed: false,
         project: false,
+        decisions: &options.trust,
     };
     if let Some(remote) = options
         .remote
@@ -714,6 +782,7 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
             dir: None,
             source: None,
             project: false,
+            withheld: Withheld::default(),
         });
     }
     let legacy = paths.legacy_config_dir();
@@ -799,6 +868,7 @@ mod tests {
             dir: None,
             source: None,
             project: false,
+            withheld: Withheld::default(),
         };
         let deny =
             |resource: &str| json!({"action": "tool.use", "resource": resource, "effect": "deny"});
@@ -1002,8 +1072,78 @@ mod tests {
             Some(global.as_str()),
             "a 0.5.x entry"
         );
-        assert_eq!(config.mcp_source("shared"), Some(local.as_str()));
         assert_eq!(config.mcp_source("none"), None);
+        // The project's redefinition of `shared` waits for approval: the user's stays as it was.
+        assert_eq!(config.mcp_source("shared"), Some(global.as_str()));
+        let shared = |config: &Config| {
+            config
+                .mcp_servers()
+                .into_iter()
+                .find(|(n, _)| n == "shared")
+                .map(|(_, s)| s["command"].clone())
+        };
+        assert_eq!(shared(&config), Some(json!(["a"])));
+        let section = config.trust[0].clone();
+        assert_eq!(
+            (section.path.as_str(), section.kind, section.decision),
+            (local.as_str(), crate::trust::TrustKind::Mcp, None)
+        );
+        let mut trust = crate::trust::Decisions::default();
+        trust.allow(&section.path, section.kind, &section.digest);
+        let config = load(
+            &paths,
+            &project,
+            &LoadOptions {
+                trust,
+                ..LoadOptions::default()
+            },
+        );
+        assert_eq!(config.mcp_source("shared"), Some(local.as_str()));
+        assert_eq!(shared(&config), Some(json!(["c"])));
+        assert_eq!(config.trust[0].decision, Some(true));
+    }
+
+    #[test]
+    fn unapproved_project_sections_are_not_applied() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let project = home.join("proj");
+        std::fs::create_dir_all(home.join(".anysola")).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        let paths = Paths::isolated(home.clone());
+        std::fs::write(
+            paths.config_file(),
+            r#"{"formatter": {"mine": {"command": ["user-fmt"]}},
+                "mcp": {"servers": {"kept": {"type": "local", "command": ["k"]}}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            project.join("anysola.json"),
+            r#"{"formatter": true, "experimental": {"mcp_timeout": 5},
+                "mcp": {"servers": {"kept": {"type": "local", "command": ["k"], "disabled": true},
+                                    "new": {"type": "remote", "url": "https://r/mcp"}}}}"#,
+        )
+        .unwrap();
+        let config = load(&paths, &project, &LoadOptions::default());
+        let servers = config.mcp_servers();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(
+            servers[0].1,
+            json!({"type": "local", "command": ["k"], "timeout": {}})
+        );
+        assert_eq!(
+            config.get("formatter"),
+            Some(&json!({"mine": {"command": ["user-fmt"]}})),
+            "the user's formatter only"
+        );
+        let kinds: Vec<_> = config.trust.iter().map(|s| s.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                crate::trust::TrustKind::Mcp,
+                crate::trust::TrustKind::Formatter
+            ]
+        );
     }
 
     #[test]
@@ -1035,6 +1175,7 @@ mod tests {
         let options = LoadOptions {
             remote: Some(serde_json::from_str(&hooks("remote")).unwrap()),
             api_url: "http://x".into(),
+            ..LoadOptions::default()
         };
         let config = load(&paths, &project, &options);
         let summary: Vec<(String, crate::hooks::HookScope)> = config
