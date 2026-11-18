@@ -521,6 +521,21 @@ impl Core {
     }
 
     fn create(&self, id: String, kind: Kind) -> Result<SessionRow, CoreError> {
+        let row = self.insert(id, kind)?;
+        self.announce(&row);
+        Ok(row)
+    }
+
+    fn announce(&self, row: &SessionRow) {
+        self.emit(Event::SessionCreated {
+            session_id: row.id.clone(),
+            parent_id: row.parent_id.clone(),
+            title: row.title.clone(),
+        });
+    }
+
+    /// Stores a new session without telling listeners about it yet.
+    fn insert(&self, id: String, kind: Kind) -> Result<SessionRow, CoreError> {
         let now = crate::time::now_ms();
         let iso = crate::time::iso(now);
         let (title, parent_id, fork_session_id, fork_boundary) = match kind {
@@ -558,11 +573,6 @@ impl Core {
             time_updated: now,
         };
         self.shared.db.create_session(&row)?;
-        self.emit(Event::SessionCreated {
-            session_id: row.id.clone(),
-            parent_id: row.parent_id.clone(),
-            title: row.title.clone(),
-        });
         Ok(row)
     }
 
@@ -622,28 +632,39 @@ impl Core {
             title,
             through: through.clone(),
         };
-        let mut row = self.create(crate::ids::session(), kind)?;
+        let mut row = self.insert(crate::ids::session(), kind)?;
         row.agent = source.agent.clone();
         row.model = source.model.clone();
+        // Listeners hear of the fork once it has its history; one that cannot be filled is
+        // removed rather than left behind empty.
+        if let Err(error) = self.fill_fork(source, &row, &through) {
+            let _ = self.shared.db.delete_session(&row.id);
+            return Err(error);
+        }
+        self.announce(&row);
+        Ok(row)
+    }
+
+    fn fill_fork(
+        &self,
+        source: &SessionRow,
+        row: &SessionRow,
+        through: &str,
+    ) -> Result<(), CoreError> {
+        let db = &self.shared.db;
         if let Some(agent) = &row.agent {
-            self.shared.db.set_agent(&row.id, agent)?;
+            db.set_agent(&row.id, agent)?;
         }
         if let Some(model) = &row.model {
-            self.shared.db.set_model(&row.id, model)?;
+            db.set_model(&row.id, model)?;
         }
-        self.shared
-            .db
-            .copy_messages(&source.id, &row.id, &through)?;
+        db.copy_messages(&source.id, &row.id, through)?;
         // The fork starts from the instructions its source last saw, not its source's baseline.
-        if let Some(state) = self.shared.db.instruction_state(&source.id)? {
-            self.shared
-                .db
-                .instruction_initialize(&row.id, 0, &state.current)?;
+        if let Some(state) = db.instruction_state(&source.id)? {
+            db.instruction_initialize(&row.id, 0, &state.current)?;
         }
-        self.shared
-            .db
-            .instruction_entries_copy(&source.id, &row.id)?;
-        Ok(row)
+        db.instruction_entries_copy(&source.id, &row.id)?;
+        Ok(())
     }
 
     /// Names the session again from its conversation so far.

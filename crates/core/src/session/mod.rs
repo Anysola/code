@@ -354,7 +354,8 @@ fn own_rows(
         .and_then(|s| s.fork_boundary.as_ref())
         .and_then(|b| b["messageID"].as_str());
     if let Some(through) = through {
-        // Copied rows are named `<source row>_<seq>`.
+        // Copied rows are named `<source row>_<seq>_<fork>`, or `<source row>_<seq>` in a fork
+        // made before forks carried their own id.
         let prefix = format!("{through}_");
         if let Some(at) = rows.iter().position(|r| r.id.starts_with(&prefix)) {
             rows.drain(..=at);

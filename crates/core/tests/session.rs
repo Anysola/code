@@ -301,6 +301,90 @@ fn forks_and_children() {
 }
 
 #[test]
+fn a_session_forks_more_than_once() {
+    let gateway = FakeGateway::start(|request, _| text(request, "ok"));
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    for text in ["one", "two"] {
+        runtime
+            .block_on(core.prompt(&session.id, prompt(text), TurnOptions::default()))
+            .unwrap();
+    }
+    let db = Db::open(&env.home.home().join(".anysola/anysola.db")).unwrap();
+    let source = db.messages(&session.id).unwrap();
+
+    // The whole session, twice, and once more cut before its second prompt.
+    let first = core.fork_session(&session.id, None).unwrap();
+    let second = core.fork_session(&session.id, None).unwrap();
+    assert!(first.title.ends_with(" (fork #1)"));
+    assert!(second.title.ends_with(" (fork #2)"));
+    for fork in [&first, &second] {
+        let rows = db.messages(&fork.id).unwrap();
+        assert_eq!(rows.len(), source.len());
+        for (copy, row) in rows.iter().zip(&source) {
+            assert!(copy.id.starts_with(&format!("{}_", row.id)), "{}", copy.id);
+            assert_eq!((&copy.kind, &copy.data), (&row.kind, &row.data));
+        }
+    }
+    let cut = source.iter().filter(|r| r.kind == "user").nth(1).unwrap();
+    let before = core.fork_session(&session.id, Some(&cut.id)).unwrap();
+    let copied = db.messages(&before.id).unwrap();
+    assert_eq!(
+        copied.len(),
+        source.iter().position(|r| r.id == cut.id).unwrap()
+    );
+    assert_eq!(db.fork_count(&session.id).unwrap(), 3);
+
+    // A fork forks too, more than once, and its forks answer a prompt.
+    let nested = core.fork_session(&first.id, None).unwrap();
+    let again = core.fork_session(&first.id, None).unwrap();
+    assert_eq!(db.messages(&nested.id).unwrap().len(), source.len());
+    assert_eq!(db.messages(&again.id).unwrap().len(), source.len());
+    let outcome = runtime
+        .block_on(core.prompt(&again.id, prompt("three"), TurnOptions::default()))
+        .unwrap();
+    assert_eq!(outcome, Outcome::Succeeded);
+
+    // History copied up to a prompt nobody answered is not a turn the fork left unfinished.
+    let answer = source
+        .iter()
+        .rposition(|r| r.kind == "user")
+        .map(|at| &source[at + 1])
+        .unwrap();
+    let open = core.fork_session(&session.id, Some(&answer.id)).unwrap();
+    assert_eq!(db.messages(&open.id).unwrap().last().unwrap().kind, "user");
+    assert!(!core.settle_interrupted(&open.id).unwrap());
+    let twice = core.fork_session(&open.id, None).unwrap();
+    assert!(!core.settle_interrupted(&twice.id).unwrap());
+}
+
+#[test]
+fn a_fork_that_fails_leaves_no_session() {
+    let gateway = FakeGateway::start(|request, _| text(request, "ok"));
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("one"), TurnOptions::default()))
+        .unwrap();
+    let db = Db::open(&env.home.home().join(".anysola/anysola.db")).unwrap();
+    let before = db.list_sessions(None, None, 100).unwrap().len();
+    // The copy cannot be written while the message table refuses inserts.
+    db.immediate(|tx| {
+        tx.execute_batch(
+            "CREATE TRIGGER refuse BEFORE INSERT ON message BEGIN SELECT RAISE(ABORT, 'refused'); END",
+        )
+    })
+    .map_err(|e: rusqlite::Error| e)
+    .unwrap();
+    assert!(core.fork_session(&session.id, None).is_err());
+    assert_eq!(db.list_sessions(None, None, 100).unwrap().len(), before);
+}
+
+#[test]
 fn prompt_images_are_normalized() {
     use base64::Engine;
     let gateway = FakeGateway::start(|request, _| text(request, "ok"));

@@ -4,6 +4,12 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## Unreleased
+
+- A session forks as often as you like. The second fork of the same session failed with
+  `UNIQUE constraint failed: message.id` and left an empty "(fork #2)" session behind; a fork that cannot be made
+  now leaves nothing.
+
 ## 1.0.8 (2026-11-18)
 
 Anysola Code Desktop for everyday use: nothing waits out of sight, nothing typed is lost, and nothing needs a

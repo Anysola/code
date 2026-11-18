@@ -523,18 +523,32 @@ impl Db {
         })
     }
 
-    /// Copies a session's messages into a fork. Copied ids get the source sequence as a suffix,
-    /// as 0.5.1 named forked rows.
+    /// Copies a session's messages, up to and including `through`, into the fork `to`, all of
+    /// them or none. A copy is named `<source row>_<seq>_<fork>`: 0.5.1 named forked rows
+    /// `<source row>_<seq>`, which a second fork of the same session would repeat, and message
+    /// ids are unique across sessions.
     pub fn copy_messages(&self, from: &str, to: &str, through: &str) -> Result<()> {
-        let rows = self.messages(from)?;
-        for row in rows {
-            let id = format!("{}_{}", row.id, row.seq);
-            self.append_message(to, &id, &row.kind, &row.data)?;
-            if row.id == through {
-                break;
-            }
+        let fork = to.strip_prefix("ses_").unwrap_or(to);
+        let now = now_ms() as i64;
+        let mut rows = self.messages(from)?;
+        if let Some(at) = rows.iter().position(|r| r.id == through) {
+            rows.truncate(at + 1);
         }
-        Ok(())
+        self.immediate(|tx| {
+            let mut insert = tx.prepare(
+                "INSERT INTO message (id, session_id, seq, type, time_created, time_updated, data)
+                 VALUES (?1, ?2, (SELECT COALESCE(MAX(seq), 0) + 1 FROM message WHERE session_id = ?2), ?3, ?4, ?4, ?5)",
+            )?;
+            for row in &rows {
+                let id = format!("{}_{}_{fork}", row.id, row.seq);
+                insert.execute(params![id, to, row.kind, now, json(&row.data)])?;
+            }
+            tx.execute(
+                "UPDATE session SET time_updated = ?2 WHERE id = ?1",
+                params![to, now],
+            )?;
+            Ok(())
+        })
     }
 
     /// Marks a session busy for `owner` unless another live owner holds it.
