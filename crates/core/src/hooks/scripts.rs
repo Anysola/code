@@ -11,9 +11,11 @@ pub struct Places<'a> {
     pub session: &'a Path,
 }
 
-/// The command line split into words as a POSIX shell would (quotes and backslashes), also at
-/// unquoted `;`, `|`, `&`, `<`, `>`, `(` and `)`.
-fn words(command: &str) -> Vec<String> {
+/// The command line split into words as a shell would (quotes), also at unquoted `;`, `|`, `&`,
+/// `<`, `>`, `(` and `)`. `escapes`: a backslash escapes the next character, as in a POSIX
+/// shell; without it a backslash is itself, as in `cmd` and PowerShell, where it separates the
+/// parts of a path.
+fn words(command: &str, escapes: bool) -> Vec<String> {
     let mut out = Vec::new();
     let mut word = String::new();
     let mut started = false;
@@ -22,7 +24,7 @@ fn words(command: &str) -> Vec<String> {
     while let Some(c) = chars.next() {
         match (quote, c) {
             (Some(q), c) if c == q => quote = None,
-            (Some('"'), '\\') => {
+            (Some('"'), '\\') if escapes => {
                 if let Some(next) = chars.next() {
                     word.push(next);
                 }
@@ -32,7 +34,7 @@ fn words(command: &str) -> Vec<String> {
                 quote = Some(c);
                 started = true;
             }
-            (None, '\\') => {
+            (None, '\\') if escapes => {
                 if let Some(next) = chars.next() {
                     word.push(next);
                     started = true;
@@ -60,16 +62,21 @@ fn expand(word: &str, places: &Places<'_>) -> String {
     if word == "~" {
         return home;
     }
-    if let Some(rest) = word.strip_prefix("~/") {
+    if let Some(rest) = word.strip_prefix("~/").or_else(|| word.strip_prefix("~\\")) {
         return format!("{home}/{rest}");
     }
     let mut out = word.to_string();
+    // The longer spellings first: `$env:HOME` holds `$HOME`'s `$` and nothing else of it.
     for (name, value) in [
         ("CLAUDE_PROJECT_DIR", &project),
         ("ANYSOLA_PROJECT_DIR", &project),
+        ("USERPROFILE", &home),
         ("HOME", &home),
     ] {
         out = out
+            .replace(&format!("${{env:{name}}}"), value)
+            .replace(&format!("$env:{name}"), value)
+            .replace(&format!("%{name}%"), value)
             .replace(&format!("${{{name}}}"), value)
             .replace(&format!("${name}"), value);
     }
@@ -77,10 +84,14 @@ fn expand(word: &str, places: &Places<'_>) -> String {
 }
 
 /// The existing files a hook command names: each word after expansion, as an absolute path or
-/// relative to the project root or the session directory. Directories are not files.
+/// relative to the project root or the session directory. Directories are not files. The shell
+/// that will run the command is not known here, so the line is read both ways, with a backslash
+/// as an escape and as a path separator; a file either reading names is protected.
 pub fn files(command: &str, places: &Places<'_>) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    for word in words(command) {
+    let mut read = words(command, true);
+    read.extend(words(command, false));
+    for word in read {
         let word = expand(&word, places);
         if word.is_empty() {
             continue;
@@ -106,14 +117,47 @@ mod tests {
 
     #[test]
     fn words_follow_shell_quoting() {
-        assert_eq!(words("sh ./x.sh"), ["sh", "./x.sh"]);
+        assert_eq!(words("sh ./x.sh", true), ["sh", "./x.sh"]);
         assert_eq!(
-            words(r#"node "$CLAUDE_PROJECT_DIR/hooks/a.mjs" --flag"#),
+            words(r#"node "$CLAUDE_PROJECT_DIR/hooks/a.mjs" --flag"#, true),
             ["node", "$CLAUDE_PROJECT_DIR/hooks/a.mjs", "--flag"]
         );
-        assert_eq!(words("'/a b/c.sh' x"), ["/a b/c.sh", "x"]);
-        assert_eq!(words("a.sh&&b.sh;c"), ["a.sh", "b.sh", "c"]);
-        assert_eq!(words(r"a\ b ''"), ["a b", ""]);
+        assert_eq!(words("'/a b/c.sh' x", true), ["/a b/c.sh", "x"]);
+        assert_eq!(words("a.sh&&b.sh;c", true), ["a.sh", "b.sh", "c"]);
+        assert_eq!(words(r"a\ b ''", true), ["a b", ""]);
+        // `cmd` and PowerShell: a backslash is part of the path.
+        assert_eq!(
+            words(
+                r#"pwsh -File "C:\Users\me\hooks dir\guard.ps1" -Strict"#,
+                false
+            ),
+            [
+                "pwsh",
+                "-File",
+                r"C:\Users\me\hooks dir\guard.ps1",
+                "-Strict"
+            ]
+        );
+        assert_eq!(words(r"a\ b", false), [r"a\", "b"]);
+    }
+
+    #[test]
+    fn windows_spellings_expand() {
+        let places = Places {
+            home: Path::new("/h"),
+            project: Path::new("/p"),
+            session: Path::new("/p"),
+        };
+        for (word, expanded) in [
+            (r"%USERPROFILE%\hooks\g.ps1", r"/h\hooks\g.ps1"),
+            (r"$env:USERPROFILE\g.ps1", r"/h\g.ps1"),
+            ("${env:CLAUDE_PROJECT_DIR}/g.ps1", "/p/g.ps1"),
+            (r"%CLAUDE_PROJECT_DIR%\g.cmd", r"/p\g.cmd"),
+            (r"~\hooks\g.ps1", r"/h/hooks\g.ps1"),
+            ("$HOME/g.sh", "/h/g.sh"),
+        ] {
+            assert_eq!(expand(word, &places), expanded, "{word}");
+        }
     }
 
     #[test]
