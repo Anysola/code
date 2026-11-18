@@ -1,9 +1,0 @@
-{
-  "a": 1,
-  "mcp": {
-    // servers
-    "servers": {
-      "x": {"type":"local","command":["y"]}, // trailing
-    },
-  },
-}

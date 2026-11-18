@@ -13,8 +13,6 @@ base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 jiff = "0.2"
-clap = { version = "4.6", features = ["derive"] }
-clap_complete = "4.6"
 fancy-regex = "0.16"
 flate2 = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
@@ -47,18 +45,8 @@ tokio-util = "0.7"
 url = "2.5"
 yaml-rust2 = { version = "0.10", default-features = false }
 
-anysola-acp = { path = "crates/acp" }
 anysola-core = { path = "crates/core" }
-anysola-mcp = { path = "crates/mcp" }
-anysola-migrate = { path = "crates/migrate" }
 anysola-testkit = { path = "crates/testkit" }
-anysola-tui = { path = "crates/tui" }
-
-[profile.release]
-opt-level = 3
-lto = "fat"
-codegen-units = 1
-strip = true
 
 [profile.dev]
 debug = "line-tables-only"
