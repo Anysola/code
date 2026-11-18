@@ -899,12 +899,20 @@ function HookLine({ run }: { run: HookRun }) {
         )}
       </div>
     )
+  // A notice with no command is the app's own word about hooks, not something a hook said.
+  const own = run.outcome === "notice" && !run.command
   return (
     <div title={title} className="text-2xs flex min-h-6 items-start gap-2 py-1">
       {icon}
       <span className="max-h-24 min-w-0 overflow-y-auto whitespace-pre-wrap select-text">
-        <span className={run.outcome === "notice" ? "text-muted" : "text-foreground/85"}>{HOOK_SAYS[run.outcome]}</span>
-        {run.message && <span className={run.outcome === "notice" ? "text-foreground/85" : "text-muted"}>{` · ${run.message}`}</span>}
+        {!own && (
+          <span className={run.outcome === "notice" ? "text-muted" : "text-foreground/85"}>{HOOK_SAYS[run.outcome]}</span>
+        )}
+        {run.message && (
+          <span className={run.outcome === "notice" ? "text-foreground/85" : "text-muted"}>
+            {own ? run.message : ` · ${run.message}`}
+          </span>
+        )}
       </span>
     </div>
   )
@@ -1386,13 +1394,18 @@ function StatusLine({ open, waiting, streaming }: { open: Open; waiting: boolean
       )
     case "failed":
       if (status.errorKind && BANNERED.has(status.errorKind)) return null
-      // The user's own hook said no: their rule at work, not a failure. The text is back in the box.
+      // The user's own hook said no: their rule at work, not a failure. The line says the text is
+      // back only when it is (a queued message the window can't tell apart isn't).
       if (status.hook)
         return (
           <div className="text-dense flex items-start gap-2">
             <Webhook className="mt-0.5 size-3.5 shrink-0 text-muted" strokeWidth={1.75} />
             <span className="flex min-w-0 flex-col gap-0.5">
-              <span>A hook stopped this message. It’s back in the message box.</span>
+              <span>
+                {status.back
+                  ? "A hook stopped this message. It’s back in the message box."
+                  : "A hook stopped a message, so it wasn’t sent."}
+              </span>
               <span className="max-h-40 overflow-y-auto whitespace-pre-wrap text-muted select-text">{status.error}</span>
             </span>
           </div>

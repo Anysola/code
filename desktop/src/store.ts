@@ -65,7 +65,15 @@ export type Status =
   | { kind: "retrying"; attempt: number; until: number; error: string }
   /** `retry`: the latest turn failed, so sending its message again makes sense. `errorKind` picks
    * the words and the way out (a limit, no connection, a lost sign-in…). */
-  | { kind: "failed"; error: string; retry?: boolean; errorKind?: ErrorKind; hook?: boolean }
+  | {
+      kind: "failed"
+      error: string
+      retry?: boolean
+      errorKind?: ErrorKind
+      /** The user's hook stopped a message; `back`: it is in the message box again. */
+      hook?: boolean
+      back?: boolean
+    }
   | { kind: "stopped"; reason: "user" | "budget" | "declined" }
 
 /** A long paste, kept folded in the composer and sent as part of the message. */
@@ -1003,10 +1011,19 @@ function settleUnsent(key: string) {
  * its images back from here (the queue itself only counts them). */
 const sentQueued = new Map<string, Unsent[]>()
 
-/** Puts a message that didn't send (`u`, else the oldest) back in its session's draft; elsewhere,
- * the notice says where. */
+/**
+ * The message a started turn took, by session, until that turn ends. `started` comes before the
+ * core checks the prompt (UserPromptSubmit hooks, the model's route, the sign-in), so a turn can
+ * still end `failed` + `unsent` and its message must be there to put back.
+ */
+const starting = new Map<string, Unsent>()
+
+/** Puts a message that didn't send (`u`; else the one a started turn took, else the oldest send)
+ * back in its session's draft; elsewhere, the notice says where. */
 function putBack(key: string, u?: Unsent) {
-  const back = dropUnsent(key, u)
+  const taken = u ? undefined : starting.get(key)
+  if (taken) starting.delete(key)
+  const back = taken ?? dropUnsent(key, u)
   if (!back) return false
   restoreDraft(key, back)
   const o = state.open
@@ -1980,6 +1997,38 @@ function hookFailure(command: string, message: string) {
   return `${short ? `A hook failed (${short}).` : "A hook failed."} ${why} The work went on.`
 }
 
+/**
+ * A turn that ran with queued messages ended `failed` + `unsent`: the core removed one message and
+ * doesn't say which. As the terminal app works it out: of the messages this window sent for the
+ * turn, the one in neither the conversation nor the queue now. Put back only when exactly one is.
+ */
+async function findUnsent(directory: string, sessionId: string) {
+  const candidates = [...(starting.has(sessionId) ? [starting.get(sessionId)!] : []), ...(sentQueued.get(sessionId) ?? [])]
+  starting.delete(sessionId)
+  let view: View
+  try {
+    view = await bridge.transcript(directory, sessionId)
+  } catch {
+    return
+  }
+  const said = (u: Unsent) => commentsText(u.text, u.comments).trim()
+  const users = view.items.flatMap((i) => (i.kind === "user" ? [i.text.trim()] : []))
+  const waiting = (view.queued ?? []).map((q) => q.text.trim())
+  const missing = candidates.filter((u) => !users.includes(said(u)) && !waiting.includes(said(u)))
+  if (missing.length !== 1) return
+  const [u] = missing
+  const list = sentQueued.get(sessionId)
+  if (list?.includes(u)) list.splice(list.indexOf(u), 1)
+  restoreDraft(sessionId, u)
+  const o = state.open
+  if (o?.sessionId === sessionId) {
+    setOpen((v) => (v.status.kind === "failed" ? { status: { ...v.status, back: true } } : {}), sessionId)
+  } else {
+    const title = state.sessions.find((r) => r.id === sessionId)?.title
+    set({ notice: `Your message${title ? ` to “${title}”` : ""} didn’t send. It’s back in that session’s message box.` })
+  }
+}
+
 /** Kinds of failure that sending the same message again won't fix. */
 const NO_RETRY = new Set<ErrorKind>(["limit", "auth", "model", "elsewhere"])
 
@@ -2047,13 +2096,16 @@ function onEvent(e: CoreEvent) {
   if (state.peek?.sessionId === id && (e.type === "changed" || e.type === "done" || e.type === "failed"))
     void refreshPeek()
   switch (e.type) {
-    case "started":
-      // The oldest send's turn started: it is delivered.
-      dropUnsent(id)
+    case "started": {
+      // The oldest send's turn started. It isn't delivered yet: the core may still refuse it
+      // (a hook, no route to the model), and then the turn ends `failed` + `unsent`.
+      const took = dropUnsent(id)
+      if (took) starting.set(id, took)
       set((s) => ({ busy: toggle(s.busy, id, true), offline: false }))
       if (here)
         setOpen((o) => ({ status: { kind: "working" }, stopping: false, started: isRunning(o) && o.started ? o.started : Date.now() }), id)
       break
+    }
     case "text":
     case "reasoning":
       if (!here) break
@@ -2115,10 +2167,16 @@ function onEvent(e: CoreEvent) {
     case "done":
     case "failed":
     case "interrupted": {
-      // A message that never started goes back where it was typed; any other was delivered.
-      const back = e.type === "failed" && e.unsent ? putBack(id) : (settleUnsent(id), false)
-      const hook = e.type === "failed" && !!e.unsent && promptBlocked.has(id)
+      const unsentFail = e.type === "failed" && !!e.unsent
+      // Messages a running turn took into its queue: one of them may be what the core refused.
+      const queuedSent = unsentFail && !!sentQueued.get(id)?.length
+      // A message that never started goes back where it was typed; any other was delivered. With
+      // queued messages in play the transcript tells which one it was (below).
+      const back = unsentFail && !queuedSent ? putBack(id) : (settleUnsent(id), false)
+      if (!unsentFail || !queuedSent) starting.delete(id)
+      const hook = unsentFail && promptBlocked.has(id)
       if (e.type === "failed") promptBlocked.delete(id)
+      if (queuedSent) void findUnsent(directoryOf(id), id)
       // Its asks end with it.
       for (const p of state.permissions) if (p.sessionId === id || p.rootId === id) closed.add(p.requestId)
       for (const q of state.questions) if (q.sessionId === id || q.rootId === id) closed.add(q.requestId)
@@ -2145,6 +2203,7 @@ function onEvent(e: CoreEvent) {
                       retry: !back && !e.unsent && !(e.kind && NO_RETRY.has(e.kind)),
                       errorKind: e.kind,
                       hook,
+                      back,
                     }
                   : { kind: "stopped", reason: e.reason },
           },
@@ -2159,6 +2218,7 @@ function onEvent(e: CoreEvent) {
       break
     }
     case "refused":
+      starting.delete(id)
       set((s) => ({ busy: toggle(s.busy, id, false) }))
       // Kept in that session's draft, open or not; the notice says so when it isn't.
       putBack(id)
@@ -2170,6 +2230,7 @@ function onEvent(e: CoreEvent) {
       break
     case "settled":
       settleUnsent(id)
+      starting.delete(id)
       set((s) => ({ busy: toggle(s.busy, id, false) }))
       if (here) {
         setOpen((o) => (isRunning(o) ? { live: [], status: { kind: "idle" }, stopping: false, started: null } : {}), id)

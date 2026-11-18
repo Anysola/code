@@ -379,14 +379,28 @@ fn tool(call: &str, name: &str, state: ToolState, directory: &str) -> Value {
             metadata,
         } => ("error", input, content, metadata, Some(error.message)),
     };
+    // The notes the core adds for the model next to the result repeat what the item's hook
+    // lines say, so they stay out of the output and the error.
+    let hooked = metadata
+        .get("hooks")
+        .and_then(Value::as_array)
+        .is_some_and(|hooks| !hooks.is_empty());
+    let note = |text: &str| hooked && HOOK_NOTES.iter().any(|n| text.starts_with(n));
     let output: String = content
         .iter()
         .filter_map(|c| match c {
-            ToolContent::Text { text } => Some(text.as_str()),
+            ToolContent::Text { text } if !note(text) => Some(text.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let error = error.map(|e| {
+        if hooked {
+            without_notes(&e).to_string()
+        } else {
+            e
+        }
+    });
     let mut item = json!({
         "kind": "tool",
         "id": call,
@@ -406,6 +420,22 @@ fn tool(call: &str, name: &str, state: ToolState, directory: &str) -> Value {
         item["hooks"] = Value::Array(hooks.iter().map(hook_run).collect());
     }
     item
+}
+
+/// How the core starts the notes it adds for the model from a call's hooks (`hooks::fire::notes`).
+const HOOK_NOTES: [&str; 3] = [
+    "PreToolUse hook context: ",
+    "PostToolUse hook feedback: ",
+    "PostToolUse hook context: ",
+];
+
+/// A tool's error without the hook notes appended to it.
+fn without_notes(error: &str) -> &str {
+    HOOK_NOTES
+        .iter()
+        .filter_map(|n| error.find(&format!("\n\n{n}")))
+        .min()
+        .map_or(error, |at| &error[..at])
 }
 
 /// A `metadata.hooks` entry as `HookRun`, each field present.
@@ -632,6 +662,46 @@ mod tests {
         let second = json!([{"content": "a", "status": "completed"}]);
         assert_eq!(todos(&[list(first), list(second.clone())]), second);
         assert_eq!(todos(&[]), json!([]));
+    }
+
+    #[test]
+    fn hook_notes_stay_out_of_the_output_and_the_error() {
+        let hooks = json!({"hooks": [{"event": "PostToolUse", "command": "./lint.sh",
+                                      "outcome": "feedback", "message": "1 warning"}]});
+        let text = |t: &str| ToolContent::Text { text: t.into() };
+        let done = tool(
+            "c1",
+            "shell",
+            ToolState::Completed {
+                input: json!({"command": "ls"}),
+                content: vec![text("a.txt"), text("PostToolUse hook feedback: 1 warning")],
+                metadata: hooks.as_object().cloned().unwrap(),
+            },
+            "/p",
+        );
+        assert_eq!(done["output"], "a.txt");
+        let failed = |metadata: Value| {
+            tool(
+                "c2",
+                "edit",
+                ToolState::Error {
+                    input: json!({"path": "a.txt"}),
+                    error: anysola_core::gateway::error::SessionError::new(
+                        "tool.execution",
+                        "Could not find oldString\n\nPostToolUse hook feedback: 1 warning",
+                    ),
+                    content: Vec::new(),
+                    metadata: metadata.as_object().cloned().unwrap(),
+                },
+                "/p",
+            )
+        };
+        assert_eq!(failed(hooks.clone())["error"], "Could not find oldString");
+        // Without hooks on the item the text is the tool's own.
+        assert_eq!(
+            failed(json!({}))["error"],
+            "Could not find oldString\n\nPostToolUse hook feedback: 1 warning"
+        );
     }
 
     #[test]

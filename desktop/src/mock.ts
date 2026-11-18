@@ -22,7 +22,9 @@
  * Hooks: `?hooks=none|user|waiting|allowed|refused|managed|all|off|locked|emptied` picks what the folder has (`user`
  * by default; `emptied`: a project file whose allowed hooks were removed; `locked`: off through a variable, so the switch can't turn them on; `waiting` shows the card for a project's hooks). `?state=hooks` has tool rows a hook
  * blocked, spoke about or failed on, and a hook's error notice; in `hook-blocked` a hook stops
- * the message sent (`&blocks=2`: two hooks do).
+ * the message sent (`&blocks=2`: two hooks do), in the core's order: `started`, then the
+ * hook, then `failed` + `unsent`. `hook-blocked-queued`: a turn runs, and a hook stops the message
+ * sent into its queue when the turn takes it.
  *
  * Settings: `?settings=<section>` opens one; `?fail=usage,mcpList` makes those calls fail,
  * `?delay=800` slows every settings call, `?theme=light` previews a theme, `?empty=1` empties
@@ -822,7 +824,7 @@ export function mockBridge(): Bridge {
       transcripts.get("ses_pricing")!.map((i) => (i.kind === "user" && i.id === "m1" ? { ...i, elapsed: 3 * 60_000 + 5_000 } : i))
     )
   const kind = (new URLSearchParams(location.search).get("kind") ?? undefined) as ErrorKind | undefined
-  const BUSY = ["crowded", "approval", "gone", "running", "question", "long", "queue", "background", "context", "updating", "closing", "restored"]
+  const BUSY = ["hook-blocked-queued", "crowded", "approval", "gone", "running", "question", "long", "queue", "background", "context", "updating", "closing", "restored"]
   /** Sessions with a turn running, and what waits in their queues. */
   const running = new Set<string>(BUSY.includes(state) ? ["ses_pricing"] : [])
   const queues = new Map<string, Queued[]>()
@@ -1236,22 +1238,46 @@ export function mockBridge(): Bridge {
         return { sessionId: id, queued: false }
       }
       if (state === "stuck") return { sessionId: id, queued: false }
-      if (state === "hook-blocked") {
-        // The hook ran as the message entered the session: it never became part of it.
-        await wait(300)
-        // Two hooks say no: one event each, and `failed` carries both reasons.
-        const reasons = [
+      const blockReasons = () =>
+        [
           "This message has what looks like an API key (sk-…). Remove it and send again.",
           "Messages in this project stay under 2,000 characters.",
         ].slice(0, params.get("blocks") === "2" ? 2 : 1)
-        for (const message of reasons)
-          emit({ type: "hook", sessionId: id, event: "UserPromptSubmit", command: "~/bin/redact-secrets", outcome: "blocked", message })
-        emit({ type: "failed", sessionId: id, unsent: true, kind: "other", error: reasons.join("\n") })
+      if (state === "hook-blocked-queued" && running.has(id)) {
+        // Queued behind the running turn; when the turn takes it, the hook says no, the
+        // message is dropped from the queue and the turn ends.
+        const q: Queued = { id: `q${Date.now()}`, text, images: files.length, delivery: "queue" }
+        queues.set(id, [...(queues.get(id) ?? []), q])
+        emit({ type: "changed", sessionId: id })
+        setTimeout(() => {
+          queues.set(id, (queues.get(id) ?? []).filter((x) => x.id !== q.id))
+          running.delete(id)
+          const reasons = blockReasons()
+          for (const message of reasons)
+            emit({ type: "hook", sessionId: id, event: "UserPromptSubmit", command: "~/bin/redact-secrets", outcome: "blocked", message })
+          emit({ type: "failed", sessionId: id, unsent: true, kind: "other", error: reasons.join("\n") })
+        }, 1200)
+        return { sessionId: id, queued: true }
+      }
+      if (state === "hook-blocked") {
+        // The turn starts, then the hook runs as the message enters the session: it never
+        // became part of it.
+        await wait(200)
+        emit({ type: "started", sessionId: id })
+        await wait(50)
+        setTimeout(() => {
+          const reasons = blockReasons()
+          for (const message of reasons)
+            emit({ type: "hook", sessionId: id, event: "UserPromptSubmit", command: "~/bin/redact-secrets", outcome: "blocked", message })
+          emit({ type: "failed", sessionId: id, unsent: true, kind: "other", error: reasons.join("\n") })
+        }, 150)
         return { sessionId: id, queued: false }
       }
       if (state === "unsent" || (state === "offline" && !running.has(id))) {
-        // The turn never started: the message wasn't kept, the window puts it back.
+        // The message wasn't kept, the window puts it back. The core starts the turn before it
+        // finds there's no route (`unsent`), or doesn't reach that far (`offline`).
         await wait(300)
+        if (state === "unsent") emit({ type: "started", sessionId: id })
         emit({
           type: "failed",
           sessionId: id,
