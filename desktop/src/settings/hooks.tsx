@@ -7,7 +7,7 @@ import { ChevronRight, Plus } from "lucide-react"
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 
 import type { Hook, HookDraft, HookEvent, HookFile, Hooks } from "../bridge"
-import { currentBridge, setHooks, useStore } from "../store"
+import { currentBridge, setHooks, trustAnswered, useStore } from "../store"
 import { btn, cn, folderKey, Spinner } from "../ui"
 import { FolderSection, OpenPath } from "./agent"
 import { Choice, Confirm, Group, Loaded, message, Row, Segmented, tilde, Toggle, type Load } from "./controls"
@@ -463,7 +463,11 @@ function ProjectFile({
     setError(null)
     currentBridge()
       .hooksTrust(directory, f.path, f.digest, allow)
-      .then(onList, (e) => setError(message(e)))
+      .then((h) => {
+        onList(h)
+        // The conversation's card asks about the same file.
+        trustAnswered(["hooks"])
+      }, (e) => setError(message(e)))
       .finally(() => setBusy(null))
   }
   return (

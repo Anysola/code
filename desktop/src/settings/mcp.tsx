@@ -5,11 +5,13 @@
 import { Plus, X } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
-import type { McpDraft, McpServer } from "../bridge"
+import type { McpDraft, McpServer, TrustItem } from "../bridge"
+import { answerTrust, useTrust } from "../hooks-card"
 import { currentBridge, openExternal, settingsFolder, useStore } from "../store"
-import { btn, cn, sameFolder, Spinner, Tooltip } from "../ui"
+import { btn, cn, folderKey, sameFolder, Spinner, Tooltip } from "../ui"
 import { OpenPath } from "./agent"
-import { Confirm, Failed, FolderLine, Group, Loaded, message, Section, Segmented, tilde, Toggle, useLoad } from "./controls"
+import { shortPath } from "./hooks"
+import { Confirm, Failed, FolderLine, Group, Loaded, message, Row, Section, Segmented, tilde, Toggle, useLoad } from "./controls"
 
 const STATUS: Record<McpServer["status"], { word: string; mark: string }> = {
   connected: { word: "Connected", mark: "bg-success" },
@@ -17,6 +19,8 @@ const STATUS: Record<McpServer["status"], { word: string; mark: string }> = {
   disabled: { word: "Off", mark: "bg-muted/40" },
   failed: { word: "Failed", mark: "bg-danger" },
   needs_auth: { word: "Sign in needed", mark: "bg-warning" },
+  // Under its file's question, which says why.
+  waiting: { word: "Not started", mark: "bg-muted/40" },
 }
 
 const CONFIG_FILE = "~/.anysola/config.json"
@@ -43,6 +47,8 @@ export function McpSection() {
 function Servers({ directory }: { directory: string }) {
   const changed = useStore((s) => s.mcpChanged)
   const load = useLoad(() => currentBridge().mcpList(directory), [directory])
+  // A project's servers wait for an answer about their file: the answers are read alongside.
+  const trust = useTrust(directory)
   const [adding, setAdding] = useState(false)
   const first = useRef(true)
   // The core says a server changed (connected, failed, signed in): read the list again.
@@ -56,12 +62,26 @@ function Servers({ directory }: { directory: string }) {
   }, [changed])
   return (
     <Loaded load={load} rows={4}>
-      {(servers) => (
+      {(all) => {
+        // A project's servers that wait are asked about by file, above the rest: one answer each.
+        const servers = all.filter((s) => s.status !== "waiting")
+        const files = new Map<string, McpServer[]>()
+        for (const s of all) if (s.status === "waiting") files.set(s.source, [...(files.get(s.source) ?? []), s])
+        return (
         <>
+          {[...files.entries()].map(([source, list]) => (
+            <ProjectServers
+              key={source}
+              source={source}
+              servers={list}
+              directory={directory}
+              item={trust.data?.find((i) => i.kind === "mcp" && folderKey(i.path) === folderKey(source))}
+            />
+          ))}
           {adding && (
             <AddForm
               directory={directory}
-              taken={servers.map((s) => s.name)}
+              taken={all.map((s) => s.name)}
               onDone={(next) => {
                 setAdding(false)
                 if (next) load.set(next)
@@ -105,12 +125,22 @@ function Servers({ directory }: { directory: string }) {
             )}
           </Group>
         </>
-      )}
+        )
+      }}
     </Loaded>
   )
 }
 
-function Server({ server: s, directory, onList }: { server: McpServer; directory: string; onList: (l: McpServer[]) => void }) {
+function Server({
+  server: s,
+  directory,
+  onList,
+}: {
+  server: McpServer
+  directory: string
+  /** Absent for a server that waits: nothing about it can change here until it is allowed. */
+  onList?: (l: McpServer[]) => void
+}) {
   const [busy, setBusy] = useState<null | "toggle" | "retry" | "signout">(null)
   const [error, setError] = useState<string | null>(null)
   // `starting`: the server's sign-in is being found (up to half a minute); then the browser's turn.
@@ -118,11 +148,12 @@ function Server({ server: s, directory, onList }: { server: McpServer; directory
   const waiting = useRef(0)
   const status = STATUS[s.status]
   const on = s.status !== "disabled"
+  const waits = s.status === "waiting"
   const run = (what: NonNullable<typeof busy>, call: () => Promise<McpServer[]>) => {
     setBusy(what)
     setError(null)
     call()
-      .then(onList, (e) => setError(message(e)))
+      .then(onList!, (e) => setError(message(e)))
       .finally(() => setBusy(null))
   }
   const signIn = async () => {
@@ -137,7 +168,7 @@ function Server({ server: s, directory, onList }: { server: McpServer; directory
       const list = await currentBridge().mcpSignInWait(directory, s.name)
       // Cancelled meanwhile: the window stopped waiting, so the answer goes unused.
       if (n !== waiting.current) return
-      onList(list)
+      onList!(list)
     } catch (e) {
       if (n === waiting.current) setError(message(e))
     } finally {
@@ -175,7 +206,7 @@ function Server({ server: s, directory, onList }: { server: McpServer; directory
           <span className="truncate font-mono text-xs text-muted" title={s.target}>
             {s.target}
           </span>
-          {!s.editable && (
+          {!s.editable && !waits && (
             <span className="text-2xs truncate text-muted" title={s.source}>
               Defined in <span className="font-mono">{tilde(s.source)}</span>
             </span>
@@ -210,23 +241,24 @@ function Server({ server: s, directory, onList }: { server: McpServer; directory
               action="Remove"
               run={async () => {
                 try {
-                  onList(await currentBridge().mcpRemove(directory, s.name))
+                  onList!(await currentBridge().mcpRemove(directory, s.name))
                 } catch (e) {
                   return message(e)
                 }
               }}
             />
           ) : (
-            <OpenPath path={s.source} />
+            !waits && <OpenPath path={s.source} />
           )}
-          <span className="ml-2 flex">
+          {/* Off or on is the project's to say once its servers are allowed. */}
+          {!waits && <span className="ml-2 flex">
             <Toggle
               label={on ? `Turn ${s.name} off` : `Turn ${s.name} on`}
               checked={on}
               disabled={busy !== null}
               onChange={(enable) => run("toggle", () => currentBridge().mcpEnable(directory, s.name, enable))}
             />
-          </span>
+          </span>}
         </div>
       </div>
       {signing && (
@@ -253,6 +285,75 @@ function Server({ server: s, directory, onList }: { server: McpServer; directory
       )}
       {error && <p className="text-dense text-danger select-text">{error}</p>}
     </div>
+  )
+}
+
+/**
+ * A project file's servers that wait: they start once the user allows that file's servers, here
+ * or on the conversation's card. One answer covers every server in the file.
+ */
+function ProjectServers({
+  source,
+  servers,
+  item,
+  directory,
+}: {
+  source: string
+  servers: McpServer[]
+  item?: TrustItem
+  directory: string
+}) {
+  const [busy, setBusy] = useState<boolean | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const refused = item?.decision === "denied"
+  const answer = (allow: boolean) => {
+    if (!item) return
+    setBusy(allow)
+    setError(null)
+    answerTrust(directory, [item], allow)
+      .catch((e) => setError(message(e)))
+      .finally(() => setBusy(null))
+  }
+  const n = servers.length
+  return (
+    <Group
+      label={
+        <>
+          This project <span className="ml-2 font-mono font-normal">{shortPath(source, directory)}</span>
+        </>
+      }
+      aside={<OpenPath path={source} small />}
+    >
+      <Row
+        label={
+          <span className="flex items-center gap-2">
+            <span className={cn("size-1.5 shrink-0 rounded-full", refused ? "bg-muted/60" : "bg-warning")} aria-hidden />
+            {refused ? "Not allowed" : "Waiting for you"}
+          </span>
+        }
+        hint={
+          refused
+            ? `You didn’t allow ${n === 1 ? "its server" : "its servers"}, so ${n === 1 ? "it doesn’t" : "they don’t"} start. Allow if you trust this project.`
+            : `${n === 1 ? "Its server starts" : `Its ${n} servers start`} on this computer once you allow ${n === 1 ? "it" : "them"}. Allow only if you trust this project.`
+        }
+      >
+        {busy !== null && <Spinner />}
+        {item && (
+          <button disabled={busy !== null} onClick={() => answer(true)} className={btn(refused ? "secondary" : "primary", "sm")}>
+            Allow
+          </button>
+        )}
+        {item && !refused && (
+          <button disabled={busy !== null} onClick={() => answer(false)} className={btn("ghost", "sm", "text-muted")}>
+            Don’t allow
+          </button>
+        )}
+      </Row>
+      {servers.map((s) => (
+        <Server key={s.name} server={s} directory={directory} />
+      ))}
+      {error && <p className="text-dense px-4 py-2.5 text-danger select-text">{error}</p>}
+    </Group>
   )
 }
 

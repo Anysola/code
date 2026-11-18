@@ -9,6 +9,7 @@ import { Fragment, useEffect, useState, type ReactNode } from "react"
 import type { AgentConfig, AgentConfigPatch, Origin, PermissionRule, SavedPermission, Sources } from "../bridge"
 import { APP_COMMANDS } from "../composer"
 import { setPref, usePrefs } from "../prefs"
+import { answerTrust, useTrust } from "../hooks-card"
 import { currentBridge, settingsFolder, useStore } from "../store"
 import { btn, cn, folderName, sameFolder, Spinner } from "../ui"
 import {
@@ -27,6 +28,7 @@ import {
   useLoad,
   Value,
 } from "./controls"
+import { shortPath } from "./hooks"
 
 /** The folder the agent sections read, and whether it is the app's own; or why it can't be read. */
 function useFolder(): { directory: string; own: boolean } | { error: string; retry: () => void } | null {
@@ -643,6 +645,7 @@ function Advanced({ directory }: { directory: string }) {
               />
               <Shell config={c} hint={over("shell")} onChange={(shell) => change({ shell })} />
             </Group>
+            <ProjectFormatters directory={directory} />
             {c.warnings.length > 0 && (
               <Group label="The config loader says">
                 {c.warnings.map((w, i) => (
@@ -656,6 +659,45 @@ function Advanced({ directory }: { directory: string }) {
         )
       }}
     </Loaded>
+  )
+}
+
+/** A project's formatters that aren't allowed: they run on edits only once they are. */
+function ProjectFormatters({ directory }: { directory: string }) {
+  const trust = useTrust(directory)
+  const items = (trust.data ?? []).filter((i) => i.kind === "formatter" && i.decision !== "allowed")
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  if (items.length === 0) return null
+  return (
+    <Group label="This project’s formatters" note={error ? <span className="text-danger">{error}</span> : undefined}>
+      {items.map((i) => (
+        <Row
+          key={i.path}
+          label={<span className="font-mono text-xs break-all">{shortPath(i.path, directory)}</span>}
+          hint={
+            i.decision === null
+              ? "Waiting for your answer. Until then, edits aren’t formatted the way this file says."
+              : "Not allowed. Edits aren’t formatted the way this file says."
+          }
+        >
+          {busy === i.path && <Spinner />}
+          <button
+            disabled={busy !== null}
+            onClick={() => {
+              setBusy(i.path)
+              setError(null)
+              answerTrust(directory, [i], true)
+                .catch((e) => setError(message(e)))
+                .finally(() => setBusy(null))
+            }}
+            className={btn("secondary", "sm")}
+          >
+            Allow
+          </button>
+        </Row>
+      ))}
+    </Group>
   )
 }
 

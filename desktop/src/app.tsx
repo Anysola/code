@@ -5,7 +5,7 @@ import { checkUpdated, resumeDeletes, setReviewing, useChrome } from "./chrome"
 import { Composer, Tasks } from "./composer"
 import { BackgroundRow, Banner, CloseConfirm, ContextMeter, FaultScreen, QueueChips } from "./conversation"
 import { FormCard } from "./form-card"
-import { HookTrustCards } from "./hooks-card"
+import { TrustCards } from "./hooks-card"
 import { SessionHeader, SidebarToggle, Toasts } from "./header"
 import { Review } from "./review"
 import { Settings, sectionLabel } from "./settings"
@@ -127,8 +127,9 @@ function Conversation({ open }: { open: Open }) {
   const pendingForms = useStore((s) => s.forms)
   // A form belongs to a folder: it shows in whichever session of that folder is open.
   const forms = useMemo(() => pendingForms.filter((f) => sameFolder(f.directory, open.directory)), [pendingForms, open.directory])
-  // A project's hooks waiting for an answer: their card counts as output, so the view follows it.
-  useStore((s) => s.hooks[folderKey(open.directory)]?.files.filter((f) => f.decision === null).length ?? 0)
+  // What a project's files want to run, waiting for an answer: their card counts as output, so
+  // the view follows it.
+  useStore((s) => s.trust[folderKey(open.directory)]?.filter((i) => i.decision === null).length ?? 0)
   const ref = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
   /** Away from the bottom; `fresh` once output arrived since. */
@@ -182,7 +183,7 @@ function Conversation({ open }: { open: Open }) {
           ) : !open.sessionId && open.items.length === 0 && open.live.length === 0 && open.status.kind === "idle" ? (
             <>
               <NewSessionStart open={open} />
-              <HookTrustCards directory={open.directory} className="mt-6 flex flex-col gap-5" />
+              <TrustCards directory={open.directory} className="mt-6 flex flex-col gap-5" />
               {forms.length > 0 && (
                 <div className="mt-6 flex flex-col gap-5">
                   {forms.map((f) => (

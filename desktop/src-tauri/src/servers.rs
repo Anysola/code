@@ -7,8 +7,9 @@
 
 use std::sync::Arc;
 
-use anysola_core::api::Core;
+use anysola_core::api::{Core, TrustItem, TrustKind};
 use anysola_core::config;
+use anysola_core::hooks::display;
 use anysola_core::mcp::{Mcp, Status};
 use anysola_mcp::{Runtime, oauth};
 use serde::Deserialize;
@@ -107,7 +108,66 @@ fn list(app: &App, core: &Core, runtime: &Runtime) -> Answer {
             })
         })
         .collect();
+    let running: Vec<String> = runtime.servers().into_iter().map(|s| s.name).collect();
+    let documents: Vec<(&str, &Map<String, Value>)> = loaded.config.documents().collect();
+    let mut servers = servers;
+    servers.extend(waiting(&core.trust_items(), &documents, &running));
     Ok(Value::Array(servers))
+}
+
+/// A project file's server as written: `mcp.servers.<name>`, or the 0.5.x `mcp.<name>`.
+fn written<'a>(data: &'a Map<String, Value>, name: &str) -> Option<&'a Value> {
+    let mcp = data.get("mcp")?;
+    mcp.get("servers")
+        .and_then(|s| s.get(name))
+        .or_else(|| mcp.get(name).filter(|s| s.is_object() && name != "servers"))
+}
+
+/// The servers project files define whose MCP section isn't allowed (yet): not running, listed
+/// so the user sees them and can allow them. A server of the same name from elsewhere runs as
+/// defined there and is listed as that one.
+fn waiting(
+    items: &[TrustItem],
+    documents: &[(&str, &Map<String, Value>)],
+    running: &[String],
+) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    for item in items
+        .iter()
+        .filter(|i| i.kind == TrustKind::Mcp && i.decision != Some(true))
+    {
+        let Some((_, data)) = documents.iter().find(|(path, _)| *path == item.path) else {
+            continue;
+        };
+        for entry in &item.entries {
+            let Some(server) = written(data, &entry.label) else {
+                // The section's timeouts, not a server.
+                continue;
+            };
+            let listed = running.contains(&entry.label)
+                || out.iter().any(|s| s["name"] == entry.label.as_str());
+            if listed {
+                continue;
+            }
+            let remote = server["type"] == "remote"
+                || (server.get("type").is_none() && server.get("url").is_some());
+            out.push(json!({
+                "name": entry.label,
+                "kind": if remote { "remote" } else { "local" },
+                // Repository text: control characters written out.
+                "target": display(&entry.command),
+                "status": "waiting",
+                "error": null,
+                "source": item.path,
+                "editable": false,
+                "oauth": false,
+                "signedIn": false,
+                "tools": 0,
+                "prompts": 0,
+            }));
+        }
+    }
+    out
 }
 
 /// Where a server of the global file is: `mcp.servers.<name>`, or the 0.5.x `mcp.<name>`.
@@ -555,6 +615,69 @@ mod tests {
             "The sign-in took too long and was stopped. Try again."
         );
         assert_eq!(plain("Something else"), "Something else");
+    }
+
+    #[test]
+    fn servers_waiting_for_approval_are_listed() {
+        let item = |path: &str, decision, entries: Vec<(&str, &str)>| TrustItem {
+            path: path.into(),
+            kind: TrustKind::Mcp,
+            digest: "d".into(),
+            decision,
+            standing: false,
+            entries: entries
+                .into_iter()
+                .map(|(label, command)| anysola_core::api::TrustEntry {
+                    label: label.into(),
+                    command: command.into(),
+                    detail: None,
+                })
+                .collect(),
+        };
+        let project = json!({"mcp": {
+            "servers": {"docs": {"type": "remote", "url": "https://h/mcp"},
+                        "fs": {"type": "local", "command": ["npx", "fs"]},
+                        "mine": {"type": "local", "command": ["x"]}},
+            "old": {"type": "local", "command": ["old\u{202e}"]},
+            "timeout": 5}});
+        let project = project.as_object().unwrap();
+        let allowed = json!({"mcp": {"servers": {"ok": {"type": "local", "command": ["y"]}}}});
+        let allowed = allowed.as_object().unwrap();
+        let documents = [
+            ("/p/anysola.json", project),
+            ("/p/.anysola/anysola.json", allowed),
+        ];
+        let items = [
+            item(
+                "/p/anysola.json",
+                None,
+                vec![
+                    ("docs", "https://h/mcp"),
+                    ("fs", "npx fs"),
+                    ("mine", "x"),
+                    ("old", "old\u{202e}"),
+                    ("MCP timeouts", "{\"catalog\":5}"),
+                ],
+            ),
+            item("/p/.anysola/anysola.json", Some(true), vec![("ok", "y")]),
+        ];
+        let rows = waiting(&items, &documents, &["mine".to_string()]);
+        let names: Vec<_> = rows.iter().map(|r| r["name"].as_str().unwrap()).collect();
+        assert_eq!(
+            names,
+            ["docs", "fs", "old"],
+            "the user's own `mine` runs as theirs"
+        );
+        assert_eq!(
+            rows[0],
+            json!({"name": "docs", "kind": "remote", "target": "https://h/mcp", "status": "waiting",
+                   "error": null, "source": "/p/anysola.json", "editable": false, "oauth": false,
+                   "signedIn": false, "tools": 0, "prompts": 0})
+        );
+        assert_eq!(rows[1]["kind"], "local");
+        assert!(!rows[2]["target"].as_str().unwrap().contains('\u{202e}'));
+        let refused = [item("/p/anysola.json", Some(false), vec![("fs", "npx fs")])];
+        assert_eq!(waiting(&refused, &documents, &[]).len(), 1);
     }
 
     #[test]

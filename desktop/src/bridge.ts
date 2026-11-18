@@ -215,7 +215,8 @@ export type McpServer = {
   kind: "remote" | "local"
   /** The address, or the command line. */
   target: string
-  status: "connected" | "pending" | "disabled" | "failed" | "needs_auth"
+  /** `waiting`: a project file defines it and that file's MCP servers are not allowed (yet). */
+  status: "connected" | "pending" | "disabled" | "failed" | "needs_auth" | "waiting"
   error: string | null
   /** The file that defines it. */
   source: string
@@ -298,6 +299,26 @@ export type HookFile = {
    * listed ones: until the change is allowed, or, once it was refused, until the app restarts.
    */
   standing?: boolean
+}
+
+/** What a project file can make the app run, each approved on its own. */
+export type TrustKind = "hooks" | "mcp" | "formatter"
+
+/** One thing a project file would run. `command`: a command line or a URL; `detail`: the rest worth knowing. */
+export type TrustEntry = { label: string; command: string; detail: string | null }
+
+/**
+ * A project file's hooks, MCP servers or formatters as they are now (`digest`). They are applied
+ * only once the user allowed this content; `decision` is null until the user answered for it.
+ * `standing` (hooks only): the version allowed before a change is running in its place.
+ */
+export type TrustItem = {
+  path: string
+  kind: TrustKind
+  digest: string
+  decision: "allowed" | "denied" | null
+  standing: boolean
+  entries: TrustEntry[]
 }
 
 export type Hooks = {
@@ -511,6 +532,8 @@ export type CoreEvent =
   | ({ type: "hook"; sessionId: string } & HookRun)
   /** The folder's hooks changed, or a project file's hooks now wait for the user's answer. */
   | { type: "hooks"; directory: string }
+  /** What the folder's project files want to run changed, or an answer about it was recorded. */
+  | { type: "trust"; directory: string }
   | { type: "notice"; message: string }
   /** The user closed the window while `busy` turns run; the window asks, then calls `quit`. */
   | { type: "closeRequested"; busy: number }
@@ -657,6 +680,15 @@ export type Bridge = {
   /** Turns the user's and the project's hooks off or back on. */
   hooksDisable(directory: string, disabled: boolean): Promise<Hooks>
 
+  /** Everything the folder's project files want to run, with the user's answer for each. */
+  trust(directory: string): Promise<TrustItem[]>
+  /** Records one answer for each item as it is now (`digest`); a stale one fails the call. */
+  trustAnswer(
+    directory: string,
+    items: { path: string; kind: TrustKind; digest: string }[],
+    allow: boolean
+  ): Promise<TrustItem[]>
+
   permissions(directory: string): Promise<{ saved: SavedPermission[]; rules: PermissionRule[] }>
   permissionForget(projectId: string, action: string, resource: string): Promise<SavedPermission[]>
   /** Every saved answer of one project. */
@@ -765,6 +797,8 @@ function tauriBridge(): Bridge {
     hookRemove: (directory, id) => invoke("hook_remove", { directory, id }),
     hooksTrust: (directory, path, digest, allow) => invoke("hooks_trust", { directory, path, digest, allow }),
     hooksDisable: (directory, disabled) => invoke("hooks_disable", { directory, disabled }),
+    trust: (directory) => invoke("trust", { directory }),
+    trustAnswer: (directory, items, allow) => invoke("trust_answer", { directory, items, allow }),
     sources: (directory) => invoke("sources", { directory }),
     personalInstructions: () => invoke("personal_instructions"),
     savePersonalInstructions: (text) => invoke("save_personal_instructions", { text }),

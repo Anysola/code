@@ -150,6 +150,7 @@ pub fn to_json(event: &Event, directory: &str) -> Option<Value> {
                    "outcome": outcome.as_str(), "message": message})
         }
         Event::HooksChanged => json!({"type": "hooks", "directory": directory}),
+        Event::TrustChanged => json!({"type": "trust", "directory": directory}),
         // The window re-reads the folder's server list.
         Event::McpStatusChanged { .. } => json!({"type": "mcp", "directory": directory}),
         // The forwarder names the root session the window has open.
@@ -409,6 +410,10 @@ mod tests {
         assert_eq!(
             to_json(&Event::HooksChanged, "/p").unwrap(),
             json!({"type": "hooks", "directory": "/p"})
+        );
+        assert_eq!(
+            to_json(&Event::TrustChanged, "/p").unwrap(),
+            json!({"type": "trust", "directory": "/p"})
         );
         let blocked = failed(anysola_core::hooks::BLOCKED, "No secrets in prompts", true);
         assert_eq!(

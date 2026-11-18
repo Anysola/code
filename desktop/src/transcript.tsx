@@ -29,7 +29,7 @@ import remarkGfm from "remark-gfm"
 import type { FileDiff, FormRequest, HookRun, Item } from "./bridge"
 import { duration, Elapsed } from "./conversation"
 import { FormCard } from "./form-card"
-import { HookTrustCards } from "./hooks-card"
+import { TrustCards } from "./hooks-card"
 import { copyPath } from "./header"
 import { getPrefs, isSendKey, sendKeyLabel, usePrefs } from "./prefs"
 import {
@@ -144,7 +144,7 @@ export function Transcript({
         {/* Reasoning isn't shown: the gateway sends it summarized or empty, so a "Thought" row
             opened onto nothing. The status line says the model is at work meanwhile. */}
         {open.live.map((l) => l.kind === "text" && <Prose key={l.key} text={l.text} />)}
-        {!readOnly && <HookTrustCards directory={open.directory} className="flex flex-col gap-5" />}
+        {!readOnly && <TrustCards directory={open.directory} className="flex flex-col gap-5" />}
         {permissions.map((p, i) => (
           // Enter and Escape answer the first ask; the keys show on that one only.
           <PermissionCard key={p.requestId} permission={p} keys={i === 0} />

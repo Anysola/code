@@ -19,6 +19,8 @@ import {
   type FormRequest,
   type GitStatus,
   type Hooks,
+  type TrustItem,
+  type TrustKind,
   type Info,
   type Item,
   type Mode,
@@ -203,6 +205,10 @@ export type State = {
   hooksChanged: number
   /** Each folder's hooks as last read (by `folderKey`), shared by Settings and the conversation. */
   hooks: Record<string, Hooks>
+  /** Counts the core's `trust` events and the answers given here: what waits is read again. */
+  trustChanged: number
+  /** What each folder's project files want to run (by `folderKey`), as last read. */
+  trust: Record<string, TrustItem[]>
   /** Sessions kept at the top of the sidebar, and project groups folded shut (by `folderKey`). */
   pinned: Set<string>
   collapsed: Set<string>
@@ -276,6 +282,8 @@ let state: State = {
   mcpChanged: 0,
   hooksChanged: 0,
   hooks: {},
+  trustChanged: 0,
+  trust: {},
   scratch: null,
   pinned: readSet("anysola.pinned"),
   // Folded projects by folder key; older entries were stored as spelled.
@@ -2049,6 +2057,9 @@ function onEvent(e: CoreEvent) {
     case "hooks":
       set((s) => ({ hooksChanged: s.hooksChanged + 1 }))
       return
+    case "trust":
+      set((s) => ({ trustChanged: s.trustChanged + 1 }))
+      return
     case "hook":
       // A blocked message comes back as `failed` + `unsent` right after: its line says why.
       // Several hooks can block one message: each sends its reason, `failed` has them all.
@@ -2247,6 +2258,23 @@ function onEvent(e: CoreEvent) {
       void loadSessions()
       break
   }
+}
+
+/** What a folder's project files want to run, as just read or answered. */
+export function setTrust(directory: string, items: TrustItem[]) {
+  set((s) => ({ trust: { ...s.trust, [folderKey(directory)]: items } }))
+}
+
+/**
+ * An answer about a project file was recorded here: every view that shows what it answered reads
+ * again (the card, Settings' hooks and servers), whether or not the core's events follow.
+ */
+export function trustAnswered(kinds: TrustKind[]) {
+  set((s) => ({
+    trustChanged: s.trustChanged + 1,
+    ...(kinds.includes("hooks") ? { hooksChanged: s.hooksChanged + 1 } : {}),
+    ...(kinds.includes("mcp") ? { mcpChanged: s.mcpChanged + 1 } : {}),
+  }))
 }
 
 /** A folder's hooks as just read or changed, for every view that shows them. */

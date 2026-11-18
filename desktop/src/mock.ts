@@ -19,12 +19,16 @@
  * those calls throw. `?slow=1500` makes a new session's first prompt take that long; `?hang=1`
  * makes Stop send nothing while the turn goes on. `window.__mockEmit(event)` sends a core event.
  *
- * Hooks: `?hooks=none|user|waiting|allowed|refused|managed|all|off|locked|emptied` picks what the folder has (`user`
+ * Hooks: `?hooks=none|user|waiting|allowed|refused|managed|all|off|locked|emptied|changed` picks what the folder has (`user`
  * by default; `emptied`: a project file whose allowed hooks were removed; `locked`: off through a variable, so the switch can't turn them on; `waiting` shows the card for a project's hooks). `?state=hooks` has tool rows a hook
  * blocked, spoke about or failed on, and a hook's error notice; in `hook-blocked` a hook stops
  * the message sent (`&blocks=2`: two hooks do), in the core's order: `started`, then the
  * hook, then `failed` + `unsent`. `hook-blocked-queued`: a turn runs, and a hook stops the message
  * sent into its queue when the turn takes it.
+ *
+ * What a project wants to run: `?trust=all` (a file with hooks, MCP servers and formatters, all
+ * waiting), `mcp` (only its servers wait), `formatter` (only its formatters, `true`), `refused` (its
+ * servers were refused). Answers go through `trustAnswer`, logged in `window.__trustCalls`.
  *
  * Settings: `?settings=<section>` opens one; `?fail=usage,mcpList` makes those calls fail,
  * `?delay=800` slows every settings call, `?theme=light` previews a theme, `?empty=1` empties
@@ -47,6 +51,8 @@ import type {
   HookFile,
   Hooks,
   Info,
+  TrustItem,
+  TrustKind,
   Item,
   McpServer,
   PendingRequest,
@@ -866,7 +872,8 @@ export function mockBridge(): Bridge {
   let config = config0()
   let data = empty ? { ...data0(), imported: null, sessions: 0 } : data0()
   // What the folder's hooks are: `?hooks=` picks the scene, the calls below change it.
-  const hookScene = empty ? "none" : (params.get("hooks") ?? "user")
+  const trustScene = empty ? null : params.get("trust")
+  const hookScene = empty ? "none" : (params.get("hooks") ?? (trustScene === "all" ? "waiting" : "user"))
   let userHooks: MockHook[] = hookScene === "none" ? [] : hookScene === "all" ? [...userHooks0, envHook] : [...userHooks0]
   let hookFiles = (
     {
@@ -875,6 +882,7 @@ export function mockBridge(): Bridge {
       refused: [projectFile("denied")],
       off: [projectFile("allowed")],
       all: [projectFile(null), parentFile("allowed")],
+      changed: [{ ...projectFile(null), standing: true }],
       emptied: [{ ...projectFile(null), digest: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", hooks: [], standing: true }],
     } as Record<string, ReturnType<typeof projectFile>[]>
   )[hookScene] ?? []
@@ -893,6 +901,85 @@ export function mockBridge(): Bridge {
       disabled: hooksOff,
     }
   }
+  // A project's MCP servers and formatters, each kind answered on its own (`?trust=`).
+  const PROJECT = `${WEB}/anysola.json`
+  const DOT = `${WEB}/.anysola/anysola.json`
+  const mcpFile = trustScene === "all" ? DOT : PROJECT
+  type Section = { path: string; kind: TrustKind; digest: string; decision: TrustItem["decision"] }
+  const sections: Section[] = empty
+    ? []
+    : [
+        {
+          path: mcpFile,
+          kind: "mcp",
+          digest: "4a1c9e2b7d3f5a8c0e6b2d4f1a3c5e7b9d0f2a4c6e8b1d3f5a7c9e0b2d4f6a8c",
+          decision: trustScene === "all" || trustScene === "mcp" ? null : trustScene === "refused" ? "denied" : "allowed",
+        },
+        ...(trustScene === "all" || trustScene === "formatter"
+          ? [
+              {
+                path: trustScene === "all" ? DOT : PROJECT,
+                kind: "formatter" as const,
+                digest: "7e3b1d5f9a2c4e6b8d0f1a3c5e7b9d2f4a6c8e0b1d3f5a7c9e2b4d6f8a0c1e3b",
+                decision: null,
+              },
+            ]
+          : []),
+      ]
+  if (!empty && (trustScene === "all" || trustScene === "mcp")) {
+    // A project with more than one server: one answer covers them all.
+    servers = servers.filter((x) => x.name !== "playwright")
+    const local = { kind: "local" as const, error: null, editable: false, oauth: false, signedIn: false, prompts: 0 }
+    servers.push(
+      { ...local, name: "playwright", target: "npx @playwright/mcp@0.0.41 --headless", status: "connected", source: mcpFile, tools: 21 },
+      {
+        ...local,
+        name: "storybook",
+        target: 'node ./tools/mcp/storybook-server.mjs --port 6006 --stories "apps/web/src/**/*.stories.tsx" --config .storybook --static-dir ./public',
+        status: "connected",
+        source: mcpFile,
+        tools: 6,
+      },
+      { ...local, kind: "remote", name: "sentry-dev", target: "https://sentry.dev.anysola.internal/mcp", status: "connected", source: mcpFile, tools: 9 }
+    )
+  } else if (!empty) servers = servers.map((x) => (x.name === "playwright" ? { ...x, source: mcpFile } : x))
+  const mcpSection = () => sections.find((x) => x.kind === "mcp")
+  /** The servers as the core shows them: a project's wait while its file's servers aren't allowed. */
+  const serversNow = () =>
+    servers.map((x) =>
+      x.source === mcpFile && mcpSection() && mcpSection()!.decision !== "allowed" ? { ...x, status: "waiting" as const, tools: null } : x
+    )
+  const trustNow = (): TrustItem[] => [
+    ...hookFiles.map((f) => ({
+      path: f.path,
+      kind: "hooks" as const,
+      digest: f.digest,
+      decision: f.decision,
+      standing: !!f.standing,
+      entries: f.hooks.map((h) => ({
+        label: h.matcher && h.matcher !== "*" ? `${h.event} (${h.matcher})` : h.event,
+        command: h.command,
+        detail: h.timeout !== (h.event === "UserPromptSubmit" ? 30 : 600) ? `timeout ${h.timeout} s` : null,
+      })),
+    })),
+    ...sections.map((x) => ({
+      ...x,
+      standing: false,
+      entries:
+        x.kind === "mcp"
+          ? servers
+              .filter((v) => v.source === x.path)
+              .map((v) => ({ label: v.name, command: v.target, detail: v.name === "sentry-dev" ? "headers: Authorization" : null }))
+          : trustScene === "formatter"
+            ? [{ label: "formatter", command: "the built-in formatters", detail: null }]
+            : [
+                { label: "prettier", command: "npx prettier --write $FILE", detail: "for .ts, .tsx, .css" },
+                { label: "gofmt", command: "the built-in gofmt formatter", detail: null },
+              ],
+    })),
+  ]
+  const trustCalls: unknown[] = []
+  ;(window as unknown as { __trustCalls: unknown[] }).__trustCalls = trustCalls
   const hookOf = (draft: HookDraft, id: string): MockHook => ({
     id,
     event: draft.event,
@@ -1452,7 +1539,7 @@ export function mockBridge(): Bridge {
         config = { ...config, ...patch }
         return config
       }),
-    mcpList: () => settle("mcpList", () => servers),
+    mcpList: () => settle("mcpList", serversNow),
     mcpAdd: (_directory, draft) =>
       settle("mcpAdd", () => {
         if (servers.some((s) => s.name === draft.name)) throw new Error(`A server named “${draft.name}” already exists.`)
@@ -1476,12 +1563,12 @@ export function mockBridge(): Bridge {
           servers = servers.map((s) => (s.name === draft.name ? { ...s, status: "connected", tools: 12 } : s))
           emit({ type: "mcp", directory: WEB })
         }, 1500)
-        return servers
+        return serversNow()
       }),
     mcpRemove: (_directory, name) =>
       settle("mcpRemove", () => {
         servers = servers.filter((s) => s.name !== name)
-        return servers
+        return serversNow()
       }),
     mcpEnable: (_directory, name, enabled) =>
       settle("mcpEnable", () => {
@@ -1492,7 +1579,7 @@ export function mockBridge(): Bridge {
               ? { ...s, status: s.oauth && !s.signedIn ? "needs_auth" : "connected", tools: s.oauth && !s.signedIn ? null : 17 }
               : { ...s, status: "disabled", tools: null, error: null }
         )
-        return servers
+        return serversNow()
       }),
     mcpRetry: (_directory, name) =>
       settle("mcpRetry", () => {
@@ -1503,19 +1590,19 @@ export function mockBridge(): Bridge {
           )
           emit({ type: "mcp", directory: WEB })
         }, 1200)
-        return servers
+        return serversNow()
       }),
     mcpSignIn: (_directory, name) =>
       settle("mcpSignIn", () => ({ url: `https://mcp.${name}.app/oauth/authorize?client_id=anysola`, instructions: null })),
     mcpSignInWait: async (_directory, name) => {
       await wait(4000)
       servers = servers.map((s) => (s.name === name ? { ...s, status: "connected", signedIn: true, tools: 23 } : s))
-      return servers
+      return serversNow()
     },
     mcpSignOut: (_directory, name) =>
       settle("mcpSignOut", () => {
         servers = servers.map((s) => (s.name === name ? { ...s, status: "needs_auth", signedIn: false, tools: null } : s))
-        return servers
+        return serversNow()
       }),
     sources: (directory) =>
       settle("sources", () => {
@@ -1563,7 +1650,28 @@ export function mockBridge(): Bridge {
         if (!file || file.digest !== digest) throw new Error("That file’s hooks changed since they were shown. Look at them again.")
         hookFiles = hookFiles.map((f) => (f.path === path ? { ...f, decision: allow ? "allowed" : "denied" } : f))
         emit({ type: "hooks", directory })
+        emit({ type: "trust", directory })
         return hooksNow()
+      }),
+    trust: () => settle("trust", trustNow),
+    trustAnswer: (directory, items, allow) =>
+      settle("trustAnswer", () => {
+        trustCalls.push({ directory, items, allow })
+        const now = trustNow()
+        for (const i of items) {
+          const at = now.find((x) => x.path === i.path && x.kind === i.kind)
+          if (!at || at.digest !== i.digest) throw new Error("That file changed since it was shown. Look at it again.")
+        }
+        const decision = allow ? ("allowed" as const) : ("denied" as const)
+        for (const i of items) {
+          if (i.kind === "hooks") hookFiles = hookFiles.map((f) => (f.path === i.path ? { ...f, decision } : f))
+          else for (const x of sections) if (x.path === i.path && x.kind === i.kind) x.decision = decision
+        }
+        // As the core reloads: what waits changed, then the hooks and servers it answered.
+        emit({ type: "trust", directory })
+        if (items.some((i) => i.kind === "hooks")) emit({ type: "hooks", directory })
+        if (items.some((i) => i.kind === "mcp")) emit({ type: "mcp", directory })
+        return trustNow()
       }),
     hooksDisable: (_directory, disabled) =>
       settle("hooksDisable", () => {

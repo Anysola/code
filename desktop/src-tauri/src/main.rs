@@ -20,6 +20,7 @@ mod servers;
 mod sources;
 mod transcript;
 mod tree;
+mod trust;
 mod update;
 
 use std::collections::HashMap;
@@ -1193,6 +1194,8 @@ fn main() {
             hooks::hook_remove,
             hooks::hooks_trust,
             hooks::hooks_disable,
+            trust::trust,
+            trust::trust_answer,
             sources::sources,
             sources::personal_instructions,
             sources::save_personal_instructions,
