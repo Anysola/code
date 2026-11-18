@@ -485,25 +485,36 @@ function ProjectFile({
         hint={
           emptied
             ? f.decision === null
-              ? "This file no longer defines hooks. The ones you allowed before keep running until you accept that or put them back."
-              : "This file defines no hooks."
+              ? "This file no longer defines hooks. The ones you allowed before keep running until you accept that."
+              : f.standing
+                ? "This file no longer defines hooks. The ones you allowed before keep running until the app restarts."
+                : "This file defines no hooks."
             : f.decision === null
-            ? "These run commands on this computer. Allow them only if you trust this project."
-            : f.decision === "allowed"
-              ? off
-                ? "They run once hooks are back on."
-                : "They run while you work in this folder."
-              : "They don’t run. Allow them if you trust this project."
+              ? f.standing
+                ? "These changed. The ones you allowed before keep running until you allow the change."
+                : "These run commands on this computer. Allow them only if you trust this project."
+              : f.decision === "allowed"
+                ? off
+                  ? "They run once hooks are back on."
+                  : "They run while you work in this folder."
+                : f.standing
+                  ? "This change isn’t allowed. The hooks you allowed before it keep running until the app restarts."
+                  : "They don’t run. Allow them if you trust this project."
         }
       >
         {busy !== null && <Spinner />}
-        {f.decision !== "allowed" && !(emptied && f.decision !== null) && (
+        {f.decision !== "allowed" && !(emptied && f.decision !== null && !f.standing) && (
           <button
             disabled={busy !== null}
             onClick={() => answer(true)}
             className={btn(f.decision === null ? "primary" : "secondary", "sm")}
           >
             {emptied ? "Stop running them" : "Allow"}
+          </button>
+        )}
+        {emptied && f.decision === null && (
+          <button disabled={busy !== null} onClick={() => answer(false)} className={btn("ghost", "sm", "text-muted")}>
+            Keep them running
           </button>
         )}
         {!emptied && f.decision !== "denied" && (

@@ -138,7 +138,7 @@ impl Context {
         for (path, digest) in stood {
             if self.approved.first_notice(&path, &digest) {
                 let message = format!(
-                    "The approved hooks of {path} keep running until the change to them is reviewed."
+                    "The approved hooks of {path} keep running until the change to them is allowed."
                 );
                 self.note(&mut notices, event, "", HookOutcome::Notice, &message);
             }

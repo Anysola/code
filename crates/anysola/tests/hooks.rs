@@ -157,3 +157,33 @@ fn commands_are_shown_escaped_with_their_timeout() {
     let trusted = home.run(BIN, &["hooks", "trust", "--yes"], None, None);
     assert!(!trusted.stdout.contains('\u{1b}'), "{}", trusted.stdout);
 }
+
+#[test]
+fn a_run_in_plan_mode_writes_its_plan_with_nobody_to_ask() {
+    let plan: std::sync::Arc<std::sync::OnceLock<String>> = Default::default();
+    let path = plan.clone();
+    let gateway = FakeGateway::start(move |request, _| {
+        let model = request.json()["model"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let body = if request.is_title() || request.body.contains("tool_result") {
+            Stream::new().text("done")
+        } else {
+            Stream::new().tool(
+                "toolu_1",
+                "write",
+                json!({"path": path.get().unwrap(), "content": "the plan"}),
+            )
+        };
+        Reply::Sse {
+            body: body.finish(&model, Some(1)),
+        }
+    });
+    let home = TestHome::new(&gateway.url);
+    let file = home.home().join(".anysola/plan/plan.md");
+    plan.set(file.display().to_string()).unwrap();
+    let out = home.run(BIN, &["run", "--agent", "plan", "plan it"], None, None);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "the plan");
+}

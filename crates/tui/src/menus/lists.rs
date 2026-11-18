@@ -605,6 +605,8 @@ pub fn hooks(
             .category(format!("{} · project", show(&d.path)))
             .footer(if d.decision.is_none() {
                 "waiting for your answer"
+            } else if d.standing {
+                "approved hooks keep running"
             } else {
                 "nothing runs"
             });
@@ -671,11 +673,14 @@ pub fn hook_trust(
             Tone::Base,
         );
         lines.push(Vec::new());
-        let state = match (review, document.decision) {
-            (true, Some(_)) => "Nothing from it runs.",
-            _ => {
-                "The hooks you approved earlier still run until you answer. Allow accepts the change: they stop running."
+        let state = match (document.standing, document.decision) {
+            (true, None) => {
+                "The hooks you approved earlier still run. Allow accepts the change: they stop running. Not now keeps them running."
             }
+            (true, Some(_)) => {
+                "The hooks you approved earlier keep running until you allow the change or restart."
+            }
+            (false, _) => "Nothing from it runs.",
         };
         text(&mut lines, state, Tone::Muted);
     } else {
@@ -710,9 +715,15 @@ pub fn hook_trust(
             }
         }
         lines.push(Vec::new());
-        let state = match (review, document.decision) {
-            (true, Some(true)) => "They run now.",
-            (true, Some(false)) => "They do not run: you refused them.",
+        let state = match (review, document.decision, document.standing) {
+            (true, Some(true), _) => "They run now.",
+            (true, Some(false), true) => {
+                "They do not run: you refused this change. The hooks you approved before it keep running until you restart."
+            }
+            (true, Some(false), false) => "They do not run: you refused them.",
+            (_, _, true) => {
+                "This file's hooks changed. The ones you approved before keep running; these run only if you allow them."
+            }
             _ => "They run only if you allow them. You can change this later in /hooks.",
         };
         text(&mut lines, state, Tone::Muted);

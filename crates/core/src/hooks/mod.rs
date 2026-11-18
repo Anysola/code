@@ -208,6 +208,9 @@ pub struct HookDocument {
     /// or the hooks changed since.
     pub decision: Option<bool>,
     pub hooks: Vec<HookInfo>,
+    /// An earlier approved version of this document's hooks runs in place of the listed content
+    /// right now (in this process): the listed content changed and is undecided or refused.
+    pub standing: bool,
 }
 
 const TRUST_PREFIX: &str = "hooks.trust:";
@@ -301,6 +304,7 @@ pub fn documents(configured: &Configured, db: &Db) -> Vec<HookDocument> {
                 path: document.path.clone(),
                 digest: document.digest.clone(),
                 decision,
+                standing: false,
                 hooks: document
                     .handlers
                     .iter()
@@ -451,19 +455,27 @@ impl Approved {
                 Some(true) => {
                     documents.insert(document.path.clone(), (*document).clone());
                 }
-                Some(false) => {
+                // Refusing a change keeps the approved version running here: only refusing the
+                // approved content itself ("stop allowing") ends it.
+                Some(false)
+                    if documents
+                        .get(&document.path)
+                        .is_some_and(|s| s.digest == document.digest) =>
+                {
                     documents.remove(&document.path);
                 }
-                None => {}
+                _ => {}
             }
         }
+        // Allowing the removal of approved hooks accepts it; refusing it keeps them running.
         let removed = removed_digest();
         documents.retain(|path, _| {
-            projects.iter().any(|d| &d.path == path) || decision(db, path, &removed).is_none()
+            projects.iter().any(|d| &d.path == path) || decision(db, path, &removed) != Some(true)
         });
     }
 
-    /// The snapshots standing in for undecided content: path → (snapshot, current digest).
+    /// The snapshots standing in for content that is not allowed (undecided or refused):
+    /// path → (snapshot, current digest).
     fn standing(&self, configured: &Configured, db: &Db) -> HashMap<String, (Document, String)> {
         if lock(&self.documents).is_empty() {
             return HashMap::new();
@@ -478,7 +490,7 @@ impl Approved {
                     .iter()
                     .find(|d| d.scope == HookScope::Project && &d.path == path)
                     .map_or_else(removed_digest, |d| d.digest.clone());
-                (decision(db, path, &digest).is_none() && digest != snapshot.digest)
+                (decision(db, path, &digest) != Some(true) && digest != snapshot.digest)
                     .then(|| (path.clone(), (snapshot.clone(), digest)))
             })
             .collect()
@@ -504,10 +516,11 @@ impl Approved {
             .into_iter()
             .filter(|(path, _)| !configured.documents.iter().any(|d| &d.path == path))
             .map(|(path, (_, digest))| HookDocument {
+                decision: decision(db, &path, &digest),
                 path,
                 digest,
-                decision: None,
                 hooks: Vec::new(),
+                standing: true,
             })
             .collect();
         out.sort_by(|a, b| a.path.cmp(&b.path));
@@ -523,7 +536,11 @@ pub(crate) fn documents_with(
     approved: &Approved,
 ) -> Vec<HookDocument> {
     approved.sync(configured, db);
+    let standing = approved.standing(configured, db);
     let mut out = documents(configured, db);
+    for document in &mut out {
+        document.standing = standing.contains_key(&document.path);
+    }
     out.extend(approved.removed(configured, db));
     out
 }

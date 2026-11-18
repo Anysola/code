@@ -2216,6 +2216,7 @@ fn project_document(decision: Option<bool>) -> anysola_core::api::HookDocument {
         path: "/home/user/my-app/anysola.json".into(),
         digest: "abc".into(),
         decision,
+        standing: false,
         hooks: vec![guard, lint],
     }
 }
@@ -2314,6 +2315,7 @@ fn hook_approval_edge_cases() {
     // A file whose approved hooks were removed: asks whether to accept that.
     let mut gone = project_document(None);
     gone.hooks.clear();
+    gone.standing = true;
     let body = lists::hook_trust(&gone, "anysola.json", false, 0);
     let screen = render(&dialog(under(1), Dialog::Body(body)));
     println!("{screen}");
@@ -2321,7 +2323,19 @@ fn hook_approval_edge_cases() {
         screen.contains("anysola.json no longer defines hooks."),
         "{screen}"
     );
-    assert!(screen.contains("still run until you answer"), "{screen}");
+    assert!(screen.contains("Not now keeps them running"), "{screen}");
+    // A changed file: the version approved before it stands in until the change is allowed.
+    let mut changed = project_document(None);
+    changed.standing = true;
+    let body = lists::hook_trust(&changed, "anysola.json", false, 0);
+    let screen = render(&dialog(under(1), Dialog::Body(body)));
+    assert!(screen.contains("hooks changed"), "{screen}");
+    assert!(screen.contains("keep running"), "{screen}");
+    // Refused: said in /hooks, with what still runs.
+    changed.decision = Some(false);
+    let body = lists::hook_trust(&changed, "anysola.json", true, 0);
+    let screen = render(&dialog(under(1), Dialog::Body(body)));
+    assert!(screen.contains("you refused this change"), "{screen}");
     // Repository text never reaches the terminal raw; a timeout off the default is shown.
     let mut tricky = project_document(None);
     tricky.hooks[0].command = "echo hi\u{1b}]0;pwned\u{7}; rm -rf ~\u{202e}".into();

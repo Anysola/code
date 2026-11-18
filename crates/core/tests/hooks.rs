@@ -1127,10 +1127,11 @@ fn approved_project_hooks_survive_an_edit_until_it_is_reviewed() {
     assert!(made.exists());
 }
 
-#[test]
-fn global_config_writes_are_always_asked() {
-    let target: Arc<std::sync::OnceLock<String>> = Arc::default();
-    let path = target.clone();
+/// A `write` of `target(home)` with every action allowed by rules: the permission asks it
+/// raised (each rejected) and whether the file was written.
+fn write_asks(target: fn(&Path) -> PathBuf, agent: Option<&str>) -> (Vec<String>, bool) {
+    let path: Arc<std::sync::OnceLock<String>> = Arc::default();
+    let shared = path.clone();
     let gateway = FakeGateway::start(move |request, _| {
         if request.is_title() || last(request).contains("tool_result") {
             return text(request, "done");
@@ -1138,35 +1139,138 @@ fn global_config_writes_are_always_asked() {
         call(
             request,
             "write",
-            json!({"path": path.get().unwrap(), "content": "{\"hooks\": {}}"}),
+            json!({"path": shared.get().unwrap(), "content": "written by the agent"}),
         )
     });
     let env = env(&gateway.url);
-    let config = env.home.home().join(".anysola/config.json");
-    target.set(config.display().to_string()).unwrap();
-    let original = json!({"permissions": [{"action": "*", "resource": "*", "effect": "allow"}]});
-    user_config(&env, original.clone());
+    let file = target(&env.home.home());
+    path.set(file.display().to_string()).unwrap();
+    user_config(
+        &env,
+        json!({"permissions": [{"action": "*", "resource": "*", "effect": "allow"}]}),
+    );
     let runtime = runtime();
     let core = runtime.block_on(common::core(&env));
     let (session, _) = core.open(&Target::New, false).unwrap();
+    if let Some(agent) = agent {
+        core.select_agent(&session.id, agent).unwrap();
+    }
     let mut events = core.subscribe();
     let answering = core.clone();
-    let asked = runtime.spawn(async move {
-        loop {
-            if let Ok(Event::PermissionAsked { request_id, .. }) = events.recv().await {
+    let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = asked.clone();
+    runtime.spawn(async move {
+        while let Ok(event) = events.recv().await {
+            if let Event::PermissionAsked {
+                request_id, action, ..
+            } = event
+            {
+                recorded.lock().unwrap().push(action);
                 answering.reply_permission(&request_id, Answer::Reject(Some("no".into())));
-                return;
             }
         }
     });
     runtime
         .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
         .unwrap();
-    runtime
-        .block_on(async { tokio::time::timeout(Duration::from_secs(5), asked).await })
-        .expect("the user was asked")
+    let written = std::fs::read_to_string(&file).is_ok_and(|t| t == "written by the agent");
+    let asked = asked.lock().unwrap().clone();
+    (asked, written)
+}
+
+#[test]
+fn global_config_and_database_writes_are_always_asked() {
+    for target in [
+        (|home: &Path| home.join(".anysola/config.json")) as fn(&Path) -> PathBuf,
+        |home: &Path| home.join(".anysola/anysola.db"),
+    ] {
+        let (asked, written) = write_asks(target, None);
+        assert!(!asked.is_empty(), "the user was asked");
+        assert!(!written);
+    }
+}
+
+#[test]
+fn plan_mode_writes_its_plans_as_before() {
+    let (asked, written) = write_asks(|home| home.join(".anysola/plan/plan.md"), Some("plan"));
+    assert!(asked.is_empty(), "{asked:?}");
+    assert!(written);
+}
+
+#[test]
+fn refusing_a_change_keeps_the_approved_guard_running() {
+    let gateway = calls_once("shell", json!({"command": "touch made"}));
+    let env = env(&gateway.url);
+    let guard = json!({"hooks": hooks(&[("PreToolUse", Some("Bash"), "echo 'approved guard' >&2; exit 2")])});
+    let file = env.home.write("proj/anysola.json", &guard.to_string());
+    let made = env.home.project().join("made");
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let approved = core.hook_documents().remove(0);
+    core.trust_hooks(&approved.path, &approved.digest, true)
         .unwrap();
-    assert_eq!(read_json(&config), original, "the config is unchanged");
+    let blocked = |core: &Core, text: &str| {
+        let (session, _) = core.open(&Target::New, false).unwrap();
+        runtime
+            .block_on(core.prompt(&session.id, prompt(text), TurnOptions::default()))
+            .unwrap();
+        let requests = model_requests(&gateway);
+        last(&requests[requests.len() - 1]).contains("approved guard")
+    };
+    assert!(blocked(&core, "one"));
+    // The agent edits the guard away; the user refuses the change.
+    std::fs::write(
+        &file,
+        json!({"hooks": hooks(&[("PreToolUse", Some("Bash"), "true")])}).to_string(),
+    )
+    .unwrap();
+    runtime.block_on(core.reload());
+    let changed = core.hook_documents().remove(0);
+    assert_eq!((changed.decision, changed.standing), (None, true));
+    core.trust_hooks(&changed.path, &changed.digest, false)
+        .unwrap();
+    let refused = core.hook_documents().remove(0);
+    assert_eq!((refused.decision, refused.standing), (Some(false), true));
+    assert!(blocked(&core, "two"), "the approved guard keeps running");
+    assert!(!made.exists());
+    // Another process runs nothing for refused content.
+    let fresh = runtime.block_on(common::core(&env));
+    assert!(!blocked(&fresh, "three"));
+    assert!(made.exists());
+    std::fs::remove_file(&made).unwrap();
+    drop(fresh);
+    // Allowing the change replaces the approved version.
+    core.trust_hooks(&changed.path, &changed.digest, true)
+        .unwrap();
+    assert!(!core.hook_documents()[0].standing);
+    assert!(!blocked(&core, "four"));
+    assert!(made.exists());
+}
+
+#[test]
+fn refusing_the_approved_hooks_themselves_stops_them() {
+    let gateway = calls_once("shell", json!({"command": "touch made"}));
+    let env = env(&gateway.url);
+    let guard = json!({"hooks": hooks(&[("PreToolUse", Some("Bash"), "echo 'approved guard' >&2; exit 2")])});
+    env.home.write("proj/anysola.json", &guard.to_string());
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let document = core.hook_documents().remove(0);
+    core.trust_hooks(&document.path, &document.digest, true)
+        .unwrap();
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("one"), TurnOptions::default()))
+        .unwrap();
+    assert!(!env.home.project().join("made").exists());
+    core.trust_hooks(&document.path, &document.digest, false)
+        .unwrap();
+    let listed = core.hook_documents().remove(0);
+    assert_eq!((listed.decision, listed.standing), (Some(false), false));
+    runtime
+        .block_on(core.prompt(&session.id, prompt("two"), TurnOptions::default()))
+        .unwrap();
+    assert!(env.home.project().join("made").exists());
 }
 
 #[test]

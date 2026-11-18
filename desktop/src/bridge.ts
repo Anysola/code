@@ -288,7 +288,17 @@ export type HookDraft = { event: HookEvent; matcher: string | null; command: str
  * A project file that defines hooks. They run only once the user allowed this content: `digest`
  * names it, and `decision` is null until the user answered for this digest.
  */
-export type HookFile = { path: string; digest: string; decision: "allowed" | "denied" | null; hooks: Hook[] }
+export type HookFile = {
+  path: string
+  digest: string
+  decision: "allowed" | "denied" | null
+  hooks: Hook[]
+  /**
+   * The hooks allowed before a change (or before they were removed) are running in place of the
+   * listed ones: until the change is allowed, or, once it was refused, until the app restarts.
+   */
+  standing?: boolean
+}
 
 export type Hooks = {
   /** Every hook configured for the folder, in the order they run. */

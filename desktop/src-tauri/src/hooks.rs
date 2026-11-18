@@ -368,6 +368,7 @@ fn answer(app: &App, core: &Core) -> Answer {
                 "path": doc.path,
                 "digest": doc.digest,
                 "decision": doc.decision.map(|allow| if allow { "allowed" } else { "denied" }),
+                "standing": doc.standing,
                 "hooks": doc.hooks.iter().map(|h| hook_json(h, None)).collect::<Vec<_>>(),
             })
         })

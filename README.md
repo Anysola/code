@@ -102,8 +102,8 @@ Put them under `hooks` in any config file:
 
 Hooks can only make the agent more careful: a hook can block a call or have you asked about it, never allow
 something your permissions would not. Hooks from `~/.anysola/config.json` run right away. Hooks from a project run
-only after you approve them, and a change to them waits for your approval again (until then, hooks you already
-approved keep running). `anysola hooks` lists every hook and whether it runs, `anysola hooks trust` approves the
+only after you approve them, and a change to them waits for your approval again (until you allow it, the hooks you
+already approved keep running in the open session, even if you refuse the change). `anysola hooks` lists every hook and whether it runs, `anysola hooks trust` approves the
 project's hooks and `anysola hooks deny` refuses them. `anysola run` never asks: it skips hooks nobody approved and
 says so. `"disable_hooks": true` in `~/.anysola/config.json` or `ANYSOLA_DISABLE_HOOKS=1` turns hooks off; hooks from
 managed settings always run.

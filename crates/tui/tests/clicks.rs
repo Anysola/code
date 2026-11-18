@@ -274,6 +274,7 @@ fn hook_approval_buttons() {
         path: "/w/anysola.json".into(),
         digest: "abc".into(),
         decision: None,
+        standing: false,
         hooks: vec![anysola_core::api::HookInfo {
             event: "Stop".into(),
             matcher: None,

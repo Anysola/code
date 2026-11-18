@@ -20,10 +20,10 @@ Hooks: commands of your own that run around the agent's work, in the terminal, t
     rules, your organization's policies or the session's mode would not.
   - They cover every route to a tool: calls from Code Mode programs and from subagents fire them too, and they see
     the input the tool actually runs.
-  - A project's hooks run only after you allowed them, and again after they change. Until you answer a change, the
-    version you allowed keeps running, so the agent cannot switch a project's guard off by editing the file. Hooks
-    in your own config (`~/.anysola/config.json`) run without asking; a guard that must hold against the agent
-    belongs there.
+  - A project's hooks run only after you allowed them, and again after they change. Until you allow a change, the
+    version you allowed before keeps running (refusing the change does not switch it off), so the agent cannot
+    remove a project's guard by editing the file. Hooks in your own config (`~/.anysola/config.json`) run without
+    asking; a guard that must hold against the agent belongs there.
   - Desktop: Settings → Hooks adds, edits and removes your hooks with a form (three starters to begin from), shows
     a project's hooks with their state, and turns hooks off. The conversation asks about a project's hooks before
     your first message, shows what a hook did under the tool it ran for, and puts a message a hook stopped back in
@@ -33,7 +33,8 @@ Hooks: commands of your own that run around the agent's work, in the terminal, t
     are not allowed and says so once.
   - Not in this release: other moments (before a compaction, when a subagent finishes, …), hooks that are not
     commands, a hook allowing a call or rewriting its input, and reading `.claude/settings.json`.
-- Changing a file under `~/.anysola` (your config, the database) always asks first, whatever the rules allow.
+- The agent changing your config (`~/.anysola/config.json`), the database or the desktop app's preferences always
+  asks first, whatever the rules allow.
 - A session forks as often as you like. The second fork of the same session failed with
   `UNIQUE constraint failed: message.id` and left an empty "(fork #2)" session behind; a fork that cannot be made
   now leaves nothing.

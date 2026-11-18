@@ -520,13 +520,21 @@ fn system_dir() -> PathBuf {
     }
 }
 
-/// Whether `path` lies under a global config root: the data dir (config, database), the legacy
-/// config dir or the system dir. Writing there changes what runs without asking.
+/// Whether `path` is a file that changes what runs without asking: a config document the loader
+/// reads from a global root (`~/.anysola/config.json`, the legacy config dir's files, anything
+/// under the system dir), the database (with its `-wal`, `-shm` and `-journal` files), or the
+/// desktop app's preferences (the mode new sessions start in). The rest of the data dir (plans,
+/// tool output, state, …) is not.
 pub fn protected(paths: &Paths, path: &Path) -> bool {
     let target = resolve(path);
-    [paths.data.clone(), paths.legacy_config_dir(), system_dir()]
-        .iter()
-        .any(|root| target.starts_with(resolve(root)))
+    if target.starts_with(resolve(&system_dir())) {
+        return true;
+    }
+    let database = paths.database().display().to_string();
+    let mut files = vec![paths.config_file(), paths.desktop_prefs()];
+    files.extend(["", "-wal", "-shm", "-journal"].map(|s| PathBuf::from(format!("{database}{s}"))));
+    files.extend(NAMES.map(|name| paths.legacy_config_dir().join(name)));
+    files.iter().any(|file| resolve(file) == target)
 }
 
 /// A path with symlinks resolved as far as it exists, so a symlinked global root is recognized.
@@ -1068,5 +1076,35 @@ mod tests {
             load(&paths, &project, &LoadOptions::default()).shell(),
             Some("bash")
         );
+    }
+}
+
+#[cfg(test)]
+mod protected_tests {
+    use super::*;
+
+    #[test]
+    fn only_files_that_change_what_runs_are_protected() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = Paths::isolated(root.path().join("home"));
+        for path in [
+            paths.config_file(),
+            paths.database(),
+            PathBuf::from(format!("{}-wal", paths.database().display())),
+            paths.desktop_prefs(),
+            paths.legacy_config_dir().join("opencode.jsonc"),
+            system_dir().join("opencode.json"),
+        ] {
+            assert!(protected(&paths, &path), "{}", path.display());
+        }
+        for path in [
+            paths.plan_dir().join("plan.md"),
+            paths.tool_output_dir().join("x"),
+            paths.state_dir().join("x"),
+            paths.data.join("other.json"),
+            paths.legacy_config_dir().join("agent/a.md"),
+        ] {
+            assert!(!protected(&paths, &path), "{}", path.display());
+        }
     }
 }

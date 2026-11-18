@@ -875,7 +875,7 @@ export function mockBridge(): Bridge {
       refused: [projectFile("denied")],
       off: [projectFile("allowed")],
       all: [projectFile(null), parentFile("allowed")],
-      emptied: [{ ...projectFile(null), digest: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", hooks: [] }],
+      emptied: [{ ...projectFile(null), digest: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", hooks: [], standing: true }],
     } as Record<string, ReturnType<typeof projectFile>[]>
   )[hookScene] ?? []
   const managed = hookScene === "managed" || hookScene === "all" ? managedHooks : []

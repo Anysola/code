@@ -50,12 +50,14 @@ function HookTrustCard({
     <section className="rounded-xl bg-surface p-4" aria-label="This project’s hooks">
       <div className="flex items-center gap-2 text-sm">
         <span className="size-1.5 rounded-full bg-warning" />
-        {emptied ? "This project’s hooks were removed" : "Run this project’s hooks?"}
+        {emptied ? "This project’s hooks were removed" : f.standing ? "This project’s hooks changed" : "Run this project’s hooks?"}
       </div>
       <p className="text-dense mt-1 pl-3.5 text-muted">
         {emptied
-          ? "The file below no longer defines hooks. The ones you allowed before keep running until you accept that or put them back."
-          : `${n === 1 ? "It runs a command" : `They run ${n} commands`} on this computer while the agent works. Allow only if you trust this project.`}
+          ? "The file below no longer defines hooks. The ones you allowed before keep running until you accept that."
+          : f.standing
+            ? `The ones you allowed before keep running until you allow ${n === 1 ? "this one" : "these"}. Allow only if you trust the change.`
+            : `${n === 1 ? "It runs a command" : `They run ${n} commands`} on this computer while the agent works. Allow only if you trust this project.`}
       </p>
       <div className="mt-3 max-h-[min(18rem,32vh)] overflow-auto rounded-lg bg-background/60 px-3 py-2.5">
         <div className={cn("text-2xs truncate font-mono text-muted", !emptied && "mb-2")} title={f.path}>
@@ -86,12 +88,9 @@ function HookTrustCard({
           {emptied ? "Stop running them" : "Allow"}
         </button>
         {busy !== null && <Spinner className="ml-1" />}
-        {/* Either answer on a removal ends the allowed hooks, so only the one that says so is offered. */}
-        {!emptied && (
-          <button onClick={() => answer(false)} disabled={busy !== null} className={btn("ghost", "sm", "ml-auto")}>
-            Don’t allow
-          </button>
-        )}
+        <button onClick={() => answer(false)} disabled={busy !== null} className={btn("ghost", "sm", "ml-auto")}>
+          {emptied ? "Keep them running" : "Don’t allow"}
+        </button>
       </div>
       {error && <p className="text-dense mt-2 text-danger select-text">{error}</p>}
     </section>

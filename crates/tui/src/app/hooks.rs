@@ -196,10 +196,29 @@ impl App {
     pub(super) fn decide_hooks(&mut self, path: &str, digest: &str, allow: bool) {
         self.state.dialogs.pop();
         let shown = self.show_source(path);
-        match self.core.trust_hooks(path, digest, allow) {
+        let document = |core: &anysola_core::api::Core| {
+            core.hook_documents().into_iter().find(|d| d.path == path)
+        };
+        let emptied = document(&self.core).is_some_and(|d| d.hooks.is_empty());
+        let result = self.core.trust_hooks(path, digest, allow);
+        // A refused change leaves the version approved before it running.
+        let standing = document(&self.core).is_some_and(|d| d.standing);
+        match result {
+            Ok(()) if allow && emptied => self.toast(
+                None,
+                format!("The hooks {shown} had no longer run."),
+                Variant::Info,
+            ),
             Ok(()) if allow => {
                 self.toast(None, format!("Hooks in {shown} will run."), Variant::Info)
             }
+            Ok(()) if standing => self.toast(
+                None,
+                format!(
+                    "The change to {shown} is not allowed. The hooks you approved before keep running. Change this in /hooks."
+                ),
+                Variant::Info,
+            ),
             Ok(()) => self.toast(
                 None,
                 format!("Hooks in {shown} will not run. Change this in /hooks."),
