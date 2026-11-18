@@ -121,7 +121,7 @@ function Servers({ directory }: { directory: string }) {
                 )}
               </div>
             ) : (
-              servers.map((s) => <Server key={s.name} server={s} directory={directory} onList={load.set} />)
+              servers.map((s) => <Server key={`${s.name}:${s.source}`} server={s} directory={directory} onList={load.set} />)
             )}
           </Group>
         </>
@@ -206,6 +206,9 @@ function Server({
           <span className="truncate font-mono text-xs text-muted" title={s.target}>
             {s.target}
           </span>
+          {waits && s.replaces && (
+            <span className="text-2xs text-muted">Allowing it replaces your own server named {s.name}.</span>
+          )}
           {!s.editable && !waits && (
             <span className="text-2xs truncate text-muted" title={s.source}>
               Defined in <span className="font-mono">{tilde(s.source)}</span>
@@ -314,7 +317,10 @@ function ProjectServers({
       .catch((e) => setError(message(e)))
       .finally(() => setBusy(null))
   }
-  const n = servers.length
+  // Every server the answer covers, as the file defines them (the list may not show them all yet).
+  const n = Math.max(servers.length, item?.entries.filter((e) => e.label !== "MCP timeouts").length ?? 0)
+  const timeouts = !!item?.entries.some((e) => e.label === "MCP timeouts")
+  const replacing = servers.filter((s) => s.replaces).length
   return (
     <Group
       label={
@@ -332,9 +338,12 @@ function ProjectServers({
           </span>
         }
         hint={
-          refused
-            ? `You didn’t allow ${n === 1 ? "its server" : "its servers"}, so ${n === 1 ? "it doesn’t" : "they don’t"} start. Allow if you trust this project.`
-            : `${n === 1 ? "Its server starts" : `Its ${n} servers start`} on this computer once you allow ${n === 1 ? "it" : "them"}. Allow only if you trust this project.`
+          (refused
+            ? `You didn’t allow ${n === 1 ? "its server" : `its ${n} servers`}, so ${n === 1 ? "it doesn’t" : "they don’t"} start.`
+            : `${n === 1 ? "Its server starts" : `Its ${n} servers start`} on this computer once you allow ${n === 1 ? "it" : "them"}.`) +
+          (replacing ? ` ${replacing === 1 ? "One replaces" : `${replacing} replace`} a server of yours.` : "") +
+          (timeouts ? " Allowing also changes how long servers may take." : "") +
+          (refused ? " Allow if you trust this project." : " Allow only if you trust this project.")
         }
       >
         {busy !== null && <Spinner />}
@@ -350,7 +359,7 @@ function ProjectServers({
         )}
       </Row>
       {servers.map((s) => (
-        <Server key={s.name} server={s} directory={directory} />
+        <Server key={`${s.name}:${s.source}`} server={s} directory={directory} />
       ))}
       {error && <p className="text-dense px-4 py-2.5 text-danger select-text">{error}</p>}
     </Group>

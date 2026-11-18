@@ -238,3 +238,88 @@ fn a_project_formatter_command_runs_only_once_approved() {
     write(&core);
     assert!(marker.exists());
 }
+
+/// A shell that leaves a marker, then runs the command with `/bin/sh`.
+#[cfg(unix)]
+fn marking_shell(env: &Env, name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let marker = env.home.home().join(format!("{name}-ran"));
+    let script = env.home.write(
+        &format!("bin/{name}"),
+        &format!(
+            "#!/bin/sh\ntouch '{}'\nexec /bin/sh \"$@\"\n",
+            marker.display()
+        ),
+    );
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    (script, marker)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_project_cannot_choose_the_shell() {
+    use anysola_core::api::Prompt;
+    use anysola_core::session::TurnOptions;
+    let gateway = anysola_testkit::FakeGateway::start(|request, _| {
+        if request.is_title() || request.body.contains("tool_result") {
+            return text(request, "done");
+        }
+        let model = request.json()["model"].as_str().unwrap().to_string();
+        anysola_testkit::Reply::Sse {
+            body: anysola_testkit::sse::Stream::new()
+                .tool("toolu_1", "shell", json!({"command": "echo hi"}))
+                .finish(&model, Some(1)),
+        }
+    });
+    let env = env(&gateway.url);
+    let (project_shell, project_marker) = marking_shell(&env, "projsh");
+    env.home.write(
+        "proj/anysola.json",
+        &json!({"shell": project_shell.display().to_string()}).to_string(),
+    );
+    let runtime = runtime();
+    let run = |core: &Core| {
+        let (session, _) = core.open(&Target::New, false).unwrap();
+        let prompt = Prompt {
+            text: "go".into(),
+            ..Default::default()
+        };
+        runtime
+            .block_on(core.prompt(&session.id, prompt, TurnOptions::default()))
+            .unwrap();
+        runtime
+            .block_on(core.run_shell(&session.id, "echo bang"))
+            .unwrap();
+    };
+    let core = runtime.block_on(common::core(&env));
+    assert_eq!(core.loaded().config.shell(), None);
+    assert!(
+        core.loaded()
+            .config
+            .warnings
+            .iter()
+            .any(|w| w.contains("\"shell\"") && w.contains("your own config"))
+    );
+    run(&core);
+    assert!(!project_marker.exists(), "the project's shell never ran");
+    drop(core);
+    // The user's own shell is used, by the tool and by `!` commands.
+    let (user_shell, user_marker) = marking_shell(&env, "usersh");
+    env.home.write(
+        ".anysola/config.json",
+        &json!({"shell": user_shell.display().to_string()}).to_string(),
+    );
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.run_shell(&session.id, "echo bang"))
+        .unwrap();
+    assert!(
+        user_marker.exists(),
+        "a `!` command ran through the user's shell"
+    );
+    std::fs::remove_file(&user_marker).unwrap();
+    run(&core);
+    assert!(user_marker.exists());
+    assert!(!project_marker.exists());
+}

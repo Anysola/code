@@ -4,6 +4,17 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## Unreleased
+
+- A project's MCP servers and formatters need your approval once, like its hooks. When a project's config defines
+  them, the app asks before starting them, in one question per project file that lists its hooks, its MCP servers
+  (with the headers and environment they would send) and its formatters. Until you allow it those servers are not
+  started and those formatters do not run; your own servers and formatters are not affected, and a project file
+  that redefines one of your servers says so and changes nothing until you allow it. A change to them asks again.
+  Settings → MCP servers shows a project's servers that wait, with Allow.
+- A project's config can no longer choose the shell that runs commands: `shell` only works in your own config.
+- Names and commands from a project are shown with invisible and direction-changing characters written out.
+
 ## 1.0.9 (2026-11-18)
 
 Hooks: commands of your own that run around the agent's work, in the terminal, the desktop app and `anysola run`.

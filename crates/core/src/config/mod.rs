@@ -247,6 +247,13 @@ impl Config {
         let mut data = document.data;
         let hooks = data.remove("hooks");
         let disable = data.remove("disable_hooks");
+        // The shell runs every command and hook: a repository must not choose it.
+        if document.project && data.remove("shell").is_some() {
+            self.warnings.push(format!(
+                "Ignoring \"shell\" in {}: it only works in your own config (~/.anysola/config.json).",
+                document.source.as_deref().unwrap_or("a project document")
+            ));
+        }
         // The gateway's document has no source and runs no hooks.
         if let Some(source) = &document.source {
             let scope = if document.managed {
@@ -932,12 +939,12 @@ mod tests {
         std::fs::create_dir_all(home.join(".config/opencode")).unwrap();
         std::fs::write(
             home.join(".config/opencode/opencode.json"),
-            r#"{"shell":"zsh","permissions":[{"action":"a","resource":"*","effect":"deny"}]}"#,
+            r#"{"default_agent":"zsh","permissions":[{"action":"a","resource":"*","effect":"deny"}]}"#,
         )
         .unwrap();
         std::fs::write(
             project.join("opencode.jsonc"),
-            "{\"shell\": \"bash\", // c\n \"instructions\": [\"x.md\",],}",
+            "{\"default_agent\": \"bash\", // c\n \"instructions\": [\"x.md\",],}",
         )
         .unwrap();
         std::fs::write(
@@ -947,12 +954,12 @@ mod tests {
         .unwrap();
         std::fs::write(
             root.path().join("opencode.json"),
-            r#"{"shell":"never-read-above-home"}"#,
+            r#"{"default_agent":"never-read-above-home"}"#,
         )
         .unwrap();
         let paths = Paths::isolated(home.clone());
         let config = load(&paths, &project, &LoadOptions::default());
-        assert_eq!(config.shell(), Some("bash"));
+        assert_eq!(config.default_agent(), Some("bash"));
         assert_eq!(config.instructions, vec!["x.md"]);
         assert_eq!(config.permissions.len(), 1);
         assert_eq!(
@@ -982,12 +989,12 @@ mod tests {
         };
         write(
             project.join("opencode.json"),
-            r#"{"shell":"zsh","instructions":["old.md"]}"#,
+            r#"{"default_agent":"zsh","instructions":["old.md"]}"#,
         );
-        write(project.join("anysola.jsonc"), r#"{"shell":"bash"}"#);
+        write(project.join("anysola.jsonc"), r#"{"default_agent":"bash"}"#);
         let paths = Paths::isolated(home.clone());
         let config = load(&paths, &project, &LoadOptions::default());
-        assert_eq!(config.shell(), Some("bash"));
+        assert_eq!(config.default_agent(), Some("bash"));
         assert_eq!(config.instructions, vec!["old.md"]);
         write(
             project.join(".opencode").join("opencode.json"),
@@ -1227,21 +1234,21 @@ mod tests {
         std::fs::create_dir_all(&real).unwrap();
         std::fs::create_dir_all(home.join(".config")).unwrap();
         std::os::unix::fs::symlink(&real, home.join(".config/opencode")).unwrap();
-        std::fs::write(real.join("opencode.json"), r#"{"shell":"zsh"}"#).unwrap();
+        std::fs::write(real.join("opencode.json"), r#"{"default_agent":"zsh"}"#).unwrap();
         std::fs::create_dir_all(real.join(".opencode")).unwrap();
         std::fs::write(
             real.join(".opencode").join("opencode.json"),
-            r#"{"shell":"fish"}"#,
+            r#"{"default_agent":"fish"}"#,
         )
         .unwrap();
         let paths = Paths::isolated(home.clone());
         let config = load(&paths, &real, &LoadOptions::default());
-        assert_eq!(config.shell(), Some("zsh"));
+        assert_eq!(config.default_agent(), Some("zsh"));
         let project = home.join("proj");
         std::fs::create_dir_all(&project).unwrap();
-        std::fs::write(project.join("opencode.json"), r#"{"shell":"bash"}"#).unwrap();
+        std::fs::write(project.join("opencode.json"), r#"{"default_agent":"bash"}"#).unwrap();
         assert_eq!(
-            load(&paths, &project, &LoadOptions::default()).shell(),
+            load(&paths, &project, &LoadOptions::default()).default_agent(),
             Some("bash")
         );
     }

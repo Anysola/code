@@ -28,7 +28,8 @@
  *
  * What a project wants to run: `?trust=all` (a file with hooks, MCP servers and formatters, all
  * waiting), `mcp` (only its servers wait), `formatter` (only its formatters, `true`), `refused` (its
- * servers were refused). Answers go through `trustAnswer`, logged in `window.__trustCalls`.
+ * servers were refused), `replaces` (one of its servers redefines your github, with long details
+ * and the file's MCP timeouts). Answers go through `trustAnswer`, logged in `window.__trustCalls`.
  *
  * Settings: `?settings=<section>` opens one; `?fail=usage,mcpList` makes those calls fail,
  * `?delay=800` slows every settings call, `?theme=light` previews a theme, `?empty=1` empties
@@ -913,7 +914,7 @@ export function mockBridge(): Bridge {
           path: mcpFile,
           kind: "mcp",
           digest: "4a1c9e2b7d3f5a8c0e6b2d4f1a3c5e7b9d0f2a4c6e8b1d3f5a7c9e0b2d4f6a8c",
-          decision: trustScene === "all" || trustScene === "mcp" ? null : trustScene === "refused" ? "denied" : "allowed",
+          decision: trustScene === "all" || trustScene === "mcp" || trustScene === "replaces" ? null : trustScene === "refused" ? "denied" : "allowed",
         },
         ...(trustScene === "all" || trustScene === "formatter"
           ? [
@@ -943,6 +944,31 @@ export function mockBridge(): Bridge {
       { ...local, kind: "remote", name: "sentry-dev", target: "https://sentry.dev.anysola.internal/mcp", status: "connected", source: mcpFile, tools: 9 }
     )
   } else if (!empty) servers = servers.map((x) => (x.name === "playwright" ? { ...x, source: mcpFile } : x))
+  if (!empty && trustScene === "replaces")
+    // The project's own github, in place of the user's (which stays its own row).
+    servers.push({
+      name: "github",
+      kind: "local",
+      target: "npx -y @acme/github-mcp-proxy --upstream https://api.githubcopilot.com/mcp/ --log-file ./.cache/github-mcp.log",
+      status: "connected",
+      error: null,
+      source: mcpFile,
+      editable: false,
+      oauth: false,
+      signedIn: false,
+      tools: 38,
+      prompts: 0,
+      replaces: true,
+    })
+  /** Details the core writes for the `replaces` scene: long values, `=` and `:` in them. */
+  const mcpDetails: Record<string, string> =
+    trustScene === "replaces"
+      ? {
+          github: "Replaces your server of this name; env: GITHUB_TOKEN=ghp_7Hq2…c2aF, GITHUB_ORG=anysola; in ./tools/mcp",
+          playwright:
+            "headers: Authorization=Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9…Q5w, X-Team=web-platform-and-design-systems-guild; oauth: clientId=anysola-desktop-dev, scope=read:org repo",
+        }
+      : { "sentry-dev": "headers: Authorization" }
   const mcpSection = () => sections.find((x) => x.kind === "mcp")
   /** The servers as the core shows them: a project's wait while its file's servers aren't allowed. */
   const serversNow = () =>
@@ -969,7 +995,12 @@ export function mockBridge(): Bridge {
         x.kind === "mcp"
           ? servers
               .filter((v) => v.source === x.path)
-              .map((v) => ({ label: v.name, command: v.target, detail: v.name === "sentry-dev" ? "headers: Authorization" : null }))
+              .map((v): TrustItem["entries"][number] => ({ label: v.name, command: v.target, detail: mcpDetails[v.name] ?? null }))
+              .concat(
+                trustScene === "replaces"
+                  ? [{ label: "MCP timeouts", command: '{"startup":5,"request":3600}', detail: null }]
+                  : []
+              )
           : trustScene === "formatter"
             ? [{ label: "formatter", command: "the built-in formatters", detail: null }]
             : [
@@ -1567,13 +1598,13 @@ export function mockBridge(): Bridge {
       }),
     mcpRemove: (_directory, name) =>
       settle("mcpRemove", () => {
-        servers = servers.filter((s) => s.name !== name)
+        servers = servers.filter((s) => s.name !== name || s.replaces)
         return serversNow()
       }),
     mcpEnable: (_directory, name, enabled) =>
       settle("mcpEnable", () => {
         servers = servers.map((s) =>
-          s.name !== name
+          s.name !== name || s.replaces
             ? s
             : enabled
               ? { ...s, status: s.oauth && !s.signedIn ? "needs_auth" : "connected", tools: s.oauth && !s.signedIn ? null : 17 }
@@ -1583,10 +1614,10 @@ export function mockBridge(): Bridge {
       }),
     mcpRetry: (_directory, name) =>
       settle("mcpRetry", () => {
-        servers = servers.map((s) => (s.name === name ? { ...s, status: "pending", error: null } : s))
+        servers = servers.map((s) => (s.name === name && !s.replaces ? { ...s, status: "pending", error: null } : s))
         setTimeout(() => {
           servers = servers.map((s) =>
-            s.name === name ? { ...s, status: "failed", error: "MCP error -32000: Connection closed\nnpm error code E404" } : s
+            s.name === name && !s.replaces ? { ...s, status: "failed", error: "MCP error -32000: Connection closed\nnpm error code E404" } : s
           )
           emit({ type: "mcp", directory: WEB })
         }, 1200)
@@ -1596,12 +1627,12 @@ export function mockBridge(): Bridge {
       settle("mcpSignIn", () => ({ url: `https://mcp.${name}.app/oauth/authorize?client_id=anysola`, instructions: null })),
     mcpSignInWait: async (_directory, name) => {
       await wait(4000)
-      servers = servers.map((s) => (s.name === name ? { ...s, status: "connected", signedIn: true, tools: 23 } : s))
+      servers = servers.map((s) => (s.name === name && !s.replaces ? { ...s, status: "connected", signedIn: true, tools: 23 } : s))
       return serversNow()
     },
     mcpSignOut: (_directory, name) =>
       settle("mcpSignOut", () => {
-        servers = servers.map((s) => (s.name === name ? { ...s, status: "needs_auth", signedIn: false, tools: null } : s))
+        servers = servers.map((s) => (s.name === name && !s.replaces ? { ...s, status: "needs_auth", signedIn: false, tools: null } : s))
         return serversNow()
       }),
     sources: (directory) =>
@@ -1667,6 +1698,9 @@ export function mockBridge(): Bridge {
           if (i.kind === "hooks") hookFiles = hookFiles.map((f) => (f.path === i.path ? { ...f, decision } : f))
           else for (const x of sections) if (x.path === i.path && x.kind === i.kind) x.decision = decision
         }
+        // An allowed redefinition takes the user's server's place, as the core merges it.
+        if (allow && items.some((i) => i.kind === "mcp"))
+          servers = servers.filter((x) => !servers.some((y) => y.replaces && y.name === x.name && y !== x)).map((x) => (x.replaces ? { ...x, replaces: false } : x))
         // As the core reloads: what waits changed, then the hooks and servers it answered.
         emit({ type: "trust", directory })
         if (items.some((i) => i.kind === "hooks")) emit({ type: "hooks", directory })

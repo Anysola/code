@@ -228,6 +228,11 @@ export type McpServer = {
   /** Null when the count isn't known (not connected). */
   tools: number | null
   prompts: number
+  /**
+   * A waiting row only: a project file redefines the user's server of this name; allowing it
+   * replaces theirs (which is listed as its own row).
+   */
+  replaces?: boolean
 }
 
 export type McpDraft =

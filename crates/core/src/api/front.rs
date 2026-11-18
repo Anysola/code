@@ -169,12 +169,7 @@ impl Core {
         let session = self
             .session(session_id)?
             .ok_or(CoreError::SessionNotFound)?;
-        let configured = self
-            .loaded()
-            .config
-            .get("shell")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        let configured = self.loaded().config.shell().map(str::to_string);
         let (program, args) = crate::tool::shell::invocation(configured.as_deref(), command);
         let created = now_ms();
         let child = crate::console::tokio_command(program)

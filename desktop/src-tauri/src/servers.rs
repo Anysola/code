@@ -5,6 +5,7 @@
 //! Nothing here waits for a server to connect: the list comes back as it stands and `mcp` events
 //! tell the window when a status changes.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use anysola_core::api::{Core, TrustItem, TrustKind};
@@ -108,28 +109,75 @@ fn list(app: &App, core: &Core, runtime: &Runtime) -> Answer {
             })
         })
         .collect();
-    let running: Vec<String> = runtime.servers().into_iter().map(|s| s.name).collect();
+    let items = core.trust_items();
     let documents: Vec<(&str, &Map<String, Value>)> = loaded.config.documents().collect();
+    let mut theirs = users_servers(&items, &documents);
+    // The gateway's servers come from no local file, and are the user's too.
+    theirs.extend(
+        runtime
+            .servers()
+            .into_iter()
+            .filter(|s| loaded.config.mcp_source(&s.name).is_none())
+            .map(|s| s.name),
+    );
     let mut servers = servers;
-    servers.extend(waiting(&core.trust_items(), &documents, &running));
+    servers.extend(waiting(&items, &documents, &theirs));
     Ok(Value::Array(servers))
 }
 
-/// A project file's server as written: `mcp.servers.<name>`, or the 0.5.x `mcp.<name>`.
-fn written<'a>(data: &'a Map<String, Value>, name: &str) -> Option<&'a Value> {
+/// A file's server as written: `mcp.servers.<name>`, or the 0.5.x `mcp.<name>`.
+pub(crate) fn written<'a>(data: &'a Map<String, Value>, name: &str) -> Option<&'a Value> {
     let mcp = data.get("mcp")?;
-    mcp.get("servers")
-        .and_then(|s| s.get(name))
-        .or_else(|| mcp.get(name).filter(|s| s.is_object() && name != "servers"))
+    mcp.get("servers").and_then(|s| s.get(name)).or_else(|| {
+        mcp.get(name)
+            .filter(|s| s.is_object() && !matches!(name, "servers" | "timeout"))
+    })
 }
 
-/// The servers project files define whose MCP section isn't allowed (yet): not running, listed
-/// so the user sees them and can allow them. A server of the same name from elsewhere runs as
-/// defined there and is listed as that one.
+/// The names of the servers a file defines.
+fn defined(data: &Map<String, Value>) -> Vec<String> {
+    let Some(mcp) = data.get("mcp").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    let native = mcp
+        .get("servers")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|s| s.keys().cloned());
+    let legacy = mcp
+        .iter()
+        .filter(|(name, server)| {
+            !matches!(name.as_str(), "servers" | "timeout") && server.get("type").is_some()
+        })
+        .map(|(name, _)| name.clone());
+    native.chain(legacy).collect()
+}
+
+/// Servers the user's own (and managed) files define: every file with servers but the project
+/// files, which each have an `mcp` item.
+pub(crate) fn users_servers(
+    items: &[TrustItem],
+    documents: &[(&str, &Map<String, Value>)],
+) -> HashSet<String> {
+    let project: HashSet<&str> = items
+        .iter()
+        .filter(|i| i.kind == TrustKind::Mcp)
+        .map(|i| i.path.as_str())
+        .collect();
+    documents
+        .iter()
+        .filter(|(path, _)| !project.contains(path))
+        .flat_map(|(_, data)| defined(data))
+        .collect()
+}
+
+/// The servers of project files whose MCP section isn't allowed (yet): not running, listed so
+/// the user sees everything allowing would start. One that redefines a server of the user's
+/// says so (`replaces`): allowing the file replaces theirs, which is listed as it runs.
 fn waiting(
     items: &[TrustItem],
     documents: &[(&str, &Map<String, Value>)],
-    running: &[String],
+    theirs: &HashSet<String>,
 ) -> Vec<Value> {
     let mut out: Vec<Value> = Vec::new();
     for item in items
@@ -141,20 +189,15 @@ fn waiting(
         };
         for entry in &item.entries {
             let Some(server) = written(data, &entry.label) else {
-                // The section's timeouts, not a server.
+                // The section's timeouts, not a server: the file's `trust` item shows them.
                 continue;
             };
-            let listed = running.contains(&entry.label)
-                || out.iter().any(|s| s["name"] == entry.label.as_str());
-            if listed {
-                continue;
-            }
             let remote = server["type"] == "remote"
                 || (server.get("type").is_none() && server.get("url").is_some());
+            // Repository text: control and bidi characters written out.
             out.push(json!({
-                "name": entry.label,
+                "name": display(&entry.label),
                 "kind": if remote { "remote" } else { "local" },
-                // Repository text: control characters written out.
                 "target": display(&entry.command),
                 "status": "waiting",
                 "error": null,
@@ -164,6 +207,7 @@ fn waiting(
                 "signedIn": false,
                 "tools": 0,
                 "prompts": 0,
+                "replaces": theirs.contains(&entry.label),
             }));
         }
     }
@@ -661,23 +705,60 @@ mod tests {
             ),
             item("/p/.anysola/anysola.json", Some(true), vec![("ok", "y")]),
         ];
-        let rows = waiting(&items, &documents, &["mine".to_string()]);
+        let user = json!({"mcp": {"servers": {"mine": {"type": "local", "command": ["x"]}},
+                                  "legacy": {"type": "remote", "url": "https://l"}}});
+        let user = user.as_object().unwrap();
+        let mut all = vec![("/home/u/.anysola/config.json", user)];
+        all.extend(documents);
+        let theirs = users_servers(&items, &all);
+        let mut sorted: Vec<_> = theirs.iter().cloned().collect();
+        sorted.sort();
+        assert_eq!(sorted, ["legacy", "mine"], "not the project files' servers");
+        let rows = waiting(&items, &all, &theirs);
         let names: Vec<_> = rows.iter().map(|r| r["name"].as_str().unwrap()).collect();
         assert_eq!(
             names,
-            ["docs", "fs", "old"],
-            "the user's own `mine` runs as theirs"
+            ["docs", "fs", "mine", "old"],
+            "every server allowing would start, the timeouts not one"
         );
         assert_eq!(
             rows[0],
             json!({"name": "docs", "kind": "remote", "target": "https://h/mcp", "status": "waiting",
                    "error": null, "source": "/p/anysola.json", "editable": false, "oauth": false,
-                   "signedIn": false, "tools": 0, "prompts": 0})
+                   "signedIn": false, "tools": 0, "prompts": 0, "replaces": false})
         );
         assert_eq!(rows[1]["kind"], "local");
-        assert!(!rows[2]["target"].as_str().unwrap().contains('\u{202e}'));
+        assert_eq!(
+            rows[2]["replaces"], true,
+            "the project redefines the user's `mine`"
+        );
+        assert!(!rows[3]["target"].as_str().unwrap().contains('\u{202e}'));
         let refused = [item("/p/anysola.json", Some(false), vec![("fs", "npx fs")])];
-        assert_eq!(waiting(&refused, &documents, &[]).len(), 1);
+        assert_eq!(waiting(&refused, &all, &theirs).len(), 1);
+    }
+
+    #[test]
+    fn a_waiting_servers_name_is_shown_as_text() {
+        let project =
+            json!({"mcp": {"servers": {"g\u{202e}h": {"type": "remote", "url": "https://y"}}}});
+        let project = project.as_object().unwrap();
+        let item = TrustItem {
+            path: "/p/anysola.json".into(),
+            kind: TrustKind::Mcp,
+            digest: "d".into(),
+            decision: None,
+            standing: false,
+            entries: ["g\u{202e}h"]
+                .into_iter()
+                .map(|label| anysola_core::api::TrustEntry {
+                    label: label.into(),
+                    command: "https://x".into(),
+                    detail: None,
+                })
+                .collect(),
+        };
+        let rows = waiting(&[item], &[("/p/anysola.json", project)], &HashSet::new());
+        assert_eq!(rows[0]["name"], "g\\u{202e}h");
     }
 
     #[test]

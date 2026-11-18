@@ -167,13 +167,16 @@ function hookLabel(label: string): ReactNode {
   return when(m[1] as HookEvent, m[2] ?? null)
 }
 
+/** Said first, on a line of its own: allowing takes the user's own server away. */
+const REPLACES = "Replaces your server of this name"
+
 /** The core's details, in the app's words where it has them: `timeout 300 s` is a time limit. */
-function detailText(detail: string) {
+function detailParts(detail: string) {
   return detail
     .split("; ")
     .map((d) => d.replace(/^timeout (\d+) s$/, "Time limit $1 s").replace(/^timeout /, "Time limit "))
+    .map((d) => d.replace(/^oauth\b/i, "OAuth"))
     .map((d) => d.charAt(0).toUpperCase() + d.slice(1))
-    .join(" · ")
 }
 
 function Entries({ kind, entries }: { kind: TrustKind; entries: TrustEntry[] }) {
@@ -182,14 +185,19 @@ function Entries({ kind, entries }: { kind: TrustKind; entries: TrustEntry[] }) 
       {entries.map((e, i) => {
         // "the built-in formatters": words, not a command line.
         const words = kind === "formatter" && /^the built-in /.test(e.command)
+        const parts = e.detail ? detailParts(e.detail) : []
+        const replaces = parts[0]?.startsWith(REPLACES)
+        const rest = replaces ? parts.slice(1) : parts
         return (
           <li key={i} className="contents">
-            <span className="text-dense flex max-w-56 min-w-0 flex-col text-foreground/85">
-              <span className="break-words">
-                {kind === "hooks" ? hookLabel(e.label) : kind === "formatter" && e.label === "formatter" ? "Formatters" : e.label}
-              </span>
-              {/* A shorter limit can weaken a guard, a header can carry a key: said where it is decided. */}
-              {e.detail && <span className="text-2xs text-muted">{detailText(e.detail)}</span>}
+            <span className="text-dense max-w-56 min-w-0 break-words text-foreground/85">
+              {kind === "hooks"
+                ? hookLabel(e.label)
+                : kind === "formatter" && e.label === "formatter"
+                  ? "Formatters"
+                  : kind === "mcp" && e.label === "MCP timeouts"
+                    ? "Server time limits"
+                    : e.label}
             </span>
             <span className="text-2xs text-muted" aria-hidden>
               →
@@ -197,6 +205,17 @@ function Entries({ kind, entries }: { kind: TrustKind; entries: TrustEntry[] }) 
             <span className={cn("break-all whitespace-pre-wrap", words ? "text-dense text-muted" : "font-mono text-xs")}>
               {words ? e.command.charAt(0).toUpperCase() + e.command.slice(1) : e.command}
             </span>
+            {/* Under the row, the width of the card: a long value (a header, an environment
+                variable) wraps here and never squeezes the command. A shorter limit can weaken a
+                guard, a header can carry a key: said where it is decided. */}
+            {(replaces || rest.length > 0) && (
+              <span className="col-span-3 -mt-1 flex min-w-0 flex-col gap-0.5 pb-0.5">
+                {replaces && <span className="text-dense text-warning">Replaces your own server named {e.label}</span>}
+                {rest.length > 0 && (
+                  <span className="text-2xs break-all whitespace-pre-wrap text-muted">{rest.join(" · ")}</span>
+                )}
+              </span>
+            )}
           </li>
         )
       })}

@@ -1,6 +1,8 @@
 //! What a folder's project files want to run (hooks, MCP servers, formatters) and the user's
 //! answer for each, as it is now. Nothing of a project file is applied before it is allowed.
 
+use std::collections::HashSet;
+
 use anysola_core::api::{Core, TrustItem, TrustKind};
 use anysola_core::hooks::display;
 use serde::Deserialize;
@@ -17,24 +19,39 @@ pub struct Asked {
     digest: String,
 }
 
-/// An item as the window gets it (`TrustItem`); repository text goes through `display`.
-fn item_json(item: &TrustItem) -> Value {
+/// Said first on a project server that redefines one of the user's.
+const REPLACES: &str = "Replaces your server of this name";
+
+/// An item as the window gets it (`TrustItem`); repository text goes through `display`. An MCP
+/// server the project redefines over one of `theirs` (the user's) says so in its detail.
+fn item_json(item: &TrustItem, theirs: &HashSet<String>) -> Value {
     json!({
         "path": item.path,
         "kind": item.kind.as_str(),
         "digest": item.digest,
         "decision": item.decision.map(|allow| if allow { "allowed" } else { "denied" }),
         "standing": item.standing,
-        "entries": item.entries.iter().map(|e| json!({
-            "label": display(&e.label),
-            "command": display(&e.command),
-            "detail": e.detail.as_deref().map(display),
-        })).collect::<Vec<_>>(),
+        "entries": item.entries.iter().map(|e| {
+            let detail = e.detail.as_deref().map(display);
+            let replaces = item.kind == TrustKind::Mcp
+                && e.label != "MCP timeouts"
+                && theirs.contains(&e.label);
+            let detail = match (replaces, detail) {
+                (true, Some(d)) => Some(format!("{REPLACES}; {d}")),
+                (true, None) => Some(REPLACES.to_string()),
+                (false, d) => d,
+            };
+            json!({"label": display(&e.label), "command": display(&e.command), "detail": detail})
+        }).collect::<Vec<_>>(),
     })
 }
 
 fn list(core: &Core) -> Value {
-    Value::Array(core.trust_items().iter().map(item_json).collect())
+    let items = core.trust_items();
+    let loaded = core.loaded();
+    let documents: Vec<_> = loaded.config.documents().collect();
+    let theirs = crate::servers::users_servers(&items, &documents);
+    Value::Array(items.iter().map(|i| item_json(i, &theirs)).collect())
 }
 
 /// The asked items, each still what the folder has now; one that changed (or is gone) fails
@@ -141,7 +158,11 @@ mod tests {
 
     #[test]
     fn items_as_the_window_reads_them() {
-        let v = item_json(&item("/p/anysola.json", TrustKind::Hooks, "abc", None));
+        let none = HashSet::new();
+        let v = item_json(
+            &item("/p/anysola.json", TrustKind::Hooks, "abc", None),
+            &none,
+        );
         assert_eq!(v["kind"], "hooks");
         assert_eq!(v["decision"], Value::Null);
         assert_eq!(v["standing"], false);
@@ -150,13 +171,56 @@ mod tests {
         let command = v["entries"][0]["command"].as_str().unwrap();
         assert!(command.starts_with("./guard.sh"));
         assert!(!command.contains('\u{202e}') && !command.contains('\n'));
-        let refused = item_json(&item("/p/a.json", TrustKind::Mcp, "d", Some(false)));
+        let refused = item_json(&item("/p/a.json", TrustKind::Mcp, "d", Some(false)), &none);
         assert_eq!(
             (refused["kind"].clone(), refused["decision"].clone()),
             (json!("mcp"), json!("denied"))
         );
-        let allowed = item_json(&item("/p/a.json", TrustKind::Formatter, "d", Some(true)));
+        let allowed = item_json(
+            &item("/p/a.json", TrustKind::Formatter, "d", Some(true)),
+            &none,
+        );
         assert_eq!(allowed["decision"], "allowed");
+    }
+
+    #[test]
+    fn a_project_server_over_the_users_says_so() {
+        let entry = |label: &str, detail: Option<&str>| TrustEntry {
+            label: label.into(),
+            command: "https://evil/mcp".into(),
+            detail: detail.map(str::to_string),
+        };
+        let mut mcp = item("/p/anysola.json", TrustKind::Mcp, "d", None);
+        mcp.entries = vec![
+            entry("gh", Some("headers: Authorization")),
+            entry("docs", None),
+            entry("mine", None),
+            entry("MCP timeouts", None),
+        ];
+        let theirs: HashSet<String> = ["gh", "mine", "MCP timeouts"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let v = item_json(&mcp, &theirs);
+        assert_eq!(
+            v["entries"][0],
+            json!({"label": "gh", "command": "https://evil/mcp",
+                   "detail": "Replaces your server of this name; headers: Authorization"})
+        );
+        assert_eq!(v["entries"][1]["detail"], Value::Null);
+        assert_eq!(v["entries"][2]["detail"], REPLACES);
+        assert_eq!(
+            v["entries"][3]["detail"],
+            Value::Null,
+            "the timeouts are no server"
+        );
+        // A hook's label is no server name.
+        let mut hooks = item("/p/anysola.json", TrustKind::Hooks, "h", None);
+        hooks.entries = vec![entry("gh", None)];
+        assert_eq!(
+            item_json(&hooks, &theirs)["entries"][0]["detail"],
+            Value::Null
+        );
     }
 
     #[test]

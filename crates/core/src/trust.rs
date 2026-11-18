@@ -152,9 +152,51 @@ fn command_line(value: Option<&Value>) -> String {
         .unwrap_or_default()
 }
 
-fn names(value: Option<&Value>) -> Option<String> {
+/// Longest value shown whole; a longer one keeps its start and end around an ellipsis.
+const VALUE_CHARS: usize = 80;
+
+fn shorten(text: &str) -> String {
+    let count = text.chars().count();
+    if count <= VALUE_CHARS {
+        return text.to_string();
+    }
+    let keep = (VALUE_CHARS - 1) / 2;
+    let head: String = text.chars().take(keep).collect();
+    let tail: String = text.chars().skip(count - keep).collect();
+    format!("{head}…{tail}")
+}
+
+fn shown(value: &Value) -> String {
+    match value {
+        Value::String(text) => shorten(text),
+        other => shorten(&crate::json::compact(other)),
+    }
+}
+
+/// `K<sep>value` for each entry of an object, values shortened: what a server is sent or started
+/// with (substitution already happened, so a secret it reads shows here).
+fn pairs(value: Option<&Value>, separator: &str) -> Option<String> {
     let map = value?.as_object()?;
-    (!map.is_empty()).then(|| map.keys().cloned().collect::<Vec<_>>().join(", "))
+    (!map.is_empty()).then(|| {
+        map.iter()
+            .map(|(key, value)| format!("{key}{separator}{}", shown(value)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    })
+}
+
+fn oauth(value: Option<&Value>) -> Option<String> {
+    match value? {
+        Value::Bool(false) => Some("oauth: off".into()),
+        Value::Object(fields) => {
+            let shown: Vec<String> = ["client_id", "redirect_uri", "callback_port", "scope"]
+                .iter()
+                .filter_map(|key| fields.get(*key).map(|v| format!("{key} {}", shown(v))))
+                .collect();
+            (!shown.is_empty()).then(|| format!("oauth: {}", shown.join(", ")))
+        }
+        _ => None,
+    }
 }
 
 fn detail(parts: Vec<Option<String>>) -> Option<String> {
@@ -176,13 +218,18 @@ pub fn mcp_section(document: &Map<String, Value>) -> Option<(String, Vec<TrustEn
             let timeout = server
                 .get("timeout")
                 .map(|t| format!("timeout {}", crate::json::compact(t)));
+            let codemode = server
+                .get("codemode")
+                .map(|c| format!("codemode: {}", crate::json::compact(c)));
             match server["type"].as_str() {
                 Some("remote") => TrustEntry {
                     label: name.clone(),
                     command: server["url"].as_str().unwrap_or_default().to_string(),
                     detail: detail(vec![
                         disabled,
-                        names(server.get("headers")).map(|h| format!("headers: {h}")),
+                        pairs(server.get("headers"), ": ").map(|h| format!("headers: {h}")),
+                        oauth(server.get("oauth")),
+                        codemode,
                         timeout,
                     ]),
                 },
@@ -192,7 +239,8 @@ pub fn mcp_section(document: &Map<String, Value>) -> Option<(String, Vec<TrustEn
                     detail: detail(vec![
                         disabled,
                         server["cwd"].as_str().map(|c| format!("in {c}")),
-                        names(server.get("environment")).map(|e| format!("env: {e}")),
+                        pairs(server.get("environment"), "=").map(|e| format!("env: {e}")),
+                        codemode,
                         timeout,
                     ]),
                 },
@@ -209,6 +257,9 @@ pub fn mcp_section(document: &Map<String, Value>) -> Option<(String, Vec<TrustEn
     Some((digest, entries))
 }
 
+/// What `formatter: true` means for a project.
+const BUILT_IN: &str = "Runs the formatters the project itself installs (such as node_modules/.bin/prettier) on every file the agent edits.";
+
 /// The `formatter` section of a document; `None` when it turns nothing on (absent or `false`).
 pub fn formatter_section(document: &Map<String, Value>) -> Option<(String, Vec<TrustEntry>)> {
     let value = document.get("formatter")?;
@@ -216,7 +267,7 @@ pub fn formatter_section(document: &Map<String, Value>) -> Option<(String, Vec<T
         Value::Bool(true) => vec![TrustEntry {
             label: "formatter".into(),
             command: "the built-in formatters".into(),
-            detail: None,
+            detail: Some(BUILT_IN.into()),
         }],
         Value::Object(map) => map
             .iter()
@@ -232,7 +283,7 @@ pub fn formatter_section(document: &Map<String, Value>) -> Option<(String, Vec<T
                         let list: Vec<&str> = list.iter().filter_map(Value::as_str).collect();
                         format!("for {}", list.join(", "))
                     }),
-                    names(entry.get("environment")).map(|e| format!("env: {e}")),
+                    pairs(entry.get("environment"), "=").map(|e| format!("env: {e}")),
                 ]),
             })
             .collect(),
@@ -409,12 +460,12 @@ mod tests {
                 TrustEntry {
                     label: "fs".into(),
                     command: "npx -y 'server fs'".into(),
-                    detail: Some("env: K".into()),
+                    detail: Some("env: K=1".into()),
                 },
                 TrustEntry {
                     label: "web".into(),
                     command: "https://m/mcp".into(),
-                    detail: Some("headers: Authorization".into()),
+                    detail: Some("headers: Authorization: x".into()),
                 },
             ]
         );
@@ -422,9 +473,42 @@ mod tests {
     }
 
     #[test]
+    fn mcp_entries_show_what_is_sent_and_how() {
+        let secret = format!("Bearer {}", "s".repeat(200));
+        let (_, entries) = mcp_section(&map(json!({"mcp": {"servers": {
+            "gh": {"type": "remote", "url": "https://evil/mcp",
+                   "headers": {"Authorization": secret},
+                   "oauth": {"client_id": "abc", "redirect_uri": "https://cb/x"}},
+            "local": {"type": "local", "command": ["node", "s.js"],
+                      "environment": {"NODE_OPTIONS": "--require ./x.js"}, "codemode": false},
+        }}})))
+        .unwrap();
+        let gh = entries[0].detail.as_deref().unwrap();
+        assert!(gh.starts_with("headers: Authorization: Bearer sss"), "{gh}");
+        assert!(gh.contains('…') && gh.chars().count() < 200, "{gh}");
+        assert!(
+            gh.ends_with("oauth: client_id abc, redirect_uri https://cb/x"),
+            "{gh}"
+        );
+        assert_eq!(
+            entries[1].detail.as_deref(),
+            Some("env: NODE_OPTIONS=--require ./x.js; codemode: false")
+        );
+        assert_eq!(shorten("short"), "short");
+        assert_eq!(shorten(&"a".repeat(81)).chars().count(), 79);
+    }
+
+    #[test]
     fn formatter_sections() {
         let (digest, entries) = formatter_section(&map(json!({"formatter": true}))).unwrap();
         assert_eq!(entries[0].command, "the built-in formatters");
+        assert!(
+            entries[0]
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("node_modules/.bin/prettier")
+        );
         assert_eq!(digest, crate::hooks::config::digest(&json!(true)));
         let (_, entries) = formatter_section(&map(json!({"formatter": {
             "mine": {"command": ["fmt", "$FILE"], "extensions": [".x"], "environment": {"A": "1"}},
@@ -437,7 +521,7 @@ mod tests {
                 TrustEntry {
                     label: "mine".into(),
                     command: "fmt '$FILE'".into(),
-                    detail: Some("for .x; env: A".into()),
+                    detail: Some("for .x; env: A=1".into()),
                 },
                 TrustEntry {
                     label: "prettier".into(),

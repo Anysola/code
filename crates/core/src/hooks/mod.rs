@@ -34,7 +34,23 @@ pub fn display(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         let code = c as u32;
-        let bidi = matches!(code, 0x200e | 0x200f | 0x202a..=0x202e | 0x2066..=0x2069);
+        // Bidirectional controls, and characters that draw nothing (zero-width, joiners, soft
+        // hyphen, fillers): `gh` plus a zero-width space must not look like `gh`.
+        let bidi = matches!(
+            code,
+            0x061c
+                | 0x00ad
+                | 0x115f
+                | 0x1160
+                | 0x180e
+                | 0x200b..=0x200f
+                | 0x2028..=0x202e
+                | 0x2060..=0x2064
+                | 0x2066..=0x2069
+                | 0x3164
+                | 0xfeff
+                | 0xffa0
+        );
         if code < 0x20 || code == 0x7f || (0x80..0xa0).contains(&code) {
             out.push_str(&format!("\\x{code:02x}"));
         } else if bidi {
@@ -651,6 +667,20 @@ mod tests {
         assert_eq!(display("a\nb\tc\u{7f}\u{9b}"), "a\\x0ab\\x09c\\x7f\\x9b");
         assert_eq!(display("x\u{202e}y"), "x\\u{202e}y");
         assert_eq!(display("café ✓"), "café ✓");
+        for (invisible, shown) in [
+            ('\u{200b}', "\\u{200b}"),
+            ('\u{200c}', "\\u{200c}"),
+            ('\u{200d}', "\\u{200d}"),
+            ('\u{2060}', "\\u{2060}"),
+            ('\u{feff}', "\\u{feff}"),
+            ('\u{00ad}', "\\u{00ad}"),
+            ('\u{180e}', "\\u{180e}"),
+            ('\u{061c}', "\\u{061c}"),
+            ('\u{2066}', "\\u{2066}"),
+            ('\u{2069}', "\\u{2069}"),
+        ] {
+            assert_eq!(display(&format!("gh{invisible}")), format!("gh{shown}"));
+        }
     }
 
     #[test]
