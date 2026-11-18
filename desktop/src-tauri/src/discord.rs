@@ -343,26 +343,48 @@ fn open(path: &std::path::Path) -> std::io::Result<Box<dyn Pipe>> {
     Ok(Box::new(NamedPipe(file)))
 }
 
+/// A helper thread is still parked on a read that timed out.
+#[cfg(any(windows, test))]
+static PARKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Reads one frame on a helper thread and waits at most `timeout` for it. On a timeout the
 /// helper is left parked on its read and the caller drops the connection (a parked read blocks
-/// writes to that pipe); it ends when Discord answers or the pipe closes.
+/// writes to that pipe); it ends when Discord answers or the pipe closes. Until it does no other
+/// read starts: a Discord that accepts and never answers would otherwise gain a parked thread
+/// at every retry.
 #[cfg(any(windows, test))]
 fn timed<R: Read + Send + 'static>(
     mut reader: R,
     timeout: Duration,
 ) -> std::io::Result<(u32, Value)> {
+    use std::sync::atomic::Ordering;
+    if PARKED.load(Ordering::SeqCst) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "an earlier read from discord is still waiting",
+        ));
+    }
     let (sender, result) = channel();
     std::thread::Builder::new()
         .name("discord-read".into())
         .spawn(move || {
             let _ = sender.send(decode(&mut reader));
+            // After the send: a caller that just gave up either takes it or sees this.
+            PARKED.store(false, Ordering::SeqCst);
         })?;
-    result.recv_timeout(timeout).unwrap_or_else(|_| {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "discord did not answer",
-        ))
-    })
+    if let Ok(read) = result.recv_timeout(timeout) {
+        return read;
+    }
+    PARKED.store(true, Ordering::SeqCst);
+    // It may have ended between the timeout and the store above.
+    if let Ok(read) = result.try_recv() {
+        PARKED.store(false, Ordering::SeqCst);
+        return read;
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        "discord did not answer",
+    ))
 }
 
 struct Connection {
@@ -804,14 +826,22 @@ mod tests {
         let error = timed(mine, Duration::from_millis(200)).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
         assert!(start.elapsed() < Duration::from_secs(2));
+        // While that read stays parked, no other starts (and no thread piles up).
         let (mine, mut peer) = std::os::unix::net::UnixStream::pair().unwrap();
         peer.write_all(&encode(OP_FRAME, &json!({"evt": "READY"})))
             .unwrap();
+        let error = timed(mine.try_clone().unwrap(), Duration::from_secs(5)).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+        // The pipe closes: the parked read ends, and reading works again.
+        drop(theirs);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while PARKED.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
         assert_eq!(
             timed(mine, Duration::from_secs(5)).unwrap(),
             (OP_FRAME, json!({"evt": "READY"}))
         );
-        drop(theirs);
     }
 
     #[test]

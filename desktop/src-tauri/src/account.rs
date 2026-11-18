@@ -19,13 +19,25 @@ static ATTEMPT: LazyLock<watch::Sender<u64>> = LazyLock::new(|| watch::channel(0
 
 const ENV_REJECTED: &str = "ANYSOLA_TOKEN is set on this computer and was rejected. Update or remove it, then start the app again.";
 
-/// The core words its sign-in errors for the terminal.
+const OFFLINE: &str = "Can’t reach Anysola. Check your connection.";
+
+/// The core words its account errors for the terminal: as the window says them.
 fn for_window(error: String) -> String {
+    if error.starts_with("Cannot reach ") || error == "Login failed: network error" {
+        return OFFLINE.into();
+    }
+    if let Some(why) = error.strip_prefix("Could not start login: ") {
+        return format!("Couldn’t start signing in: {why}");
+    }
     error.replace("Run `anysola login` again.", "Sign in again.")
 }
 
 #[tauri::command]
 pub async fn auth_status(app: State<'_, App>) -> Answer {
+    // The app's data didn't open: signing in can't help.
+    if let Some(fault) = app.fault() {
+        return Ok(json!({"signedIn": false, "fault": fault}));
+    }
     let token = Token::resolve(app.db()?).map_err(text)?;
     Ok(json!({"signedIn": token.is_some()}))
 }
@@ -37,7 +49,10 @@ pub async fn login_start(app: State<'_, App>) -> Answer {
     if env_token().is_some() {
         return Err(ENV_REJECTED.into());
     }
-    let login = Gateway::new(None).start_device_login().await?;
+    let login = Gateway::new(None)
+        .start_device_login()
+        .await
+        .map_err(for_window)?;
     let started = json!({"url": login.url, "code": login.user_code});
     ATTEMPT.send_modify(|n| *n += 1);
     *app.login.lock().await = Some(login);
@@ -91,7 +106,7 @@ async fn call(app: &App, method: Method, route: &str) -> Result<Value, String> {
     let reply = gateway
         .account_call(method, route, None)
         .await
-        .map_err(|e| format!("{e}. Check your connection and try again."))?;
+        .map_err(for_window)?;
     match reply.status {
         401 if env => Err(ENV_REJECTED.into()),
         401 => Err("Your sign-in has expired. Sign in again.".into()),
@@ -154,13 +169,16 @@ pub async fn account(app: State<'_, App>) -> Answer {
     let Some((gateway, env)) = gateway(&app)? else {
         return Ok(json!({"expired": true}));
     };
-    let reply = gateway.account_call(Method::GET, "/me", None).await?;
+    let reply = gateway
+        .account_call(Method::GET, "/me", None)
+        .await
+        .map_err(for_window)?;
     if reply.status == 401 {
         return Ok(json!({"expired": true, "rejected": env.then_some(ENV_REJECTED)}));
     }
     if !reply.ok() {
         return Err(format!(
-            "Account details are unavailable (HTTP {}).",
+            "Anysola couldn’t load your account (HTTP {}). Try again in a moment.",
             reply.status
         ));
     }
@@ -287,7 +305,7 @@ pub async fn limits_redeem(app: State<'_, App>) -> Answer {
     let reply = gateway
         .account_call(Method::POST, "/limits/redeem", None)
         .await
-        .map_err(|e| format!("{e}. Check your connection and try again."))?;
+        .map_err(for_window)?;
     match reply.status {
         409 => return Err(reply.error().1),
         401 => return Err("Your sign-in has expired. Sign in again.".into()),
@@ -305,7 +323,10 @@ pub async fn logout(app: State<'_, App>) -> Answer {
         Gateway::new(Some(Token::Login(token)))
             .revoke_self()
             .await
-            .map_err(|e| format!("Couldn’t revoke the token: {e}. It was kept."))?;
+            .map_err(|e| match for_window(e) {
+                e if e == OFFLINE => format!("{OFFLINE} You’re still signed in."),
+                e => format!("Couldn’t sign out ({e}). You’re still signed in; try again."),
+            })?;
         db.remove_integration_credentials("anysola").map_err(text)?;
     }
     app.drop_cores().await;
@@ -383,6 +404,24 @@ mod tests {
         assert_eq!(usage["byModel"][1]["name"], "x");
         assert_eq!(usage["byDay"][0]["date"], "2026-11-16");
         assert_eq!(usage["today"], 1);
+    }
+
+    #[test]
+    fn errors_read_for_the_window() {
+        assert_eq!(
+            for_window("Cannot reach https://api.anysola.com".into()),
+            OFFLINE
+        );
+        assert_eq!(for_window("Login failed: network error".into()), OFFLINE);
+        assert_eq!(
+            for_window("The login code expired. Run `anysola login` again.".into()),
+            "The login code expired. Sign in again."
+        );
+        assert_eq!(
+            for_window("Could not start login: busy".into()),
+            "Couldn’t start signing in: busy"
+        );
+        assert_eq!(for_window("Login was denied.".into()), "Login was denied.");
     }
 
     #[test]

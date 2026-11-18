@@ -31,6 +31,14 @@ tauri-plugin-updater = "=2.14.1"
 tauri-plugin-window-state = "=2.5.0"
 tokio = { version = "1", features = ["macros", "sync", "time"] }
 
+[target.'cfg(unix)'.dependencies]
+# Signals to a child's whole process group (git, the login shell probe).
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# The user's and the machine's PATH, for an app started from the Start menu.
+windows-registry = "0.6"
+
 # Full LTO only for releases (release.yml sets it): branch builds stay quick.
 [profile.release]
 strip = true

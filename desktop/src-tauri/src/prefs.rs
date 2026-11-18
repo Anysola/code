@@ -28,6 +28,8 @@ pub struct General {
     pub default_folder: Option<String>,
     pub start_mode: String,
     pub check_updates: bool,
+    /// An editor's id (see `editor.rs`); none picks the first one found.
+    pub editor: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -83,6 +85,7 @@ impl Default for General {
             default_folder: None,
             start_mode: "last".into(),
             check_updates: true,
+            editor: None,
         }
     }
 }
@@ -170,6 +173,7 @@ impl Prefs {
             &defaults.general.start_mode,
         );
         optional(&mut self.general.default_folder);
+        optional(&mut self.general.editor);
         let a = &mut self.appearance;
         one_of(&mut a.theme, &["dark", "light", "system"], "dark");
         one_of(&mut a.text_size, &["small", "default", "large"], "default");
@@ -318,7 +322,8 @@ mod tests {
         assert_eq!(
             serde_json::to_value(Prefs::default()).unwrap(),
             json!({
-                "general": {"defaultFolder": null, "startMode": "last", "checkUpdates": true},
+                "general": {"defaultFolder": null, "startMode": "last", "checkUpdates": true,
+                            "editor": null},
                 "appearance": {"theme": "dark", "textSize": "default", "width": "default",
                                "wrapCode": false, "reduceMotion": false},
                 "conversation": {"changes": "closed", "commands": "closed", "lookups": "grouped",
@@ -341,6 +346,7 @@ mod tests {
             r#"{"appearance": {"theme": "light", "textSize": "huge", "extra": 1},
                 "notifications": {"finished": false},
                 "discord": "not an object",
+                "general": {"checkUpdates": false},
                 "unknown": true}"#,
         )
         .unwrap();
@@ -349,6 +355,11 @@ mod tests {
         assert_eq!(prefs.appearance.text_size, "default");
         assert!(!prefs.notifications.finished && prefs.notifications.approval);
         assert_eq!(prefs.discord, Discord::default());
+        assert!(!prefs.general.check_updates);
+        assert_eq!(
+            prefs.general.editor, None,
+            "a file from before editors had no key"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -378,6 +389,7 @@ mod tests {
         let mut prefs = Prefs::default();
         prefs.discord.application_id = Some(" 123 ".into());
         prefs.general.start_mode = "auto".into();
+        prefs.general.editor = Some("cursor".into());
         let prefs = prefs.normalized();
         prefs.save(&file).unwrap();
         assert_eq!(Prefs::load(&file), prefs);

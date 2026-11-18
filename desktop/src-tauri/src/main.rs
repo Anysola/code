@@ -10,19 +10,22 @@ mod actions;
 mod config;
 mod data;
 mod discord;
+mod editor;
 mod events;
 mod git;
+mod path_repair;
 mod prefs;
 mod servers;
 mod sources;
 mod transcript;
+mod tree;
 mod update;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anysola_core::api::{Core, Prompt, Target};
+use anysola_core::api::{Core, Prompt, Steered, Target};
 use anysola_core::events::Event;
 use anysola_core::gateway::account::DeviceLogin;
 use anysola_core::mcp::FormReply;
@@ -30,7 +33,6 @@ use anysola_core::model::{ModelRef, PROVIDER};
 use anysola_core::paths::Paths;
 use anysola_core::session::TurnOptions;
 use anysola_core::session::gate::{Floor, Reply};
-use anysola_core::session::inbox::Delivery;
 use anysola_core::session::message::InvokedSkill;
 use anysola_core::storage::{Db, SessionRow};
 use anysola_core::tool::question::QuestionReply;
@@ -70,6 +72,8 @@ impl Running {
 
 pub(crate) struct App {
     db: Option<Arc<Db>>,
+    /// Why the database didn't open, when it didn't.
+    db_fault: Option<String>,
     pub(crate) paths: Paths,
     /// Read without I/O by `notify()` and the commands; written by `prefs_set`.
     pub(crate) prefs: std::sync::RwLock<prefs::Prefs>,
@@ -92,13 +96,17 @@ pub(crate) struct App {
 /// case and with or without a trailing separator, and two cores on one folder would each run
 /// its MCP servers and not see the other's turns.
 fn key(directory: &str) -> PathBuf {
+    key_for(directory, cfg!(windows))
+}
+
+fn key_for(directory: &str, windows: bool) -> PathBuf {
     let trimmed = directory.trim_end_matches(['/', '\\']);
     let trimmed = if trimmed.is_empty() || trimmed.ends_with(':') {
         directory
     } else {
         trimmed
     };
-    if cfg!(windows) {
+    if windows {
         PathBuf::from(trimmed.replace('/', "\\").to_lowercase())
     } else {
         PathBuf::from(trimmed)
@@ -144,10 +152,28 @@ impl App {
     pub(crate) fn prefs(&self) -> prefs::Prefs {
         self.prefs.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
+
+    /// `{message, folder}` when the app's own data can't be opened: signing in won't help, the
+    /// window says so and offers the folder.
+    pub(crate) fn fault(&self) -> Option<Value> {
+        self.db_fault.as_ref()?;
+        let database = self.paths.database();
+        let folder = database.parent().unwrap_or(&database);
+        Some(json!({
+            "message": "Anysola Code can’t open its saved data. Close any other copy of the app \
+                        and open it again. If this keeps happening, the data folder may be damaged.",
+            "folder": folder.display().to_string(),
+        }))
+    }
 }
 
 pub(crate) fn text(e: impl std::fmt::Display) -> String {
     e.to_string()
+}
+
+/// A core error in the words a desktop user reads (no terminal commands, no session ids).
+pub(crate) fn plain_error(e: anysola_core::api::CoreError) -> String {
+    events::core_error(&e).1
 }
 
 /// The directory's core, started on first use; its events go to the window from then on.
@@ -208,37 +234,25 @@ fn forward(
     directory: String,
 ) -> tauri::async_runtime::JoinHandle<()> {
     let mut events = core.subscribe();
-    let core = core.clone();
     tauri::async_runtime::spawn(async move {
+        // The last failure each MCP server was announced with: one notice per change into it.
+        let mut announced: HashMap<String, &'static str> = HashMap::new();
         loop {
             match events.recv().await {
-                // The window has no form view yet: decline at once rather than leave the turn
-                // waiting on a form nobody sees, and say so.
-                Ok(Event::FormAsked { form }) => {
-                    core.reply_form(&form.id, FormReply::Cancelled);
-                    let server = form
-                        .metadata
-                        .get("server")
-                        .and_then(Value::as_str)
-                        .unwrap_or("An MCP server");
-                    let _ = handle.emit(
-                        "core",
-                        json!({"type": "notice", "message": format!(
-                            "{server} asked for input; the desktop app can’t show that form yet, so it was declined."
-                        )}),
-                    );
+                Ok(Event::McpStatusChanged { server }) => {
+                    if let Some(message) = mcp_notice(&mut announced, &server) {
+                        let _ = handle.emit("core", json!({"type": "notice", "message": message}));
+                    }
+                    let _ = handle.emit("core", json!({"type": "mcp", "directory": directory}));
+                }
+                // A background command's session may be a subagent's: the window has its root open.
+                Ok(Event::BackgroundChanged { session_id }) => {
+                    let root = root_of(&handle, &session_id).unwrap_or(session_id);
+                    let _ = handle.emit("core", json!({"type": "changed", "sessionId": root}));
                 }
                 Ok(event) => {
                     notify(&handle, &event);
-                    if let Some(mut payload) = events::to_json(&event, &directory) {
-                        // A subagent's ask shows in the session the user has open: its root.
-                        if matches!(
-                            event,
-                            Event::PermissionAsked { .. } | Event::QuestionAsked { .. }
-                        ) && let Some(root) = root_of(&handle, event.session_id())
-                        {
-                            payload["rootId"] = json!(root);
-                        }
+                    if let Some(payload) = request_json(&handle, &event, &directory) {
                         let _ = handle.emit("core", payload);
                     }
                 }
@@ -249,6 +263,46 @@ fn forward(
                 Err(RecvError::Closed) => return,
             }
         }
+    })
+}
+
+/// An event as the window gets it; a subagent's ask names the session the user has open above
+/// it (`rootId`), as live and as listed by `pending`.
+fn request_json(handle: &AppHandle, event: &Event, directory: &str) -> Option<Value> {
+    let mut payload = events::to_json(event, directory)?;
+    if matches!(
+        event,
+        Event::PermissionAsked { .. } | Event::QuestionAsked { .. }
+    ) && let Some(root) = root_of(handle, event.session_id())
+    {
+        payload["rootId"] = json!(root);
+    }
+    Some(payload)
+}
+
+/// The notice for a server that just failed or now needs a sign-in, once per change: the window
+/// shows MCP servers only in Settings. A server that connects or is turned off is forgotten.
+fn mcp_notice(
+    announced: &mut HashMap<String, &'static str>,
+    server: &anysola_core::mcp::Server,
+) -> Option<String> {
+    use anysola_core::mcp::Status;
+    let state = match server.status {
+        Status::Failed { .. } => "failed",
+        Status::NeedsAuth { .. } => "auth",
+        Status::Connected | Status::Disabled => {
+            announced.remove(&server.name);
+            return None;
+        }
+        // Retrying: it may come back or fail the same way again.
+        Status::Pending => return None,
+    };
+    if announced.insert(server.name.clone(), state) == Some(state) {
+        return None;
+    }
+    Some(match state {
+        "failed" => format!("The MCP server “{}” couldn’t start.", server.name),
+        _ => format!("The MCP server “{}” needs you to sign in.", server.name),
     })
 }
 
@@ -275,6 +329,24 @@ fn notify(handle: &AppHandle, event: &Event) {
             (session_id, "Needs your approval", |n: &Notifications| {
                 n.approval
             })
+        }
+        // A form belongs to a server, not a session: the server names it.
+        Event::FormAsked { form } => {
+            let wanted = handle.state::<App>().prefs().notifications;
+            let focused = handle
+                .get_webview_window("main")
+                .and_then(|w| w.is_focused().ok())
+                .unwrap_or(false);
+            if wanted.enabled && (wanted.approval || wanted.question) && !focused {
+                let server = form.metadata["server"].as_str().unwrap_or("An MCP server");
+                let _ = handle
+                    .notification()
+                    .builder()
+                    .title(server)
+                    .body("Asks for your input")
+                    .show();
+            }
+            return;
         }
         Event::QuestionAsked { session_id, .. } => {
             (session_id, "Has a question for you", |n: &Notifications| {
@@ -407,11 +479,19 @@ async fn open_session(
         .session(&session_id)
         .map_err(text)?
         .ok_or("This session no longer exists.")?;
+    // A turn the app was closed under (or that crashed) shows as interrupted, not as still
+    // running; one this or another process drives is left alone.
+    for id in transcript::family(&core, &row.id) {
+        if !core.is_busy(&id) {
+            let _ = core.settle_interrupted(&id);
+        }
+    }
     Ok(json!({
         "session": session_json(&row),
         "view": transcript::view(&core, &row.id, &row.directory)?,
         "info": info(&core, Some(&row)),
         "busy": core.is_busy(&row.id),
+        "pending": pending_of(&handle, &core, &row.id, &directory),
     }))
 }
 
@@ -450,7 +530,8 @@ async fn select_model(
         id: model,
         variant,
     };
-    core.select_model(&session_id, &reference).map_err(text)?;
+    core.select_model(&session_id, &reference)
+        .map_err(plain_error)?;
     let row = core
         .session(&session_id)
         .map_err(text)?
@@ -522,16 +603,17 @@ pub(crate) fn prepare(
 ) -> Result<String, String> {
     let id = match session_id {
         Some(id) => id,
-        None => core.open(&Target::New, false).map_err(text)?.0.id,
+        None => core.open(&Target::New, false).map_err(plain_error)?.0.id,
     };
-    core.set_permission_floor(&id, floor(mode)).map_err(text)?;
+    core.set_permission_floor(&id, floor(mode))
+        .map_err(plain_error)?;
     if let Some(model) = model {
         let reference = ModelRef {
             provider: PROVIDER.into(),
             id: model,
             variant,
         };
-        core.select_model(&id, &reference).map_err(text)?;
+        core.select_model(&id, &reference).map_err(plain_error)?;
     }
     if let Some(agent) = agent {
         let current = core.session(&id).map_err(text)?.and_then(|r| r.agent);
@@ -547,18 +629,32 @@ pub(crate) fn prepare(
 /// the window offers no retry.
 pub(crate) fn spawn_turn(handle: AppHandle, core: Core, session: String, prompt: Prompt) {
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = core.prompt(&session, prompt, TurnOptions::default()).await {
-            refused(&handle, &session, error.to_string());
+        match core.prompt(&session, prompt, TurnOptions::default()).await {
+            // Queued for a running turn, or what the turn left in the inbox: the window re-reads it.
+            Ok(_) => changed(&handle, &session),
+            Err(error) => refused_by(&handle, &session, &error),
         }
     });
 }
 
-/// Something the user asked for didn't run (as opposed to a turn that failed).
-pub(crate) fn refused(handle: &AppHandle, session: &str, error: String) {
+/// The session's view changed outside a turn's events (its inbox, its background commands).
+pub(crate) fn changed(handle: &AppHandle, session: &str) {
+    let _ = handle.emit("core", json!({"type": "changed", "sessionId": session}));
+}
+
+/// Something the user asked for didn't run (as opposed to a turn that failed); `kind` is an
+/// `ErrorKind`.
+pub(crate) fn refused(handle: &AppHandle, session: &str, kind: &str, error: String) {
     let _ = handle.emit(
         "core",
-        json!({"type": "refused", "sessionId": session, "error": error}),
+        json!({"type": "refused", "sessionId": session, "error": error, "kind": kind}),
     );
+}
+
+/// [`refused`] for a core error, in plain words.
+pub(crate) fn refused_by(handle: &AppHandle, session: &str, error: &anysola_core::api::CoreError) {
+    let (kind, message) = events::core_error(error);
+    refused(handle, session, kind, message);
 }
 
 /// A command or compaction ended: when no turn is left running, the window stops showing work
@@ -609,14 +705,12 @@ async fn prompt(
         skills,
         command: None,
     };
-    if core.is_busy(&id) {
-        // A running turn takes it when it ends.
-        core.enqueue(&id, prompt, Delivery::Queue)
-            .map_err(self::text)?;
-        return Ok(json!({"sessionId": id, "queued": true}));
-    }
+    // A running turn takes it when it ends: the core queues it for that turn, or starts one if
+    // the turn ended meanwhile. Messages left from a stopped or failed turn run after it, in the
+    // order `View.queued` shows them.
+    let queued = core.is_busy(&id);
     spawn_turn(handle.clone(), core, id.clone(), prompt);
-    Ok(json!({"sessionId": id, "queued": false}))
+    Ok(json!({"sessionId": id, "queued": queued}))
 }
 
 #[tauri::command]
@@ -670,6 +764,221 @@ async fn reply_question(
     Ok(json!(answered))
 }
 
+/// Answers an MCP server's form: accepted with its values, declined, or cancelled.
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "lowercase")]
+enum FormAnswer {
+    Accept {
+        #[serde(default)]
+        values: serde_json::Map<String, Value>,
+    },
+    Decline,
+    Cancel,
+}
+
+impl FormAnswer {
+    fn reply(self) -> FormReply {
+        match self {
+            FormAnswer::Accept { values } => FormReply::Answered(values),
+            FormAnswer::Decline => FormReply::Declined,
+            FormAnswer::Cancel => FormReply::Cancelled,
+        }
+    }
+}
+
+#[tauri::command]
+async fn reply_form(
+    handle: AppHandle,
+    app: State<'_, App>,
+    directory: String,
+    form_id: String,
+    answer: FormAnswer,
+) -> Answer {
+    let answered = core_for(&handle, &app, &directory)
+        .await?
+        .reply_form(&form_id, answer.reply());
+    Ok(json!(answered))
+}
+
+/// What waits for the user in the session (a root), its subagents and the folder's MCP servers,
+/// as the live events showed it.
+fn pending_of(handle: &AppHandle, core: &Core, session_id: &str, directory: &str) -> Vec<Value> {
+    core.pending_requests()
+        .iter()
+        .filter(|event| match event {
+            Event::FormAsked { .. } => true,
+            other => root_of(handle, other.session_id()).as_deref() == Some(session_id),
+        })
+        .filter_map(|event| request_json(handle, event, directory))
+        .collect()
+}
+
+#[tauri::command]
+async fn pending(
+    handle: AppHandle,
+    app: State<'_, App>,
+    directory: String,
+    session_id: String,
+) -> Answer {
+    let core = core_for(&handle, &app, &directory).await?;
+    Ok(json!(pending_of(&handle, &core, &session_id, &directory)))
+}
+
+/// Takes a waiting message out of the session's inbox.
+#[tauri::command]
+async fn queue_cancel(
+    handle: AppHandle,
+    app: State<'_, App>,
+    directory: String,
+    session_id: String,
+    id: String,
+) -> Answer {
+    let core = core_for(&handle, &app, &directory).await?;
+    let removed = core.cancel_pending(&id).map_err(text)?;
+    changed(&handle, &session_id);
+    // Promoted meanwhile: the turn has it, so the window must not put it back or call it removed.
+    if !removed {
+        return Err("That message already went to the session.".into());
+    }
+    transcript::view(&core, &session_id, &directory)
+}
+
+/// Hands a waiting message to the running turn at its next step.
+#[tauri::command]
+async fn queue_steer(
+    handle: AppHandle,
+    app: State<'_, App>,
+    directory: String,
+    session_id: String,
+    id: String,
+) -> Answer {
+    let core = core_for(&handle, &app, &directory).await?;
+    // Switched only while a turn holds the session: with no turn to join, a steer would merge
+    // into the next prompt's turn unseen.
+    let steered = core.steer_pending(&session_id, &id).map_err(text)?;
+    changed(&handle, &session_id);
+    match steered {
+        Steered::Taken => transcript::view(&core, &session_id, &directory),
+        Steered::NoTurn => Err("The turn ended before it could take the message.".into()),
+        Steered::Gone => Err("That message already went to the session.".into()),
+    }
+}
+
+/// Runs what waits in the inbox when no turn does (after a stop or a failure), under `mode`.
+#[tauri::command]
+async fn queue_send(
+    handle: AppHandle,
+    app: State<'_, App>,
+    directory: String,
+    session_id: String,
+    mode: String,
+) -> Answer {
+    let core = core_for(&handle, &app, &directory).await?;
+    core.set_permission_floor(&session_id, floor(&mode))
+        .map_err(text)?;
+    tauri::async_runtime::spawn(async move {
+        match core.send_queued(&session_id, TurnOptions::default()).await {
+            Ok(_) => {
+                changed(&handle, &session_id);
+                settled(&handle, &core, &session_id);
+            }
+            Err(error) => refused_by(&handle, &session_id, &error),
+        }
+    });
+    Ok(Value::Null)
+}
+
+/// Stops a background command; false when it already ended.
+#[tauri::command]
+async fn background_stop(
+    handle: AppHandle,
+    app: State<'_, App>,
+    directory: String,
+    id: String,
+) -> Answer {
+    let core = core_for(&handle, &app, &directory).await?;
+    Ok(json!(core.kill_shell(&id)))
+}
+
+/// The root sessions with work running, over every folder: a turn of their own or of one of
+/// their subagents (a background one goes on after its parent's turn ended).
+async fn busy_roots(app: &App) -> usize {
+    let mut roots = std::collections::HashSet::new();
+    for (_, core) in app.cores_running().await {
+        for id in core.busy_sessions() {
+            roots.insert(root_session(&core, &id));
+        }
+    }
+    roots.len()
+}
+
+/// The root of a session's subagent chain.
+fn root_session(core: &Core, session_id: &str) -> String {
+    let mut id = session_id.to_string();
+    // Subagents nest a few levels at most; the bound only guards a broken chain.
+    for _ in 0..16 {
+        match core.session(&id) {
+            Ok(Some(row)) => match row.parent_id {
+                Some(parent) => id = parent,
+                None => break,
+            },
+            _ => break,
+        }
+    }
+    id
+}
+
+/// How long quitting waits for stopped turns to store their end.
+const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// A second close within this long closes the app even if the window never answered the first.
+const CLOSE_AGAIN: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// When the window was last asked to confirm a close.
+static CLOSE_ASKED: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+/// What a close request does while work runs.
+#[derive(Debug, PartialEq)]
+enum Close {
+    /// Ask the window to confirm.
+    Ask,
+    /// Part of the request just asked about (a double click): nothing more.
+    Same,
+    /// Asked again soon after: stop the work and close.
+    Anyway,
+}
+
+/// Clicks closer than this are one request.
+const CLOSE_GESTURE: std::time::Duration = std::time::Duration::from_millis(500);
+
+fn close_again(asked: Option<std::time::Instant>, now: std::time::Instant) -> Close {
+    match asked.map(|at| now.saturating_duration_since(at)) {
+        Some(since) if since < CLOSE_GESTURE => Close::Same,
+        Some(since) if since < CLOSE_AGAIN => Close::Anyway,
+        _ => Close::Ask,
+    }
+}
+
+/// Closes the app even while turns run: they are stopped first, so each ends as "Stopped".
+#[tauri::command]
+async fn quit(handle: AppHandle, app: State<'_, App>) -> Answer {
+    stop_and_exit(&handle, &app).await;
+    Ok(Value::Null)
+}
+
+async fn stop_and_exit(handle: &AppHandle, app: &App) {
+    let cores = app.cores_running().await;
+    for (_, core) in &cores {
+        core.interrupt_all();
+    }
+    let start = std::time::Instant::now();
+    while cores.iter().any(|(_, core)| core.any_busy()) && start.elapsed() < QUIT_WAIT {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    // The exit handler ends the MCP servers and background commands.
+    handle.exit(0);
+}
+
 #[tauri::command]
 async fn rename_session(app: State<'_, App>, session_id: String, title: String) -> Answer {
     let title = title.trim();
@@ -705,11 +1014,20 @@ fn notify_test(handle: AppHandle) -> Answer {
 }
 
 fn main() {
+    // First, while this is the only thread: the PATH a terminal would have.
+    path_repair::repair();
     anysola_core::version::set_desktop_client();
     let paths = Paths::from_env();
     // The same file the CLI appends to, each line marked `role=desktop`; nothing on stdout.
     anysola_core::log::init_as(&paths, None, false, "desktop");
-    let db = Db::open(&paths.database()).ok().map(Arc::new);
+    path_repair::report();
+    let (db, db_fault) = match Db::open(&paths.database()) {
+        Ok(db) => (Some(Arc::new(db)), None),
+        Err(error) => {
+            anysola_core::log::warn("database failed to open", &[("error", &error.to_string())]);
+            (None, Some(error.to_string()))
+        }
+    };
     let (prefs, prefs_invalid) = prefs::Prefs::read(&paths.desktop_prefs());
     anysola_core::skill::set_claude_skills(prefs.sources.claude_skills);
     tauri::Builder::default()
@@ -730,6 +1048,7 @@ fn main() {
         .manage(update::Pending::default())
         .manage(App {
             db,
+            db_fault,
             paths,
             prefs: std::sync::RwLock::new(prefs),
             discord: std::sync::OnceLock::new(),
@@ -738,6 +1057,39 @@ fn main() {
             sign_ins: Mutex::default(),
             cores: Mutex::default(),
             login: Mutex::default(),
+        })
+        // Closing the window while turns run asks first; `quit` then stops them and exits. A
+        // second close soon after does the same without the window, which may not be answering.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let (handle, window) = (window.app_handle().clone(), window.clone());
+                tauri::async_runtime::spawn(async move {
+                    let app = handle.state::<App>();
+                    let busy = busy_roots(&app).await;
+                    if busy == 0 {
+                        let _ = window.destroy();
+                        return;
+                    }
+                    let now = std::time::Instant::now();
+                    let close = {
+                        let mut asked = CLOSE_ASKED.lock().unwrap_or_else(|e| e.into_inner());
+                        let close = close_again(*asked, now);
+                        if close != Close::Same {
+                            *asked = Some(now);
+                        }
+                        close
+                    };
+                    match close {
+                        Close::Ask => {
+                            let _ = handle
+                                .emit("core", json!({"type": "closeRequested", "busy": busy}));
+                        }
+                        Close::Same => {}
+                        Close::Anyway => stop_and_exit(&handle, &app).await,
+                    }
+                });
+            }
         })
         .setup(|app| {
             let state = app.state::<App>();
@@ -764,6 +1116,14 @@ fn main() {
             interrupt,
             reply_permission,
             reply_question,
+            reply_form,
+            pending,
+            queue_cancel,
+            queue_steer,
+            queue_send,
+            background_stop,
+            actions::message_images,
+            quit,
             rename_session,
             delete_session,
             actions::revert,
@@ -781,9 +1141,13 @@ fn main() {
             git::git_branch,
             git::git_commit,
             git::git_push,
+            git::git_pull,
+            git::git_identity,
             git::git_pr,
             git::suggest_commit_message,
             git::reveal,
+            editor::editors,
+            editor::open_in_editor,
             prefs::prefs_get,
             prefs::prefs_set,
             account::devices,
@@ -799,6 +1163,7 @@ fn main() {
             servers::mcp_retry,
             servers::mcp_sign_in,
             servers::mcp_sign_in_wait,
+            servers::mcp_sign_in_cancel,
             servers::mcp_sign_out,
             sources::sources,
             sources::personal_instructions,
@@ -832,4 +1197,103 @@ fn main() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_key_per_folder() {
+        let windows = |d| key_for(d, true);
+        assert_eq!(windows(r"C:\Work\Shop"), PathBuf::from(r"c:\work\shop"));
+        assert_eq!(windows(r"c:\work\shop\"), windows(r"C:\Work\Shop"));
+        assert_eq!(windows("C:/Work/Shop/"), windows(r"C:\Work\Shop"));
+        assert_eq!(windows(r"C:\"), PathBuf::from(r"c:\"));
+        assert_eq!(windows("C:/"), PathBuf::from(r"c:\"));
+        assert_eq!(windows("C:"), PathBuf::from("c:"));
+        assert_eq!(
+            windows(r"\\Server\Share\Proj\"),
+            PathBuf::from(r"\\server\share\proj")
+        );
+        assert_eq!(
+            windows("//server/share/proj"),
+            windows(r"\\SERVER\share\proj")
+        );
+        let unix = |d| key_for(d, false);
+        assert_eq!(unix("/home/u/Shop/"), PathBuf::from("/home/u/Shop"));
+        assert_ne!(unix("/home/u/Shop"), unix("/home/u/shop"));
+        assert_eq!(unix("/"), PathBuf::from("/"));
+    }
+
+    #[test]
+    fn a_second_close_soon_after_closes() {
+        let now = std::time::Instant::now();
+        let ago = |ms: u64| Some(now - std::time::Duration::from_millis(ms));
+        assert_eq!(close_again(None, now), Close::Ask);
+        assert_eq!(close_again(ago(100), now), Close::Same, "a double click");
+        assert_eq!(close_again(ago(1_000), now), Close::Anyway);
+        assert_eq!(close_again(ago(4_000), now), Close::Ask);
+        assert_eq!(close_again(ago(60_000), now), Close::Ask);
+    }
+}
+
+#[cfg(test)]
+mod agent_tests {
+    use super::*;
+    use anysola_core::mcp::{Server, Status};
+
+    #[test]
+    fn mcp_failures_are_announced_once_per_change() {
+        let server = |status| Server {
+            name: "docs".into(),
+            status,
+            integration: None,
+        };
+        let failed = || {
+            server(Status::Failed {
+                error: "spawn failed".into(),
+            })
+        };
+        let mut announced = HashMap::new();
+        assert_eq!(
+            mcp_notice(&mut announced, &failed()).as_deref(),
+            Some("The MCP server “docs” couldn’t start.")
+        );
+        // A retry that fails the same way says nothing new.
+        assert_eq!(mcp_notice(&mut announced, &server(Status::Pending)), None);
+        assert_eq!(mcp_notice(&mut announced, &failed()), None);
+        assert_eq!(
+            mcp_notice(
+                &mut announced,
+                &server(Status::NeedsAuth {
+                    error: "401".into()
+                })
+            )
+            .as_deref(),
+            Some("The MCP server “docs” needs you to sign in.")
+        );
+        assert_eq!(mcp_notice(&mut announced, &server(Status::Connected)), None);
+        assert!(mcp_notice(&mut announced, &failed()).is_some());
+    }
+
+    #[test]
+    fn form_answers_become_three_different_replies() {
+        let reply = |answer: Value| {
+            serde_json::from_value::<FormAnswer>(answer)
+                .unwrap()
+                .reply()
+        };
+        assert_eq!(
+            reply(json!({"action": "accept", "values": {"env": "prod", "n": 2, "tags": ["a"]}})),
+            FormReply::Answered(
+                json!({"env": "prod", "n": 2, "tags": ["a"]})
+                    .as_object()
+                    .unwrap()
+                    .clone()
+            )
+        );
+        assert_eq!(reply(json!({"action": "decline"})), FormReply::Declined);
+        assert_eq!(reply(json!({"action": "cancel"})), FormReply::Cancelled);
+    }
 }

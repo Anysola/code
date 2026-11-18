@@ -18,7 +18,8 @@ use tokio::sync::{Notify, oneshot};
 
 use crate::{Answer, App, key, mcp_for, text};
 
-/// A sign-in waiting for the browser; a newer one for the same server ends its wait.
+/// A sign-in in progress: finding the server's sign-in address (no `done` yet), then waiting
+/// for the browser. A newer one for the same server, or a cancel, takes its place and ends it.
 pub struct Waiting {
     done: Option<oneshot::Receiver<Result<(), String>>>,
     replaced: Arc<Notify>,
@@ -96,7 +97,7 @@ fn list(app: &App, core: &Core, runtime: &Runtime) -> Answer {
                 "kind": if entry["type"] == "local" { "local" } else { "remote" },
                 "target": target(&entry),
                 "status": state,
-                "error": error,
+                "error": error.map(plain),
                 "source": source,
                 "editable": source == global,
                 "oauth": server.integration.is_some(),
@@ -153,6 +154,71 @@ async fn edit(
     }
     core.reload().await;
     Ok(())
+}
+
+/// The program a failed stdio spawn names: `NotFound: ChildProcess.spawn (npx -y foo)`.
+fn spawned(error: &str, kind: &str) -> Option<String> {
+    let rest = error
+        .split_once(&format!("{kind}: ChildProcess.spawn ("))?
+        .1;
+    let program = rest.trim_end_matches(')').split_whitespace().next()?;
+    // `C:\tools\uvx.exe` or `/usr/bin/uvx`: the name says what to install.
+    let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    Some(name.to_string())
+}
+
+/// What installs a program MCP servers are commonly started with.
+fn installer(program: &str) -> Option<&'static str> {
+    let name = program.to_lowercase();
+    let name = name
+        .strip_suffix(".exe")
+        .or_else(|| name.strip_suffix(".cmd"))
+        .unwrap_or(&name);
+    Some(match name {
+        "npx" | "npm" | "node" | "pnpm" | "pnpx" => "Node.js",
+        "uvx" | "uv" => "uv",
+        "python" | "python3" | "py" | "pip" | "pipx" => "Python",
+        "docker" => "Docker",
+        "bun" | "bunx" => "Bun",
+        "deno" => "Deno",
+        _ => return None,
+    })
+}
+
+/// An MCP error as a sentence for the window: what happened and what to do.
+fn plain(error: &str) -> String {
+    if let Some(program) = spawned(error, "NotFound") {
+        return match installer(&program) {
+            Some(what) => format!(
+                "Couldn’t find `{program}`. Install {what}, or use the full path in the command."
+            ),
+            None => format!(
+                "Couldn’t find `{program}`. Install it, or use the full path in the command."
+            ),
+        };
+    }
+    if let Some(program) = spawned(error, "PermissionDenied") {
+        return format!(
+            "`{program}` isn’t allowed to run. Check that the command names a program you can run."
+        );
+    }
+    let lower = error.to_lowercase();
+    if lower.contains("address already in use")
+        || lower.contains("only one usage of each socket address")
+        || lower.contains("os error 98")
+        || lower.contains("os error 10048")
+    {
+        return "Another app is using the port this server’s sign-in listens on. Close it, or \
+                wait a moment, then try again."
+            .into();
+    }
+    if lower.contains("oauth callback timeout") {
+        return "The sign-in took too long and was stopped. Try again.".into();
+    }
+    if lower == "authorization expired" {
+        return "The sign-in was interrupted. Try again.".into();
+    }
+    error.to_string()
 }
 
 fn find(runtime: &Runtime, name: &str) -> Result<(), String> {
@@ -309,25 +375,74 @@ pub async fn mcp_sign_in(
     if server.integration.is_none() {
         return Err(format!("“{name}” doesn’t sign in with OAuth."));
     }
-    let attempt = runtime.authorize(&name).await?;
-    let waiting = Waiting {
-        done: Some(attempt.done),
-        replaced: Arc::new(Notify::new()),
+    // An earlier attempt ends first: with a fixed callback port, its listener holds the port.
+    // This one holds the slot while it finds the address, so a cancel meanwhile is seen.
+    let slot = (key(&directory), name.clone());
+    let this = Arc::new(Notify::new());
+    let discovering = Waiting {
+        done: None,
+        replaced: this.clone(),
     };
-    if let Some(earlier) = app
-        .sign_ins
-        .lock()
-        .await
-        .insert((key(&directory), name), waiting)
-    {
+    if let Some(earlier) = app.sign_ins.lock().await.insert(slot.clone(), discovering) {
         earlier.replaced.notify_one();
     }
-    let instructions = Some(attempt.instructions).filter(|i| !i.trim().is_empty());
-    Ok(json!({"url": attempt.url, "instructions": instructions}))
+    let mut tries = 0;
+    let attempt = loop {
+        match runtime.authorize(&name).await {
+            Ok(attempt) => break attempt,
+            // The earlier listener closes as its wait notices; give it a moment.
+            Err(error)
+                if tries < 5 && plain(&error).starts_with("Another app is using the port") =>
+            {
+                tries += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+            Err(error) => {
+                let mut sign_ins = app.sign_ins.lock().await;
+                if sign_ins
+                    .get(&slot)
+                    .is_some_and(|w| Arc::ptr_eq(&w.replaced, &this))
+                {
+                    sign_ins.remove(&slot);
+                }
+                return Err(plain(&error));
+            }
+        }
+    };
+    {
+        let mut sign_ins = app.sign_ins.lock().await;
+        match sign_ins.get_mut(&slot) {
+            Some(waiting) if Arc::ptr_eq(&waiting.replaced, &this) => {
+                waiting.done = Some(attempt.done);
+            }
+            // Cancelled, or a newer attempt took the slot, while the address was found: this
+            // attempt is dropped, and its listener frees the callback port.
+            _ => return Err(SIGN_IN_CANCELLED.into()),
+        }
+    }
+    // The core's words are for the terminal, where the browser tab closes on its own.
+    Ok(json!({
+        "url": attempt.url,
+        "instructions": format!("Finish signing in to {name} in your browser, then come back here."),
+    }))
+}
+
+/// What a sign-in cancelled before its address was found answers.
+const SIGN_IN_CANCELLED: &str = "The sign-in was cancelled.";
+
+/// Gives up a sign-in, still finding its address or waiting for the browser: its wait returns
+/// and its callback port is freed.
+#[tauri::command]
+pub async fn mcp_sign_in_cancel(app: State<'_, App>, directory: String, name: String) -> Answer {
+    if let Some(waiting) = app.sign_ins.lock().await.remove(&(key(&directory), name)) {
+        // A wait holding the attempt drops it as it returns; one not started yet drops it here.
+        waiting.replaced.notify_one();
+    }
+    Ok(Value::Null)
 }
 
 /// Waits for the browser to finish the sign-in, then lists the servers (the server reconnects
-/// with the new credential). A newer sign-in for the same server ends this wait.
+/// with the new credential). A newer sign-in for the same server, or a cancel, ends this wait.
 #[tauri::command]
 pub async fn mcp_sign_in_wait(
     handle: AppHandle,
@@ -346,7 +461,7 @@ pub async fn mcp_sign_in_wait(
     };
     if let Some(done) = done {
         let result = tokio::select! {
-            result = done => Some(result.unwrap_or_else(|_| Err("The sign-in expired. Try again.".into()))),
+            result = done => Some(result.unwrap_or_else(|_| Err("The sign-in expired. Try again.".into())).map_err(|e| plain(&e))),
             _ = replaced.notified() => None,
         };
         if let Some(result) = result {
@@ -409,6 +524,37 @@ mod tests {
         let legacy = json!({"mcp": {"a": {"type": "local", "command": ["x"]}}});
         assert_eq!(entry_path(legacy.as_object().unwrap(), "a"), ["mcp", "a"]);
         assert_eq!(entry_path(&Map::new(), "new"), ["mcp", "servers", "new"]);
+    }
+
+    #[test]
+    fn errors_read_as_sentences() {
+        assert_eq!(
+            plain("NotFound: ChildProcess.spawn (npx -y @modelcontextprotocol/server-x)"),
+            "Couldn’t find `npx`. Install Node.js, or use the full path in the command."
+        );
+        assert_eq!(
+            plain("NotFound: ChildProcess.spawn (C:\\tools\\uvx.exe mcp-server)"),
+            "Couldn’t find `uvx.exe`. Install uv, or use the full path in the command."
+        );
+        assert_eq!(
+            plain("NotFound: ChildProcess.spawn (my-server)"),
+            "Couldn’t find `my-server`. Install it, or use the full path in the command."
+        );
+        assert!(plain("PermissionDenied: ChildProcess.spawn (./x --y)").starts_with("`x` isn’t"));
+        for bind in [
+            "Address already in use (os error 98)",
+            "Only one usage of each socket address (protocol/network address/port) is normally permitted. (os error 10048)",
+        ] {
+            assert!(
+                plain(bind).starts_with("Another app is using the port"),
+                "{bind}"
+            );
+        }
+        assert_eq!(
+            plain("OAuth callback timeout - authorization took too long"),
+            "The sign-in took too long and was stopped. Try again."
+        );
+        assert_eq!(plain("Something else"), "Something else");
     }
 
     #[test]

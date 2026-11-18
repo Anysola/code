@@ -20,6 +20,7 @@
         "minHeight": 560,
         "decorations": false,
         "dragDropEnabled": false,
+        "zoomHotkeysEnabled": true,
         "backgroundColor": "#110f0d"
       }
     ],

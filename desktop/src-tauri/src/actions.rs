@@ -14,7 +14,10 @@ use serde_json::{Value, json};
 use tauri::{AppHandle, State};
 use tokio::sync::broadcast::error::TryRecvError;
 
-use crate::{Answer, App, core_for, info, prepare, refused, settled, spawn_turn, text, transcript};
+use crate::{
+    Answer, App, core_for, info, prepare, refused, refused_by, settled, spawn_turn, text,
+    transcript,
+};
 
 /// Files listed for `@`; a larger tree is cut here (the menu filters this list as you type).
 const FILE_LIST: usize = 20_000;
@@ -144,6 +147,29 @@ pub async fn resend(
     Ok(json!({"sessionId": id}))
 }
 
+/// A sent message's images as data URLs, in the order they were attached.
+#[tauri::command]
+pub async fn message_images(
+    handle: AppHandle,
+    app: State<'_, App>,
+    directory: String,
+    session_id: String,
+    message_id: String,
+) -> Answer {
+    let core = core_for(&handle, &app, &directory).await?;
+    let data = user_message(&core, &session_id, &message_id)?;
+    Ok(json!(images(&data)))
+}
+
+fn images(data: &UserData) -> Vec<String> {
+    data.files
+        .iter()
+        .flatten()
+        .filter(|f| f.mime.starts_with("image/"))
+        .map(|f| format!("data:{};base64,{}", f.mime, f.data))
+        .collect()
+}
+
 /// What the session changed in its files, from before its first change to now; `null`
 /// outside git, where the window sums the edits instead.
 #[tauri::command]
@@ -257,9 +283,17 @@ pub async fn run_command(
             }
         }
         match outcome {
-            Ok(Outcome::Failed(error)) if !ran => refused(&handle, &session, error.message),
+            Ok(Outcome::Failed(error)) if !ran => {
+                let (kind, _) = crate::events::error_kind(&error.kind, &error.message);
+                refused(
+                    &handle,
+                    &session,
+                    kind,
+                    crate::events::plain(kind, &error.message),
+                );
+            }
             Ok(_) => settled(&handle, &core, &session),
-            Err(error) => refused(&handle, &session, error.to_string()),
+            Err(error) => refused_by(&handle, &session, &error),
         }
     });
     Ok(json!({"sessionId": id}))
@@ -280,7 +314,7 @@ pub async fn compact(
     tauri::async_runtime::spawn(async move {
         match core.compact(&session_id).await {
             Ok(_) => settled(&handle, &core, &session_id),
-            Err(error) => refused(&handle, &session_id, error.to_string()),
+            Err(error) => refused_by(&handle, &session_id, &error),
         }
     });
     Ok(Value::Null)
@@ -355,6 +389,24 @@ pub async fn scratch_folder() -> Answer {
 #[cfg(test)]
 mod tests {
     use super::walk;
+
+    #[test]
+    fn images_come_back_as_data_urls_in_order() {
+        let data: super::UserData = serde_json::from_value(serde_json::json!({
+            "time": {"created": 1},
+            "text": "look",
+            "files": [
+                {"mime": "image/png", "data": "AAA", "source": {"type": "inline"}, "name": "a.png"},
+                {"mime": "text/plain", "data": "BBB", "source": {"type": "inline"}},
+                {"mime": "image/jpeg", "data": "CCC", "source": {"type": "inline"}},
+            ],
+        }))
+        .unwrap();
+        assert_eq!(
+            super::images(&data),
+            ["data:image/png;base64,AAA", "data:image/jpeg;base64,CCC"]
+        );
+    }
 
     #[test]
     fn walk_lists_files_and_directories_relative_and_ignores_hidden() {
