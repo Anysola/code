@@ -42,6 +42,10 @@
       "icons/icon.ico",
       "icons/icon.png"
     ],
+    "resources": {
+      "../../LICENSE": "LICENSE",
+      "../../NOTICE": "NOTICE"
+    },
     "category": "DeveloperTool",
     "shortDescription": "Anysola Code",
     "windows": {

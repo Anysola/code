@@ -9,7 +9,8 @@ branch.
 The terminal app is retired. Anysola Code is the desktop app for Windows and Linux.
 
 - The `anysola` command line and its TUI are no longer built or released: no CLI archives, no install scripts and
-  no new npm packages. 1.0.9 stays installed and keeps working where it is, but gets no updates.
+  no new npm packages. 1.0.9 was its last version: an installed terminal app no longer gets answers from Anysola,
+  only a note that it has been retired.
 - If you used the terminal app, download the desktop app from www.anysola.com/code. Your sessions, sign-in and
   settings in `~/.anysola` carry over; then remove the old binary with `anysola uninstall` or
   `npm rm -g @anysola/code`.
