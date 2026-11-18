@@ -4,7 +4,7 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
-## 1.1.0 (unreleased)
+## 1.1.0 (2026-11-18)
 
 The terminal app is retired. Anysola Code is the desktop app for Windows and Linux.
 
