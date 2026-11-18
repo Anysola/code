@@ -959,6 +959,13 @@ fn close_again(asked: Option<std::time::Instant>, now: std::time::Instant) -> Cl
     }
 }
 
+/// The window answered the close question with "keep working": the next close asks again,
+/// however soon it comes.
+#[tauri::command]
+fn keep_open() {
+    *CLOSE_ASKED.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 /// Closes the app even while turns run: they are stopped first, so each ends as "Stopped".
 #[tauri::command]
 async fn quit(handle: AppHandle, app: State<'_, App>) -> Answer {
@@ -1124,6 +1131,7 @@ fn main() {
             background_stop,
             actions::message_images,
             quit,
+            keep_open,
             rename_session,
             delete_session,
             actions::revert,

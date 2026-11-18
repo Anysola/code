@@ -1948,6 +1948,8 @@ export function quitNow() {
 
 export function keepWorking() {
   set({ closing: null })
+  // Harmless when it fails: closing again within a few seconds then closes without asking.
+  void bridge.keepOpen().catch(() => {})
 }
 
 // ---------------------------------------------------------------------------

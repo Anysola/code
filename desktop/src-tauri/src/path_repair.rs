@@ -31,14 +31,22 @@ pub fn report() {
 /// Merges the user's full PATH into the process's. Never fails and never waits long: whatever
 /// can't be read is left out.
 pub fn repair() {
+    // This runs before the window on every start: whatever goes wrong in it (a registry value
+    // no one expected, a shell that prints nonsense) must leave the app starting as it did.
     let current = std::env::var("PATH").unwrap_or_default();
-    let Some(path) = full(&current) else {
+    let Ok(Some(path)) = std::panic::catch_unwind(|| full(&current)) else {
         return;
     };
-    if path != current {
+    if settable(&path) && path != current {
         // SAFETY: called at the top of `main`, before any other thread exists.
         unsafe { std::env::set_var("PATH", &path) };
     }
+}
+
+/// What the system takes as a variable's value: `set_var` panics on a NUL, and Windows refuses
+/// a value past its limit (32,767 characters).
+fn settable(path: &str) -> bool {
+    !path.is_empty() && !path.contains('\0') && path.encode_utf16().count() < 32_767
 }
 
 #[cfg(unix)]
@@ -289,6 +297,32 @@ fn merge(lists: &[Vec<String>], windows: bool) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    /// The real thing, on whatever this machine has (on Windows: the registry read).
+    #[test]
+    fn repairing_this_machine_gives_a_value_the_system_takes() {
+        let current = std::env::var("PATH").unwrap_or_default();
+        if let Some(path) = super::full(&current) {
+            assert!(super::settable(&path), "{path:?}");
+            // Nothing the app was started with is lost.
+            for dir in std::env::split_paths(&current).filter(|d| !d.as_os_str().is_empty()) {
+                let dir = dir.to_string_lossy().to_lowercase();
+                let dir = dir.trim_end_matches(['\\', '/']);
+                assert!(
+                    path.to_lowercase().contains(dir),
+                    "{dir} is missing from {path}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_value_the_system_refuses_is_not_set() {
+        assert!(!super::settable(""));
+        assert!(!super::settable("a\0b"));
+        assert!(!super::settable(&"x".repeat(40_000)));
+        assert!(super::settable("/usr/bin:/bin"));
+    }
+
     use super::*;
 
     #[test]

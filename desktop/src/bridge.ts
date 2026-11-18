@@ -596,6 +596,8 @@ export type Bridge = {
 
   /** Closes the app even while turns run (they are stopped). */
   quit(): Promise<void>
+  /** The close question was answered "keep working": closing again asks again. */
+  keepOpen(): Promise<void>
 
   pickFolder(defaultPath?: string | null): Promise<string | null>
   openUrl(url: string): Promise<void>
@@ -692,6 +694,7 @@ function tauriBridge(): Bridge {
     discordStatus: () => invoke("discord_status"),
     presence: (presence) => invoke("presence", { presence }),
     quit: () => invoke("quit"),
+    keepOpen: () => invoke("keep_open"),
     async pickFolder(defaultPath) {
       const { open } = await import("@tauri-apps/plugin-dialog")
       const picked = await open({ directory: true, multiple: false, defaultPath: defaultPath ?? undefined })

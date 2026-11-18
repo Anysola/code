@@ -819,7 +819,8 @@ const DECLINED = "The user declined this tool call"
 
 /** Ended by the user, by a stop or a Deny: the row says so itself, with no error under it. */
 function cutShort(tool: Tool) {
-  return tool.status === "error" && (tool.error === CUT_SHORT || tool.error === DECLINED)
+  // A call settled after the app died reads "Tool execution interrupted: <tool>".
+  return tool.status === "error" && (!!tool.error?.startsWith(CUT_SHORT) || tool.error === DECLINED)
 }
 
 function ToolState({ state }: { state: ReturnType<typeof useToolState> }) {

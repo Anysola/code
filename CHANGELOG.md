@@ -24,7 +24,7 @@ terminal.
   - Closing the window while a turn runs asks first. An update waits for the running turn, shows its download,
     and stops MCP servers and background commands before it restarts.
 - Nothing typed is lost.
-  - The draft, its images and its review comments belong to their session and survive a restart.
+  - A draft, its images and its review comments belong to their session; its text survives a restart.
   - A message that could not be sent goes back into the message box.
   - Arrow up recalls what you sent; a long paste folds into a chip; Escape stops a turn on the second press.
 - Errors say what to do. A full usage window shows when it starts over, with "Use a saved reset" and "See usage"

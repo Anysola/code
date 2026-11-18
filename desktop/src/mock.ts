@@ -1164,6 +1164,7 @@ export function mockBridge(): Bridge {
     async quit() {
       location.reload()
     },
+    async keepOpen() {},
     async renameSession(sessionId, title) {
       const row = rows.find((r) => r.id === sessionId)
       if (row) row.title = title
