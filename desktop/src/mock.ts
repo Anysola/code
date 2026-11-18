@@ -29,7 +29,9 @@
  * What a project wants to run: `?trust=all` (a file with hooks, MCP servers and formatters, all
  * waiting), `mcp` (only its servers wait), `formatter` (only its formatters, `true`), `refused` (its
  * servers were refused), `replaces` (one of its servers redefines your github, with long details
- * and the file's MCP timeouts). Answers go through `trustAnswer`, logged in `window.__trustCalls`.
+ * and the file's MCP timeouts), `permissions` / `remote` (only its allow rules / downloads wait),
+ * `permissions-refused` / `remote-refused`, `five` (one file with all five kinds waiting),
+ * `agentfile` (anysola.json's rules and an agent file's, two cards). Answers go through `trustAnswer`, logged in `window.__trustCalls`.
  *
  * Settings: `?settings=<section>` opens one; `?fail=usage,mcpList` makes those calls fail,
  * `?delay=800` slows every settings call, `?theme=light` previews a theme, `?empty=1` empties
@@ -874,7 +876,9 @@ export function mockBridge(): Bridge {
   let data = empty ? { ...data0(), imported: null, sessions: 0 } : data0()
   // What the folder's hooks are: `?hooks=` picks the scene, the calls below change it.
   const trustScene = empty ? null : params.get("trust")
-  const hookScene = empty ? "none" : (params.get("hooks") ?? (trustScene === "all" ? "waiting" : "user"))
+  /** `five`: the `all` file, with rules and downloads waiting too. */
+  const allScene = trustScene === "all" || trustScene === "five"
+  const hookScene = empty ? "none" : (params.get("hooks") ?? (allScene ? "waiting" : "user"))
   let userHooks: MockHook[] = hookScene === "none" ? [] : hookScene === "all" ? [...userHooks0, envHook] : [...userHooks0]
   let hookFiles = (
     {
@@ -905,7 +909,7 @@ export function mockBridge(): Bridge {
   // A project's MCP servers and formatters, each kind answered on its own (`?trust=`).
   const PROJECT = `${WEB}/anysola.json`
   const DOT = `${WEB}/.anysola/anysola.json`
-  const mcpFile = trustScene === "all" ? DOT : PROJECT
+  const mcpFile = allScene ? DOT : PROJECT
   type Section = { path: string; kind: TrustKind; digest: string; decision: TrustItem["decision"] }
   const sections: Section[] = empty
     ? []
@@ -914,12 +918,12 @@ export function mockBridge(): Bridge {
           path: mcpFile,
           kind: "mcp",
           digest: "4a1c9e2b7d3f5a8c0e6b2d4f1a3c5e7b9d0f2a4c6e8b1d3f5a7c9e0b2d4f6a8c",
-          decision: trustScene === "all" || trustScene === "mcp" || trustScene === "replaces" ? null : trustScene === "refused" ? "denied" : "allowed",
+          decision: allScene || trustScene === "mcp" || trustScene === "replaces" ? null : trustScene === "refused" ? "denied" : "allowed",
         },
-        ...(trustScene === "all" || trustScene === "formatter"
+        ...(allScene || trustScene === "formatter"
           ? [
               {
-                path: trustScene === "all" ? DOT : PROJECT,
+                path: allScene ? DOT : PROJECT,
                 kind: "formatter" as const,
                 digest: "7e3b1d5f9a2c4e6b8d0f1a3c5e7b9d2f4a6c8e0b1d3f5a7c9e2b4d6f8a0c1e3b",
                 decision: null,
@@ -927,7 +931,32 @@ export function mockBridge(): Bridge {
             ]
           : []),
       ]
-  if (!empty && (trustScene === "all" || trustScene === "mcp")) {
+  // Rules that let the agent do more, and what a file makes the app download.
+  const AGENT_FILE = `${WEB}/.anysola/agent/build.md`
+  const rulesScene = ["five", "permissions", "permissions-refused", "agentfile"].includes(trustScene ?? "")
+  const remoteScene = ["five", "remote", "remote-refused"].includes(trustScene ?? "")
+  if (!empty && rulesScene)
+    sections.push({
+      path: trustScene === "five" ? DOT : PROJECT,
+      kind: "permissions",
+      digest: "2c4e6a8b0d1f3a5c7e9b2d4f6a8c0e1b3d5f7a9c2e4b6d8f0a1c3e5b7d9f2a4c",
+      decision: trustScene === "permissions-refused" ? "denied" : null,
+    })
+  if (!empty && trustScene === "agentfile")
+    sections.push({
+      path: AGENT_FILE,
+      kind: "permissions",
+      digest: "5d7f9b1c3e5a7c9e1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e",
+      decision: null,
+    })
+  if (!empty && remoteScene)
+    sections.push({
+      path: trustScene === "five" ? DOT : PROJECT,
+      kind: "remote",
+      digest: "8f0a2c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a",
+      decision: trustScene === "remote-refused" ? "denied" : null,
+    })
+  if (!empty && (allScene || trustScene === "mcp")) {
     // A project with more than one server: one answer covers them all.
     servers = servers.filter((x) => x.name !== "playwright")
     const local = { kind: "local" as const, error: null, editable: false, oauth: false, signedIn: false, prompts: 0 }
@@ -1001,6 +1030,24 @@ export function mockBridge(): Bridge {
                   ? [{ label: "MCP timeouts", command: '{"startup":5,"request":3600}', detail: null }]
                   : []
               )
+          : x.kind === "permissions"
+            ? x.path === AGENT_FILE
+              ? [
+                  { label: "agent build", command: "allow edit: *", detail: AGENT_FILE },
+                  { label: "agent build", command: "allow shell: *", detail: AGENT_FILE },
+                ]
+              : [
+                  { label: "all agents", command: "allow shell: npm test*", detail: null },
+                  { label: "all agents", command: "allow webfetch: https://developer.mozilla.org/*", detail: null },
+                  { label: "agent build", command: "allow edit: apps/web/src/**", detail: null },
+                  { label: "agent plan", command: "allow external_directory: ~/code/shared-config/**", detail: null },
+                  { label: "policy", command: "deny mcp.use: github", detail: null },
+                ]
+          : x.kind === "remote"
+            ? [
+                { label: "instructions", command: "https://raw.githubusercontent.com/anysola/handbook/main/agents/web-team-rules.md", detail: null },
+                { label: "design-tokens", command: "https://github.com/anysola/design-tokens (branch main)", detail: null },
+              ]
           : trustScene === "formatter"
             ? [{ label: "formatter", command: "the built-in formatters", detail: null }]
             : [

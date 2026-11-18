@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 
 use anysola_core::paths::Paths;
 use anysola_core::storage::Db;
-use serde_json::{Value, json};
+use anysola_core::trust::TrustKind;
+use serde_json::{Map, Value, json};
 use tauri::{AppHandle, State};
 
 use crate::{Answer, App, core_for, text};
@@ -32,13 +33,21 @@ fn saved(db: &Db) -> Answer {
     Ok(Value::Array(list))
 }
 
-/// Every project's saved answers, and the configured rules for `directory` with their files.
-#[tauri::command]
-pub async fn permissions(handle: AppHandle, app: State<'_, App>, directory: String) -> Answer {
-    let core = core_for(&handle, &app, &directory).await?;
-    let loaded = core.loaded();
+/// The rules the documents apply, with their files. A project file's allow rules are left out
+/// until its `permissions` are allowed: the core does not apply them, and the window shows them
+/// as waiting from `trust`.
+fn rules(
+    documents: &[(&str, &Map<String, Value>)],
+    sections: &[anysola_core::trust::Section],
+) -> Vec<Value> {
+    let withheld = |source: &str| {
+        sections.iter().any(|s| {
+            s.kind == TrustKind::Permissions && s.path == source && s.decision != Some(true)
+        })
+    };
     let mut rules = Vec::new();
-    for (source, data) in loaded.config.documents() {
+    for (source, data) in documents {
+        let withheld = withheld(source);
         for rule in data
             .get("permissions")
             .and_then(Value::as_array)
@@ -51,7 +60,7 @@ pub async fn permissions(handle: AppHandle, app: State<'_, App>, directory: Stri
             else {
                 continue;
             };
-            if !matches!(effect, "allow" | "ask" | "deny") {
+            if !matches!(effect, "allow" | "ask" | "deny") || (withheld && effect == "allow") {
                 continue;
             }
             rules.push(
@@ -59,6 +68,16 @@ pub async fn permissions(handle: AppHandle, app: State<'_, App>, directory: Stri
             );
         }
     }
+    rules
+}
+
+/// Every project's saved answers, and the configured rules for `directory` with their files.
+#[tauri::command]
+pub async fn permissions(handle: AppHandle, app: State<'_, App>, directory: String) -> Answer {
+    let core = core_for(&handle, &app, &directory).await?;
+    let loaded = core.loaded();
+    let documents: Vec<_> = loaded.config.documents().collect();
+    let rules = rules(&documents, &loaded.config.trust);
     Ok(json!({"saved": saved(app.db()?)?, "rules": rules}))
 }
 
@@ -319,6 +338,58 @@ pub async fn about(handle: AppHandle) -> Answer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_projects_allow_rules_wait_for_approval() {
+        let section = |path: &str, decision| anysola_core::trust::Section {
+            path: path.into(),
+            kind: TrustKind::Permissions,
+            digest: "d".into(),
+            decision,
+            entries: Vec::new(),
+        };
+        let doc = json!({"permissions": [
+            {"action": "shell", "resource": "npm test*", "effect": "allow"},
+            {"action": "shell", "resource": "rm *", "effect": "deny"},
+            {"action": "edit", "resource": "*", "effect": "ask"}]});
+        let doc = doc.as_object().unwrap();
+        let user = "/home/u/.anysola/config.json";
+        let project = "/p/anysola.json";
+        let effects = |sections: &[anysola_core::trust::Section]| -> Vec<(String, String)> {
+            rules(&[(user, doc), (project, doc)], sections)
+                .iter()
+                .map(|r| {
+                    let file = if r["source"] == user {
+                        "user"
+                    } else {
+                        "project"
+                    };
+                    (file.to_string(), r["effect"].as_str().unwrap().to_string())
+                })
+                .collect()
+        };
+        let pair = |f: &str, e: &str| (f.to_string(), e.to_string());
+        let all = vec![
+            pair("user", "allow"),
+            pair("user", "deny"),
+            pair("user", "ask"),
+            pair("project", "allow"),
+            pair("project", "deny"),
+            pair("project", "ask"),
+        ];
+        let tightening = vec![
+            pair("user", "allow"),
+            pair("user", "deny"),
+            pair("user", "ask"),
+            pair("project", "deny"),
+            pair("project", "ask"),
+        ];
+        assert_eq!(effects(&[section(project, None)]), tightening);
+        assert_eq!(effects(&[section(project, Some(false))]), tightening);
+        assert_eq!(effects(&[section(project, Some(true))]), all);
+        // No section: the file has no allow rule of its own to approve.
+        assert_eq!(effects(&[]), all);
+    }
 
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

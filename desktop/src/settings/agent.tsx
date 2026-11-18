@@ -29,6 +29,7 @@ import {
   Value,
 } from "./controls"
 import { shortPath } from "./hooks"
+import { ProjectTrust } from "./trust"
 
 /** The folder the agent sections read, and whether it is the app's own; or why it can't be read. */
 function useFolder(): { directory: string; own: boolean } | { error: string; retry: () => void } | null {
@@ -130,6 +131,8 @@ function Permissions({ directory }: { directory: string }) {
         </dl>
         <p className="text-2xs text-muted">The rules below apply in every mode: a rule can still ask, or refuse.</p>
       </section>
+      {/* A project's own allow rules wait for an answer: above what is in effect. */}
+      <ProjectTrust directory={directory} kind="permissions" />
       <Loaded load={load} rows={3}>
         {({ saved, rules }) => (
           <>
@@ -452,6 +455,7 @@ export function InstructionsSection() {
       {(directory) => (
         <>
           <Personal />
+          <ProjectTrust directory={directory} kind="remote" />
           <InEffect directory={directory} />
         </>
       )}

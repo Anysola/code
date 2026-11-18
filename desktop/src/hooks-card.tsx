@@ -83,8 +83,35 @@ export function TrustCards({ directory, className }: { directory: string; classN
   )
 }
 
-const KIND_ORDER: TrustKind[] = ["hooks", "mcp", "formatter"]
-const HEADING: Record<TrustKind, string> = { hooks: "Hooks", mcp: "MCP servers", formatter: "Formatters" }
+const KIND_ORDER: TrustKind[] = ["hooks", "mcp", "formatter", "permissions", "remote"]
+const HEADING: Record<TrustKind, string> = {
+  hooks: "Hooks",
+  mcp: "MCP servers",
+  formatter: "Formatters",
+  permissions: "Changes to your rules",
+  remote: "What it downloads",
+}
+
+/** What allowing does, by what it is about: the card's question names each that waits. */
+const DOES = { run: "run commands", rules: "change your rules", fetch: "download files" } as const
+const doesOf = (kind: TrustKind): keyof typeof DOES =>
+  kind === "permissions" ? "rules" : kind === "remote" ? "fetch" : "run"
+
+/** "Let this project run commands, change your rules and download files?" for what waits. */
+function question(items: TrustItem[]) {
+  const does = (["run", "rules", "fetch"] as const).filter((d) => items.some((i) => doesOf(i.kind) === d)).map((d) => DOES[d])
+  const list = does.length > 1 ? `${does.slice(0, -1).join(", ")} and ${does[does.length - 1]}` : does[0]
+  return `Let this project ${list}?`
+}
+
+/** The line under the question: what allowing changes, when it is one thing; else that nothing applies yet. */
+function consequence(items: TrustItem[]) {
+  const does = new Set(items.map((i) => doesOf(i.kind)))
+  if (does.size > 1) return "None of this applies until you allow it. Allow only if you trust this project."
+  if (does.has("rules")) return "These change what the agent may do without asking you. Allow only if you trust this project."
+  if (does.has("fetch")) return "The app fetches these each time it opens this project. Allow only if you trust this project."
+  return "Its config starts these on this computer once you allow them. Allow only if you trust this project."
+}
 
 function TrustCard({ path, items, directory }: { path: string; items: TrustItem[]; directory: string }) {
   const [busy, setBusy] = useState<boolean | null>(null)
@@ -103,21 +130,21 @@ function TrustCard({ path, items, directory }: { path: string; items: TrustItem[
   const removed = !!hooks && hooks.entries.length === 0
   const changed = !!hooks?.standing && !removed
   return (
-    <section className="rounded-xl bg-surface p-4" aria-label="What this project wants to run">
+    <section className="rounded-xl bg-surface p-4" aria-label="What this project wants to change">
       <div className="flex items-center gap-2 text-sm">
         <span className="size-1.5 rounded-full bg-warning" />
         {onlyHooks && removed
           ? "This project’s hooks were removed"
           : onlyHooks && changed
             ? "This project’s hooks changed"
-            : "Let this project run commands?"}
+            : question(items)}
       </div>
       <p className="text-dense mt-1 pl-3.5 text-muted">
         {onlyHooks && removed
           ? "The file below no longer defines hooks. The ones you allowed before keep running until you accept that."
           : onlyHooks && changed
             ? `The ones you allowed before keep running until you allow ${hooks.entries.length === 1 ? "this one" : "these"}. Allow only if you trust the change.`
-            : "Its config starts these on this computer once you allow them. Allow only if you trust this project."}
+            : consequence(items)}
       </p>
       {/* Not capped: what the answer covers is all on the page, never inside a box of its own that scrolls. */}
       <div className="mt-3 flex flex-col gap-3 rounded-lg bg-background/60 px-3 py-2.5">
@@ -167,6 +194,72 @@ function hookLabel(label: string): ReactNode {
   return when(m[1] as HookEvent, m[2] ?? null)
 }
 
+/** Where a project's rule applies, as the core labels it: `all agents`, `agent build`, `policy`. */
+export function scopeLabel(label: string) {
+  if (label === "all agents") return "Every agent"
+  if (label === "policy") return "Project policy"
+  const agent = /^agent (.+)$/.exec(label)
+  return agent ? `The ${agent[1].charAt(0).toUpperCase()}${agent[1].slice(1)} agent` : label
+}
+
+const Code = ({ children }: { children: ReactNode }) => <span className="font-mono text-xs break-all">{children}</span>
+
+/**
+ * A project rule as a person reads it: `allow shell: npm test*` is "Run npm test* without
+ * asking", a policy `deny mcp.use: github` is "Turn off your server github". Anything the app
+ * has no words for is shown as the core wrote it.
+ */
+export function ruleText(rule: string): ReactNode {
+  const m = /^(allow|deny|ask) ([\w.]+):? ?(.*)$/.exec(rule.trim())
+  if (!m) return <Code>{rule}</Code>
+  const [, effect, action, resource] = m
+  const any = resource === "" || resource === "*"
+  const what = <Code>{resource}</Code>
+  if (effect === "deny") {
+    if (action === "mcp.use") return <>Turn off your server {what}</>
+    if (action === "provider.use") return <>Turn off your provider {what}</>
+    if (action === "integration.use" || action === "integration.connect") return <>Turn off your integration {what}</>
+    return <Code>{rule}</Code>
+  }
+  if (effect !== "allow") return <Code>{rule}</Code>
+  const without = " without asking"
+  switch (action) {
+    case "shell":
+    case "bash":
+      return any ? <>Run any command{without}</> : <>Run {what}{without}</>
+    case "edit":
+    case "write":
+      return any ? <>Change any file{without}</> : <>Change {what}{without}</>
+    case "read":
+      return any ? <>Read any file{without}</> : <>Read {what}{without}</>
+    case "webfetch":
+      return any ? <>Open any web page{without}</> : <>Open {what}{without}</>
+    case "websearch":
+      return <>Search the web{without}</>
+    case "external_directory":
+      return any ? <>Work in any folder outside the project{without}</> : <>Work in {what}, outside the project,{without}</>
+    case "mcp.use":
+      return any ? <>Use any MCP server{without}</> : <>Use the server {what}{without}</>
+    case "tool.use":
+      return any ? <>Use any tool{without}</> : <>Use the tool {what}{without}</>
+    default:
+      return any ? <>Use {action}{without}</> : <>Use {action} on {what}{without}</>
+  }
+}
+
+/** An address a project makes the app fetch, said as what happens. */
+export function remoteText(e: TrustEntry): ReactNode {
+  const repo = /^(.*) \(branch (.+)\)$/.exec(e.command)
+  if (e.label === "instructions") return <>Reads instructions from <Code>{e.command}</Code> each time</>
+  return repo ? (
+    <>
+      Downloads the repository <Code>{repo[1]}</Code>, branch <Code>{repo[2]}</Code>
+    </>
+  ) : (
+    <>Downloads the repository <Code>{e.command}</Code></>
+  )
+}
+
 /** Said first, on a line of its own: allowing takes the user's own server away. */
 const REPLACES = "Replaces your server of this name"
 
@@ -185,13 +278,22 @@ function Entries({ kind, entries }: { kind: TrustKind; entries: TrustEntry[] }) 
       {entries.map((e, i) => {
         // "the built-in formatters": words, not a command line.
         const words = kind === "formatter" && /^the built-in /.test(e.command)
-        const parts = e.detail ? detailParts(e.detail) : []
+        // Rules and downloads are said as sentences, with the rule's or the address's own text in them.
+        const sentence = kind === "permissions" ? ruleText(e.command) : kind === "remote" ? remoteText(e) : null
+        // A rule's detail is the agent file it comes from: the card already names its file.
+        const parts = e.detail && kind !== "permissions" ? detailParts(e.detail) : []
         const replaces = parts[0]?.startsWith(REPLACES)
         const rest = replaces ? parts.slice(1) : parts
         return (
           <li key={i} className="contents">
             <span className="text-dense max-w-56 min-w-0 break-words text-foreground/85">
-              {kind === "hooks"
+              {kind === "permissions"
+                ? scopeLabel(e.label)
+                : kind === "remote"
+                  ? e.label === "instructions"
+                    ? "Instructions"
+                    : e.label
+                  : kind === "hooks"
                 ? hookLabel(e.label)
                 : kind === "formatter" && e.label === "formatter"
                   ? "Formatters"
@@ -202,9 +304,13 @@ function Entries({ kind, entries }: { kind: TrustKind; entries: TrustEntry[] }) 
             <span className="text-2xs text-muted" aria-hidden>
               →
             </span>
-            <span className={cn("break-all whitespace-pre-wrap", words ? "text-dense text-muted" : "font-mono text-xs")}>
-              {words ? e.command.charAt(0).toUpperCase() + e.command.slice(1) : e.command}
-            </span>
+            {sentence ? (
+              <span className="text-dense min-w-0 break-words">{sentence}</span>
+            ) : (
+              <span className={cn("break-all whitespace-pre-wrap", words ? "text-dense text-muted" : "font-mono text-xs")}>
+                {words ? e.command.charAt(0).toUpperCase() + e.command.slice(1) : e.command}
+              </span>
+            )}
             {/* Under the row, the width of the card: a long value (a header, an environment
                 variable) wraps here and never squeezes the command. A shorter limit can weaken a
                 guard, a header can carry a key: said where it is decided. */}

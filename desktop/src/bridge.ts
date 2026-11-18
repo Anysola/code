@@ -306,8 +306,13 @@ export type HookFile = {
   standing?: boolean
 }
 
-/** What a project file can make the app run, each approved on its own. */
-export type TrustKind = "hooks" | "mcp" | "formatter"
+/**
+ * What a project file can change on this computer, each approved on its own: commands it runs
+ * (`hooks`, `mcp`, `formatter`), what it lets the agent do without asking (`permissions`: its
+ * allow rules; rules that ask or deny apply without approval), and what it makes the app download
+ * (`remote`: instruction URLs and git repositories).
+ */
+export type TrustKind = "hooks" | "mcp" | "formatter" | "permissions" | "remote"
 
 /** One thing a project file would run. `command`: a command line or a URL; `detail`: the rest worth knowing. */
 export type TrustEntry = { label: string; command: string; detail: string | null }

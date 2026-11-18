@@ -12,7 +12,15 @@ branch.
   started and those formatters do not run; your own servers and formatters are not affected, and a project file
   that redefines one of your servers says so and changes nothing until you allow it. A change to them asks again.
   Settings → MCP servers shows a project's servers that wait, with Allow.
+- A project only tightens your rules until you say otherwise: the rules in its config, its agents and its agent
+  files that would let the agent act without asking (and its policies that would turn off your own servers or
+  providers) wait for your approval, in the same question; its rules that ask or deny apply at once. Settings →
+  Permissions lists what waits, and no longer shows a project's unapproved rules as if they were in effect.
+- A project's config makes the app download nothing until you allow it: instruction URLs are not fetched and git
+  references are not cloned before that. Settings → Instructions lists what waits.
 - A project's config can no longer choose the shell that runs commands: `shell` only works in your own config.
+- The agent's edit and write tools also ask before changing the agent, command and skill folders in your config
+  directory. `{file:…}` in a config reads at most 1 MiB, and only regular files from a project's config.
 - Names and commands from a project are shown with invisible and direction-changing characters written out.
 
 ## 1.0.9 (2026-11-18)

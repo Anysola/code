@@ -224,6 +224,56 @@ mod tests {
     }
 
     #[test]
+    fn permissions_and_remote_items_go_through_like_the_rest() {
+        let none = HashSet::new();
+        let agent = "/p/.anysola/agent/build.md";
+        let mut rules = item(agent, TrustKind::Permissions, "p1", None);
+        rules.entries = vec![TrustEntry {
+            label: "agent build".into(),
+            command: "allow shell: npm test*\u{202e}".into(),
+            detail: Some(agent.into()),
+        }];
+        let v = item_json(&rules, &none);
+        assert_eq!(v["kind"], "permissions");
+        assert_eq!(v["path"], agent);
+        assert_eq!(
+            v["entries"][0],
+            json!({"label": "agent build", "command": "allow shell: npm test*\\u{202e}",
+                   "detail": agent})
+        );
+        let mut remote = item("/p/anysola.json", TrustKind::Remote, "r1", Some(false));
+        remote.entries = vec![TrustEntry {
+            label: "instructions".into(),
+            command: "https://x/rules.md".into(),
+            detail: None,
+        }];
+        let v = item_json(&remote, &["instructions".to_string()].into());
+        assert_eq!(v["kind"], "remote");
+        assert_eq!(v["decision"], "denied");
+        assert_eq!(
+            v["entries"][0]["detail"],
+            Value::Null,
+            "only MCP servers replace"
+        );
+        let items = [rules, remote];
+        assert_eq!(
+            current(
+                &items,
+                &[
+                    asked(agent, "permissions", "p1"),
+                    asked("/p/anysola.json", "remote", "r1")
+                ]
+            )
+            .unwrap()
+            .iter()
+            .map(|(_, kind, _)| *kind)
+            .collect::<Vec<_>>(),
+            [TrustKind::Permissions, TrustKind::Remote]
+        );
+        assert!(current(&items, &[asked(agent, "remote", "p1")]).is_err());
+    }
+
+    #[test]
     fn a_stale_item_fails_the_whole_answer() {
         let items = [
             item("/p/anysola.json", TrustKind::Hooks, "h1", None),
