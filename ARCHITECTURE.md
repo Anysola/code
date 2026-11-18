@@ -1,106 +1,74 @@
-# Anysola Code (Rust)
+# Anysola Code: architecture
 
-A from-scratch Rust rewrite of Anysola Code 0.5.1 (an OpenCode 2.2.5 fork in TypeScript/Bun). The target is the
-same product, feature for feature: what a 0.5.1 user sees and uses keeps working, and existing session history is
-imported. `PARITY.md` is the checklist that defines "done"; this file is the shape of the code and its budgets.
-
-## Why
-
-Measured on linux-arm64, 0.5.1:
-
-| | 0.5.1 (TS/Bun) | Rust budget (CI fails above) |
-|---|---|---|
-| Binary | 196 MB (88 MB tar.gz), ~99 MB of it the Bun runtime | 25 MB stripped, 12 MB archive |
-| `anysola --version` | 80 ms, 80 MB RSS | 15 ms, 10 MB RSS |
-| Idle TUI | 3 processes, ~340 MB RSS | 1 process, 40 MB RSS |
-| TUI first frame | not measured | 150 ms |
-
-A dependency probe with the whole stack below (tokio, reqwest/rustls, ratatui, rusqlite bundled, syntect with
-default syntaxes, ripgrep crates, tree-sitter-bash, image, rmcp, htmd, nucleo) builds to 10.7 MB stripped, 4.6 MB
-gzipped, starts in under 10 ms at 4 MB RSS on linux-arm64. The budgets leave room for our own code on top of that.
-
-The archive budget started at 10 MB and was raised to 12 MB once Code Mode (QuickJS), the mermaid and LaTeX
-renderers, the terminal pane and the MCP client were in; linux-x64 measured 10.2 MB at that point.
-
-Budgets are checked by `script/budget.sh` in CI on every push (size of the linux-x64 release binary and archive,
-`--version` time and RSS, idle TUI RSS against the fake gateway). A dependency that spends a large share of the
-size budget needs a line in this file saying why.
+Anysola Code is a desktop app (Tauri 2) for Windows x64 and Linux x64. The agent is a Rust library; the app runs it
+in its own process and draws the window with React. 1.0.0 to 1.0.9 also shipped a terminal app (`anysola`, CLI and
+TUI) on the same library; it was retired in 1.1.0 and its code is in the history up to `v1.0.9`.
 
 ## Process model
 
-One process. The TUI, the agent loop, tools and storage run in the same address space on a tokio runtime. Child
-processes exist only for work that is inherently external: the shell commands the bash tool runs, stdio MCP
-servers, language servers, formatters.
+One process. The agent loop, tools, storage and the window's backend run on one tokio runtime; the window is a
+WebView that talks to it through Tauri commands and one event channel. Child processes exist only for work that is
+inherently external: the shell commands the shell tool runs, stdio MCP servers, formatters, hooks, git and the
+editor the user opens files in.
 
-0.5.1 runs a background `serve --service` (one or two per TUI, sometimes outliving it). The Rust version has no
-service. Several `anysola` processes may run at once (two terminals, a TUI and `anysola run`); they coordinate
-through SQLite in WAL mode, and a session that is being driven by one process is marked busy for the others.
+Sessions live in `~/.anysola/anysola.db` (SQLite, WAL). A process that drives a session marks it busy, so a second
+app (or a 1.0.x terminal app still installed) cannot run the same session at the same time.
 
-## Crates
+## Layout
 
 ```
-crates/
-  anysola        bin: argument parsing, subcommands, wiring
-  core           config, storage, provider, agent loop, tools, permissions, compaction, snapshots,
-                 instructions, skills, commands, agents, event bus
-  tui            ratatui + crossterm front end, talks to core through its in-process API
-  mcp            MCP client (stdio, streamable HTTP, SSE) and OAuth
-  acp            Agent Client Protocol server for editors (`anysola acp`)
-  lsp            language server client: detection, download, diagnostics
-  migrate        import of 0.5.x data (opencode.db, config, token, KV)
-  testkit        fake Anysola gateway (scripted SSE), temp homes, helpers for integration tests
+crates/            the agent (one Cargo workspace)
+  core             config, storage, gateway client, agent loop, tools, permissions, hooks, compaction,
+                   snapshots, instructions, skills, commands, agents, Code Mode, event bus
+  mcp              MCP client (stdio, streamable HTTP, SSE) and OAuth
+  testkit          fake Anysola gateway (scripted SSE), temp homes; a dev-dependency of core and mcp
+desktop/           the app (its own Cargo workspace and npm package)
+  src/             the window: React 19, HeroUI, Tailwind; bridge.ts is the contract with the Rust side
+  src-tauri/       Tauri shell and commands on top of core and mcp (account, sessions, git, settings,
+                   MCP servers, hooks, updates)
+spec/              0.5.1 parity inventories of core behaviour, with the captures the tests compare against
+                   (spec/verbatim)
 ```
 
-Core exposes one API that the TUI, `run`, and ACP all use: open/continue a session, send a prompt, abort, answer a
-permission or question, and a broadcast stream of events (message and part updates, permission requests, status,
-credits). Nothing in core knows about the terminal.
+Core exposes one API (`anysola_core::api::Core`): open or continue a session, send a prompt, abort, answer a
+permission, question or form, and a broadcast stream of events (message and part updates, permission requests,
+status, usage). Nothing in core knows about the window. The app keeps one `Core` per open folder.
+
+`desktop/src-tauri` is a separate Cargo workspace so `crates/*` builds and tests without WebKitGTK and keeps its
+own lockfile; it depends on `crates/core` and `crates/mcp` by path.
 
 ## Stack
 
 | Need | Choice | Note |
 |---|---|---|
+| App shell | Tauri 2 | WebView2 on Windows, WebKitGTK on Linux; updater, dialog, notification, single-instance, window-state plugins |
+| Window | React 19 + HeroUI 3 + Tailwind 4, Vite | |
 | Async | tokio | |
 | Code Mode | rquickjs (QuickJS) | the `execute` tool |
 | HTTP | reqwest + rustls | no OpenSSL; same TLS on every platform |
-| SSE | hand-written parser | Anthropic stream plus the `anysola_credits` event |
-| CLI | clap (derive) | |
-| TUI | ratatui + crossterm | Windows console included |
-| Markdown | pulldown-cmark | |
-| Highlighting | syntect (fancy-regex) + two-face extra syntaxes | covers the 39 languages 0.5.1 highlighted without per-language C grammars; built in, nothing downloaded |
-| Shell parsing for permissions | port of 0.5.1's hand-written scanner | same accept/reject behaviour |
-| Storage | rusqlite, bundled SQLite | identical engine on all platforms; reads the 0.5.x database for import |
+| SSE | hand-written parser | Anthropic stream plus the `anysola_usage` event |
+| Shell parsing for permissions | port of 0.5.1's scanner | same accept/reject behaviour |
+| Storage | rusqlite, bundled SQLite | identical engine on every platform |
 | Search | ripgrep's crates (grep-searcher, grep-regex, ignore, globset) | no bundled `rg`; results sorted by path |
-| Diff | port of jsdiff (`tool/edit/diff.rs`) | edit metadata patches must equal 0.5.1's byte for byte; `similar` breaks ties differently |
-| Fuzzy matching | nucleo-matcher | |
-| HTML to Markdown | port of 0.5.1's converter | webfetch output must match the captured 0.5.1 output |
-| Images | image (png, jpeg, webp, gif only) | resize before sending, as photon did |
-| MCP | rmcp | |
-| ACP | agent-client-protocol | |
+| Diff | port of jsdiff (`tool/edit/diff.rs`) | edit metadata patches equal 0.5.1's byte for byte |
+| HTML to Markdown | port of 0.5.1's converter | webfetch output matches the captured 0.5.1 output |
+| Images | image (png, jpeg, webp, gif) | resized before sending |
 
 ## Contracts that do not change
 
-The gateway, Account, Admin, install scripts and the GitHub Action stay as they are. The Rust binary keeps:
-
-- the `/v1/code/*` requests and headers the gateway accepts (see `spec/protocol.md`),
-- `anysola run` flags, output and exit codes that `Anysola/code-action` relies on,
-- release archive names, `SHA256SUMS`, the `install` / `install.ps1` flow and `~/.anysola/bin`,
-- the npm layout (`@anysola/code` and `@anysola/code-<os>-<arch>`, bin `anysola`),
-- `/v1/code/version` semantics for update notices and the minimum version.
+- The `/v1/code/*` requests and headers the gateway accepts (`spec/protocol.md`); model calls send the user agent
+  `anysola-code/<ver>/desktop`.
+- `/v1/code/version` (Admin's latest and minimum version) gates updates.
+- The release's asset names, `latest-desktop.json`'s shape and the updater key (`RELEASING.md`): installed apps
+  from 1.0.6 on find updates through them.
+- The `~/.anysola` layout and the session database, which 1.0.x terminal installs share.
 
 ## Testing
 
-- Unit tests next to the code.
-- Integration tests run the real binary against `testkit`'s fake gateway, which replays scripted SSE streams
-  (text, thinking, tool use, errors, `anysola_credits`).
-- TUI tests render to ratatui's test backend and compare text snapshots; a pty-driven smoke test renders real
-  screens the way `testing/tui-*.sh` did for 0.5.1.
-- A CI matrix (Linux x64/arm64, macOS arm64/x64, Windows x64/arm64) builds, runs the tests and a smoke run on
-  every push. Publishing stays a tag-only job.
-
-## Release
-
-Linux builds are static musl, so the `-musl` and glibc archive names can carry the same bytes; six real
-builds (linux x64/arm64, macOS x64/arm64, Windows x64/arm64) fill the 12 asset names the install scripts know.
-
-0.5.x stays on the TypeScript line until the Rust version covers `PARITY.md`. Rust ships once, as 1.0.0, through
-the same channels (GitHub Release archives, install scripts, npm, Admin Release).
+- Unit tests next to the code, in core, mcp and the app's Rust side.
+- Integration tests in `crates/core/tests` and `crates/mcp/tests` drive core in-process against `testkit`'s fake
+  gateway; `requests.rs` replays the 0.5.1 request captures of `spec/verbatim` and compares body and headers.
+- The window has no unit tests; `npm run build` type-checks it. The app is tried end to end under Xvfb with a fake
+  gateway before a release.
+- CI (`.github/workflows/ci.yml`): fmt, clippy and tests of both workspaces and the window's build, on Windows x64
+  for branch pushes and on Windows x64 and Linux x64 for tags and manual runs.

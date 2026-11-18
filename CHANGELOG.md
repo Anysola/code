@@ -4,8 +4,18 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
-## Unreleased
+## 1.1.0 (unreleased)
 
+The terminal app is retired. Anysola Code is the desktop app for Windows and Linux.
+
+- The `anysola` command line and its TUI are no longer built or released: no CLI archives, no install scripts and
+  no new npm packages. 1.0.9 stays installed and keeps working where it is, but gets no updates.
+- If you used the terminal app, download the desktop app from www.anysola.com/code. Your sessions, sign-in and
+  settings in `~/.anysola` carry over; then remove the old binary with `anysola uninstall` or
+  `npm rm -g @anysola/code`.
+- Not in the desktop app: `anysola run` (one prompt without a window, used in CI and by `Anysola/code-action`),
+  the editor integration (`anysola acp`), importing a session file, and the import of 0.5.x data on first start.
+- Messages that told you to run `anysola login` now say to sign in again.
 - A project's MCP servers and formatters need your approval once, like its hooks. When a project's config defines
   them, the app asks before starting them, in one question per project file that lists its hooks, its MCP servers
   (with the headers and environment they would send) and its formatters. Until you allow it those servers are not
