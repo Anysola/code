@@ -10,22 +10,12 @@ pub const VERSION: &str = match option_env!("ANYSOLA_VERSION") {
 /// databases read the same; not sent to any server.
 pub const OPENCODE_VERSION: &str = "2.2.5";
 
-/// `anysola --version` output.
-pub fn version_line() -> String {
-    format!("Anysola Code {VERSION}")
-}
-
 /// User agent of every plain HTTP request.
 pub fn user_agent() -> String {
     format!("anysola-code/{VERSION}")
 }
 
 static CLIENT: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
-
-/// Marks this process as the ACP server (`anysola acp`), which model calls report.
-pub fn set_acp_client() {
-    let _ = CLIENT.set("acp");
-}
 
 /// Marks this process as the desktop app, which model calls report. The desktop app has no
 /// console, so the processes it starts open no console window either.
@@ -34,12 +24,12 @@ pub fn set_desktop_client() {
     crate::console::set_no_console();
 }
 
-/// `cli`, `acp` under `anysola acp`, or `desktop` in the desktop app.
+/// `desktop` in the desktop app; `cli` elsewhere (tests).
 pub fn client() -> &'static str {
     CLIENT.get().copied().unwrap_or("cli")
 }
 
-/// User agent of model calls: the plain one plus `cli`, `acp` or `desktop`.
+/// User agent of model calls: the plain one plus `desktop` (`cli` in tests).
 pub fn model_user_agent() -> String {
     format!("anysola-code/{VERSION}/{}", client())
 }

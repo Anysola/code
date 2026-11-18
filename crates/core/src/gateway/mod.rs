@@ -4,7 +4,6 @@
 pub mod account;
 pub mod config;
 pub mod error;
-pub mod format;
 pub mod limits;
 pub mod retry;
 pub mod sse;
