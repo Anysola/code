@@ -3,9 +3,11 @@ import { ArrowDownToLine, X } from "lucide-react"
 import { useEffect, useState } from "react"
 
 import type { Prefs, UpdateCheck } from "../bridge"
+import { loadEditors, useChrome } from "../chrome"
 import { LIGHT_THEME, setPref, usePrefs } from "../prefs"
+import { useShortcutList } from "../shortcuts"
 import { checkUpdateNow, currentBridge, installUpdate, pickFolder, settingsFolder, useStore } from "../store"
-import { btn, Kbd, Spinner } from "../ui"
+import { btn, Kbd, Spinner, Tooltip } from "../ui"
 import { Choice, Group, Loaded, message, Row, Section, Segmented, tilde, Toggle, useLoad, Value } from "./controls"
 
 // ---------------------------------------------------------------------------
@@ -33,14 +35,15 @@ export function GeneralSection() {
             {general.defaultFolder ? "Change…" : "Choose…"}
           </button>
           {general.defaultFolder && (
-            <button
-              onClick={() => void setPref("general", { defaultFolder: null })}
-              aria-label="Clear the default folder"
-              title="Ask each time"
-              className={btn("ghost", "sm", "text-muted", true)}
-            >
-              <X className="size-3.5" />
-            </button>
+            <Tooltip label="Ask for a folder each time">
+              <button
+                onClick={() => void setPref("general", { defaultFolder: null })}
+                aria-label="Clear the default folder"
+                className={btn("ghost", "sm", "text-muted", true)}
+              >
+                <X className="size-3.5" />
+              </button>
+            </Tooltip>
           )}
         </Row>
         <Row label="Start in" id="start-mode">
@@ -57,9 +60,47 @@ export function GeneralSection() {
           />
         </Row>
       </Group>
+      <EditorChoice />
       <DefaultModel />
       <Updates />
     </Section>
+  )
+}
+
+/** Where files and folders open: an editor found on this computer. */
+function EditorChoice() {
+  const chosen = usePrefs((p) => p.general.editor)
+  const editors = useChrome((c) => c.editors)
+  useEffect(() => void loadEditors(), [])
+  if (editors === null) return null
+  const found = editors.find((e) => e.id === chosen)
+  return (
+    <Group label="Editor">
+      <Row
+        label="Open files in"
+        hint={
+          editors.length === 0
+            ? "No editor was found, so a file is shown in its folder and a folder opens in your file manager"
+            : chosen && !found
+              ? "The chosen editor isn’t found anymore, so the first one found is used"
+              : undefined
+        }
+      >
+        {editors.length === 0 ? (
+          <Value>File manager</Value>
+        ) : (
+          <Choice
+            label="Open files in"
+            value={found ? chosen : null}
+            onChange={(editor) => void setPref("general", { editor })}
+            options={[
+              { id: null, label: "Automatic", note: `The first one found: ${editors[0].name}` },
+              ...editors.map((e) => ({ id: e.id, label: e.name })),
+            ]}
+          />
+        )}
+      </Row>
+    </Group>
   )
 }
 
@@ -393,55 +434,14 @@ export function NotificationsSection() {
 // ---------------------------------------------------------------------------
 
 export function KeyboardSection() {
-  const send = usePrefs((p) => p.conversation.send)
-  const sendKey = send === "enter" ? "Enter" : "Ctrl Enter"
-  const groups: { label: string; rows: [string, string[]][] }[] = [
-    {
-      label: "Anywhere",
-      rows: [
-        ["New session", ["Ctrl N"]],
-        ["Search sessions", ["Ctrl K"]],
-        ["Settings", ["Ctrl ,"]],
-        ["Close a panel, menu or Settings", ["Esc"]],
-      ],
-    },
-    {
-      label: "Message box",
-      rows: [
-        ["Send", [sendKey]],
-        ["New line", send === "enter" ? ["Shift Enter"] : ["Enter", "Shift Enter"]],
-        ["Allow the waiting request, with the box empty", [sendKey]],
-        ["Deny the waiting request, or stop the turn", ["Esc"]],
-        ["Commands and skills", ["/"]],
-        ["Files and skills", ["@"]],
-        ["Move in a menu", ["↑", "↓"]],
-        ["Take the highlighted item", ["Enter", "Tab"]],
-      ],
-    },
-    {
-      label: "Sessions",
-      rows: [
-        ["Select one more", ["Ctrl click"]],
-        ["Select a range", ["Shift click"]],
-        ["Stop selecting", ["Esc"]],
-        ["Save a new name", ["Enter"]],
-      ],
-    },
-    {
-      label: "Changes",
-      rows: [
-        ["Add a comment on a line", ["Enter"]],
-        ["Cancel a comment", ["Esc"]],
-      ],
-    },
-  ]
+  const groups = useShortcutList()
   return (
     <Section title="Keyboard">
       {groups.map((g) => (
         <Group key={g.label} label={g.label}>
-          {g.rows.map(([label, keys]) => (
-            <Row key={label} label={label} className="min-h-10 py-2">
-              {keys.map((k) => (
+          {g.rows.map((r) => (
+            <Row key={r.label} label={r.label} className="min-h-10 py-2">
+              {r.keys.map((k) => (
                 <Kbd key={k}>{k}</Kbd>
               ))}
             </Row>
@@ -451,4 +451,3 @@ export function KeyboardSection() {
     </Section>
   )
 }
-

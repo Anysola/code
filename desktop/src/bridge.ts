@@ -15,9 +15,27 @@ export type FileDiff = {
   deletions: number
 }
 
+/**
+ * What went wrong, for the window to pick words and actions by: `limit` a usage window is full,
+ * `offline` the service can't be reached, `auth` the sign-in is gone, `model` the model isn't
+ * available, `elsewhere` another Anysola Code process drives the session.
+ */
+export type ErrorKind = "limit" | "offline" | "auth" | "model" | "elsewhere" | "other"
+
 export type Item =
-  /** `command`: the `/name args` line a command's text was rendered from. */
-  | { kind: "user"; id: string; text: string; images: number; command?: string | null }
+  /**
+   * `command`: the `/name args` line a command's text was rendered from. `time`: when it was sent
+   * (ms). `elapsed`: how long its turn worked (ms); null while it runs or when unknown.
+   */
+  | {
+      kind: "user"
+      id: string
+      text: string
+      images: number
+      command?: string | null
+      time?: number | null
+      elapsed?: number | null
+    }
   | { kind: "text"; id: string; text: string }
   | { kind: "reasoning"; id: string; text: string }
   | {
@@ -31,8 +49,11 @@ export type Item =
       error: string | null
       /** A subagent's session. */
       child?: string | null
+      /** How long it ran (ms), once it ended. */
+      elapsed?: number | null
     }
-  | { kind: "error"; id: string; message: string }
+  /** `retry`: sending again can work (false for a full limit, a missing model, a lost sign-in). */
+  | { kind: "error"; id: string; message: string; errorKind?: ErrorKind; retry?: boolean }
   /** A marker in the session, such as a compaction. */
   | { kind: "note"; id: string; text: string; failed: boolean }
 
@@ -112,6 +133,8 @@ export type Prefs = {
     startMode: Mode | "last"
     /** Look for a new version when the app starts. */
     checkUpdates: boolean
+    /** The editor files and folders open in (an `Editor.id`); null picks the first one found. */
+    editor: string | null
   }
   appearance: {
     theme: "dark" | "light" | "system"
@@ -281,10 +304,97 @@ export type Revert = {
 
 export type Todo = { content: string; status: "pending" | "in_progress" | "completed" | "cancelled" | string }
 
-/** `agent` wrote the last shown reply. */
-export type View = { items: Item[]; revert: Revert | null; todos: Todo[]; agent: string | null }
+/** A message sent while a turn ran: `queue` waits for the turn to end, `steer` joins it at its next step. */
+export type Queued = { id: string; text: string; images: number; delivery: "queue" | "steer" }
 
-export type Opened = { session: SessionRow; view: View; info: Info; busy: boolean }
+/** How full the model's context is: the latest step's tokens over the model's window. */
+export type Context = { tokens: number; limit: number }
+
+/** A command the agent left running in the background (`sessionId` may be a subagent's). */
+export type BackgroundCommand = { id: string; sessionId: string; command: string; started: number }
+
+/**
+ * `agent` wrote the last shown reply. `queued`: what waits in the session's inbox, oldest first.
+ * `context`: null until a step reported its tokens. `background`: the session's and its
+ * subagents' running background commands.
+ */
+export type View = {
+  items: Item[]
+  revert: Revert | null
+  todos: Todo[]
+  agent: string | null
+  queued: Queued[]
+  context: Context | null
+  background: BackgroundCommand[]
+}
+
+/** `pending`: what waits for an answer in this session or its subagents. */
+export type Opened = { session: SessionRow; view: View; info: Info; busy: boolean; pending: PendingRequest[] }
+
+/**
+ * One input of an MCP server's form (elicitation). `external` is the URL kind: show the message
+ * and a button that opens `url`; the server ends the request itself.
+ */
+export type FormField = {
+  key: string
+  title: string
+  description?: string | null
+  required?: boolean
+  type: "boolean" | "number" | "integer" | "string" | "multiselect" | "external"
+  default?: unknown
+  minimum?: number
+  maximum?: number
+  format?: "email" | "uri" | "date" | "date-time" | string
+  minLength?: number
+  maxLength?: number
+  /** A closed list (`custom` false) of values to choose from. */
+  options?: { value: string; label: string }[]
+  custom?: boolean
+  minItems?: number
+  maxItems?: number
+  url?: string
+}
+
+/** `accept` carries typed values by field key: boolean, number, string, or string[] for a multiselect. */
+export type FormAnswer = { action: "accept"; values: Record<string, unknown> } | { action: "decline" } | { action: "cancel" }
+
+export type PermissionRequest = {
+  type: "permission"
+  sessionId: string
+  /** The session the user has open above a subagent's; absent when unknown. */
+  rootId?: string
+  directory: string
+  requestId: string
+  action: string
+  resources: string[]
+  canAlways: boolean
+  files: FileDiff[] | null
+}
+
+export type QuestionRequest = {
+  type: "question"
+  sessionId: string
+  rootId?: string
+  directory: string
+  requestId: string
+  questions: Question[]
+}
+
+/** A form belongs to a folder's MCP server, not to a session: it shows in every open session of `directory`. */
+export type FormRequest = {
+  type: "form"
+  directory: string
+  formId: string
+  server: string
+  title: string
+  message: string
+  fields: FormField[]
+}
+
+export type PendingRequest = PermissionRequest | QuestionRequest | FormRequest
+
+/** An editor found on this computer; `id` is what `Prefs.general.editor` stores. */
+export type Editor = { id: string; name: string }
 
 export type Palette = {
   commands: { name: string; description: string | null }[]
@@ -306,32 +416,23 @@ export type CoreEvent =
   | { type: "text" | "reasoning"; sessionId: string; messageId: string; ordinal: number; text: string }
   | { type: "changed"; sessionId: string; error?: string }
   | { type: "retrying"; sessionId: string; attempt: number; delayMs: number; error: string }
-  | {
-      type: "permission"
-      sessionId: string
-      /** The session the user has open above a subagent's; absent when unknown. */
-      rootId?: string
-      directory: string
-      requestId: string
-      action: string
-      resources: string[]
-      canAlways: boolean
-      files: FileDiff[] | null
-    }
+  | PermissionRequest
   | { type: "permissionReplied"; sessionId: string; requestId: string }
-  | {
-      type: "question"
-      sessionId: string
-      rootId?: string
-      directory: string
-      requestId: string
-      questions: Question[]
-    }
+  | QuestionRequest
+  /** A question was answered or dropped (its turn ended). */
+  | { type: "questionReplied"; sessionId: string; requestId: string }
+  | FormRequest
+  /** A form was answered, or its server ended it. */
+  | { type: "formReplied"; directory: string; formId: string }
   | { type: "title"; sessionId: string; title: string }
   | { type: "done"; sessionId: string }
-  | { type: "failed"; sessionId: string; error: string }
+  /**
+   * `unsent`: the turn never started and the message was not kept in the session, so the window
+   * puts its text back in the composer.
+   */
+  | { type: "failed"; sessionId: string; error: string; kind?: ErrorKind; unsent?: boolean }
   /** What the user asked for didn't run; no turn failed. */
-  | { type: "refused"; sessionId: string; error: string }
+  | { type: "refused"; sessionId: string; error: string; kind?: ErrorKind }
   /** A command or compaction ended with no turn left running. */
   | { type: "settled"; sessionId: string }
   | { type: "interrupted"; sessionId: string; reason: "user" | "budget" | "declined" }
@@ -341,17 +442,28 @@ export type CoreEvent =
   /** A folder's MCP server changed state (connected, failed, signed in). */
   | { type: "mcp"; directory: string }
   | { type: "notice"; message: string }
+  /** The user closed the window while `busy` turns run; the window asks, then calls `quit`. */
+  | { type: "closeRequested"; busy: number }
+  /** An update is downloading; `total` null when the size isn't known. */
+  | { type: "update"; downloaded: number; total: number | null }
 
 export type GitStatus =
-  | { repo: false }
+  /** `git: "missing"`: Git isn't installed (or isn't found), which is why nothing shows. */
+  | { repo: false; git?: "missing" }
   | {
       repo: true
+      /** The repository's top folder; `files` and `unmerged` are relative to it. */
+      root?: string | null
       branch: string
       detached: boolean
       upstream: string | null
       ahead: number
       behind: number
       files: { file: string; status: "added" | "modified" | "deleted" }[]
+      /** Files with merge conflicts; committing is refused while any exist. */
+      unmerged: string[]
+      /** `user.name` and `user.email` are set, so a commit can be made. */
+      identity: boolean
       remote: string | null
       /** The GitHub CLI is installed, so a pull request opens from here. */
       gh: boolean
@@ -360,7 +472,8 @@ export type GitStatus =
 export type PermissionReply = "once" | "always" | "reject"
 
 export type Bridge = {
-  authStatus(): Promise<{ signedIn: boolean }>
+  /** `fault`: the app's own data can't be opened (a broken or locked database); signing in won't help. */
+  authStatus(): Promise<{ signedIn: boolean; fault?: { message: string; folder: string } | null }>
   loginStart(): Promise<{ url: string; code: string }>
   loginWait(): Promise<{ signedIn: boolean }>
   loginCancel(): Promise<void>
@@ -378,6 +491,20 @@ export type Bridge = {
   interrupt(directory: string, sessionId: string): Promise<void>
   replyPermission(directory: string, requestId: string, reply: PermissionReply): Promise<boolean>
   replyQuestion(directory: string, requestId: string, answers: string[][] | null): Promise<boolean>
+  /** False when the form is no longer waiting. */
+  replyForm(directory: string, formId: string, answer: FormAnswer): Promise<boolean>
+  /** What waits for an answer in the session, its subagents, and the folder's MCP servers. */
+  pending(directory: string, sessionId: string): Promise<PendingRequest[]>
+  /** Takes a waiting message out of the queue (its text is in `View.queued` before the call). */
+  queueCancel(directory: string, sessionId: string, id: string): Promise<View>
+  /** Hands a waiting message to the running turn at its next step instead of after it. */
+  queueSteer(directory: string, sessionId: string, id: string): Promise<View>
+  /** Runs what waits in the queue when no turn is running (after a stop or a failure). */
+  queueSend(directory: string, sessionId: string, mode: Mode): Promise<void>
+  /** Stops a background command; false when it already ended. */
+  backgroundStop(directory: string, id: string): Promise<boolean>
+  /** A sent message's images as data URLs, in order. */
+  messageImages(directory: string, sessionId: string, messageId: string): Promise<string[]>
   renameSession(sessionId: string, title: string): Promise<void>
   deleteSession(directory: string, sessionId: string): Promise<boolean>
   /** `filesKept`: the folder keeps no snapshots (not git), so the turns' edits stay. */
@@ -398,13 +525,26 @@ export type Bridge = {
   restoreFile(directory: string, sessionId: string, file: string): Promise<void>
   gitStatus(directory: string): Promise<GitStatus>
   gitBranch(directory: string, name: string): Promise<void>
-  gitCommit(directory: string, message: string): Promise<{ commit: string }>
+  /** `files`: the paths to commit; null commits every change. */
+  gitCommit(directory: string, message: string, files: string[] | null): Promise<{ commit: string }>
   gitPush(directory: string): Promise<void>
+  /** Fast-forward only: brings the branch up to its upstream, or fails saying why. */
+  gitPull(directory: string): Promise<void>
+  /** Sets the name and email commits are made with, for every repository of this user. */
+  gitIdentity(name: string, email: string): Promise<void>
   gitPr(directory: string, title: string, body: string): Promise<{ url: string; created: boolean }>
   suggestCommitMessage(directory: string, sessionId: string): Promise<string>
   reveal(directory: string): Promise<void>
   /** Shows a file or folder in the system's file manager. */
   revealPath(path: string): Promise<void>
+  /** The editors found on this computer, the preferred one first; empty when none. */
+  editors(): Promise<Editor[]>
+  /**
+   * Opens the folder (`path` null) or a file of it (`path` relative to `directory` or absolute,
+   * at `line` when given) in the preferred editor. With no editor found, a file is shown in its folder
+   * and a folder opens in the file manager: a file is never handed to the system to "open".
+   */
+  openInEditor(directory: string, path: string | null, line: number | null): Promise<void>
 
   prefsGet(): Promise<Prefs>
   prefsSet(prefs: Prefs): Promise<Prefs>
@@ -428,6 +568,8 @@ export type Bridge = {
   /** Starts the OAuth sign-in and opens its page; `mcpSignInWait` ends when the browser is done. */
   mcpSignIn(directory: string, name: string): Promise<{ url: string; instructions: string | null }>
   mcpSignInWait(directory: string, name: string): Promise<McpServer[]>
+  /** Ends a sign-in that is waiting for the browser; `mcpSignInWait` then returns. */
+  mcpSignInCancel(directory: string, name: string): Promise<void>
   mcpSignOut(directory: string, name: string): Promise<McpServer[]>
 
   sources(directory: string): Promise<Sources>
@@ -451,6 +593,9 @@ export type Bridge = {
   notifyTest(): Promise<void>
   discordStatus(): Promise<DiscordStatus>
   presence(presence: Presence): Promise<void>
+
+  /** Closes the app even while turns run (they are stopped). */
+  quit(): Promise<void>
 
   pickFolder(defaultPath?: string | null): Promise<string | null>
   openUrl(url: string): Promise<void>
@@ -478,6 +623,13 @@ function tauriBridge(): Bridge {
       invoke("select_model", { directory, sessionId, model, variant }),
     prompt: (directory, request) => invoke("prompt", { directory, request }),
     replyQuestion: (directory, requestId, answers) => invoke("reply_question", { directory, requestId, answers }),
+    replyForm: (directory, formId, answer) => invoke("reply_form", { directory, formId, answer }),
+    pending: (directory, sessionId) => invoke("pending", { directory, sessionId }),
+    queueCancel: (directory, sessionId, id) => invoke("queue_cancel", { directory, sessionId, id }),
+    queueSteer: (directory, sessionId, id) => invoke("queue_steer", { directory, sessionId, id }),
+    queueSend: (directory, sessionId, mode) => invoke("queue_send", { directory, sessionId, mode }),
+    backgroundStop: (directory, id) => invoke("background_stop", { directory, id }),
+    messageImages: (directory, sessionId, messageId) => invoke("message_images", { directory, sessionId, messageId }),
     renameSession: (sessionId, title) => invoke("rename_session", { sessionId, title }),
     deleteSession: (directory, sessionId) => invoke("delete_session", { directory, sessionId }),
     setMode: (directory, sessionId, mode) => invoke("set_mode", { directory, sessionId, mode }),
@@ -498,12 +650,16 @@ function tauriBridge(): Bridge {
     restoreFile: (directory, sessionId, file) => invoke("restore_file", { directory, sessionId, file }),
     gitStatus: (directory) => invoke("git_status", { directory }),
     gitBranch: (directory, name) => invoke("git_branch", { directory, name }),
-    gitCommit: (directory, message) => invoke("git_commit", { directory, message }),
+    gitCommit: (directory, message, files) => invoke("git_commit", { directory, message, files }),
     gitPush: (directory) => invoke("git_push", { directory }),
+    gitPull: (directory) => invoke("git_pull", { directory }),
+    gitIdentity: (name, email) => invoke("git_identity", { name, email }),
     gitPr: (directory, title, body) => invoke("git_pr", { directory, title, body }),
     suggestCommitMessage: (directory, sessionId) => invoke("suggest_commit_message", { directory, sessionId }),
     reveal: (directory) => invoke("reveal", { directory }),
     revealPath: (path) => invoke("reveal_path", { path }),
+    editors: () => invoke("editors"),
+    openInEditor: (directory, path, line) => invoke("open_in_editor", { directory, path, line }),
     prefsGet: () => invoke("prefs_get"),
     prefsSet: (prefs) => invoke("prefs_set", { prefs }),
     devices: () => invoke("devices"),
@@ -519,6 +675,7 @@ function tauriBridge(): Bridge {
     mcpRetry: (directory, name) => invoke("mcp_retry", { directory, name }),
     mcpSignIn: (directory, name) => invoke("mcp_sign_in", { directory, name }),
     mcpSignInWait: (directory, name) => invoke("mcp_sign_in_wait", { directory, name }),
+    mcpSignInCancel: (directory, name) => invoke("mcp_sign_in_cancel", { directory, name }),
     mcpSignOut: (directory, name) => invoke("mcp_sign_out", { directory, name }),
     sources: (directory) => invoke("sources", { directory }),
     personalInstructions: () => invoke("personal_instructions"),
@@ -534,6 +691,7 @@ function tauriBridge(): Bridge {
     notifyTest: () => invoke("notify_test"),
     discordStatus: () => invoke("discord_status"),
     presence: (presence) => invoke("presence", { presence }),
+    quit: () => invoke("quit"),
     async pickFolder(defaultPath) {
       const { open } = await import("@tauri-apps/plugin-dialog")
       const picked = await open({ directory: true, multiple: false, defaultPath: defaultPath ?? undefined })

@@ -4,7 +4,20 @@
  * (the default), `running`, `failed`, `question`, `update`, `rewound`, `plan`, `todos`, `done`.
  * Prompts in `refused` are refused before their answer comes back; in `stuck` they send no
  * events and Stop sends none either, as when nothing was running. `long` has long messages,
- * code, diffs and file lists; `event` a promotion; `limited` a full 5-hour window.
+ * code, diffs and file lists; `event` a promotion; `limited` a full 5-hour window; `crowded` a
+ * running turn with three queued messages, background commands and a full 5-hour window at once.
+ *
+ * The conversation: `queue` (a running turn with messages waiting), `queue-stopped` (a stopped
+ * turn left them), `context` (a nearly full context), `background` (commands left running),
+ * `offline` (the account can't be read; a send fails for it), `unsent` (a send fails before its
+ * turn starts: the text comes back), `restored` (asks that waited before the window opened come
+ * back from `pending`), `form` (an MCP server's form) and `form-url` (one that opens a page),
+ * `closing` (the window was closed mid-turn), `fault` (the database can't be opened), `gone`
+ * (every answer finds its request no longer waiting), `images` (a message with images),
+ * `failed&kind=limit|offline|auth|model|elsewhere` (a turn failed for that reason), `updating`
+ * (an update while a turn runs). `?fail=replyPermission,setMode,queueSteer,changes,gitStatus…` makes
+ * those calls throw. `?slow=1500` makes a new session's first prompt take that long; `?hang=1`
+ * makes Stop send nothing while the turn goes on. `window.__mockEmit(event)` sends a core event.
  *
  * Settings: `?settings=<section>` opens one; `?fail=usage,mcpList` makes those calls fail,
  * `?delay=800` slows every settings call, `?theme=light` previews a theme, `?empty=1` empties
@@ -14,16 +27,21 @@ import type {
   About,
   Account,
   AgentConfig,
+  BackgroundCommand,
   Bridge,
   CoreEvent,
   DataInfo,
   Device,
+  ErrorKind,
   FileDiff,
+  FormRequest,
   Info,
   Item,
   McpServer,
+  PendingRequest,
   PermissionRule,
   Prefs,
+  Queued,
   Revert,
   SavedPermission,
   SessionRow,
@@ -119,6 +137,7 @@ const pricingItems: Item[] = [
     id: "m1",
     text: "On /pricing the Monthly/Yearly toggle switches, but the cards keep showing the monthly price. Fix it and add a test.",
     images: 0,
+    time: now - 3 * 60_000 - 12_000,
   },
   { kind: "text", id: "m2:0", text: "Let me find where the cards get their price." },
   tool("t1", "read", "apps/web/src/routes/pricing.tsx", { output: "64 lines" }),
@@ -131,7 +150,7 @@ const pricingItems: Item[] = [
   },
   tool("t4", "edit", planCard.file, { files: [planCard] }),
   tool("t5", "edit", pricing.file, { files: [pricing] }),
-  tool("t5b", "subagent", "Check the other plan cards for the same bug", { child: "ses_child" }),
+  tool("t5b", "subagent", "Check the other plan cards for the same bug", { child: "ses_child", elapsed: 48_000 }),
   tool("t6", "write", test.file, { files: [test] }),
   {
     kind: "text",
@@ -140,6 +159,86 @@ const pricingItems: Item[] = [
   },
   tool("t7", "shell", "pnpm --filter @anysola/web test pricing", { status: "running" }),
 ]
+
+/** `?state=images` and `done`: an earlier, finished turn above the one shown. */
+const earlierItems: Item[] = [
+  {
+    kind: "user",
+    id: "e1",
+    text: "Here’s how the pricing page looks on my phone. The toggle wraps under the heading.",
+    images: 2,
+    time: now - 26 * 60_000,
+    elapsed: 2 * 60_000 + 14_000,
+  },
+  tool("e2", "read", "apps/web/src/routes/pricing.tsx", { output: "64 lines" }),
+  tool("e3", "grep", "CycleToggle", {
+    output: "apps/web/src/routes/pricing.tsx:24:      <CycleToggle value={cycle} onChange={setCycle} />\napps/web/src/components/cycle-toggle.tsx:8:export function CycleToggle({ value, onChange }: Props) {",
+  }),
+  {
+    kind: "text",
+    id: "e4:0",
+    text: "The heading and the toggle share a row with no wrap rule. I moved the toggle under the heading below `sm` in [cycle-toggle.tsx](apps/web/src/components/cycle-toggle.tsx#L8); see the [Tailwind docs](https://tailwindcss.com/docs/responsive-design) for the breakpoints.",
+  },
+]
+
+/** A small picture for `messageImages`. */
+function picture(hue: number, label: string) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="390" height="844" viewBox="0 0 390 844"><rect width="390" height="844" fill="hsl(${hue} 8% 14%)"/><rect x="24" y="96" width="342" height="40" rx="8" fill="hsl(${hue} 8% 24%)"/><rect x="24" y="152" width="200" height="28" rx="14" fill="hsl(${hue} 8% 30%)"/><rect x="24" y="210" width="342" height="260" rx="16" fill="hsl(${hue} 8% 20%)"/><text x="24" y="520" fill="hsl(${hue} 8% 60%)" font-family="sans-serif" font-size="20">${label}</text></svg>`
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+}
+
+const form: FormRequest = {
+  type: "form",
+  directory: WEB,
+  formId: "frm_1",
+  server: "linear",
+  title: "Create an issue",
+  message: "Linear needs a few details to file the bug in the Web team’s backlog.",
+  fields: [
+    { key: "title", title: "Title", type: "string", required: true, minLength: 4, maxLength: 80, default: "Yearly price missing on team card" },
+    { key: "reporter", title: "Reporter email", type: "string", format: "email", required: true },
+    { key: "link", title: "Link", type: "string", format: "uri", description: "Where it shows" },
+    { key: "due", title: "Due date", type: "string", format: "date" },
+    { key: "estimate", title: "Estimate (points)", type: "integer", minimum: 1, maximum: 8, default: 2 },
+    {
+      key: "priority",
+      title: "Priority",
+      type: "string",
+      required: true,
+      custom: false,
+      options: [
+        { value: "urgent", label: "Urgent" },
+        { value: "high", label: "High" },
+        { value: "medium", label: "Medium" },
+        { value: "low", label: "Low" },
+      ],
+      default: "medium",
+    },
+    {
+      key: "labels",
+      title: "Labels",
+      type: "multiselect",
+      minItems: 1,
+      maxItems: 2,
+      options: [
+        { value: "bug", label: "Bug" },
+        { value: "pricing", label: "Pricing" },
+        { value: "mobile", label: "Mobile" },
+      ],
+    },
+    { key: "notify", title: "Notify the team", type: "boolean", default: true },
+  ],
+}
+
+const formUrl: FormRequest = {
+  type: "form",
+  directory: WEB,
+  formId: "frm_url",
+  server: "github",
+  title: "Authorize",
+  message: "GitHub wants you to approve access to anysola/web in your browser.",
+  fields: [{ key: "auth", title: "Approve in GitHub", type: "external", url: "https://github.com/login/oauth/authorize?client_id=anysola" }],
+}
 
 const efforts = ["low", "medium", "high", "xhigh", "max"]
 const agents = [
@@ -164,7 +263,7 @@ const info: Info = {
 const iso = (ms: number) => new Date(ms).toISOString()
 
 function accountFor(state: string, bank: number): Account {
-  const limited = state === "limited"
+  const limited = state === "limited" || state === "crowded"
   return {
     expired: false,
     plan: "pro",
@@ -545,6 +644,7 @@ export function mockBridge(): Bridge {
   const state = new URLSearchParams(location.search).get("state") ?? "approval"
   const handlers = new Set<(e: CoreEvent) => void>()
   const emit = (e: CoreEvent) => setTimeout(() => handlers.forEach((h) => h(e)), 0)
+  ;(window as unknown as { __mockEmit: typeof emit }).__mockEmit = emit
   const transcripts = new Map<string, Item[]>([
     ["ses_pricing", pricingItems],
     [
@@ -558,6 +658,31 @@ export function mockBridge(): Bridge {
   ])
   if (state === "plan") transcripts.set("ses_pricing", planItems)
   if (state === "long") transcripts.set("ses_pricing", longItems)
+  if (state === "images" || state === "done") transcripts.set("ses_pricing", [...earlierItems, ...pricingItems])
+  if (state === "done")
+    transcripts.set(
+      "ses_pricing",
+      transcripts.get("ses_pricing")!.map((i) => (i.kind === "user" && i.id === "m1" ? { ...i, elapsed: 3 * 60_000 + 5_000 } : i))
+    )
+  const kind = (new URLSearchParams(location.search).get("kind") ?? undefined) as ErrorKind | undefined
+  const BUSY = ["crowded", "approval", "gone", "running", "question", "long", "queue", "background", "context", "updating", "closing", "restored"]
+  /** Sessions with a turn running, and what waits in their queues. */
+  const running = new Set<string>(BUSY.includes(state) ? ["ses_pricing"] : [])
+  const queues = new Map<string, Queued[]>()
+  if (state === "queue" || state === "queue-stopped" || state === "crowded")
+    queues.set("ses_pricing", [
+      { id: "q1", text: "Also check the team card while you’re in there.", images: 0, delivery: "queue" },
+      { id: "q2", text: "And here’s the mobile layout I mentioned — the toggle should sit under the heading.", images: 1, delivery: "queue" },
+      ...(state === "crowded" ? [{ id: "q3", text: "Then run the pricing tests once more.", images: 0, delivery: "queue" as const }] : []),
+    ])
+  const background: BackgroundCommand[] =
+    state === "background" || state === "crowded"
+      ? [
+          { id: "bg1", sessionId: "ses_pricing", command: "pnpm --filter @anysola/web dev", started: now - 4 * 60_000 },
+          { id: "bg2", sessionId: "ses_child", command: "pnpm vitest --watch pricing", started: now - 90_000 },
+        ]
+      : []
+  let forms: FormRequest[] = state === "form" ? [form] : state === "form-url" ? [formUrl] : []
   let signedIn = state !== "signed-out"
   let revert: Revert | null = state === "rewound" ? rewound : null
   const params = new URLSearchParams(location.search)
@@ -584,21 +709,64 @@ export function mockBridge(): Bridge {
   let personal = "Reply in short, plain sentences.\nUse pnpm, never npm, in the web repos.\nRun the tests that cover a change before saying it is done.\n"
   const view = (sessionId: string): View => {
     const items = transcripts.get(sessionId) ?? []
+    const extra = {
+      queued: queues.get(sessionId) ?? [],
+      context:
+        sessionId !== "ses_pricing" ? null : { tokens: state === "context" ? 171_400 : 61_800, limit: 200_000 },
+      background: background.filter((b) => b.sessionId === sessionId || sessionId === "ses_pricing"),
+    }
     if (revert && sessionId === "ses_pricing")
-      return { items: [], revert, todos: [], agent: null }
-    const done = state === "done" || state === "plan" || state === "todos"
+      return { items: [], revert, todos: [], agent: null, ...extra }
+    // A stopped turn can leave a tool row that never heard its end.
+    const done = !running.has(sessionId) && state !== "queue-stopped"
     return {
       items: state === "question" ? items.slice(0, -1) : done ? items.filter((i) => i.kind !== "tool" || i.status !== "running") : items,
       revert: null,
-      todos: state === "todos" && sessionId === "ses_pricing" ? todos : [],
+      todos: (state === "todos" || state === "background") && sessionId === "ses_pricing" ? todos : [],
       agent: state === "plan" ? "plan" : "build",
+      ...extra,
     }
+  }
+  /** A turn's reply, streamed word by word, then its end. */
+  const reply = async (id: string, text: string, end = true) => {
+    await wait(400)
+    for (const w of text.split(" ")) {
+      emit({ type: "text", sessionId: id, messageId: "live", ordinal: 0, text: `${w} ` })
+      await wait(60)
+    }
+    if (!end || !running.has(id)) return
+    const list = transcripts.get(id) ?? []
+    transcripts.set(id, [...list, { kind: "text", id: `r${list.length}`, text }])
+    await wait(300)
+    // The queue runs next, as the core does it.
+    const waiting = queues.get(id) ?? []
+    if (waiting.length) {
+      queues.set(id, [])
+      const after = transcripts.get(id) ?? []
+      transcripts.set(id, [
+        ...after,
+        ...waiting.map((q, i) => ({ kind: "user" as const, id: `uq${after.length + i}`, text: q.text, images: q.images, time: Date.now() })),
+      ])
+      emit({ type: "changed", sessionId: id })
+      void reply(id, "On it: the team card reads its price the same way.")
+      return
+    }
+    running.delete(id)
+    emit({ type: "done", sessionId: id })
   }
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
   let cancelLogin = () => {}
 
   return {
     async authStatus() {
+      if (state === "fault")
+        return {
+          signedIn: true,
+          fault: {
+            message: "The database is locked by another program. Close other copies of Anysola Code, then open it again.",
+            folder: "/home/alex/.anysola",
+          },
+        }
       return { signedIn }
     },
     async loginStart() {
@@ -615,7 +783,8 @@ export function mockBridge(): Bridge {
       cancelLogin()
     },
     async sessions() {
-      return state === "empty" ? [] : rows
+      // A new list each read, as the core sends it.
+      return state === "empty" ? [] : [...rows]
     },
     async openSession(_directory, sessionId) {
       const session = rows.find((r) => r.id === sessionId) ?? rows[0]
@@ -631,7 +800,7 @@ export function mockBridge(): Bridge {
             canAlways: true,
             files: [bigPatch(reviewFiles[3].file, 80)],
           })
-        if (state === "approval")
+        if (state === "approval" || state === "gone")
           emit({
             type: "permission",
             sessionId: session.id,
@@ -642,16 +811,7 @@ export function mockBridge(): Bridge {
             canAlways: true,
             files: null,
           })
-        if (state === "running") {
-          emit({ type: "started", sessionId: session.id })
-          const words = "The tests pass. I’ll also check the yearly prices on the team plan, which reads".split(" ")
-          void (async () => {
-            for (const w of words) {
-              emit({ type: "text", sessionId: session.id, messageId: "live", ordinal: 0, text: `${w} ` })
-              await wait(15)
-            }
-          })()
-        }
+        if (state === "running") emit({ type: "started", sessionId: session.id })
         if (state === "question")
           emit({
             type: "question",
@@ -673,15 +833,48 @@ export function mockBridge(): Bridge {
           emit({
             type: "failed",
             sessionId: session.id,
-            error: "Anysola Code is temporarily unavailable. Try again shortly.",
+            kind,
+            error:
+              kind === "limit"
+                ? "Your 5-hour limit is reached."
+                : kind === "offline"
+                  ? "Couldn’t reach api.anysola.com."
+                  : kind === "auth"
+                    ? "Your sign-in is no longer valid."
+                    : kind === "model"
+                      ? "Opus 5.5 isn’t available on your plan right now."
+                      : kind === "elsewhere"
+                        ? "This session is open in Anysola Code in a terminal, which is running it now."
+                        : "Anysola Code is temporarily unavailable. Try again shortly.",
           })
+        if (state === "queue-stopped") emit({ type: "interrupted", sessionId: session.id, reason: "user" })
+        if (state === "closing") setTimeout(() => emit({ type: "closeRequested", busy: 2 }), 400)
+        if (state === "running" || state === "background" || state === "context") {
+          void reply(session.id, "The tests pass. I’ll also check the yearly prices on the team plan, which reads", false)
+        }
       }
-      const busy = session.id === "ses_pricing" && ["approval", "running", "question", "long"].includes(state)
+      const pending: PendingRequest[] =
+        state === "restored" && session.id === "ses_pricing"
+          ? [
+              {
+                type: "permission",
+                sessionId: session.id,
+                directory: session.directory,
+                requestId: "per_restored",
+                action: "shell",
+                resources: ["pnpm --filter @anysola/web test pricing"],
+                canAlways: true,
+                files: null,
+              },
+              ...forms.filter((f) => f.directory === session.directory),
+            ]
+          : forms.filter((f) => f.directory === session.directory)
       return {
         session,
         view: view(session.id),
         info: state === "plan" ? { ...info, agent: "plan" } : info,
-        busy,
+        busy: running.has(session.id),
+        pending,
       }
     },
     async transcript(_directory, sessionId) {
@@ -700,7 +893,9 @@ export function mockBridge(): Bridge {
     },
     async resend(_directory, sessionId) {
       revert = null
+      running.add(sessionId)
       emit({ type: "started", sessionId })
+      void reply(sessionId, "Trying that again from the top.")
       return { sessionId }
     },
     async palette() {
@@ -719,7 +914,9 @@ export function mockBridge(): Bridge {
     },
     async runCommand(_directory, { sessionId }) {
       const id = sessionId ?? "ses_pricing"
+      running.add(id)
       emit({ type: "started", sessionId: id })
+      void reply(id, "Reviewing the uncommitted changes.")
       return { sessionId: id }
     },
     async compact() {},
@@ -740,24 +937,32 @@ export function mockBridge(): Bridge {
       ]
     },
     async changes(_directory, sessionId) {
+      if (failing.has("changes")) throw new Error("git diff failed: index.lock exists.")
       if (sessionId !== "ses_pricing") return []
       return state === "long" ? reviewFiles : [planCard, pricing, test]
     },
     async restoreFile() {},
     async gitStatus(directory) {
-      if (directory !== WEB) return { repo: false }
+      // `?git=missing|conflict|noidentity|behind`: the git menu's other states.
+      const git = params.get("git")
+      if (failing.has("gitStatus")) throw new Error("git status failed: not a valid object name HEAD.")
+      if (git === "missing") return { repo: false as const, git: "missing" as const }
+      if (directory !== WEB) return { repo: false as const }
       return {
         repo: true,
         branch: "fix/yearly-price",
         detached: false,
-        upstream: state === "pushed" ? "origin/fix/yearly-price" : null,
-        ahead: state === "pushed" ? 0 : 1,
-        behind: 0,
+        upstream: state === "pushed" || git === "behind" ? "origin/fix/yearly-price" : null,
+        ahead: state === "pushed" || git === "behind" ? 0 : 1,
+        behind: git === "behind" ? 2 : 0,
         files: [
           { file: planCard.file, status: "modified" },
           { file: pricing.file, status: "modified" },
           { file: test.file, status: "added" },
+          { file: "apps/web/dist/build-stats.json", status: "added" },
         ],
+        unmerged: git === "conflict" ? ["apps/web/src/lib/plans.ts", "apps/web/src/routes/checkout.tsx"] : [],
+        identity: git !== "noidentity",
         remote: "origin",
         gh: true,
       }
@@ -779,12 +984,24 @@ export function mockBridge(): Bridge {
       return "/home/alex/.anysola/no-project"
     },
     async account() {
+      if (state === "offline") throw new Error("Couldn’t reach api.anysola.com.")
       return accountFor(state, bank)
     },
     async updateCheck() {
-      return state === "update" ? { available: true, version: "1.0.6" } : { available: false }
+      return state === "update" || state === "updating"
+        ? {
+            available: true,
+            version: "1.0.8",
+            notes: "A welcome screen and starter prompts for new sessions.\nKeyboard shortcuts: Ctrl / lists them.\nThe git menu commits the files you pick.",
+          }
+        : { available: false }
     },
     async updateInstall() {
+      const total = 38_400_000
+      for (let got = 0; got <= total; got += 2_400_000) {
+        emit({ type: "update", downloaded: got, total })
+        await wait(250)
+      }
       await wait(1_000_000)
     },
     async logout() {
@@ -799,6 +1016,7 @@ export function mockBridge(): Bridge {
       return { ...info, model: m.name, modelId: m.id, variant }
     },
     async prompt(directory, { sessionId, text, files }) {
+      if (!sessionId && params.get("slow")) await wait(Number(params.get("slow")))
       const id = sessionId ?? `ses_${Math.random().toString(36).slice(2, 10)}`
       if (!sessionId) {
         rows.unshift({ id, title: "New session", directory, updated: Date.now() })
@@ -811,31 +1029,140 @@ export function mockBridge(): Bridge {
         return { sessionId: id, queued: false }
       }
       if (state === "stuck") return { sessionId: id, queued: false }
+      if (state === "unsent" || (state === "offline" && !running.has(id))) {
+        // The turn never started: the message wasn't kept, the window puts it back.
+        await wait(300)
+        emit({
+          type: "failed",
+          sessionId: id,
+          unsent: true,
+          kind: state === "offline" ? "offline" : "other",
+          error: state === "offline" ? "Couldn’t reach api.anysola.com." : "The session couldn’t start a turn: its folder was moved.",
+        })
+        return { sessionId: id, queued: false }
+      }
+      if (running.has(id)) {
+        const q: Queued = { id: `q${Date.now()}`, text, images: files.length, delivery: "queue" }
+        queues.set(id, [...(queues.get(id) ?? []), q])
+        emit({ type: "changed", sessionId: id })
+        return { sessionId: id, queued: true }
+      }
       const list = transcripts.get(id) ?? []
-      transcripts.set(id, [...list, { kind: "user", id: `u${list.length}`, text, images: files.length }])
+      transcripts.set(id, [...list, { kind: "user", id: `u${list.length}`, text, images: files.length, time: Date.now() }])
+      running.add(id)
       emit({ type: "changed", sessionId: id })
       emit({ type: "started", sessionId: id })
-      const words = "I’ll start by reading the files this touches, then make the change.".split(" ")
-      void (async () => {
-        await wait(400)
-        for (const w of words) {
-          emit({ type: "text", sessionId: id, messageId: "live", ordinal: 0, text: `${w} ` })
-          await wait(60)
-        }
-      })()
+      void reply(id, "I’ll start by reading the files this touches, then make the change.")
       return { sessionId: id, queued: false }
     },
-    async setMode() {},
+    async setMode() {
+      if (failing.has("setMode")) throw new Error("The session’s settings couldn’t be saved.")
+    },
     async interrupt(_directory, sessionId) {
-      if (state !== "stuck") emit({ type: "interrupted", sessionId, reason: "user" })
+      if (state === "stuck" || params.has("hang")) return
+      // The core takes a moment to stop the turn, then adds its note.
+      await wait(700)
+      running.delete(sessionId)
+      const list = transcripts.get(sessionId) ?? []
+      transcripts.set(sessionId, [...list, { kind: "note", id: `n${list.length}`, text: "Stopped", failed: false }])
+      emit({ type: "interrupted", sessionId, reason: "user" })
     },
     async replyPermission(_directory, requestId) {
+      await wait(150)
+      if (failing.has("replyPermission")) throw new Error("The answer didn’t reach the session. Try again.")
+      if (state === "gone") return false
       emit({ type: "permissionReplied", sessionId: "ses_pricing", requestId })
       return true
     },
     async replyQuestion(_directory, requestId) {
-      emit({ type: "permissionReplied", sessionId: "ses_pricing", requestId })
+      await wait(150)
+      if (failing.has("replyQuestion")) throw new Error("The answer didn’t reach the session. Try again.")
+      if (state === "gone") return false
+      emit({ type: "questionReplied", sessionId: "ses_pricing", requestId })
       return true
+    },
+    async replyForm(directory, formId) {
+      await wait(150)
+      if (failing.has("replyForm")) throw new Error("The answer didn’t reach linear. Try again.")
+      if (state === "gone") return false
+      forms = forms.filter((f) => f.formId !== formId)
+      emit({ type: "formReplied", directory, formId })
+      return true
+    },
+    async pending(directory, sessionId) {
+      return state === "restored" && sessionId === "ses_pricing"
+        ? [
+            {
+              type: "permission",
+              sessionId,
+              directory,
+              requestId: "per_restored",
+              action: "shell",
+              resources: ["pnpm --filter @anysola/web test pricing"],
+              canAlways: true,
+              files: null,
+            },
+          ]
+        : forms.filter((f) => f.directory === directory)
+    },
+    async queueCancel(_directory, sessionId, id) {
+      if (failing.has("queueCancel")) throw new Error("That message already went to the session.")
+      queues.set(sessionId, (queues.get(sessionId) ?? []).filter((q) => q.id !== id))
+      return view(sessionId)
+    },
+    async queueSteer(_directory, sessionId, id) {
+      if (failing.has("queueSteer")) throw new Error("The turn ended before it could take the message.")
+      queues.set(
+        sessionId,
+        (queues.get(sessionId) ?? []).map((q) => (q.id === id ? { ...q, delivery: "steer" as const } : q))
+      )
+      // The running turn picks it up at its next step.
+      setTimeout(() => {
+        const q = (queues.get(sessionId) ?? []).find((x) => x.id === id)
+        if (!q) return
+        queues.set(sessionId, (queues.get(sessionId) ?? []).filter((x) => x.id !== id))
+        const list = transcripts.get(sessionId) ?? []
+        transcripts.set(sessionId, [...list, { kind: "user", id: `us${list.length}`, text: q.text, images: q.images, time: Date.now() }])
+        emit({ type: "changed", sessionId })
+      }, 1200)
+      return view(sessionId)
+    },
+    async queueSend(_directory, sessionId) {
+      const waiting = queues.get(sessionId) ?? []
+      queues.set(sessionId, [])
+      const list = transcripts.get(sessionId) ?? []
+      transcripts.set(sessionId, [
+        ...list,
+        ...waiting.map((q, i) => ({ kind: "user" as const, id: `uq${list.length + i}`, text: q.text, images: q.images, time: Date.now() })),
+      ])
+      running.add(sessionId)
+      emit({ type: "started", sessionId })
+      emit({ type: "changed", sessionId })
+      void reply(sessionId, "Picking up where we stopped: the team card next.")
+    },
+    async backgroundStop(_directory, id) {
+      const at = background.findIndex((b) => b.id === id)
+      if (at < 0) return false
+      background.splice(at, 1)
+      return true
+    },
+    async messageImages() {
+      await wait(300)
+      return [picture(30, "Pricing · 390 × 844"), picture(210, "Pricing · toggle open")]
+    },
+    async editors() {
+      if (params.get("editors") === "none") return []
+      return [
+        { id: "code", name: "Visual Studio Code" },
+        { id: "zed", name: "Zed" },
+      ]
+    },
+    async openInEditor() {},
+    async gitPull() {},
+    async gitIdentity() {},
+    async mcpSignInCancel() {},
+    async quit() {
+      location.reload()
     },
     async renameSession(sessionId, title) {
       const row = rows.find((r) => r.id === sessionId)

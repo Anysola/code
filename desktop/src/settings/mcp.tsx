@@ -7,9 +7,9 @@ import { useEffect, useRef, useState } from "react"
 
 import type { McpDraft, McpServer } from "../bridge"
 import { currentBridge, openExternal, settingsFolder, useStore } from "../store"
-import { btn, cn, sameFolder, Spinner } from "../ui"
+import { btn, cn, sameFolder, Spinner, Tooltip } from "../ui"
 import { OpenPath } from "./agent"
-import { Confirm, FolderLine, Group, Loaded, message, Section, Segmented, tilde, Toggle, useLoad } from "./controls"
+import { Confirm, Failed, FolderLine, Group, Loaded, message, Section, Segmented, tilde, Toggle, useLoad } from "./controls"
 
 const STATUS: Record<McpServer["status"], { word: string; mark: string }> = {
   connected: { word: "Connected", mark: "bg-success" },
@@ -25,11 +25,15 @@ export function McpSection() {
   const open = useStore((s) => s.open?.directory ?? null)
   const scratch = useStore((s) => s.scratch)
   const [directory, setDirectory] = useState<string | null>(open)
+  const [error, setError] = useState<string | null>(null)
+  const [tries, setTries] = useState(0)
   useEffect(() => {
-    void settingsFolder().then(setDirectory)
-  }, [open])
+    setError(null)
+    settingsFolder().then(setDirectory, (e) => setError(message(e)))
+  }, [open, tries])
   return (
     <Section title="MCP servers">
+      {error && !directory && <Failed error={error} retry={() => setTries((n) => n + 1)} bare />}
       {directory && <FolderLine directory={directory} own={sameFolder(directory, scratch)} />}
       {directory && <Servers directory={directory} />}
     </Section>
@@ -109,7 +113,8 @@ function Servers({ directory }: { directory: string }) {
 function Server({ server: s, directory, onList }: { server: McpServer; directory: string; onList: (l: McpServer[]) => void }) {
   const [busy, setBusy] = useState<null | "toggle" | "retry" | "signout">(null)
   const [error, setError] = useState<string | null>(null)
-  const [signing, setSigning] = useState<{ url: string; instructions: string | null } | null>(null)
+  // `starting`: the server's sign-in is being found (up to half a minute); then the browser's turn.
+  const [signing, setSigning] = useState<{ url: string; instructions: string | null } | "starting" | null>(null)
   const waiting = useRef(0)
   const status = STATUS[s.status]
   const on = s.status !== "disabled"
@@ -123,6 +128,7 @@ function Server({ server: s, directory, onList }: { server: McpServer; directory
   const signIn = async () => {
     setError(null)
     const n = ++waiting.current
+    setSigning("starting")
     try {
       const start = await currentBridge().mcpSignIn(directory, s.name)
       if (n !== waiting.current) return
@@ -137,6 +143,14 @@ function Server({ server: s, directory, onList }: { server: McpServer; directory
     } finally {
       if (n === waiting.current) setSigning(null)
     }
+  }
+  const cancelSignIn = () => {
+    waiting.current++
+    setSigning(null)
+    // The core stops waiting too, so a later sign-in starts clean.
+    currentBridge()
+      .mcpSignInCancel(directory, s.name)
+      .catch(() => {})
   }
   const counts = [
     s.tools !== null && `${s.tools} tool${s.tools === 1 ? "" : "s"}`,
@@ -218,26 +232,24 @@ function Server({ server: s, directory, onList }: { server: McpServer; directory
       {signing && (
         <div className="text-dense flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg bg-default/40 px-3 py-2">
           <Spinner />
-          <span className="min-w-0 flex-1">Waiting for the browser…</span>
-          <button onClick={() => openExternal(signing.url)} className={btn("ghost", "sm", "text-muted")}>
-            Open the page again
-          </button>
-          <button
-            onClick={() => {
-              waiting.current++
-              setSigning(null)
-            }}
-            className={btn("ghost", "sm")}
-          >
+          <span className="min-w-0 flex-1">
+            {signing === "starting" ? `Finding how ${s.name} signs in…` : "Waiting for you to finish in the browser…"}
+          </span>
+          {signing !== "starting" && (
+            <button onClick={() => openExternal(signing.url)} className={btn("ghost", "sm", "text-muted")}>
+              Open the page again
+            </button>
+          )}
+          <button onClick={cancelSignIn} className={btn("ghost", "sm")}>
             Cancel
           </button>
-          {signing.instructions && <p className="text-2xs w-full text-muted select-text">{signing.instructions}</p>}
+          {signing !== "starting" && signing.instructions && (
+            <p className="text-2xs w-full text-muted select-text">{signing.instructions}</p>
+          )}
         </div>
       )}
       {s.status === "failed" && s.error && (
-        <pre className="max-h-48 overflow-auto rounded-lg bg-background/60 px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap text-danger select-text">
-          {s.error}
-        </pre>
+        <p className="text-dense max-h-48 overflow-auto whitespace-pre-wrap text-danger select-text">{s.error}</p>
       )}
       {error && <p className="text-dense text-danger select-text">{error}</p>}
     </div>
@@ -465,14 +477,16 @@ function Pairs({
             spellCheck={false}
             className={cn(input, "flex-1 font-mono")}
           />
-          <button
-            type="button"
-            onClick={() => onChange(list.filter((_, j) => j !== i))}
-            aria-label="Remove"
-            className={btn("ghost", "sm", "shrink-0 text-muted", true)}
-          >
-            <X className="size-3.5" />
-          </button>
+          <Tooltip label="Remove">
+            <button
+              type="button"
+              onClick={() => onChange(list.filter((_, j) => j !== i))}
+              aria-label="Remove"
+              className={btn("ghost", "sm", "shrink-0 text-muted", true)}
+            >
+              <X className="size-3.5" />
+            </button>
+          </Tooltip>
         </div>
       ))}
       <button

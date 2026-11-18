@@ -1,134 +1,63 @@
-import { FolderClosed, FolderOpen, MessageSquare, X } from "lucide-react"
+import { ArrowDown, FolderClosed, X } from "lucide-react"
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 
+import { checkUpdated, resumeDeletes, setReviewing, useChrome } from "./chrome"
 import { Composer, Tasks } from "./composer"
-import {
-  closePeek,
-  closeSettings,
-  dismissNotice,
-  newScratchSession,
-  newSession,
-  openSettings,
-  cancelSignIn,
-  openLoginPage,
-  signIn,
-  start,
-  useStore,
-  type Open,
-  type Peek,
-} from "./store"
-import { changedFiles, GitMenu, Review } from "./review"
+import { BackgroundRow, Banner, CloseConfirm, ContextMeter, FaultScreen, QueueChips } from "./conversation"
+import { FormCard } from "./form-card"
+import { SessionHeader, SidebarToggle, Toasts } from "./header"
+import { Review } from "./review"
 import { Settings, sectionLabel } from "./settings"
-import { PlaceLabel, Sidebar } from "./sidebar"
+import { ShortcutsSheet, useShortcuts } from "./shortcuts"
+import { Sidebar } from "./sidebar"
+import { closePeek, dismissNotice, openSettings, start, useStore, type Open, type Peek } from "./store"
 import { Transcript } from "./transcript"
-import { btn, Counts, Kbd, Mark, sameFolder, Spinner, TitleBar, UsageMeter, useEscape } from "./ui"
+import { btn, cn, sameFolder, Spinner, TitleBar, Tooltip, useEscape } from "./ui"
+import { Home, NewSessionStart, SignIn } from "./welcome"
 
 export function App() {
   const auth = useStore((s) => s.auth)
   const settings = useStore((s) => s.settings)
+  const sidebarHidden = useChrome((c) => c.sidebarHidden)
+  const fault = useStore((s) => s.fault)
   useEffect(() => {
     void start()
   }, [])
+  useEffect(() => {
+    if (auth !== "signed-in") return
+    void checkUpdated()
+    void resumeDeletes()
+  }, [auth])
   useShortcuts()
   if (auth === "checking") return <div className="h-full bg-background" />
-  if (auth === "signed-out") return <SignIn />
+  // The app's own data can't be opened: signing in wouldn't help.
+  if (fault) return <FaultScreen fault={fault} />
+  if (auth === "signed-out")
+    return (
+      <>
+        <SignIn />
+        <ShortcutsSheet />
+      </>
+    )
   return (
     <div className="relative h-full bg-background">
       {/* Settings covers the window; the session stays as it was (scroll, draft, open panels). */}
       <div className="flex h-full" inert={settings !== null} aria-hidden={settings !== null || undefined}>
-        <Sidebar />
+        {!sidebarHidden && <Sidebar />}
         <Main />
       </div>
       {settings && <Settings section={settings} />}
-      <Notice />
-    </div>
-  )
-}
-
-function useShortcuts() {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const ctrl = e.ctrlKey || e.metaKey
-      if (ctrl && e.key.toLowerCase() === "n") {
-        e.preventDefault()
-        closeSettings()
-        void newSession()
-      }
-      if (ctrl && e.key === ",") {
-        e.preventDefault()
-        // openSettings itself does nothing while signed out.
-        if (document.querySelector("[data-settings]")) closeSettings()
-        else openSettings()
-      }
-    }
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
-  }, [])
-}
-
-// ---------------------------------------------------------------------------
-// Sign-in
-// ---------------------------------------------------------------------------
-
-function SignIn() {
-  const login = useStore((s) => s.login)
-  const error = useStore((s) => s.loginError)
-  const [starting, setStarting] = useState(false)
-  const [copied, setCopied] = useState(false)
-  return (
-    <div className="flex h-full flex-col bg-background">
-      <TitleBar controls />
-      <main className="flex flex-1 flex-col items-center justify-center gap-8 pb-16">
-        <Mark className="h-7 text-foreground" />
-        <h1 className="sr-only">Sign in to Anysola Code</h1>
-        {login ? (
-          <div className="flex flex-col items-center gap-5">
-            <div className="flex flex-col items-center gap-2">
-              <span className="text-2xs tracking-wide text-muted">Code</span>
-              <span className="font-mono text-3xl tracking-[0.2em] select-all">{login.code}</span>
-            </div>
-            <div className="text-dense flex items-center gap-2 text-muted">
-              <Spinner />
-              Waiting for approval in your browser
-            </div>
-            <span className="text-dense font-mono text-muted select-all">{login.url.replace(/^https?:\/\//, "")}</span>
-            <div className="flex items-center gap-1">
-              <button onClick={openLoginPage} className={btn("ghost", "sm", "text-muted")}>
-                Open the page again
-              </button>
-              <button
-                onClick={() => {
-                  void navigator.clipboard.writeText(login.url).then(() => {
-                    setCopied(true)
-                    setTimeout(() => setCopied(false), 1500)
-                  })
-                }}
-                className={btn("ghost", "sm", "text-muted")}
-              >
-                {copied ? "Copied" : "Copy link"}
-              </button>
-              <button onClick={cancelSignIn} className={btn("ghost", "sm", "text-muted")}>
-                Cancel
-              </button>
-            </div>
-            {error && <p className="text-dense max-w-sm text-center text-danger">{error}</p>}
-          </div>
-        ) : (
-          <div className="flex flex-col items-center gap-4">
-            <button
-              onClick={() => {
-                setStarting(true)
-                void signIn().finally(() => setStarting(false))
-              }}
-              disabled={starting}
-              className={btn("primary", "md", "min-w-56")}
-            >
-              {starting ? "Starting…" : "Sign in with Anysola"}
-            </button>
-            {error && <p className="text-dense max-w-sm text-center text-danger">{error}</p>}
-          </div>
-        )}
-      </main>
+      {/* Notices and toasts share one column under the title bar: they never overlap, and never cover the message box. */}
+      <div
+        className="pointer-events-none fixed inset-x-0 top-14 z-30 flex flex-col items-center gap-2 px-6"
+        role="status"
+        aria-live="polite"
+      >
+        <Notice />
+        <Toasts />
+      </div>
+      <ShortcutsSheet />
+      <CloseConfirm />
     </div>
   )
 }
@@ -139,16 +68,25 @@ function SignIn() {
 
 function Main() {
   const open = useStore((s) => s.open)
-  const [reviewing, setReviewing] = useState(false)
+  const reviewing = useChrome((c) => c.reviewing)
+  const sidebarHidden = useChrome((c) => c.sidebarHidden)
   useEffect(() => setReviewing(false), [open?.sessionId])
   return (
-    <main className="relative m-2 ml-0 flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl bg-surface/40">
+    <main
+      className={cn(
+        "relative m-2 flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl bg-surface/40",
+        !sidebarHidden && "ml-0"
+      )}
+    >
       {open ? (
         <>
-          <SessionHeader open={open} onReview={() => setReviewing(true)} />
+          <SessionHeader open={open} />
           <Conversation open={open} />
           <div className="mx-auto w-full max-w-(--conversation-width) px-8 pb-5">
+            <BackgroundRow open={open} />
             <Tasks todos={open.todos} />
+            <Banner open={open} />
+            <QueueChips open={open} />
             <Composer open={open} />
             <div className="mt-2 flex items-center gap-3 px-2">
               <span className="text-2xs flex min-w-0 items-center gap-1 text-muted" title={open.directory}>
@@ -157,7 +95,7 @@ function Main() {
                   <FooterPlace directory={open.directory} />
                 </span>
               </span>
-              <UsageMeter percent={open.info?.fiveHour ?? null} className="ml-auto w-44 shrink-0" />
+              <ContextMeter open={open} />
             </div>
           </div>
           {reviewing && <Review open={open} onClose={() => setReviewing(false)} />}
@@ -165,18 +103,10 @@ function Main() {
         </>
       ) : (
         <>
-          <TitleBar controls />
-          <div className="flex flex-1 flex-col items-center justify-center gap-2 pb-16">
-            <button onClick={() => void newSession()} className={btn("secondary", "md", "min-w-60 gap-2")}>
-              <FolderOpen className="size-4" />
-              <span className="flex-1 text-left">Open a folder</span>
-              <Kbd>Ctrl N</Kbd>
-            </button>
-            <button onClick={() => void newScratchSession()} className={btn("ghost", "md", "min-w-60 gap-2 text-muted")}>
-              <MessageSquare className="size-4" />
-              <span className="flex-1 text-left">Start without a project</span>
-            </button>
-          </div>
+          <TitleBar className={sidebarHidden ? "pl-2" : undefined} controls>
+            {sidebarHidden && <SidebarToggle hidden />}
+          </TitleBar>
+          <Home />
         </>
       )}
     </main>
@@ -188,46 +118,30 @@ function FooterPlace({ directory }: { directory: string }) {
   return <>{sameFolder(directory, scratch) ? "No project · runs in the app’s own folder" : directory}</>
 }
 
-function SessionHeader({ open, onReview }: { open: Open; onReview: () => void }) {
-  const files = changedFiles(open)
-  const add = files.reduce((n, f) => n + f.add, 0)
-  const del = files.reduce((n, f) => n + f.del, 0)
-  return (
-    <TitleBar className="pl-6" controls>
-      <div className="flex min-w-0 items-center gap-3">
-        <h1 className="min-w-0 truncate text-sm font-medium">{open.title}</h1>
-        <span className="text-2xs flex shrink-0 items-center gap-1 text-muted">
-          <FolderClosed className="size-3" strokeWidth={1.75} />
-          <PlaceLabel directory={open.directory} />
-        </span>
-      </div>
-      <div className="mr-2 ml-auto flex shrink-0 items-center gap-1">
-        <GitMenu open={open} />
-        {files.length > 0 && (
-          <button onClick={onReview} className={btn("ghost", "sm", "shrink-0 gap-2 text-muted")}>
-            <Counts add={add} del={del} />
-            Review changes
-          </button>
-        )}
-      </div>
-    </TitleBar>
-  )
-}
-
 function Conversation({ open }: { open: Open }) {
   const all = useStore((s) => s.permissions)
   const permissions = useMemo(() => all.filter((p) => p.rootId === open.sessionId), [all, open.sessionId])
   const asked = useStore((s) => s.questions)
   const questions = useMemo(() => asked.filter((q) => q.rootId === open.sessionId), [asked, open.sessionId])
+  const pendingForms = useStore((s) => s.forms)
+  // A form belongs to a folder: it shows in whichever session of that folder is open.
+  const forms = useMemo(() => pendingForms.filter((f) => sameFolder(f.directory, open.directory)), [pendingForms, open.directory])
   const ref = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
+  /** Away from the bottom; `fresh` once output arrived since. */
+  const [away, setAway] = useState<{ fresh: boolean } | null>(null)
+  const size = useRef(0)
   // A chat opens at its latest turn and follows new output while the reader is at the bottom.
   useLayoutEffect(() => {
     const el = ref.current
-    if (el && stick.current) el.scrollTop = el.scrollHeight
+    if (!el) return
+    if (stick.current) el.scrollTop = el.scrollHeight
+    else if (el.scrollHeight > size.current + 4) setAway((a) => (a && !a.fresh ? { fresh: true } : a))
+    size.current = el.scrollHeight
   })
   useEffect(() => {
     stick.current = true
+    setAway(null)
   }, [open.sessionId])
   // The composer grows (lines, images) and the area shrinks: stay at the bottom if there.
   useEffect(() => {
@@ -239,24 +153,54 @@ function Conversation({ open }: { open: Open }) {
     watch.observe(el)
     return () => watch.disconnect()
   }, [])
+  const jump = () => {
+    const el = ref.current
+    if (!el) return
+    stick.current = true
+    setAway(null)
+    el.scrollTo({ top: el.scrollHeight, behavior: document.documentElement.hasAttribute("data-reduce-motion") ? "auto" : "smooth" })
+  }
   return (
-    <div
-      ref={ref}
-      onScroll={(e) => {
-        const el = e.currentTarget
-        stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
-      }}
-      className="min-h-0 flex-1 overflow-y-auto"
-    >
-      <div className="mx-auto max-w-(--conversation-width) px-8 pt-6 pb-8">
-        {open.loading ? (
-          <div className="flex justify-center pt-16">
-            <Spinner />
-          </div>
-        ) : (
-          <Transcript open={open} permissions={permissions} questions={questions} />
-        )}
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div
+        ref={ref}
+        onScroll={(e) => {
+          const el = e.currentTarget
+          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+          setAway((a) => (stick.current ? null : (a ?? { fresh: false })))
+        }}
+        className="min-h-0 flex-1 overflow-y-auto"
+      >
+        <div className="mx-auto max-w-(--conversation-width) px-8 pt-6 pb-8">
+          {open.loading ? (
+            <div className="flex justify-center pt-16">
+              <Spinner />
+            </div>
+          ) : !open.sessionId && open.items.length === 0 && open.live.length === 0 && open.status.kind === "idle" ? (
+            <>
+              <NewSessionStart open={open} />
+              {forms.length > 0 && (
+                <div className="mt-6 flex flex-col gap-5">
+                  {forms.map((f) => (
+                    <FormCard key={f.formId} form={f} />
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            <Transcript open={open} permissions={permissions} questions={questions} forms={forms} />
+          )}
+        </div>
       </div>
+      {away && !open.loading && (
+        <button
+          onClick={jump}
+          className={btn("secondary", "sm", "absolute bottom-3 left-1/2 z-10 -translate-x-1/2 gap-1.5 bg-overlay")}
+        >
+          <ArrowDown className="size-3.5" />
+          {away.fresh ? "New output" : "Jump to latest"}
+        </button>
+      )}
     </div>
   )
 }
@@ -284,7 +228,11 @@ function Peeking({ peek }: { peek: Peek }) {
     revert: null,
     todos: [],
     lastAgent: null,
-    fill: null,
+    queued: [],
+    context: null,
+    background: [],
+    stopping: false,
+    started: null,
   }
   return (
     <div ref={panel} className="absolute inset-0 z-10 flex justify-end bg-scrim" onClick={closePeek}>
@@ -296,9 +244,13 @@ function Peeking({ peek }: { peek: Peek }) {
         <div className="flex h-12 shrink-0 items-center gap-3 px-5">
           <span className="text-2xs text-muted">Subagent</span>
           <span className="min-w-0 truncate text-sm font-medium">{peek.title}</span>
-          <button onClick={closePeek} className={btn("ghost", "sm", "ml-auto text-muted", true)} aria-label="Close">
-            <X className="size-4" />
-          </button>
+          <span className="ml-auto">
+            <Tooltip label="Close" keys="Esc">
+              <button onClick={closePeek} className={btn("ghost", "sm", "text-muted", true)} aria-label="Close">
+                <X className="size-4" />
+              </button>
+            </Tooltip>
+          </span>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-8">
           {peek.loading ? (
@@ -319,7 +271,7 @@ function Notice() {
   const link = useStore((s) => s.noticeLink)
   if (!notice) return null
   return (
-    <div className="text-dense fixed right-6 bottom-6 z-30 flex max-w-sm items-start gap-3 rounded-xl bg-popover px-4 py-3">
+    <div className="text-dense pointer-events-auto flex w-max max-w-md items-start gap-3 rounded-xl bg-popover px-4 py-3">
       <span className="flex max-h-40 min-w-0 flex-1 flex-col items-start gap-2 overflow-y-auto">
         <span className="select-text">{notice}</span>
         {link && (
@@ -334,9 +286,11 @@ function Notice() {
           </button>
         )}
       </span>
-      <button onClick={dismissNotice} className="text-muted hover:text-foreground" aria-label="Dismiss">
-        <X className="size-4" />
-      </button>
+      <Tooltip label="Dismiss" side="top">
+        <button onClick={dismissNotice} className="text-muted hover:text-foreground" aria-label="Dismiss">
+          <X className="size-4" />
+        </button>
+      </Tooltip>
     </div>
   )
 }

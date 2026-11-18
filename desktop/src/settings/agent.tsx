@@ -4,10 +4,10 @@
  * the app's own folder when none is open, and says which at the top.
  */
 import { FolderOpen } from "lucide-react"
-import { useEffect, useState, type ReactNode } from "react"
+import { Fragment, useEffect, useState, type ReactNode } from "react"
 
 import type { AgentConfig, AgentConfigPatch, Origin, PermissionRule, SavedPermission, Sources } from "../bridge"
-import { APP_COMMANDS, modes } from "../composer"
+import { APP_COMMANDS } from "../composer"
 import { setPref, usePrefs } from "../prefs"
 import { currentBridge, settingsFolder, useStore } from "../store"
 import { btn, cn, folderName, sameFolder, Spinner } from "../ui"
@@ -17,6 +17,7 @@ import {
   FolderLine,
   Group,
   Loaded,
+  Failed,
   message,
   Row,
   Section,
@@ -27,14 +28,18 @@ import {
   Value,
 } from "./controls"
 
-/** The folder the agent sections read, and whether it is the app's own. */
-function useFolder(): { directory: string; own: boolean } | null {
+/** The folder the agent sections read, and whether it is the app's own; or why it can't be read. */
+function useFolder(): { directory: string; own: boolean } | { error: string; retry: () => void } | null {
   const open = useStore((s) => s.open?.directory ?? null)
   const scratch = useStore((s) => s.scratch)
   const [directory, setDirectory] = useState<string | null>(open)
+  const [error, setError] = useState<string | null>(null)
+  const [tries, setTries] = useState(0)
   useEffect(() => {
-    void settingsFolder().then(setDirectory)
-  }, [open])
+    setError(null)
+    settingsFolder().then(setDirectory, (e) => setError(message(e)))
+  }, [open, tries])
+  if (error && !directory) return { error, retry: () => setTries((n) => n + 1) }
   return directory ? { directory, own: sameFolder(directory, scratch) } : null
 }
 
@@ -66,8 +71,9 @@ function FolderSection({ title, children }: { title: string; children: (director
   const folder = useFolder()
   return (
     <Section title={title}>
-      {folder && <FolderLine directory={folder.directory} own={folder.own} />}
-      {folder && children(folder.directory)}
+      {folder && "error" in folder && <Failed error={folder.error} retry={folder.retry} bare />}
+      {folder && "directory" in folder && <FolderLine directory={folder.directory} own={folder.own} />}
+      {folder && "directory" in folder && children(folder.directory)}
     </Section>
   )
 }
@@ -88,6 +94,13 @@ const ACTIONS: Record<string, string> = {
 
 const EFFECT = { allow: "Allow", ask: "Ask", deny: "Deny" } as const
 
+const MODES: [string, string][] = [
+  ["Ask", "Every edit and every command waits for your OK."],
+  ["Edits", "Files change without asking; commands wait for your OK."],
+  ["Auto", "Everything runs without asking, except what a rule below says to ask about or refuse."],
+  ["Plan", "The agent reads and writes a plan; nothing changes until you approve it."],
+]
+
 export function PermissionsSection() {
   return (
     <FolderSection title="Permissions">
@@ -100,11 +113,21 @@ function Permissions({ directory }: { directory: string }) {
   const load = useLoad(() => currentBridge().permissions(directory), [directory])
   return (
     <>
-      <Group label="Modes" note="Pick one in the message box. A rule below can still ask, or refuse, in any mode.">
-        {modes.map((m) => (
-          <Row key={m.id} label={m.label} hint={m.hint} className="min-h-11 py-2" />
-        ))}
-      </Group>
+      <section className="flex flex-col gap-2 px-1">
+        <h2 className="text-2xs font-medium tracking-wide text-muted">Modes</h2>
+        <p className="text-dense text-muted">
+          You choose the mode in the message box. It decides what the agent may do without asking you first.
+        </p>
+        <dl className="text-dense grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5">
+          {MODES.map(([name, text]) => (
+            <Fragment key={name}>
+              <dt className="text-foreground/85">{name}</dt>
+              <dd className="text-muted">{text}</dd>
+            </Fragment>
+          ))}
+        </dl>
+        <p className="text-2xs text-muted">The rules below apply in every mode: a rule can still ask, or refuse.</p>
+      </section>
       <Loaded load={load} rows={3}>
         {({ saved, rules }) => (
           <>
@@ -586,9 +609,15 @@ function Advanced({ directory }: { directory: string }) {
             >
               <ConfigToggle id="websearch" label="Web search" hint={over("websearch")} checked={c.websearch} onChange={(websearch) => change({ websearch })} />
               <ConfigToggle id="todo" label="Task list" hint={over("todo") ?? "The agent keeps a list of steps for longer work"} checked={c.todo} onChange={(todo) => change({ todo })} />
-              <Row label="Subagent depth" hint={over("subagentDepth") ?? "How deep subagents may start their own"}>
+              <Row
+                label="Helper agent levels"
+                hint={
+                  over("subagentDepth") ??
+                  "The agent can hand parts of a task to helper agents. More levels let helpers start their own."
+                }
+              >
                 <Segmented
-                  label="Subagent depth"
+                  label="Helper agent levels"
                   value={String(c.subagentDepth) as "1" | "2" | "3"}
                   onChange={(d) => change({ subagentDepth: Number(d) })}
                   options={[

@@ -217,8 +217,8 @@ function Bank({ account }: { account: Live }) {
   const bank = [...account.bank].sort((a, b) => at(a) - at(b))
   const soonest = bank[0]
   return (
-    <Group label="Banked resets" aside={bank.length > 0 ? `${bank.length} saved` : undefined}>
-      {bank.length === 0 && <Row label="No banked resets" hint="A reset starts a window over when you use it" />}
+    <Group label="Saved resets" aside={bank.length > 0 ? `${bank.length} saved` : undefined}>
+      {bank.length === 0 && <Row label="No saved resets" hint="A reset starts a window over when you use it" />}
       {bank.map((r) => (
         <Row
           key={r.id}
@@ -290,7 +290,8 @@ function UsageView({ usage }: { usage: Usage }) {
         <Stat label={`Last ${usage.days} days`} value={usage.requests.toLocaleString("en-GB")} />
         <Stat label="Today" value={usage.today.toLocaleString("en-GB")} />
         <Stat
-          label="From the cache"
+          label="Reused from earlier"
+          title="How much of what the agent sends was reused from earlier requests instead of read again"
           value={usage.cacheHitRate === null ? "Not known" : `${Math.round(usage.cacheHitRate * 100)}%`}
         />
       </dl>
@@ -348,9 +349,9 @@ function UsageView({ usage }: { usage: Usage }) {
   )
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
-    <div className="flex flex-col gap-0.5">
+    <div className="flex flex-col gap-0.5" title={title}>
       <dt className="text-2xs text-muted">{label}</dt>
       <dd className="text-md tabular-nums">{value}</dd>
     </div>

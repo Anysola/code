@@ -13,11 +13,11 @@ export function message(e: unknown): string {
   return typeof e === "string" ? e : e instanceof Error ? e.message : "That didn’t work."
 }
 
-/** One section: the nav names it, so its heading is for screen readers only. */
+/** One section, under its name: a page never opens on a bare card. */
 export function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="mx-auto flex w-full max-w-[42rem] flex-col gap-8 px-8 pt-4 pb-16">
-      <h1 className="sr-only">{title}</h1>
+    <div className="mx-auto flex w-full max-w-[42rem] flex-col gap-8 px-8 pt-2 pb-16">
+      <h1 className="-mb-3 px-1 text-base font-medium">{title}</h1>
       {children}
     </div>
   )

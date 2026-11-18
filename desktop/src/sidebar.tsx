@@ -4,17 +4,22 @@
  */
 import {
   ArrowDownToLine,
+  ArrowUpRight,
   Check,
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  CircleHelp,
   Ellipsis,
+  FileDown,
   FolderClosed,
   FolderOpen,
   Gauge,
+  Keyboard,
   ListChecks,
   LogOut,
   MessageSquare,
+  MessageSquareText,
   Pencil,
   Pin,
   PinOff,
@@ -27,11 +32,14 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import type { SessionRow, Window as AccountWindow } from "./bridge"
+import { deleteLater, FEEDBACK, flushDeletes, HELP, RELEASES, showShortcuts, useChrome } from "./chrome"
 import { capitalize } from "./composer"
+import { exportSession, SidebarToggle } from "./header"
+import { KEYS } from "./shortcuts"
 import { usePrefs } from "./prefs"
 import {
-  deleteSessions,
   installUpdate,
+  openExternal,
   newScratchSession,
   newSession,
   openSession,
@@ -44,7 +52,24 @@ import {
   togglePin,
   useStore,
 } from "./store"
-import { ago, btn, cn, folderKey, folderName, Kbd, Mark, MenuItem, Popover, resetsIn, sameFolder, Spinner, TitleBar } from "./ui"
+import {
+  ago,
+  anyLayer,
+  btn,
+  cn,
+  folderKey,
+  folderName,
+  Kbd,
+  Mark,
+  MenuItem,
+  MenuSeparator,
+  Popover,
+  resetsIn,
+  sameFolder,
+  Spinner,
+  TitleBar,
+  Tooltip,
+} from "./ui"
 
 /** A session's folder as the window names it: the app's own folder is "No project". */
 function usePlace(directory: string) {
@@ -56,23 +81,29 @@ export function PlaceLabel({ directory }: { directory: string }) {
   return <>{usePlace(directory)}</>
 }
 
-/** New session: the default folder, a recent one, one to pick, or none. */
-function NewSessionButton() {
+/** The folders of the latest sessions, newest first: not the app's own nor the default folder. */
+export function useRecentFolders(limit = 4) {
   const sessions = useStore((s) => s.sessions)
   const scratch = useStore((s) => s.scratch)
   const preferred = usePrefs((p) => p.general.defaultFolder)
-  const [show, setShow] = useState(false)
-  const close = useCallback(() => setShow(false), [])
-  const recent = useMemo(() => {
+  return useMemo(() => {
     const seen = new Map<string, string>()
     for (const s of sessions) {
       const key = folderKey(s.directory)
       if (sameFolder(s.directory, scratch) || sameFolder(s.directory, preferred) || seen.has(key)) continue
       seen.set(key, s.directory)
-      if (seen.size === 4) break
+      if (seen.size === limit) break
     }
     return [...seen.values()]
-  }, [sessions, scratch, preferred])
+  }, [sessions, scratch, preferred, limit])
+}
+
+/** New session: the default folder, a recent one, one to pick, or none. */
+function NewSessionButton() {
+  const preferred = usePrefs((p) => p.general.defaultFolder)
+  const [show, setShow] = useState(false)
+  const close = useCallback(() => setShow(false), [])
+  const recent = useRecentFolders()
   const go = (f: () => Promise<void>) => {
     close()
     void f()
@@ -88,7 +119,7 @@ function NewSessionButton() {
         <span className="flex-1 text-left">New session</span>
         <Kbd>Ctrl N</Kbd>
       </button>
-      <Popover open={show} onClose={close} side="bottom" align="start" className="w-full min-w-60">
+      <Popover open={show} onClose={close} side="bottom" align="start" menu label="New session" matchWidth className="min-w-60">
         {preferred && (
           <MenuItem onSelect={() => go(() => newSession(preferred))}>
             <FolderClosed className="size-3.5 text-muted" />
@@ -106,7 +137,7 @@ function NewSessionButton() {
             </span>
           </MenuItem>
         ))}
-        {(preferred || recent.length > 0) && <div className="my-1 border-t border-separator" />}
+        {(preferred || recent.length > 0) && <MenuSeparator />}
         <MenuItem
           onSelect={() =>
             go(async () => {
@@ -133,7 +164,10 @@ type Selecting = {
 }
 
 export function Sidebar() {
-  const sessions = useStore((s) => s.sessions)
+  const all = useStore((s) => s.sessions)
+  const deleting = useChrome((c) => c.deleting)
+  // Sessions waiting behind Undo are gone from the list already.
+  const sessions = useMemo(() => (deleting ? all.filter((s) => !deleting.ids.has(s.id)) : all), [all, deleting])
   const pinned = useStore((s) => s.pinned)
   const collapsed = useStore((s) => s.collapsed)
   const [query, setQuery] = useState("")
@@ -171,13 +205,10 @@ export function Sidebar() {
     })
   }, [sessions])
   useEffect(() => {
+    // Ctrl K (focus the search) is in shortcuts.tsx, which also unfolds the sidebar for it.
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault()
-        search.current?.focus()
-      }
-      // Under Settings, Escape is Settings' own.
-      if (e.key === "Escape" && selected.size > 0 && !document.querySelector("[data-settings]")) setSelected(new Set())
+      // Under Settings, a panel or a menu, Escape is theirs.
+      if (e.key === "Escape" && selected.size > 0 && !anyLayer()) setSelected(new Set())
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
@@ -217,6 +248,9 @@ export function Sidebar() {
         <div className="flex items-center gap-2 px-4 text-sm font-medium whitespace-nowrap">
           <Mark />
           Anysola Code
+        </div>
+        <div className="mr-1.5 ml-auto">
+          <SidebarToggle hidden={false} />
         </div>
       </TitleBar>
       <div className="px-2 pt-2 pb-4">
@@ -327,17 +361,21 @@ function Project({
             </span>
           )}
         </button>
-        <button
-          onClick={() => setMenu(!menu)}
-          aria-label={`Actions for ${folderName(directory)}`}
-          className={cn(
-            "absolute top-0.5 right-1.5 flex size-6 items-center justify-center rounded-md text-muted hover:bg-default-hover hover:text-foreground focus-visible:status-focused-field",
-            !menu && "invisible group-hover/project:visible focus-visible:visible"
-          )}
-        >
-          <Ellipsis className="size-4" />
-        </button>
-        <Popover open={menu} onClose={close} side="bottom" align="end" className="w-60">
+        <Tooltip label="Project actions">
+          <button
+            onClick={() => setMenu(!menu)}
+            aria-label={`Actions for ${folderName(directory)}`}
+            aria-haspopup="menu"
+            aria-expanded={menu}
+            className={cn(
+              "absolute top-0.5 right-1.5 flex size-6 items-center justify-center rounded-md text-muted hover:bg-default-hover hover:text-foreground focus-visible:status-focused-field",
+              !menu && "invisible group-hover/project:visible focus-visible:visible"
+            )}
+          >
+            <Ellipsis className="size-4" />
+          </button>
+        </Tooltip>
+        <Popover open={menu} onClose={close} side="bottom" align="end" menu label={`Actions for ${folderName(directory)}`} className="w-60">
           <MenuItem
             onSelect={() => {
               close()
@@ -380,14 +418,14 @@ function Project({
 /** Shown while sessions are selected, in place of the account: delete them, or stop selecting. */
 function SelectionBar({ rows, onDone }: { rows: SessionRow[]; onDone: () => void }) {
   const [confirm, setConfirm] = useState(false)
-  const [working, setWorking] = useState(false)
+  const openId = useStore((s) => s.open?.sessionId ?? null)
   useEffect(() => setConfirm(false), [rows.length])
   const n = rows.length
   return (
     <div className="mx-2 mt-2 mb-3 flex flex-col gap-2.5 rounded-xl bg-surface px-3 py-3">
       {confirm ? (
         <p className="text-dense">
-          Delete {n} session{n === 1 ? "" : "s"}? Their history is removed from this computer.
+          Delete {n} session{n === 1 ? "" : "s"}? Their history is removed from this computer; you can undo for a few seconds.
         </p>
       ) : (
         <div className="text-dense flex items-center justify-between">
@@ -400,17 +438,13 @@ function SelectionBar({ rows, onDone }: { rows: SessionRow[]; onDone: () => void
       <div className="flex gap-2">
         {confirm ? (
           <button
-            disabled={working}
             onClick={() => {
-              setWorking(true)
-              void deleteSessions(rows).finally(() => {
-                setWorking(false)
-                onDone()
-              })
+              deleteLater(rows, openId)
+              onDone()
             }}
             className={btn("danger-soft", "sm", "gap-1.5")}
           >
-            {working ? <Spinner className="size-3.5" /> : <Trash2 className="size-3.5" />}
+            <Trash2 className="size-3.5" />
             Delete {n}
           </button>
         ) : (
@@ -441,12 +475,22 @@ function SessionLink({
   const active = useStore((s) => s.open?.sessionId === row.id)
   const busy = useStore((s) => s.busy.has(row.id))
   const pinned = useStore((s) => s.pinned.has(row.id))
+  // A form belongs to a folder, not a session: the folder's running sessions may be the ones waiting.
   const asking = useStore(
-    (s) => s.permissions.some((p) => p.rootId === row.id) || s.questions.some((q) => q.rootId === row.id)
+    (s) =>
+      s.permissions.some((p) => p.rootId === row.id) ||
+      s.questions.some((q) => q.rootId === row.id) ||
+      (s.busy.has(row.id) && s.forms.some((f) => sameFolder(f.directory, row.directory)))
   )
-  const [menu, setMenu] = useState<"closed" | "open" | "confirm">("closed")
+  const [menu, setMenu] = useState(false)
+  const openId = useStore((s) => s.open?.sessionId ?? null)
+  const scratch = useStore((s) => s.scratch)
   const [renaming, setRenaming] = useState(false)
-  const close = useCallback(() => setMenu("closed"), [])
+  const close = useCallback(() => setMenu(false), [])
+  const go = (f: () => void) => () => {
+    close()
+    f()
+  }
   const choosing = selecting.selected.size > 0
   const checked = selecting.selected.has(row.id)
 
@@ -520,68 +564,44 @@ function SessionLink({
         </span>
       </button>
       {!choosing && (
-        <button
-          onClick={() => setMenu(menu === "closed" ? "open" : "closed")}
-          aria-label={`Actions for ${row.title}`}
-          className={cn(
-            "absolute top-1.5 right-1.5 flex size-6 items-center justify-center rounded-md text-muted hover:bg-default-hover hover:text-foreground focus-visible:status-focused-field",
-            menu === "closed" && "invisible group-hover:visible focus-visible:visible"
-          )}
-        >
-          <Ellipsis className="size-4" />
-        </button>
+        <Tooltip label="Session actions">
+          <button
+            onClick={() => setMenu(!menu)}
+            aria-label={`Actions for ${row.title}`}
+            aria-haspopup="menu"
+            aria-expanded={menu}
+            className={cn(
+              "absolute top-1.5 right-1.5 flex size-6 items-center justify-center rounded-md text-muted hover:bg-default-hover hover:text-foreground focus-visible:status-focused-field",
+              !menu && "invisible group-hover:visible focus-visible:visible"
+            )}
+          >
+            <Ellipsis className="size-4" />
+          </button>
+        </Tooltip>
       )}
-      <Popover open={menu !== "closed"} onClose={close} side="bottom" align="end" className="w-56">
-        {menu === "open" ? (
-          <>
-            <MenuItem
-              onSelect={() => {
-                close()
-                togglePin(row.id)
-              }}
-            >
-              {pinned ? <PinOff className="size-3.5 text-muted" /> : <Pin className="size-3.5 text-muted" />}
-              {pinned ? "Unpin" : "Pin"}
-            </MenuItem>
-            <MenuItem
-              onSelect={() => {
-                close()
-                setRenaming(true)
-              }}
-            >
-              <Pencil className="size-3.5 text-muted" /> Rename
-            </MenuItem>
-            <MenuItem
-              onSelect={() => {
-                close()
-                selecting.select([row.id])
-              }}
-            >
-              <ListChecks className="size-3.5 text-muted" /> Select
-            </MenuItem>
-            <MenuItem danger onSelect={() => setMenu("confirm")}>
-              <Trash2 className="size-3.5" /> Delete
-            </MenuItem>
-          </>
-        ) : (
-          <div className="flex flex-col gap-3 p-2">
-            <p className="text-dense">Delete this session? Its history is removed from this computer.</p>
-            <div className="flex gap-2">
-              <button
-                onClick={() => {
-                  close()
-                  void deleteSessions([row])
-                }}
-                className={btn("danger-soft", "sm")}
-              >
-                Delete
-              </button>
-              <button onClick={close} className={btn("ghost", "sm")}>
-                Cancel
-              </button>
-            </div>
-          </div>
+      <Popover open={menu} onClose={close} side="bottom" align="end" menu label={`Actions for ${row.title}`} className="w-56">
+        <MenuItem onSelect={go(() => togglePin(row.id))}>
+          {pinned ? <PinOff className="size-3.5 text-muted" /> : <Pin className="size-3.5 text-muted" />}
+          {pinned ? "Unpin" : "Pin"}
+        </MenuItem>
+        <MenuItem onSelect={go(() => setRenaming(true))}>
+          <Pencil className="size-3.5 text-muted" /> Rename
+        </MenuItem>
+        {!sameFolder(row.directory, scratch) && (
+          <MenuItem onSelect={go(() => void reveal(row.directory))}>
+            <FolderOpen className="size-3.5 text-muted" /> Open folder
+          </MenuItem>
         )}
+        <MenuItem onSelect={go(() => void exportSession(row.directory, row.id))}>
+          <FileDown className="size-3.5 text-muted" /> Export…
+        </MenuItem>
+        <MenuItem onSelect={go(() => selecting.select([row.id]))}>
+          <ListChecks className="size-3.5 text-muted" /> Select
+        </MenuItem>
+        <MenuSeparator />
+        <MenuItem danger onSelect={go(() => deleteLater([row], openId))}>
+          <Trash2 className="size-3.5" /> Delete
+        </MenuItem>
       </Popover>
     </li>
   )
@@ -589,17 +609,62 @@ function SessionLink({
 
 function UpdateRow() {
   const update = useStore((s) => s.update)
+  const [notes, setNotes] = useState(false)
+  const close = useCallback(() => setNotes(false), [])
   if (!update?.available) return null
   return (
     <div className="px-2 pt-2">
-      <button
-        onClick={() => void installUpdate()}
-        disabled={update.installing}
-        className={btn("secondary", "sm", "w-full justify-start gap-2")}
-      >
-        {update.installing ? <Spinner className="size-3.5" /> : <ArrowDownToLine className="size-3.5" />}
-        {update.installing ? `Installing ${update.version}…` : `Update to ${update.version}`}
-      </button>
+      <div className="relative flex items-center gap-1">
+        <button
+          onClick={() => void installUpdate()}
+          disabled={update.installing || update.waiting}
+          className={btn("secondary", "sm", "min-w-0 flex-1 justify-start gap-2")}
+        >
+          {update.installing || update.waiting ? <Spinner className="size-3.5" /> : <ArrowDownToLine className="size-3.5" />}
+          <span className="truncate">
+            {update.installing
+              ? update.progress?.total
+                ? `Downloading ${update.version} · ${Math.min(100, Math.round((update.progress.downloaded / update.progress.total) * 100))}%`
+                : `Installing ${update.version}…`
+              : update.waiting
+                ? "Finishes after the running turn"
+                : `Update to ${update.version}`}
+          </span>
+        </button>
+        <button
+          onClick={() => (update.notes ? setNotes(!notes) : openExternal(RELEASES))}
+          aria-expanded={update.notes ? notes : undefined}
+          className={btn("ghost", "sm", "shrink-0 text-muted")}
+        >
+          What’s new
+        </button>
+        {update.notes && (
+          <Popover open={notes} onClose={close} side="top" align="start" label={`What’s new in ${update.version}`} matchWidth className="w-72 p-3">
+            <div className="flex flex-col gap-2">
+              <span className="text-sm font-medium">What’s new in {update.version}</span>
+              <p className="text-dense whitespace-pre-wrap text-muted select-text">{update.notes.trim()}</p>
+              <button
+                onClick={() => {
+                  close()
+                  openExternal(RELEASES)
+                }}
+                className={btn("ghost", "sm", "-ml-2 gap-1 self-start text-muted")}
+              >
+                All releases
+                <ArrowUpRight className="size-3.5" />
+              </button>
+            </div>
+          </Popover>
+        )}
+      </div>
+      {update.waiting && !update.installing && (
+        <p className="text-2xs flex items-center gap-1 px-2 pt-1.5 text-muted">
+          The restart waits so the turn isn’t cut off.
+          <button onClick={() => void installUpdate(true)} className="text-foreground/80 underline-offset-2 hover:underline">
+            Restart now
+          </button>
+        </p>
+      )}
       {update.error && <p className="text-2xs px-2 pt-1.5 text-danger">{update.error}</p>}
     </div>
   )
@@ -630,49 +695,95 @@ function AccountRow() {
     close()
     openSettings(section)
   }
+  const link = (url: string) => () => {
+    close()
+    openExternal(url)
+  }
+  const meters = account.fiveHour || account.weekly
   return (
-    <div className="relative px-2 pt-1 pb-3">
-      <button
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
-        className="flex h-8 w-full items-center justify-between rounded-lg px-2 text-left text-sm hover:bg-default/60 focus-visible:status-focused-field"
-      >
-        {account.plan ? `${capitalize(account.plan)} plan` : "Anysola"}
-        <ChevronUp className="size-3.5 text-muted" />
-      </button>
+    <div className="px-2 pt-1 pb-3">
+      <div className="relative">
+        <button
+          onClick={() => setOpen(!open)}
+          aria-expanded={open}
+          aria-haspopup="menu"
+          className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-sm hover:bg-default/60 focus-visible:status-focused-field"
+        >
+          <span className="min-w-0 flex-1 truncate">{account.plan ? `${capitalize(account.plan)} plan` : "Anysola"}</span>
+          {meters && (
+            <span
+              // A short window: the meters fold into this row so the session list keeps its room.
+              className="text-2xs hidden shrink-0 text-muted tabular-nums [@media(max-height:720px)]:inline"
+              title={[
+                account.fiveHour && `5-hour ${account.fiveHour.percent}%`,
+                account.weekly && `weekly ${account.weekly.percent}%`,
+              ]
+                .filter(Boolean)
+                .join(", ")}
+            >
+              {[account.fiveHour && `5h ${account.fiveHour.percent}%`, account.weekly && `wk ${account.weekly.percent}%`]
+                .filter(Boolean)
+                .join(" · ")}
+            </span>
+          )}
+          <ChevronUp className="size-3.5 shrink-0 text-muted" />
+        </button>
+        <Popover open={open} onClose={close} side="top" menu label="Account" className="w-60">
+          <MenuItem onSelect={() => go("account")}>
+            <UserRound className="size-3.5 text-muted" /> Account and devices
+          </MenuItem>
+          <MenuItem onSelect={() => go("usage")}>
+            <Gauge className="size-3.5 text-muted" /> Usage and limits
+          </MenuItem>
+          <MenuItem onSelect={() => go("general")}>
+            <SettingsIcon className="size-3.5 text-muted" />
+            <span className="flex-1">Settings</span>
+            <Kbd>{KEYS.settings}</Kbd>
+          </MenuItem>
+          <MenuSeparator />
+          <MenuItem onSelect={link(HELP)}>
+            <CircleHelp className="size-3.5 text-muted" />
+            <span className="flex-1">Help and docs</span>
+            <ArrowUpRight className="size-3.5 text-muted" />
+          </MenuItem>
+          <MenuItem onSelect={link(FEEDBACK)}>
+            <MessageSquareText className="size-3.5 text-muted" />
+            <span className="flex-1">Send feedback</span>
+            <ArrowUpRight className="size-3.5 text-muted" />
+          </MenuItem>
+          <MenuItem
+            onSelect={() => {
+              close()
+              showShortcuts(true)
+            }}
+          >
+            <Keyboard className="size-3.5 text-muted" />
+            <span className="flex-1">Keyboard shortcuts</span>
+            <Kbd>{KEYS.shortcuts}</Kbd>
+          </MenuItem>
+          <MenuSeparator />
+          <MenuItem
+            onSelect={() => {
+              close()
+              // A delete waiting behind Undo goes through before the sessions are put away.
+              void flushDeletes().then(signOut)
+            }}
+          >
+            <LogOut className="size-3.5 text-muted" /> Sign out
+          </MenuItem>
+        </Popover>
+      </div>
       {!account.included && <p className="text-dense px-2 pb-1 text-warning">This plan doesn’t include Anysola Code.</p>}
-      {(account.fiveHour || account.weekly) && (
+      {meters && (
         <button
           onClick={() => go("usage")}
           aria-label="Usage and limits"
-          className="flex w-full flex-col gap-2 rounded-lg px-2 pt-1 pb-2 text-left hover:bg-default/60 focus-visible:status-focused-field"
+          className="flex w-full flex-col gap-2 rounded-lg px-2 pt-1 pb-2 text-left hover:bg-default/60 focus-visible:status-focused-field [@media(max-height:720px)]:hidden"
         >
           <WindowMeter label="5-hour" window={account.fiveHour} />
           <WindowMeter label="Weekly" window={account.weekly} />
         </button>
       )}
-      <Popover open={open} onClose={close} side="top" className="left-2 w-60">
-        <MenuItem onSelect={() => go("account")}>
-          <UserRound className="size-3.5 text-muted" /> Account and devices
-        </MenuItem>
-        <MenuItem onSelect={() => go("usage")}>
-          <Gauge className="size-3.5 text-muted" /> Usage and limits
-        </MenuItem>
-        <MenuItem onSelect={() => go("general")}>
-          <SettingsIcon className="size-3.5 text-muted" />
-          <span className="flex-1">Settings</span>
-          <Kbd>Ctrl ,</Kbd>
-        </MenuItem>
-        <div className="my-1 border-t border-separator" />
-        <MenuItem
-          onSelect={() => {
-            close()
-            void signOut()
-          }}
-        >
-          <LogOut className="size-3.5 text-muted" /> Sign out
-        </MenuItem>
-      </Popover>
     </div>
   )
 }
@@ -685,7 +796,7 @@ function WindowMeter({ label, window: w }: { label: string; window: AccountWindo
       <span className="text-2xs flex justify-between text-muted">
         <span>{label}</span>
         <span className="tabular-nums">
-          {w.percent}%{resets && <span className="text-muted/70"> · {resets}</span>}
+          {w.percent}%{resets && <span> · {resets}</span>}
         </span>
       </span>
       <span className="block h-1 overflow-hidden rounded-full bg-default">

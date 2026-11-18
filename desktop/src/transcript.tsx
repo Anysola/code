@@ -2,6 +2,7 @@ import {
   ChevronDown,
   ChevronRight,
   CircleAlert,
+  Ellipsis,
   FilePlus2,
   FileText,
   Globe,
@@ -20,21 +21,29 @@ import {
   SquareSlash,
   Undo2,
 } from "lucide-react"
-import { useState, type ReactNode } from "react"
-import Markdown, { type ExtraProps } from "react-markdown"
+import { createContext, memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import Markdown, { type Components, type ExtraProps } from "react-markdown"
 import remarkGfm from "remark-gfm"
 
-import type { FileDiff, Item } from "./bridge"
+import type { FileDiff, FormRequest, Item } from "./bridge"
+import { duration, Elapsed } from "./conversation"
+import { FormCard } from "./form-card"
+import { copyPath } from "./header"
 import { getPrefs, isSendKey, sendKeyLabel, usePrefs } from "./prefs"
 import {
   answer,
   buildPlan,
+  isRunning,
+  messageImages,
+  notify,
   openExternal,
+  openInEditor,
   peekAt,
   redo,
   reply,
   resend,
   retry,
+  revealFile,
   rewind,
   useStore,
   type Asked,
@@ -42,7 +51,7 @@ import {
   type Permission,
   type Status,
 } from "./store"
-import { btn, cn, Counts, DiffView, Kbd, Spinner } from "./ui"
+import { btn, cn, Counts, DiffView, Kbd, MenuItem, Popover, Spinner, useEscape } from "./ui"
 
 type Tool = Extract<Item, { kind: "tool" }>
 type UserItem = Extract<Item, { kind: "user" }>
@@ -66,20 +75,30 @@ function blocks(items: Item[]): Block[] {
   return out
 }
 
+/** The open session's folder and whether a turn runs in it: what rows deep in the list need. */
+type Where = { directory: string; sessionId: string | null; live: boolean }
+const WhereContext = createContext<Where>({ directory: "", sessionId: null, live: false })
+
+/** Kinds of failure that sending again won't fix. */
+const FINAL = new Set(["limit", "auth", "model", "elsewhere"])
+
 export function Transcript({
   open,
   permissions,
   questions,
+  forms = [],
   readOnly = false,
 }: {
   open: Open
   permissions: Permission[]
   questions: Asked[]
+  forms?: FormRequest[]
   /** A subagent's transcript: no rewinding or editing. */
   readOnly?: boolean
 }) {
   const busy = useStore((s) => (open.sessionId ? s.busy.has(open.sessionId) : false))
   const last = open.items[open.items.length - 1]
+  const live = busy || isRunning(open)
   // Plan wrote the last reply and the session is still in Plan.
   const planned =
     !readOnly &&
@@ -90,53 +109,121 @@ export function Transcript({
     !open.revert &&
     last?.kind === "text" &&
     open.info.agents.some((a) => a.id === "build")
-  // The latest turn failed: as it happened, or as the session was left.
+  // The latest turn failed for a reason sending again can fix: as it happened, or as the session was left.
   const retryable =
     !readOnly &&
     !busy &&
     ((open.status.kind === "failed" && open.status.retry === true) ||
-      (open.status.kind === "idle" && last?.kind === "error"))
+      (open.status.kind === "idle" &&
+        last?.kind === "error" &&
+        last.retry !== false &&
+        !(last.errorKind && FINAL.has(last.errorKind))))
+  const where = useMemo(
+    () => ({ directory: open.directory, sessionId: open.sessionId, live }),
+    [open.directory, open.sessionId, live]
+  )
+  const shown = useMemo(() => turns(blocks(open.items), live), [open.items, live])
   return (
-    <div className="flex flex-col gap-5">
-      {blocks(open.items).map((b) =>
-        b.kind === "explore" ? (
-          <Explored key={b.id} tools={b.tools} />
-        ) : b.item.kind === "user" ? (
-          <UserMessage key={b.item.id} item={b.item} actions={!readOnly} />
-        ) : (
-          <Entry key={b.item.id} item={b.item} directory={open.directory} />
-        )
-      )}
-      {open.revert && !readOnly && <Rewound revert={open.revert} />}
-      {/* Reasoning isn't shown: the gateway sends it summarized or empty, so a "Thought" row
-          opened onto nothing. The status line says the model is at work meanwhile. */}
-      {open.live.map((l) => l.kind === "text" && <Prose key={l.key} text={l.text} />)}
-      {permissions.map((p, i) => (
-        // Enter and Escape answer the first ask; the keys show on that one only.
-        <PermissionCard key={p.requestId} permission={p} keys={i === 0} />
-      ))}
-      {questions.map((q) => (
-        <QuestionCard key={q.requestId} asked={q} />
-      ))}
-      <StatusLine
-        status={open.status}
-        waiting={permissions.length + questions.length > 0}
-        streaming={open.live.some((l) => l.kind === "text")}
-      />
-      {retryable && open.items.some((i) => i.kind === "user") && (
-        <button onClick={() => void retry()} className={btn("secondary", "sm", "-mt-2 gap-1.5 self-start")}>
-          <RotateCcw className="size-3.5" />
-          Try again
-        </button>
-      )}
-      {planned && (
-        <div className="flex items-center gap-3">
-          <button onClick={() => void buildPlan()} className={btn("primary", "sm", "gap-2")}>
-            <Hammer className="size-3.5" />
-            Build this plan
+    <WhereContext.Provider value={where}>
+      <div className="flex flex-col gap-5">
+        {shown.map((b) =>
+          b.kind === "end" ? (
+            <TurnEnd key={b.id} elapsed={b.elapsed} text={b.text} />
+          ) : b.kind === "explore" ? (
+            <Explored key={b.id} tools={b.tools} />
+          ) : b.item.kind === "user" ? (
+            <UserMessage key={b.item.id} item={b.item} actions={!readOnly} />
+          ) : (
+            <Entry key={b.item.id} item={b.item} directory={open.directory} />
+          )
+        )}
+        {open.revert && !readOnly && <Rewound revert={open.revert} />}
+        {/* Reasoning isn't shown: the gateway sends it summarized or empty, so a "Thought" row
+            opened onto nothing. The status line says the model is at work meanwhile. */}
+        {open.live.map((l) => l.kind === "text" && <Prose key={l.key} text={l.text} />)}
+        {permissions.map((p, i) => (
+          // Enter and Escape answer the first ask; the keys show on that one only.
+          <PermissionCard key={p.requestId} permission={p} keys={i === 0} />
+        ))}
+        {questions.map((q) => (
+          <QuestionCard key={q.requestId} asked={q} />
+        ))}
+        {forms.map((f) => (
+          <FormCard key={f.formId} form={f} />
+        ))}
+        {!readOnly && (
+          <StatusLine
+            open={open}
+            waiting={permissions.length + questions.length + forms.length > 0}
+            streaming={open.live.some((l) => l.kind === "text")}
+          />
+        )}
+        {retryable && open.items.some((i) => i.kind === "user") && (
+          <button onClick={() => void retry()} className={btn("secondary", "sm", "-mt-2 gap-1.5 self-start")}>
+            <RotateCcw className="size-3.5" />
+            Try again
           </button>
-          <span className="text-dense text-muted">Switches to Build and carries it out</span>
-        </div>
+        )}
+        {planned && (
+          <div className="flex items-center gap-3">
+            <button onClick={() => void buildPlan()} className={btn("primary", "sm", "gap-2")}>
+              <Hammer className="size-3.5" />
+              Build this plan
+            </button>
+            <span className="text-dense text-muted">Switches to Build and carries it out</span>
+          </div>
+        )}
+      </div>
+    </WhereContext.Provider>
+  )
+}
+
+type Shown = Block | { kind: "end"; id: string; elapsed: number | null; text: string | null }
+
+/** Each finished turn gets a row under it: how long it worked, and Copy for its last reply. */
+function turns(list: Block[], live: boolean): Shown[] {
+  const out: Shown[] = []
+  let user: UserItem | null = null
+  let reply: string | null = null
+  const close = (running: boolean) => {
+    if (user && !running && (user.elapsed != null || reply)) out.push({ kind: "end", id: `end:${user.id}`, elapsed: user.elapsed ?? null, text: reply })
+  }
+  for (const b of list) {
+    if (b.kind === "item" && b.item.kind === "user") {
+      close(false)
+      user = b.item
+      reply = null
+    } else if (b.kind === "item" && b.item.kind === "text") reply = b.item.text
+    out.push(b)
+  }
+  close(live)
+  return out
+}
+
+function TurnEnd({ elapsed, text }: { elapsed: number | null; text: string | null }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <div className="group -mt-3 -mb-2 flex h-7 items-center gap-1">
+      {elapsed != null && elapsed >= 1000 && (
+        <span className="text-2xs pr-1 text-muted/80">Worked for {duration(elapsed)}</span>
+      )}
+      {text && (
+        <span className={cn("opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100", (elapsed == null || elapsed < 1000) && "-ml-1.5")}>
+          <IconAction
+            label={copied ? "Copied" : "Copy reply"}
+            onClick={() =>
+              void navigator.clipboard.writeText(text).then(
+                () => {
+                  setCopied(true)
+                  setTimeout(() => setCopied(false), 1500)
+                },
+                () => notify("The reply couldn’t be copied. Select its text and copy it instead.")
+              )
+            }
+          >
+            {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+          </IconAction>
+        </span>
       )}
     </div>
   )
@@ -234,21 +321,21 @@ function UserMessage({ item, actions }: { item: UserItem; actions: boolean }) {
             {full ? "Show less" : "Show all"}
           </button>
         )}
-        {item.images > 0 && (
-          <div className="text-2xs mt-1.5 text-muted">
-            {item.images} image{item.images > 1 ? "s" : ""}
-          </div>
-        )}
+        {item.images > 0 && <Thumbnails item={item} />}
       </div>
       {actions && (
         <div className="-mb-3 flex h-8 items-center justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+          {item.time != null && <span className="text-2xs mr-auto pl-1 text-muted/80">{sentAt(item.time)}</span>}
           <IconAction
             label={copied ? "Copied" : "Copy"}
             onClick={() =>
-              void navigator.clipboard.writeText(item.text).then(() => {
-                setCopied(true)
-                setTimeout(() => setCopied(false), 1500)
-              })
+              void navigator.clipboard.writeText(item.text).then(
+                () => {
+                  setCopied(true)
+                  setTimeout(() => setCopied(false), 1500)
+                },
+                () => notify("The message couldn’t be copied. Select its text and copy it instead.")
+              )
             }
           >
             {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
@@ -271,6 +358,99 @@ function UserMessage({ item, actions }: { item: UserItem; actions: boolean }) {
   )
 }
 
+/** "14:32" today, "Mon 14:32" this week, else "3 Nov 14:32". */
+function sentAt(ms: number) {
+  const d = new Date(ms)
+  const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
+  const days = (Date.now() - ms) / 86_400_000
+  if (new Date().toDateString() === d.toDateString()) return time
+  if (days < 6) return `${d.toLocaleDateString("en-GB", { weekday: "short" })} ${time}`
+  return `${d.toLocaleDateString("en-GB", { day: "numeric", month: "short" })} ${time}`
+}
+
+/** A sent message's images, read when the message shows; a click opens them large. */
+function Thumbnails({ item }: { item: UserItem }) {
+  const { directory, sessionId } = useContext(WhereContext)
+  const [urls, setUrls] = useState<string[] | null>(null)
+  const [failed, setFailed] = useState(false)
+  const [big, setBig] = useState<number | null>(null)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el || !sessionId) return
+    let live = true
+    // Read once it scrolls into view: a long session doesn't read every image it ever sent.
+    const seen = new IntersectionObserver((entries) => {
+      if (!entries.some((e) => e.isIntersecting)) return
+      seen.disconnect()
+      messageImages(directory, sessionId, item.id).then(
+        (list) => live && setUrls(list),
+        () => live && setFailed(true)
+      )
+    })
+    seen.observe(el)
+    return () => {
+      live = false
+      seen.disconnect()
+    }
+  }, [directory, sessionId, item.id])
+  return (
+    <div ref={ref} className="mt-2.5 flex flex-wrap gap-2">
+      {urls
+        ? urls.map((u, i) => (
+            <button
+              key={i}
+              onClick={() => setBig(i)}
+              aria-label={`Image ${i + 1} of ${urls.length}`}
+              className="overflow-hidden rounded-lg focus-visible:status-focused-field"
+            >
+              <img src={u} alt="" className="size-16 object-cover" />
+            </button>
+          ))
+        : Array.from({ length: item.images }, (_, i) => (
+            <span key={i} className="flex size-16 items-center justify-center rounded-lg bg-default/60 text-muted">
+              {failed ? <CircleAlert className="size-3.5" /> : null}
+            </span>
+          ))}
+      {failed && <span className="text-2xs self-center text-muted">The images couldn’t be read.</span>}
+      {urls && big !== null && <Lightbox urls={urls} at={big} onMove={setBig} onClose={() => setBig(null)} />}
+    </div>
+  )
+}
+
+/** An image large over the window: arrows step through the message's images, Escape closes
+ * (and only closes: the composer's Escape would stop the turn). */
+function Lightbox({ urls, at, onMove, onClose }: { urls: string[]; at: number; onMove: (i: number) => void; onClose: () => void }) {
+  const panel = useRef<HTMLDivElement>(null)
+  useEscape(panel, onClose)
+  useEffect(() => {
+    panel.current?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "ArrowRight" && at < urls.length - 1) onMove(at + 1)
+      if (e.key === "ArrowLeft" && at > 0) onMove(at - 1)
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [at, urls.length, onMove])
+  return (
+    <div
+      ref={panel}
+      tabIndex={-1}
+      role="dialog"
+      aria-label="Image"
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-scrim p-10 outline-none"
+    >
+      <img src={urls[at]} alt="" onClick={(e) => e.stopPropagation()} className="max-h-full max-w-full min-h-0 rounded-xl object-contain" />
+      {urls.length > 1 && (
+        <span className="text-2xs rounded-full bg-overlay px-2.5 py-1 text-muted tabular-nums">
+          {at + 1} of {urls.length}
+        </span>
+      )}
+    </div>
+  )
+}
+
 function IconAction({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
   return (
     <button
@@ -284,7 +464,7 @@ function IconAction({ label, onClick, children }: { label: string; onClick: () =
   )
 }
 
-const MARK = { added: "A", modified: "M", deleted: "D" } as const
+const MARK = { added: "Added", modified: "Edited", deleted: "Deleted" } as const
 
 /** A staged rewind: what it hid and put back, until the next message makes it final. */
 function Rewound({ revert }: { revert: NonNullable<Open["revert"]> }) {
@@ -309,7 +489,7 @@ function Rewound({ revert }: { revert: NonNullable<Open["revert"]> }) {
         <ul className="flex flex-col gap-1 pl-6.5">
           {files.map((f) => (
             <li key={f.file} className="text-dense flex items-center gap-2 font-mono text-muted">
-              <span className="w-3 text-center">{MARK[f.status] ?? "M"}</span>
+              <span className="text-2xs w-12 shrink-0 font-sans">{MARK[f.status] ?? "Edited"}</span>
               <span className="min-w-0 flex-1 truncate text-foreground/85">{f.file}</span>
               {f.additions + f.deletions > 0 && <Counts add={f.additions} del={f.deletions} />}
             </li>
@@ -331,7 +511,8 @@ function Rewound({ revert }: { revert: NonNullable<Open["revert"]> }) {
   )
 }
 
-function Entry({ item, directory }: { item: Exclude<Item, UserItem>; directory: string }) {
+/** Rows render again only when their item changed (the store keeps unchanged items as they were). */
+const Entry = memo(function Entry({ item, directory }: { item: Exclude<Item, UserItem>; directory: string }) {
   switch (item.kind) {
     case "text":
       return <Prose text={item.text} />
@@ -358,44 +539,102 @@ function Entry({ item, directory }: { item: Exclude<Item, UserItem>; directory: 
       if (item.name === "subagent" || item.name === "task") return <Subagent tool={item} directory={directory} />
       return <OtherTool tool={item} />
   }
-}
+})
 
 // ---------------------------------------------------------------------------
 // Text
 // ---------------------------------------------------------------------------
 
-export function Prose({ text }: { text: string }) {
+/** A link in a reply: web and mail links go to the browser, a file of the folder to the editor. */
+function ReplyLink({ href, children }: { href?: string; children?: ReactNode }) {
+  const { directory } = useContext(WhereContext)
+  const go = () => {
+    if (!href) return
+    if (/^(https?:|mailto:)/i.test(href)) return openExternal(href)
+    const file = localFile(href)
+    if (file && directory) void openInEditor(directory, file.path, file.line)
+    else if (/^file:/i.test(href)) notify("That file is on another computer, so it isn’t opened from here.")
+  }
+  return (
+    <a
+      href={href}
+      title={href}
+      onClick={(e) => {
+        e.preventDefault()
+        go()
+      }}
+      // A middle click would open a WebView2 window of its own.
+      onAuxClick={(e) => {
+        if (e.button !== 1) return
+        e.preventDefault()
+        go()
+      }}
+      className="underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground"
+    >
+      {children}
+    </a>
+  )
+}
+
+/** A link to a file: `file://` or a path, with `#L12` or `:12` naming a line. Null for anything
+ * else with a scheme (`javascript:`, `ftp:`…) and for a `file://` link to another computer
+ * (`file://host/share/…`): following it would reach that computer. */
+export function localFile(href: string): { path: string; line: number | null } | null {
+  let h = href.trim()
+  if (/^file:/i.test(h)) {
+    // file:////host/share keeps the host in the path, past the URL parser.
+    if (/^file:[\\/]{4}/i.test(h)) return null
+    try {
+      const url = new URL(h)
+      if (url.hostname && url.hostname.toLowerCase() !== "localhost") return null
+      // The line (`#L12`) is the URL's hash.
+      h = decodeURIComponent(url.pathname) + url.hash
+      // file:///C:/x arrives as /C:/x.
+      if (/^\/[a-z]:/i.test(h)) h = h.slice(1)
+    } catch {
+      return null
+    }
+  } else if (/^[a-z][a-z0-9+.-]+:/i.test(h) && !/^[a-z]:[\\/]/i.test(h)) return null
+  let line: number | null = null
+  const hash = /#L(\d+)(?:-L?\d+)?$/.exec(h)
+  if (hash) {
+    line = Number(hash[1])
+    h = h.slice(0, hash.index)
+  } else {
+    const colon = /:(\d+)(?::\d+)?$/.exec(h)
+    if (colon && !/^[a-z]:$/i.test(h.slice(0, colon.index))) {
+      line = Number(colon[1])
+      h = h.slice(0, colon.index)
+    }
+  }
+  h = h.replace(/[?#].*$/, "")
+  if (!h) return null
+  try {
+    h = decodeURIComponent(h)
+  } catch {
+    // Kept as written.
+  }
+  return { path: h, line }
+}
+
+const MARKDOWN: Components = {
+  pre: ({ children, node }) => <CodeBlock node={node}>{children}</CodeBlock>,
+  a: ({ href, children }) => <ReplyLink href={href}>{children}</ReplyLink>,
+}
+const PLUGINS = [remarkGfm]
+/** Links keep their address as written: clicks are handled above, nothing navigates. */
+const keepUrl = (url: string) => url
+
+/** Markdown, parsed again only when its text changes (a streaming reply, not its neighbours). */
+export const Prose = memo(function Prose({ text }: { text: string }) {
   return (
     <div className="prose-anysola text-md leading-relaxed text-foreground/90">
-      <Markdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          pre: ({ children, node }) => <CodeBlock node={node}>{children}</CodeBlock>,
-          a: ({ href, children }) => (
-            <a
-              href={href}
-              onClick={(e) => {
-                e.preventDefault()
-                if (href?.startsWith("http")) openExternal(href)
-              }}
-              // A middle click would open a WebView2 window of its own.
-              onAuxClick={(e) => {
-                if (e.button !== 1) return
-                e.preventDefault()
-                if (href?.startsWith("http")) openExternal(href)
-              }}
-              className="underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground"
-            >
-              {children}
-            </a>
-          ),
-        }}
-      >
+      <Markdown remarkPlugins={PLUGINS} components={MARKDOWN} urlTransform={keepUrl}>
         {text}
       </Markdown>
     </div>
   )
-}
+})
 
 type Hast = { type: string; value?: string; tagName?: string; properties?: Record<string, unknown>; children?: Hast[] }
 
@@ -423,10 +662,13 @@ function CodeBlock({ children, node }: { children: ReactNode; node: ExtraProps["
   const cut = !!code && shorten && lines > CODE_LIMIT && !full
   const language = (code?.properties?.className as string[] | undefined)?.join(" ")
   const copy = () => {
-    void navigator.clipboard.writeText(source).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    })
+    void navigator.clipboard.writeText(source).then(
+      () => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1500)
+      },
+      () => notify("The code couldn’t be copied. Select it and copy it instead.")
+    )
   }
   return (
     <div className="group relative">
@@ -502,6 +744,8 @@ const verbs: Record<string, string> = {
   subagent: "Ran a subagent",
   question: "Asked",
   skill: "Used a skill",
+  // Code mode: a short script that calls tools (MCP servers' among them).
+  execute: "Ran a script",
 }
 
 function summary(tools: Tool[]) {
@@ -515,7 +759,8 @@ function summary(tools: Tool[]) {
 }
 
 function Explored({ tools }: { tools: Tool[] }) {
-  const running = tools.some((t) => t.status === "running" || t.status === "streaming")
+  const { live } = useContext(WhereContext)
+  const running = live && tools.some((t) => t.status === "running" || t.status === "streaming")
   const [open, setOpen] = useState(false)
   const listed = usePrefs((p) => p.conversation.lookups === "listed")
   if (listed)
@@ -543,23 +788,135 @@ function Explored({ tools }: { tools: Tool[] }) {
   )
 }
 
+const FILE_TOOLS = new Set(["read", "write", "edit", "list"])
+/** Lookups whose output is worth a look (the matches, the files found). */
+const OPENS = new Set(["grep", "glob", "websearch", "webfetch"])
+
+/** A row is running only while its turn is: a stopped turn can leave one that never heard its end. */
+function useToolState(tool: Tool): "running" | "waiting" | "declined" | "stopped" | "error" | "done" {
+  const { live, sessionId } = useContext(WhereContext)
+  // A call held by a permission card isn't running yet: the card under it asks.
+  const held = useStore(
+    (s) =>
+      !!tool.target &&
+      s.permissions.some(
+        (p) =>
+          (p.sessionId === sessionId || p.rootId === sessionId) &&
+          p.resources.some((r) => !!r && (tool.target.includes(r) || r.includes(tool.target)))
+      )
+  )
+  if (tool.status === "running" || tool.status === "streaming")
+    return !live ? "stopped" : held ? "waiting" : "running"
+  if (tool.status === "error" && tool.error === DECLINED) return "declined"
+  if (cutShort(tool)) return "stopped"
+  return tool.status === "error" ? "error" : "done"
+}
+
+/** What the core writes on a call that a stop cut short: the user's doing, not a failure. */
+const CUT_SHORT = "Tool execution interrupted"
+/** And on a call the user answered Deny to. */
+const DECLINED = "The user declined this tool call"
+
+/** Ended by the user, by a stop or a Deny: the row says so itself, with no error under it. */
+function cutShort(tool: Tool) {
+  return tool.status === "error" && (tool.error === CUT_SHORT || tool.error === DECLINED)
+}
+
+function ToolState({ state }: { state: ReturnType<typeof useToolState> }) {
+  if (state === "running") return <Spinner className="size-3" />
+  if (state === "waiting") return <span>Waiting for you</span>
+  if (state === "declined") return <span>Declined</span>
+  if (state === "stopped") return <span>Stopped</span>
+  if (state === "error") return <span className="text-danger">Failed</span>
+  return null
+}
+
 function ToolRow({ tool, verb, icon }: { tool: Tool; verb?: string; icon?: typeof FileText }) {
   const Icon = icon ?? icons[tool.name] ?? Wrench
-  return (
-    <div className="text-dense flex h-8 items-center gap-2.5 rounded-lg px-2">
+  const state = useToolState(tool)
+  const { directory } = useContext(WhereContext)
+  const error = cutShort(tool) ? null : tool.error
+  const output = OPENS.has(tool.name) ? (error ?? tool.output) : error
+  const [open, setOpen] = useState(false)
+  const file = FILE_TOOLS.has(tool.name) && tool.target && directory ? tool.target : null
+  const head = (
+    <>
       <Icon className="size-3.5 shrink-0 text-muted" strokeWidth={1.75} />
       <span className="shrink-0 text-foreground/80">{verb ?? verbs[tool.name] ?? tool.name}</span>
       <span className="min-w-0 truncate font-mono text-xs text-muted">{tool.target}</span>
-      <span className="ml-auto flex shrink-0 items-center gap-2 text-2xs text-muted">
-        {(tool.status === "running" || tool.status === "streaming") && <Spinner className="size-3" />}
-        {tool.status === "error" && <span className="text-danger">Failed</span>}
-      </span>
+    </>
+  )
+  return (
+    <div className="group/tool">
+      <div className="text-dense flex h-8 items-center gap-2.5 rounded-lg px-2 hover:bg-default/40">
+        {output ? (
+          <button
+            onClick={() => setOpen(!open)}
+            aria-expanded={open}
+            className="flex min-w-0 flex-1 items-center gap-2.5 text-left focus-visible:status-focused-field"
+          >
+            {head}
+          </button>
+        ) : file ? (
+          <button
+            onClick={() => void openInEditor(directory, file, null)}
+            title="Open in your editor"
+            className="flex min-w-0 flex-1 items-center gap-2.5 text-left focus-visible:status-focused-field [&>span:last-child]:hover:underline [&>span:last-child]:decoration-muted/50 [&>span:last-child]:underline-offset-2"
+          >
+            {head}
+          </button>
+        ) : (
+          <span className="flex min-w-0 flex-1 items-center gap-2.5">{head}</span>
+        )}
+        <span className="ml-auto flex shrink-0 items-center gap-2 text-2xs text-muted">
+          <ToolState state={state} />
+          {file && <PathMenu directory={directory} path={file} />}
+          {output && (open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />)}
+        </span>
+      </div>
+      {open && output && (
+        <pre
+          className={cn(
+            "mx-2 mt-1 mb-1 max-h-60 overflow-auto rounded-lg bg-background/60 px-3 py-2.5 font-mono text-xs leading-relaxed whitespace-pre-wrap",
+            error ? "text-danger" : "text-foreground/75"
+          )}
+        >
+          {output}
+        </pre>
+      )}
     </div>
   )
 }
 
+/** Open in the editor, show in the file manager, or copy a file's path. */
+function PathMenu({ directory, path }: { directory: string; path: string }) {
+  const [show, setShow] = useState(false)
+  const close = () => setShow(false)
+  const absolute = /^([a-z]:[\\/]|[\\/])/i.test(path) ? path : `${directory.replace(/[\\/]+$/, "")}${directory.includes("\\") ? "\\" : "/"}${path}`
+  return (
+    <span className="relative" onClick={(e) => e.stopPropagation()}>
+      <button
+        onClick={() => setShow(!show)}
+        aria-label={`More for ${path}`}
+        aria-expanded={show}
+        className={cn(
+          "flex size-6 items-center justify-center rounded-md text-muted hover:bg-default/60 hover:text-foreground focus-visible:opacity-100 focus-visible:status-focused-field",
+          !show && "opacity-0 group-hover/tool:opacity-100"
+        )}
+      >
+        <Ellipsis className="size-3.5" />
+      </button>
+      <Popover open={show} onClose={close} side="bottom" align="end" menu label={path} className="w-48">
+        <MenuItem onSelect={() => (close(), void openInEditor(directory, path, null))}>Open in editor</MenuItem>
+        <MenuItem onSelect={() => (close(), void revealFile(absolute, directory))}>Reveal in folder</MenuItem>
+        <MenuItem onSelect={() => (close(), copyPath(absolute))}>Copy path</MenuItem>
+      </Popover>
+    </span>
+  )
+}
+
 function Subagent({ tool, directory }: { tool: Tool; directory: string }) {
-  const running = tool.status === "running" || tool.status === "streaming"
+  const state = useToolState(tool)
   const child = tool.child
   return (
     <div className="-mx-2">
@@ -572,9 +929,10 @@ function Subagent({ tool, directory }: { tool: Tool; directory: string }) {
         <span className="shrink-0 text-foreground/80">Subagent</span>
         <span className="min-w-0 truncate text-muted">{tool.target}</span>
         <span className="ml-auto flex shrink-0 items-center gap-2 text-2xs text-muted">
-          {running && <Spinner className="size-3" />}
-          {tool.status === "error" && <span className="text-danger">Failed</span>}
-          {child && <ChevronRight className="size-3.5 opacity-0 group-hover:opacity-100" />}
+          {state === "running" ? <Spinner className="size-3" /> : <ToolState state={state} />}
+          {state === "done" && <span>Done</span>}
+          {tool.elapsed != null && state !== "running" && <span className="tabular-nums">{duration(tool.elapsed)}</span>}
+          {child && <ChevronRight className="size-3.5" />}
         </span>
       </button>
     </div>
@@ -585,29 +943,32 @@ function OtherTool({ tool }: { tool: Tool }) {
   return (
     <div className="-mx-2">
       <ToolRow tool={tool} />
-      {tool.error && <div className="text-2xs ml-8 max-h-32 overflow-y-auto whitespace-pre-wrap text-danger">{tool.error}</div>}
+      {tool.error && !cutShort(tool) && (
+        <div className="text-2xs ml-8 max-h-32 overflow-y-auto whitespace-pre-wrap text-danger">{tool.error}</div>
+      )}
     </div>
   )
 }
 
 function Command({ tool }: { tool: Tool }) {
-  const [open, setOpen] = useState(() => getPrefs().conversation.commands === "open")
-  const running = tool.status === "running" || tool.status === "streaming"
-  const output = tool.error ?? tool.output
+  const state = useToolState(tool)
+  // A failed command shows why at once; the user's own click wins after that.
+  const [chosen, setChosen] = useState<boolean | null>(null)
+  const open = chosen ?? (state === "error" || getPrefs().conversation.commands === "open")
+  const output = (cutShort(tool) ? null : tool.error) || tool.output
   return (
     <div className="-mx-2">
       <button
-        onClick={() => output && setOpen(!open)}
+        onClick={() => output && setChosen(!open)}
         aria-expanded={output ? open : undefined}
         className="text-dense group flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left hover:bg-default/60 focus-visible:status-focused-field"
       >
         <SquareTerminal className="size-3.5 shrink-0 text-muted" strokeWidth={1.75} />
-        <span className="shrink-0 text-foreground/80">{running ? "Running" : "Ran"}</span>
+        <span className="shrink-0 text-foreground/80">{state === "running" ? "Running" : state === "waiting" || state === "declined" ? "Run" : "Ran"}</span>
         <span className="min-w-0 truncate font-mono text-xs text-muted">{tool.target}</span>
         <span className="ml-auto flex shrink-0 items-center gap-2 text-2xs text-muted">
-          {running && <Spinner className="size-3" />}
-          {tool.status === "error" && <span className="text-danger">Failed</span>}
-          {output && (open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5 opacity-0 group-hover:opacity-100" />)}
+          <ToolState state={state} />
+          {output && (open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />)}
         </span>
       </button>
       {open && output && (
@@ -643,33 +1004,38 @@ export function EditCard({
 }) {
   const [open, setOpen] = useState(() => startOpen ?? getPrefs().conversation.changes === "open")
   const added = file.status === "added"
-  const waiting = status === "running"
+  const live = useContext(WhereContext).live
+  const waiting = status === "running" && live
+  // Review, outside the conversation, shows the open session's folder too.
+  const openDirectory = useStore((s) => s.open?.directory ?? "")
+  const directory = useContext(WhereContext).directory || openDirectory
   return (
-    <div className="overflow-hidden rounded-xl bg-surface">
-      <button
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
-        className="text-dense flex h-9 w-full items-center gap-2.5 px-3 text-left hover:bg-default/30 focus-visible:status-focused-field focus-visible:ring-inset"
-      >
-        {added ? (
-          <FilePlus2 className="size-3.5 shrink-0 text-muted" strokeWidth={1.75} />
-        ) : (
-          <Pencil className="size-3.5 shrink-0 text-muted" strokeWidth={1.75} />
-        )}
-        <span className="shrink-0 text-foreground/80">
-          {waiting ? (added ? "Create" : "Edit") : added ? "Created" : file.status === "deleted" ? "Deleted" : "Edited"}
-        </span>
-        <span className="min-w-0 truncate font-mono text-xs text-muted">{file.file}</span>
-        <span className="ml-auto flex shrink-0 items-center gap-2">
-          {status === "error" && <span className="text-2xs text-danger">Not applied</span>}
-          <Counts add={file.additions} del={file.deletions} />
-          {open ? (
-            <ChevronDown className="size-3.5 text-muted" />
+    <div className="group/tool overflow-hidden rounded-xl bg-surface">
+      <div className="flex h-9 items-center hover:bg-default/30">
+        <button
+          onClick={() => setOpen(!open)}
+          aria-expanded={open}
+          className="text-dense flex h-full min-w-0 flex-1 items-center gap-2.5 pl-3 text-left focus-visible:status-focused-field focus-visible:ring-inset"
+        >
+          {added ? (
+            <FilePlus2 className="size-3.5 shrink-0 text-muted" strokeWidth={1.75} />
           ) : (
-            <ChevronRight className="size-3.5 text-muted" />
+            <Pencil className="size-3.5 shrink-0 text-muted" strokeWidth={1.75} />
           )}
+          <span className="shrink-0 text-foreground/80">
+            {waiting ? (added ? "Add" : "Edit") : added ? "Added" : file.status === "deleted" ? "Deleted" : "Edited"}
+          </span>
+          <span className="min-w-0 truncate font-mono text-xs text-muted">{file.file}</span>
+          <span className="ml-auto flex shrink-0 items-center gap-2 pr-1">
+            {status === "error" && <span className="text-2xs text-danger">Not applied</span>}
+            <Counts add={file.additions} del={file.deletions} />
+            {open ? <ChevronDown className="size-3.5 text-muted" /> : <ChevronRight className="size-3.5 text-muted" />}
+          </span>
+        </button>
+        <span className="flex shrink-0 items-center pr-2">
+          {directory && file.status !== "deleted" ? <PathMenu directory={directory} path={file.file} /> : <span className="w-1" />}
         </span>
-      </button>
+      </div>
       {/* In the conversation a long diff scrolls inside its card; Review shows it whole. */}
       {open && (
         <DiffView
@@ -697,6 +1063,8 @@ const asks: Record<string, string> = {
 function PermissionCard({ permission: p, keys }: { permission: Permission; keys: boolean }) {
   const shell = p.action === "shell"
   const send = usePrefs((s) => s.conversation.send)
+  // The answer is on its way: the card waits for it instead of going (and coming back on a failure).
+  const sending = useStore((s) => s.sending.has(p.requestId))
   return (
     <div className="rounded-xl bg-surface p-4">
       <div className="flex items-center gap-2 text-sm">
@@ -728,18 +1096,24 @@ function PermissionCard({ permission: p, keys }: { permission: Permission; keys:
           ))}
         </div>
       ) : (
-        <div className="mt-2 max-h-40 overflow-y-auto font-mono text-xs break-all text-muted">{p.resources.join(", ")}</div>
+        // "*" is the rule's own wildcard (an MCP tool has no narrower target): nothing to read.
+        p.resources.some((r) => r !== "*") && (
+          <div className="mt-2 max-h-40 overflow-y-auto font-mono text-xs break-all text-muted">
+            {p.resources.filter((r) => r !== "*").join(", ")}
+          </div>
+        )
       )}
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <button onClick={() => void reply(p, "once")} className={btn("primary", "sm", "gap-2")}>
+        <button onClick={() => void reply(p, "once")} disabled={sending} className={btn("primary", "sm", "gap-2")}>
           Allow once {keys && <Kbd onPrimary>{sendKeyLabel(send)}</Kbd>}
         </button>
         {p.canAlways && (
-          <button onClick={() => void reply(p, "always")} className={btn("secondary", "sm")}>
+          <button onClick={() => void reply(p, "always")} disabled={sending} className={btn("secondary", "sm")}>
             Always allow{shell ? " this command" : ""}
           </button>
         )}
-        <button onClick={() => void reply(p, "reject")} className={btn("ghost", "sm", "ml-auto gap-2")}>
+        {sending && <Spinner className="ml-1" />}
+        <button onClick={() => void reply(p, "reject")} disabled={sending} className={btn("ghost", "sm", "ml-auto gap-2")}>
           Deny {keys && <Kbd>Esc</Kbd>}
         </button>
       </div>
@@ -752,6 +1126,7 @@ function QuestionCard({ asked }: { asked: Asked }) {
   const [other, setOther] = useState<string[]>(() => asked.questions.map(() => ""))
   const answers = asked.questions.map((_, i) => [...picked[i], ...(other[i].trim() ? [other[i].trim()] : [])])
   const complete = answers.every((a) => a.length > 0)
+  const sending = useStore((s) => s.sending.has(asked.requestId))
   const toggle = (i: number, label: string, multiple: boolean) => {
     // One answer to a single choice: picking an option drops a typed one.
     if (!multiple) setOther((all) => all.map((v, j) => (j === i ? "" : v)))
@@ -787,9 +1162,9 @@ function QuestionCard({ asked }: { asked: Asked }) {
                 >
                   <span
                     className={cn(
-                      "mt-0.5 flex size-4 shrink-0 items-center justify-center bg-default-hover",
+                      "mt-0.5 flex size-4 shrink-0 items-center justify-center",
                       q.multiple ? "rounded" : "rounded-full",
-                      on && "bg-accent text-accent-foreground"
+                      on ? "bg-accent text-accent-foreground" : "border-[1.5px] border-muted/70"
                     )}
                   >
                     {on && <Check className="size-3" strokeWidth={2.5} />}
@@ -815,13 +1190,14 @@ function QuestionCard({ asked }: { asked: Asked }) {
       </div>
       <div className="flex items-center gap-2">
         <button
-          disabled={!complete}
+          disabled={!complete || sending}
           onClick={() => void answer(asked, answers)}
           className={btn("primary", "sm")}
         >
           Send answers
         </button>
-        <button onClick={() => void answer(asked, null)} className={btn("ghost", "sm", "ml-auto text-muted")}>
+        {sending && <Spinner />}
+        <button onClick={() => void answer(asked, null)} disabled={sending} className={btn("ghost", "sm", "ml-auto text-muted")}>
           Skip
         </button>
       </div>
@@ -829,45 +1205,100 @@ function QuestionCard({ asked }: { asked: Asked }) {
   )
 }
 
-function StatusLine({ status, waiting, streaming }: { status: Status; waiting: boolean; streaming: boolean }) {
+/** What runs now, from the newest running tool: "Running pnpm test", "Editing src/app.tsx". */
+function doing(items: Item[]): string | null {
+  const running: Tool[] = []
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]
+    if (it.kind === "user") break
+    if (it.kind === "tool" && (it.status === "running" || it.status === "streaming")) running.push(it)
+  }
+  const t = running[0]
+  if (!t) return null
+  const reads = running.filter((r) => r.name === "read").length
+  if (t.name === "read" && reads > 1) return `Reading ${reads} files`
+  const target = t.target ? ` ${t.target}` : ""
+  switch (t.name) {
+    case "shell":
+    case "bash":
+      return `Running${target}`
+    case "edit":
+      return `Editing${target}`
+    case "write":
+      return `Writing${target}`
+    case "read":
+      return `Reading${target}`
+    case "list":
+      return `Listing${target}`
+    case "grep":
+    case "glob":
+      return `Searching for${target}`
+    case "webfetch":
+      return `Fetching${target}`
+    case "websearch":
+      return `Searching the web for${target}`
+    case "task":
+    case "subagent":
+      return t.target ? `Subagent: ${t.target}` : "Running a subagent"
+    case "todowrite":
+      return "Updating the plan"
+    default:
+      return `Using ${t.name}`
+  }
+}
+
+/** Kinds the banner over the composer explains, with its own way out. */
+const BANNERED = new Set(["limit", "offline", "auth", "model"])
+
+function StatusLine({ open, waiting, streaming }: { open: Open; waiting: boolean; streaming: boolean }) {
+  const status: Status = open.status
+  const doingNow = useMemo(() => doing(open.items), [open.items])
+  // A running row right above already names what runs; the line then only keeps the time.
+  const last = open.items[open.items.length - 1]
+  const named = last?.kind === "tool" && (last.status === "running" || last.status === "streaming") && !last.child
+  const now = named ? null : doingNow
   if (waiting) return null
+  if (open.stopping && (status.kind === "working" || status.kind === "retrying"))
+    return (
+      <div className="text-dense flex items-center gap-2 text-muted">
+        <Spinner />
+        Stopping…
+      </div>
+    )
   switch (status.kind) {
     case "working":
-      // Streaming text already shows the model at work.
-      if (streaming) return null
+      // Streaming text already shows the model at work; what a tool does still says so.
+      if (streaming && !doingNow) return null
       return (
-        <div className="text-dense flex items-center gap-2 text-muted">
-          <Spinner />
-          Working
+        <div className="text-dense flex min-w-0 items-center gap-2 text-muted">
+          <Spinner className="shrink-0" />
+          <span className="min-w-0 truncate">{now ?? "Working"}</span>
+          {open.started && (
+            <span className="text-2xs shrink-0 text-muted/80">
+              · <Elapsed since={open.started} />
+            </span>
+          )}
         </div>
       )
     case "retrying":
       return (
-        <div className="text-dense flex items-start gap-2 text-muted">
-          <Spinner className="mt-0.5" />
-          <span>
-            Retrying, attempt {status.attempt}
-            <span className="block text-2xs text-muted/80">{status.error}</span>
-          </span>
+        <div className="text-dense flex items-center gap-2 text-muted" title={status.error}>
+          <Spinner />
+          <span>Reconnecting… (attempt {status.attempt})</span>
         </div>
       )
     case "failed":
+      if (status.errorKind && BANNERED.has(status.errorKind)) return null
       return (
-        <div className="text-dense flex items-start gap-2 text-danger">
+        // Running elsewhere isn't an error to fix here: said plainly, not in red.
+        <div className={cn("text-dense flex items-start gap-2", status.errorKind === "elsewhere" ? "text-muted" : "text-danger")}>
           <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
           <span className="max-h-40 min-w-0 overflow-y-auto whitespace-pre-wrap select-text">{status.error}</span>
         </div>
       )
     case "stopped":
-      return (
-        <div className="text-dense text-muted">
-          {status.reason === "budget"
-            ? "Stopped at this session’s budget."
-            : status.reason === "declined"
-              ? "Stopped after a denied request."
-              : "Stopped."}
-        </div>
-      )
+      // Every stop ends with the core's own note in the transcript (stopped, denied, the budget).
+      return null
     default:
       return null
   }

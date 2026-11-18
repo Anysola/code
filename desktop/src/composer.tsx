@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronUp,
   Circle,
+  ClipboardList,
   CircleCheck,
   FileText,
   Folder,
@@ -21,9 +22,14 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 
 import type { Attachment, Palette, Todo } from "./bridge"
+import { useBlocked } from "./conversation"
 import { isSendKey, usePrefs } from "./prefs"
 import {
   chooseAgent,
+  draftKey,
+  EMPTY_DRAFT,
+  isRunning,
+  setDraft,
   chooseModel,
   compact,
   newSession,
@@ -37,17 +43,18 @@ import {
   send,
   setMode,
   stop,
+  STOP_AGAIN,
   undo,
   useStore,
   type Mode,
   type Open,
 } from "./store"
-import { btn, cn, Popover } from "./ui"
+import { anyLayer, btn, cn, Popover, Spinner, Tooltip } from "./ui"
 
 export const modes: { id: Mode | "plan"; label: string; hint: string }[] = [
   { id: "ask", label: "Ask", hint: "Ask before every edit and command" },
   { id: "edits", label: "Edits", hint: "Edit files without asking; ask before commands" },
-  { id: "auto", label: "Auto", hint: "Ask only where your rules say to" },
+  { id: "auto", label: "Auto", hint: "Runs without asking, except where a rule says to ask or refuse" },
   { id: "plan", label: "Plan", hint: "Read and plan; change nothing until you approve" },
 ]
 
@@ -104,7 +111,10 @@ function actions(open: Open): Row[] {
     { name: "retry", detail: detail("retry"), run: () => void retry() },
     { name: "compact", detail: detail("compact"), run: () => void compact() },
     { name: "new", detail: detail("new"), run: () => void newSession(open.directory) },
-  ].map((a) => ({ key: `a:${a.name}`, label: `/${a.name}`, detail: a.detail, kind: "action", insert: "", run: a.run }))
+  ]
+    // Before the first message there is nothing to rewind, send again or summarize.
+    .filter((a) => open.sessionId || a.name === "new")
+    .map((a) => ({ key: `a:${a.name}`, label: `/${a.name}`, detail: a.detail, kind: "action", insert: "", run: a.run }))
   if (open.revert)
     rows.splice(1, 0, {
       key: "a:redo",
@@ -228,54 +238,98 @@ function Menu({
 // Composer
 // ---------------------------------------------------------------------------
 
+/** Over this many characters a paste is kept folded, as a chip, instead of filling the box. */
+const LONG_PASTE = 1500
+
+/** How long a second Escape has to stop a running turn. */
+const ESC_AGAIN = 1000
+
+/** Enter on an empty box allows a waiting ask, but not in the moment it appears: a message typed
+ * with Enter just then would allow something unread. */
+const ASK_SETTLE = 300
+
+/** True once `ms` have gone by since `at` (false while `at` is unset). */
+function usePast(at: number | false, ms: number) {
+  const [past, setPast] = useState(false)
+  useEffect(() => {
+    setPast(false)
+    if (!at) return
+    const t = setTimeout(() => setPast(true), Math.max(0, at + ms - Date.now()))
+    return () => clearTimeout(t)
+  }, [at, ms])
+  return past
+}
+
 export function Composer({ open }: { open: Open }) {
   const mode = useStore((s) => s.mode)
   const sendKey = usePrefs((p) => p.conversation.send)
   const asking = useStore((s) => s.permissions.find((p) => p.rootId === open.sessionId) ?? null)
-  const [text, setText] = useState("")
+  const key = draftKey(open)
+  const draft = useStore((s) => s.drafts[key] ?? EMPTY_DRAFT)
+  const text = draft.text
+  const files = draft.files
+  const pasted = draft.pasted
+  const setText = (t: string) => setDraft(key, { text: t })
   const [caret, setCaret] = useState(0)
-  const [files, setFiles] = useState<Attachment[]>([])
   const [problem, setProblem] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const [pal, setPal] = useState<Palette | null>(null)
   const [paths, setPaths] = useState<string[] | null>(null)
+  /** The row the arrows are on; -1 before they move with nothing typed after `/`. */
   const [active, setActive] = useState(0)
   /** The trigger the user closed with Escape, until they type elsewhere. */
   const [dismissed, setDismissed] = useState<number | null>(null)
+  /** How far back ArrowUp went through the sent messages; null when not recalling. */
+  const [recall, setRecall] = useState<number | null>(null)
+  const [escHint, setEscHint] = useState(false)
+  const escAt = useRef(0)
   const area = useRef<HTMLTextAreaElement>(null)
   const picker = useRef<HTMLInputElement>(null)
-  const running = open.status.kind === "working" || open.status.kind === "retrying"
+  const running = isRunning(open)
+  // A stop that hasn't ended the turn after a few seconds may be pressed again.
+  const stopStuck = usePast(open.stopping, STOP_AGAIN)
+  const blocked = useBlocked(open)
   const model = open.info?.models.find((m) => m.id === open.info?.modelId)
   const comments = useStore((s) => s.comments)
-  const empty = !text.trim() && files.length === 0 && comments.length === 0
+  const empty = !text.trim() && files.length === 0 && comments.length === 0 && pasted.length === 0
   const planning = open.info?.agent === "plan"
   const hasPlan = open.info?.agents.some((a) => a.id === "plan") ?? false
 
   useEffect(() => area.current?.focus(), [open.sessionId])
-  // A rewind puts its message back here.
-  const fill = open.fill
-  const current = useRef(text)
-  current.current = text
+  // Text put back by the store (a rewind, a message that didn't send): the caret goes to its end.
   useEffect(() => {
-    if (!fill) return
-    if (fill.replacing !== undefined && current.current !== fill.replacing) return
-    setText(fill.text)
-    setCaret(fill.text.length)
-    const back = fill.files
-    if (back?.length) setFiles((all) => (all.length ? all : back))
+    if (!draft.stamp) return
     requestAnimationFrame(() => {
       const el = area.current
       if (!el) return
       el.focus()
-      el.setSelectionRange(fill.text.length, fill.text.length)
+      el.setSelectionRange(el.value.length, el.value.length)
+      setCaret(el.value.length)
     })
-  }, [fill])
+  }, [draft.stamp])
+  useEffect(() => {
+    setRecall(null)
+    setProblem(null)
+  }, [key])
+  // When the ask in front of Enter appeared.
+  const askedAt = useRef(0)
+  useEffect(() => {
+    askedAt.current = Date.now()
+  }, [asking?.requestId])
+  // Grows with the text, up to 240px; in a short window less (what the rows around it leave),
+  // so Send stays on screen.
+  const [tall, setTall] = useState(() => window.innerHeight)
+  useEffect(() => {
+    const onResize = () => setTall(window.innerHeight)
+    window.addEventListener("resize", onResize)
+    return () => window.removeEventListener("resize", onResize)
+  }, [])
   useLayoutEffect(() => {
     const el = area.current
     if (!el) return
     el.style.height = "auto"
-    el.style.height = `${Math.min(el.scrollHeight, 240)}px`
-  }, [text])
+    el.style.height = `${Math.min(el.scrollHeight, 240, Math.max(80, tall - 440))}px`
+  }, [text, tall])
   // An answer for the folder open before a switch doesn't land in this one's menus.
   const folder = useRef(open.directory)
   folder.current = open.directory
@@ -284,7 +338,7 @@ export function Composer({ open }: { open: Open }) {
     const directory = open.directory
     void readPalette(directory)
       .then((p) => folder.current === directory && setPal(p))
-      .catch(() => {})
+      .catch((e) => folder.current === directory && setProblem(`This folder’s commands couldn’t be read. ${e instanceof Error ? e.message : String(e)}`))
   }, [open.directory])
   useEffect(() => {
     setPal(null)
@@ -327,7 +381,9 @@ export function Composer({ open }: { open: Open }) {
         kind: "skill",
         insert: `@${s.name} `,
       }))
-      return filter([...actions(open), ...server, ...skills], typed.query, (r) => r.label.slice(1), 50)
+      // A brand-new session has nothing to undo, retry or compact: the folder's commands lead.
+      const all = open.sessionId ? [...actions(open), ...server, ...skills] : [...server, ...actions(open), ...skills]
+      return filter(all, typed.query, (r) => r.label.slice(1), 50)
     }
     const skills: Row[] = (pal?.skills ?? []).map((s) => ({
       key: `s:${s.name}`,
@@ -349,7 +405,8 @@ export function Composer({ open }: { open: Open }) {
       ...filter(found, typed.query, (r) => r.label, 40),
     ]
   }, [typed?.kind, typed?.query, menuOpen, pal, paths, open])
-  useEffect(() => setActive(0), [typed?.kind, typed?.query])
+  // A bare `/` has no row picked: Enter there must not run whatever comes first.
+  useEffect(() => setActive(typed?.kind === "/" && !typed.query ? -1 : 0), [typed?.kind, typed?.query])
 
   const pick = (r: Row) => {
     if (!typed) return
@@ -371,7 +428,7 @@ export function Composer({ open }: { open: Open }) {
     for (const file of list) {
       try {
         const image = await readImage(file)
-        setFiles((all) => [...all, image])
+        setDraft(key, (d) => ({ files: [...d.files, image] }))
       } catch (e) {
         setProblem(e instanceof Error ? e.message : String(e))
       }
@@ -379,16 +436,41 @@ export function Composer({ open }: { open: Open }) {
   }
 
   const clear = () => {
-    setText("")
+    setDraft(key, { text: "", files: [], pasted: [] })
     setCaret(0)
-    setFiles([])
     setProblem(null)
+    setRecall(null)
+  }
+
+  /** What the user sent before in this session, newest first: ArrowUp walks back through it. */
+  const history = useMemo(
+    () =>
+      open.items
+        .filter((i): i is Extract<typeof i, { kind: "user" }> => i.kind === "user" && !i.command && !!i.text.trim())
+        .map((i) => i.text)
+        .reverse(),
+    [open.items]
+  )
+  const recallTo = (n: number | null) => {
+    setRecall(n)
+    const t = n === null ? "" : history[n]
+    setText(t)
+    requestAnimationFrame(() => {
+      const el = area.current
+      if (!el) return
+      el.setSelectionRange(t.length, t.length)
+      setCaret(t.length)
+    })
   }
 
   const submit = () => {
     if (empty) return
+    if (blocked) {
+      setProblem("Sending waits for your limit to reset.")
+      return
+    }
     const command = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim())
-    if (command && files.length === 0) {
+    if (command && files.length === 0 && pasted.length === 0) {
       const [, name, args = ""] = command
       const own = actions(open).find((a) => a.label === `/${name}`)
       if (own?.run) {
@@ -406,10 +488,11 @@ export function Composer({ open }: { open: Open }) {
         return
       }
     }
+    const full = [text, ...pasted.map((p) => p.text)].filter((t) => t.trim()).join("\n\n")
     const skills = (pal?.skills ?? [])
       .map((s) => s.name)
-      .filter((name) => new RegExp(`(^|\\s)@${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=\\s|$)`).test(text))
-    void send(text, files, skills)
+      .filter((name) => new RegExp(`(^|\\s)@${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=\\s|$)`).test(full))
+    void send(full, files, skills)
     clear()
   }
 
@@ -420,7 +503,7 @@ export function Composer({ open }: { open: Open }) {
       {menuOpen && (rows.length > 0 || typed?.kind === "@") && (
         <Menu
           rows={rows}
-          active={Math.min(active, Math.max(rows.length - 1, 0))}
+          active={Math.min(active, rows.length - 1)}
           onPick={pick}
           onHover={setActive}
           empty={paths === null ? "Reading files…" : `Nothing matches “${typed?.query}”`}
@@ -461,13 +544,24 @@ export function Composer({ open }: { open: Open }) {
             ))}
           </div>
         )}
+        {pasted.length > 0 && (
+          <div className="flex flex-col gap-1 px-1.5 pt-1 pb-2">
+            {pasted.map((p) => (
+              <PastedChip
+                key={p.id}
+                text={p.text}
+                onRemove={() => setDraft(key, (d) => ({ pasted: d.pasted.filter((x) => x.id !== p.id) }))}
+              />
+            ))}
+          </div>
+        )}
         {files.length > 0 && (
           <div className="flex flex-wrap gap-2 px-1.5 pt-1 pb-2">
             {files.map((f, i) => (
               <div key={i} className="group relative">
                 <img src={`data:${f.mime};base64,${f.data}`} alt={f.name} className="size-14 rounded-lg object-cover" />
                 <button
-                  onClick={() => setFiles((all) => all.filter((_, j) => j !== i))}
+                  onClick={() => setDraft(key, (d) => ({ files: d.files.filter((_, j) => j !== i) }))}
                   aria-label={`Remove ${f.name}`}
                   className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full bg-popover text-muted opacity-0 group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100"
                 >
@@ -485,13 +579,21 @@ export function Composer({ open }: { open: Open }) {
             setText(e.target.value)
             setCaret(e.target.selectionStart)
             setDismissed(null)
+            setRecall(null)
           }}
           onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
           onPaste={(e) => {
+            // Excel and Word put a picture of the cells next to their text: the text is what was meant.
+            const pastedText = e.clipboardData.getData("text/plain")
             const images = [...e.clipboardData.files].filter((f) => f.type.startsWith("image/"))
-            if (images.length) {
+            if (images.length && !pastedText.trim()) {
               e.preventDefault()
               void add(images)
+              return
+            }
+            if (pastedText.length > LONG_PASTE) {
+              e.preventDefault()
+              setDraft(key, (d) => ({ pasted: [...d.pasted, { id: Date.now(), text: pastedText }] }))
             }
           }}
           onKeyDown={(e) => {
@@ -499,12 +601,17 @@ export function Composer({ open }: { open: Open }) {
               if (e.key === "ArrowDown" || e.key === "ArrowUp") {
                 e.preventDefault()
                 const step = e.key === "ArrowDown" ? 1 : -1
-                setActive((a) => (a + step + rows.length) % rows.length)
+                setActive((a) => (a < 0 ? (step > 0 ? 0 : rows.length - 1) : (a + step + rows.length) % rows.length))
                 return
               }
-              if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+              if (e.key === "Tab") {
                 e.preventDefault()
-                pick(rows[Math.min(active, rows.length - 1)])
+                pick(rows[Math.max(0, Math.min(active, rows.length - 1))])
+                return
+              }
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault()
+                if (active >= 0) pick(rows[Math.min(active, rows.length - 1)])
                 return
               }
             }
@@ -513,43 +620,77 @@ export function Composer({ open }: { open: Open }) {
               setDismissed(typed.start)
               return
             }
+            // ArrowUp in an empty box (or on a recalled message) walks back through what was sent.
+            const el = e.currentTarget
+            const recalled = recall !== null && text === history[recall]
+            if (e.key === "ArrowUp" && !e.shiftKey && history.length > 0 && (text === "" || recalled)) {
+              e.preventDefault()
+              recallTo(recall === null ? 0 : Math.min(recall + 1, history.length - 1))
+              return
+            }
+            if (e.key === "ArrowDown" && recalled && el.selectionStart === el.value.length) {
+              e.preventDefault()
+              recallTo(recall === 0 ? null : recall - 1)
+              return
+            }
             if (isSendKey(e, sendKey)) {
               e.preventDefault()
-              if (empty && asking) void reply(asking, "once")
-              else submit()
+              if (empty && asking) {
+                if (Date.now() - askedAt.current >= ASK_SETTLE) void reply(asking, "once")
+              } else submit()
             } else if (e.key === "Escape") {
+              // A panel or menu over the window takes Escape; this one is never for the box.
+              if (anyLayer()) return
               if (asking) void reply(asking, "reject")
-              else if (running) stop()
+              else if (running) {
+                // One press could be meant for something else; two in a row stop the turn.
+                if (Date.now() - escAt.current < ESC_AGAIN) {
+                  escAt.current = 0
+                  setEscHint(false)
+                  stop()
+                } else {
+                  escAt.current = Date.now()
+                  setEscHint(true)
+                  setTimeout(() => setEscHint(false), ESC_AGAIN)
+                }
+              }
             }
           }}
           placeholder={
             sendKey === "enter"
               ? asking
                 ? "Reply, or press Enter to allow"
-                : planning
-                  ? "Describe what to plan"
-                  : "Ask for a change, / for commands, @ for files"
+                : running
+                  ? "Add to the queue, or Esc twice to stop"
+                  : planning
+                    ? "Describe what to plan"
+                    : "Ask for a change, / for commands, @ for files"
               : asking
                 ? "Reply, or press Ctrl Enter to allow"
-                : planning
-                  ? "Describe what to plan, Ctrl Enter to send"
-                  : "Ask for a change, / for commands, @ for files, Ctrl Enter to send"
+                : running
+                  ? "Add to the queue, Ctrl Enter to send"
+                  : planning
+                    ? "Describe what to plan, Ctrl Enter to send"
+                    : "Ask for a change, / for commands, @ for files, Ctrl Enter to send"
           }
           aria-label="Message"
           className="text-md block min-h-14 w-full resize-none bg-transparent px-2.5 pt-1.5 leading-relaxed outline-none placeholder:text-field-placeholder"
         />
-        {(problem || (files.length > 0 && model && !model.images)) && (
-          <p className="text-dense px-2.5 pb-2 text-warning">{problem ?? `${model?.name} doesn’t read images.`}</p>
+        {(problem || escHint || (files.length > 0 && model && !model.images)) && (
+          <p className={cn("text-dense px-2.5 pb-2", escHint && !problem ? "text-muted" : "text-warning")}>
+            {problem ?? (escHint ? "Press Esc again to stop" : `${model?.name} doesn’t read images.`)}
+          </p>
         )}
         <div className="flex items-center gap-1.5">
-          <button
-            onClick={() => picker.current?.click()}
-            className={btn("ghost", "sm", "text-muted", true)}
-            aria-label="Attach images"
-            title="Attach images"
-          >
-            <Paperclip className="size-4" strokeWidth={1.75} />
-          </button>
+          <Tooltip label="Attach images" side="top">
+            <button
+              onClick={() => picker.current?.click()}
+              className={btn("ghost", "sm", "text-muted", true)}
+              aria-label="Attach images"
+            >
+              <Paperclip className="size-4" strokeWidth={1.75} />
+            </button>
+          </Tooltip>
           <input
             ref={picker}
             type="file"
@@ -584,20 +725,64 @@ export function Composer({ open }: { open: Open }) {
                 </button>
               ))}
           </div>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex min-w-0 items-center gap-2">
             <ModelPicker open={open} />
             {running && empty ? (
-              <button onClick={stop} className={btn("secondary", "sm", "", true)} aria-label="Stop">
-                <span className="size-2.5 rounded-[2px] bg-current" />
-              </button>
+              open.stopping && !stopStuck ? (
+                <button disabled className={btn("secondary", "sm", "gap-2 px-3")} aria-label="Stopping">
+                  <Spinner className="size-3" />
+                  Stopping…
+                </button>
+              ) : (
+                <Tooltip label={open.stopping ? "Still stopping. Stop again" : "Stop"} keys="Esc Esc" side="top">
+                  <button onClick={stop} className={btn("secondary", "sm", "", true)} aria-label="Stop">
+                    <span className="size-2.5 rounded-[2px] bg-current" />
+                  </button>
+                </Tooltip>
+              )
             ) : (
-              <button onClick={submit} disabled={empty} className={btn("primary", "sm", "", true)} aria-label="Send">
-                <ArrowUp className="size-4" />
-              </button>
+              <Tooltip label={blocked ? "Sending waits for your limit to reset" : running ? "Queue for after this turn" : "Send"} side="top">
+                <button onClick={submit} disabled={empty || !!blocked} className={btn("primary", "sm", "", true)} aria-label="Send">
+                  <ArrowUp className="size-4" />
+                </button>
+              </Tooltip>
             )}
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+/** A long paste, folded: its size, and the text on demand. */
+function PastedChip({ text, onRemove }: { text: string; onRemove: () => void }) {
+  const [shown, setShown] = useState(false)
+  const lines = text.split("\n").length
+  return (
+    <div className="rounded-lg bg-default/50">
+      <div className="text-dense flex items-center gap-2 py-1 pr-1 pl-2.5">
+        <ClipboardList className="size-3.5 shrink-0 text-muted" />
+        <button
+          onClick={() => setShown(!shown)}
+          aria-expanded={shown}
+          className="min-w-0 flex-1 truncate text-left hover:text-foreground focus-visible:status-focused-field"
+        >
+          Pasted text <span className="text-muted">· {lines === 1 ? `${text.length.toLocaleString("en-US")} characters` : `${lines.toLocaleString("en-US")} lines`}</span>
+        </button>
+        {shown ? <ChevronUp className="size-3.5 text-muted" /> : <ChevronDown className="size-3.5 text-muted" />}
+        <button
+          onClick={onRemove}
+          aria-label="Remove pasted text"
+          className="flex size-6 items-center justify-center rounded-md text-muted hover:text-foreground"
+        >
+          <X className="size-3" />
+        </button>
+      </div>
+      {shown && (
+        <pre className="mx-1 mb-1 max-h-40 overflow-auto rounded-md bg-background/60 px-2.5 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap text-foreground/75">
+          {text}
+        </pre>
+      )}
     </div>
   )
 }
@@ -615,19 +800,28 @@ export function capitalize(s: string) {
 function ModelPicker({ open }: { open: Open }) {
   const [show, setShow] = useState(false)
   const close = useCallback(() => setShow(false), [])
+  // "Choose another model" from a banner opens this list.
+  const asked = useStore((s) => s.pickModel)
+  const seen = useRef(asked)
+  useEffect(() => {
+    if (asked === seen.current) return
+    seen.current = asked
+    setShow(true)
+  }, [asked])
   const info = open.info
   if (!info?.model) return null
   const current = info.models.find((m) => m.id === info.modelId)
   return (
-    <div className="relative">
+    <div className="relative min-w-0">
       <button
         onClick={() => setShow(!show)}
         aria-expanded={show}
-        className="text-dense flex h-8 items-center gap-1.5 rounded-full px-3 text-muted hover:bg-default/60 hover:text-foreground focus-visible:status-focused-field"
+        title={info.variant ? `${info.model} · ${efforts[info.variant] ?? capitalize(info.variant)}` : info.model}
+        className="text-dense flex h-8 max-w-56 min-w-0 items-center gap-1.5 rounded-full px-3 text-muted hover:bg-default/60 hover:text-foreground focus-visible:status-focused-field"
       >
-        {info.model}
-        {info.variant && <span className="text-muted/70">· {efforts[info.variant] ?? capitalize(info.variant)}</span>}
-        <ChevronDown className="size-3.5" />
+        <span className="min-w-0 truncate">{info.model}</span>
+        {info.variant && <span className="shrink-0 text-muted/70">· {efforts[info.variant] ?? capitalize(info.variant)}</span>}
+        <ChevronDown className="size-3.5 shrink-0" />
       </button>
       <Popover open={show} onClose={close} side="top" align="end" className="w-72">
         <div role="listbox" aria-label="Model" className="flex max-h-[min(20rem,50vh)] flex-col overflow-y-auto">
@@ -670,6 +864,7 @@ function ModelPicker({ open }: { open: Open }) {
                 </button>
               ))}
             </div>
+            <p className="text-2xs pt-2 text-muted">Higher thinks longer and uses more of your limit.</p>
           </div>
         )}
       </Popover>

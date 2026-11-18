@@ -9,15 +9,22 @@ import {
   getBridge,
   type Account,
   type Attachment,
+  type BackgroundCommand,
   type Bridge,
+  type Context,
   type CoreEvent,
+  type ErrorKind,
   type FileDiff,
+  type FormAnswer,
+  type FormRequest,
   type GitStatus,
   type Info,
   type Item,
   type Mode,
   type Palette,
+  type PendingRequest,
   type PermissionReply,
+  type Queued,
   type Question,
   type Revert,
   type SessionRow,
@@ -26,7 +33,7 @@ import {
   type View,
 } from "./bridge"
 import { getPrefs, loadPrefs, onPrefsFailure, setPref } from "./prefs"
-import { folderKey, sameFolder } from "./ui"
+import { folderKey, onBeforeClose, runBeforeClose, sameFolder } from "./ui"
 
 export type { Mode }
 
@@ -55,9 +62,30 @@ export type Status =
   | { kind: "idle" }
   | { kind: "working" }
   | { kind: "retrying"; attempt: number; until: number; error: string }
-  /** `retry`: the latest turn failed, so sending its message again makes sense. */
-  | { kind: "failed"; error: string; retry?: boolean }
+  /** `retry`: the latest turn failed, so sending its message again makes sense. `errorKind` picks
+   * the words and the way out (a limit, no connection, a lost sign-in…). */
+  | { kind: "failed"; error: string; retry?: boolean; errorKind?: ErrorKind }
   | { kind: "stopped"; reason: "user" | "budget" | "declined" }
+
+/** A long paste, kept folded in the composer and sent as part of the message. */
+export type Pasted = { id: number; text: string }
+
+/**
+ * What the composer holds for one session (or for a new one in a folder): it stays there when
+ * the user goes elsewhere. `stamp` changes when the store puts text back (a rewind, a message
+ * that didn't send), so the composer moves the caret to its end.
+ */
+export type Draft = { text: string; files: Attachment[]; comments: Comment[]; pasted: Pasted[]; stamp: number }
+
+export const EMPTY_DRAFT: Draft = { text: "", files: [], comments: [], pasted: [], stamp: 0 }
+
+const DRAFTS_KEY = "anysola.drafts"
+
+/** A new session's draft that nobody came back to goes after this long. */
+const DRAFT_DAYS = 21
+
+/** When each draft last changed (read before `state` is made, so declared here). */
+const draftAt = new Map<string, number>()
 
 export type Open = {
   /** This view of the folder or session: a new session's requests answer to it alone. */
@@ -77,9 +105,14 @@ export type Open = {
   todos: Todo[]
   /** The agent that wrote the last reply shown. */
   lastAgent: string | null
-  /** Text for the composer to take (a rewound message, or one that didn't send); `n` tells
-   * refills apart. With `replacing`, only while the composer still holds that text. */
-  fill: { text: string; n: number; replacing?: string; files?: Attachment[] } | null
+  /** Messages waiting for the running turn (or, after a stop, for the user to send them). */
+  queued: Queued[]
+  context: Context | null
+  background: BackgroundCommand[]
+  /** When Stop was pressed (ms); the turn hasn't ended yet. False when not stopping. */
+  stopping: false | number
+  /** When the running turn started (ms), for the elapsed time; null when unknown. */
+  started: number | null
 }
 
 /** A remark on a diff line, sent with the next message. */
@@ -124,7 +157,28 @@ export type State = {
   permissions: Permission[]
   questions: Asked[]
   account: Account | null
-  update: (UpdateCheck & { installing?: boolean; error?: string }) | null
+  /** `waiting`: install was asked for while turns run; it starts when they end. `progress`: the
+   * download so far. */
+  update:
+    | (UpdateCheck & {
+        installing?: boolean
+        error?: string
+        waiting?: boolean
+        progress?: { downloaded: number; total: number | null }
+      })
+    | null
+  /** MCP forms waiting for an answer; each shows in the open session of its folder. */
+  forms: FormRequest[]
+  /** What the composers hold, by `draftKey`. */
+  drafts: Record<string, Draft>
+  /** The service couldn't be reached on the last try; cleared by the next request that works. */
+  offline: boolean
+  /** The window was closed while this many turns ran: the window asks before quitting. */
+  closing: number | null
+  /** Counts requests to open the model picker ("Choose another model"). */
+  pickModel: number
+  /** The app's own data can't be opened: signing in won't help, the folder needs a look. */
+  fault: { message: string; folder: string } | null
   open: Open | null
   peek: Peek | null
   mode: Mode
@@ -140,7 +194,11 @@ export type State = {
   collapsed: Set<string>
   /** The open session's folder in git, once read. */
   git: (GitStatus & { directory: string }) | null
-  /** Diff comments waiting for the next message, by session (`""` for a new one). */
+  /** The last read of a folder's git state failed: the git menu says so, with a retry. */
+  gitError: { directory: string; message: string } | null
+  /** Asks (permissions, questions, forms) whose answer is on its way: their cards wait, disabled. */
+  sending: Set<string>
+  /** The open view's diff comments, waiting for its next message (kept in its draft). */
   comments: Comment[]
   /** The app's folder for sessions without a project, once known. */
   scratch: string | null
@@ -207,16 +265,149 @@ let state: State = {
   // Folded projects by folder key; older entries were stored as spelled.
   collapsed: new Set([...readSet("anysola.collapsed")].map(folderKey)),
   git: null,
+  gitError: null,
+  sending: new Set(),
   comments: [],
+  forms: [],
+  drafts: readDrafts(),
+  offline: false,
+  closing: null,
+  pickModel: 0,
+  fault: null,
 }
 
 const listeners = new Set<() => void>()
+
+const NO_COMMENTS: Comment[] = []
 
 function set(patch: Partial<State> | ((s: State) => Partial<State>)) {
   const p = typeof patch === "function" ? patch(state) : patch
   // A new notice drops the last one's link unless it brings its own.
   state = { ...state, ...("notice" in p && !("noticeLink" in p) ? { noticeLink: null } : {}), ...p }
+  // The comments shown are the open view's draft's: they follow it in and out of sessions.
+  const comments = (state.open && state.drafts[draftKey(state.open)]?.comments) || NO_COMMENTS
+  if (comments !== state.comments) state = { ...state, comments }
+  if ("drafts" in p) saveDrafts()
   listeners.forEach((l) => l())
+}
+
+// ---------------------------------------------------------------------------
+// Drafts
+// ---------------------------------------------------------------------------
+
+/** A session's draft goes by its id; a new session's by its folder, so it waits there. */
+export function draftKey(open: { sessionId: string | null; directory: string }) {
+  return open.sessionId ?? `new:${folderKey(open.directory)}`
+}
+
+/** Only the text outlives the window: images can be megabytes, comments point at a diff. Stored
+ * as `{ text, at }`; older versions stored the text alone. */
+function readDrafts(): Record<string, Draft> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(DRAFTS_KEY) ?? "{}") as Record<string, unknown>
+    const out: Record<string, Draft> = {}
+    const now = Date.now()
+    for (const [k, v] of Object.entries(raw)) {
+      const o = v && typeof v === "object" ? (v as { text?: unknown; at?: unknown }) : null
+      const text = typeof v === "string" ? v : typeof o?.text === "string" ? o.text : ""
+      const at = typeof o?.at === "number" ? o.at : now
+      if (!text || (k.startsWith("new:") && now - at > DRAFT_DAYS * 86_400_000)) continue
+      out[k] = { ...EMPTY_DRAFT, text }
+      draftAt.set(k, at)
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+let saveTimer: ReturnType<typeof setTimeout> | undefined
+
+/** Writes the drafts now. */
+function writeDrafts() {
+  clearTimeout(saveTimer)
+  saveTimer = undefined
+  const texts: Record<string, { text: string; at: number }> = {}
+  for (const [k, d] of Object.entries(state.drafts)) {
+    // A folded paste is part of what was typed.
+    const text = [d.text, ...d.pasted.map((p) => p.text)].filter((t) => t.trim()).join("\n\n")
+    if (text) texts[k] = { text, at: draftAt.get(k) ?? Date.now() }
+  }
+  try {
+    localStorage.setItem(DRAFTS_KEY, JSON.stringify(texts))
+  } catch {
+    // Kept for this window only.
+  }
+}
+
+function saveDrafts() {
+  clearTimeout(saveTimer)
+  saveTimer = setTimeout(writeDrafts, 300)
+}
+
+// A window that goes without warning (Alt F4, a crash, the updater's restart) gives no time for
+// the debounce: what is typed is written the moment the window is hidden or left.
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", writeDrafts)
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") writeDrafts()
+  })
+  onBeforeClose(writeDrafts)
+}
+
+/** Drafts of sessions that are gone (deleted here or elsewhere) go with them. */
+function pruneDrafts(sessions: SessionRow[]) {
+  // A session made a moment ago may not be in a list read just before.
+  if (creating > 0) return
+  const ids = new Set(sessions.map((r) => r.id))
+  const keep = state.open ? draftKey(state.open) : null
+  const gone = Object.keys(state.drafts).filter((k) => !k.startsWith("new:") && !ids.has(k) && k !== keep && !unsent.has(k))
+  if (gone.length === 0) return
+  set((s) => {
+    const drafts = { ...s.drafts }
+    for (const k of gone) delete drafts[k]
+    return { drafts }
+  })
+}
+
+/** Changes one draft; one left empty is dropped. */
+export function setDraft(key: string, patch: Partial<Draft> | ((d: Draft) => Partial<Draft>)) {
+  set((s) => {
+    const d = s.drafts[key] ?? EMPTY_DRAFT
+    const next = { ...d, ...(typeof patch === "function" ? patch(d) : patch) }
+    const drafts = { ...s.drafts }
+    const blank = !next.text && !next.files.length && !next.comments.length && !next.pasted.length
+    if (blank) delete drafts[key]
+    else drafts[key] = next
+    draftAt.set(key, Date.now())
+    return { drafts }
+  })
+}
+
+let stamps = 0
+
+/** Puts text back into a draft (with its images and comments), after what is there already. */
+function restoreDraft(key: string, back: { text: string; files?: Attachment[]; comments?: Comment[] }) {
+  setDraft(key, (d) => ({
+    text: d.text.trim() && back.text.trim() ? `${back.text}\n\n${d.text}` : back.text || d.text,
+    files: [...(back.files ?? []), ...d.files],
+    comments: [...(back.comments ?? []), ...d.comments.filter((c) => !back.comments?.some((b) => b.id === c.id))],
+    stamp: ++stamps,
+  }))
+}
+
+/** A draft that moves with its view: a new session's, once the session exists. */
+function moveDraft(from: string, to: string) {
+  if (from === to || !state.drafts[from]) return
+  set((s) => {
+    const drafts = { ...s.drafts }
+    const d = drafts[from]
+    delete drafts[from]
+    const into = drafts[to]
+    drafts[to] = into ? { ...into, text: [into.text, d.text].filter(Boolean).join("\n\n"), files: [...into.files, ...d.files], comments: [...into.comments, ...d.comments], pasted: [...into.pasted, ...d.pasted] } : d
+    draftAt.set(to, Date.now())
+    return { drafts }
+  })
 }
 
 /** Updates the open view; with a target, only while that session (or that view) is open. */
@@ -259,7 +450,8 @@ function showing(target: string | { key: string }) {
 
 /** A request's failure: on its own view while shown, else in the notice, never on another. */
 function failed(target: string | { key: string }, e: unknown) {
-  if (showing(target)) setOpen({ status: { kind: "failed", error: message(e) } }, target)
+  // Its message went back to the composer: there is nothing to try again.
+  if (showing(target)) setOpen({ status: { kind: "failed", error: message(e), retry: false } }, target)
   else set({ notice: message(e) })
 }
 
@@ -296,7 +488,8 @@ export async function checkUpdateNow(): Promise<UpdateCheck | string> {
   }
 }
 
-export async function installUpdate() {
+/** Installs and restarts; while turns run it waits for them (`now` skips the wait). */
+export async function installUpdate(now = false) {
   const update = state.update
   if (!update?.available) return
   if (update.manual) {
@@ -306,7 +499,13 @@ export async function installUpdate() {
     })
     return
   }
-  set({ update: { ...update, installing: true, error: undefined } })
+  // A running turn would be cut off by the restart: the install waits for the last one to end,
+  // unless the user says to go ahead now.
+  if (state.busy.size > 0 && !now) {
+    set({ update: { ...update, waiting: true, error: undefined } })
+    return
+  }
+  set({ update: { ...update, installing: true, waiting: false, error: undefined } })
   try {
     // Restarts into the new version when it is done.
     await bridge.updateInstall()
@@ -328,9 +527,14 @@ export async function start() {
   setInterval(() => void checkUpdate(), UPDATE_EVERY)
   listeners.add(watchPresence)
   try {
-    const { signedIn } = await bridge.authStatus()
+    const { signedIn, fault } = await bridge.authStatus()
+    if (fault) {
+      // A broken or locked database: the sign-in screen would only send the user in circles.
+      set({ auth: "signed-out", fault })
+      return
+    }
     set({ auth: signedIn ? "signed-in" : "signed-out" })
-    // Names the app's folder "No project" in the sidebar.
+    // Names the app's folder "No project" in the sidebar; without it the folder shows its path.
     void bridge
       .scratchFolder()
       .then((scratch) => set({ scratch }))
@@ -392,19 +596,44 @@ export async function loadAccount() {
       })
       return
     }
-    set({ account })
+    set({ account, offline: false })
   } catch {
-    // The plan and windows stay as last read.
+    // The plan and windows stay as last read; the banner says why they may be old.
+    set({ offline: true })
   }
+}
+
+/** The offline banner's Retry: reads the account again, and sends again a message that failed for it. */
+export async function retryConnection() {
+  await loadAccount()
+  const o = state.open
+  if (!state.offline && o?.status.kind === "failed" && o.status.errorKind === "offline" && o.status.retry) await retry()
+}
+
+/** Shows the folder whose data can't be opened. */
+export function revealFault() {
+  const fault = state.fault
+  if (fault) void bridge.revealPath(fault.folder).catch((e) => set({ notice: message(e) }))
+}
+
+/** "Choose another model": the composer's picker opens. */
+export function openModelPicker() {
+  set((s) => ({ pickModel: s.pickModel + 1 }))
 }
 
 export async function signOut() {
   try {
     const { signedIn } = await bridge.logout()
     if (signedIn) {
-      set({ notice: "ANYSOLA_TOKEN is set, so this computer stays signed in." })
+      set({
+        notice:
+          "This computer signs in with a token set outside the app, so signing out here can’t end it. To sign out, remove the ANYSOLA_TOKEN environment variable, then open the app again.",
+      })
       return
     }
+    // What was typed belongs to the account that typed it.
+    unsent.clear()
+    draftAt.clear()
     set({
       auth: "signed-out",
       account: null,
@@ -412,8 +641,11 @@ export async function signOut() {
       open: null,
       permissions: [],
       questions: [],
+      forms: [],
       settings: null,
+      drafts: {},
     })
+    writeDrafts()
   } catch (e) {
     set({ notice: message(e) })
   }
@@ -423,39 +655,77 @@ export async function signOut() {
 // Sessions
 // ---------------------------------------------------------------------------
 
+/** The list failed once and said so; it says so again only after a read that worked. */
+let listFailed = false
+
+/** Reads the session list; a failure keeps the list as it was and says so once. */
 async function loadSessions(openFirst = false) {
-  const sessions = await bridge.sessions()
+  let sessions: SessionRow[]
+  try {
+    sessions = await bridge.sessions()
+    listFailed = false
+  } catch (e) {
+    if (!listFailed) set({ notice: `Your sessions couldn’t be read. ${message(e)}` })
+    listFailed = true
+    return
+  }
   set({ sessions })
+  pruneDrafts(sessions)
   if (openFirst && !state.open && sessions[0]) await openSession(sessions[0])
+}
+
+function blankView(directory: string, sessionId: string | null, title: string): Open {
+  return {
+    key: `v${++views}`,
+    directory,
+    sessionId,
+    title,
+    items: [],
+    live: [],
+    info: null,
+    status: { kind: "idle" },
+    loading: sessionId !== null,
+    revert: null,
+    todos: [],
+    lastAgent: null,
+    queued: [],
+    context: null,
+    background: [],
+    stopping: false,
+    started: null,
+  }
+}
+
+/** The mode a session runs under follows the composer's; if that fails, the user must know:
+ * the turn would go on asking (or not asking) as before. */
+function applyMode(directory: string, sessionId: string, mode: Mode) {
+  void bridge
+    .setMode(directory, sessionId, mode)
+    .catch((e) => set({ notice: `The ${mode === "ask" ? "Ask" : mode === "edits" ? "Edits" : "Auto"} mode didn’t apply to this session. ${message(e)}` }))
+}
+
+/** When a running turn started, as far as the transcript tells: its message's time. */
+function turnStart(items: Item[]): number | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]
+    if (it.kind === "user") return it.time ?? null
+  }
+  return null
 }
 
 export async function openSession(row: SessionRow) {
   void refreshGit(row.directory)
-  set({
-    comments: [],
-    open: {
-      key: `v${++views}`,
-      directory: row.directory,
-      sessionId: row.id,
-      title: row.title,
-      items: [],
-      live: [],
-      info: null,
-      status: { kind: "idle" },
-      loading: true,
-      revert: null,
-      todos: [],
-      lastAgent: null,
-      fill: null,
-    },
-  })
+  set({ open: blankView(row.directory, row.id, row.title) })
   const n = ++reads
+  const since = asks
   try {
     const opened = await bridge.openSession(row.directory, row.id)
     // The composer's mode is the window's, the floor the session's: a turn still running here
     // would otherwise go on under the mode it started with while the composer shows another.
-    void bridge.setMode(row.directory, row.id, state.mode).catch(() => {})
+    applyMode(row.directory, row.id, state.mode)
     set((s) => ({ busy: toggle(s.busy, row.id, opened.busy) }))
+    // What waited for an answer when the window last looked (or before it started) shows again.
+    applyPending(row.directory, row.id, opened.pending ?? [], since)
     setOpen(
       (o) => ({
         ...(latest(n) ? viewPatch(opened.view, o) : {}),
@@ -463,13 +733,14 @@ export async function openSession(row: SessionRow) {
         title: opened.session.title,
         loading: false,
         status: o.status.kind === "idle" && opened.busy ? { kind: "working" } : o.status,
+        started: opened.busy ? (o.started ?? turnStart(opened.view.items)) : null,
       }),
       row.id
     )
   } catch (e) {
     setOpen({ loading: false, status: { kind: "failed", error: message(e) } }, row.id)
     // A session deleted elsewhere ("This session no longer exists."): its row goes too.
-    void loadSessions().catch(() => {})
+    void loadSessions()
   }
 }
 
@@ -481,25 +752,9 @@ export async function newSession(directory?: string) {
   const startMode = getPrefs().general.startMode
   if (startMode !== "last" && startMode !== state.mode) set({ mode: startMode })
   void refreshGit(directory)
-  const view = { key: `v${++views}` }
-  set({
-    comments: [],
-    open: {
-      ...view,
-      directory,
-      sessionId: null,
-      title: "New session",
-      items: [],
-      live: [],
-      info: null,
-      status: { kind: "idle" },
-      loading: false,
-      revert: null,
-      todos: [],
-      lastAgent: null,
-      fill: null,
-    },
-  })
+  const open = blankView(directory, null, "New session")
+  const view = { key: open.key }
+  set({ open })
   try {
     const info = await bridge.folderInfo(directory)
     setOpen({ info }, view)
@@ -626,12 +881,49 @@ function watchPresence() {
 function viewPatch(view: View, o: Open): Partial<Open> {
   const items = view.items
   return {
-    items,
+    items: keepSame(o.items, items),
     revert: view.revert,
     todos: view.todos,
     lastAgent: view.agent,
-    live: o.live.filter((l) => !items.some((i) => "text" in i && i.text === l.text)),
+    // Messages held for a session still being made aren't the core's yet.
+    queued: [...(view.queued ?? []), ...o.queued.filter((q) => q.id.startsWith(HELD))],
+    context: view.context ?? null,
+    background: view.background ?? [],
+    // Only the same message's stored text ends its streaming: another turn may say the same words.
+    live: o.live.filter((l) => {
+      const message = l.key.slice(0, l.key.lastIndexOf(":") + 1)
+      return !items.some((i) => "text" in i && i.text === l.text && i.id.startsWith(message))
+    }),
   }
+}
+
+/** Items read again keep the objects already shown when nothing in them changed, so only the
+ * rows that did change render again (a reply's markdown isn't parsed on every read). */
+function keepSame(before: Item[], after: Item[]): Item[] {
+  if (before.length === 0) return after
+  const old = new Map(before.map((i) => [i.id, i]))
+  return after.map((i) => {
+    const was = old.get(i.id)
+    return was && alike(was, i) ? was : i
+  })
+}
+
+/** Equal as far as a row can show, without walking every character of a long output each read:
+ * a long string compares by length and samples (output only grows; a changed one changes there). */
+function alike(a: unknown, b: unknown): boolean {
+  if (typeof a === "string" && typeof b === "string") {
+    if (a.length !== b.length) return false
+    if (a.length <= 2048) return a === b
+    const n = a.length
+    const mid = n >> 1
+    return a.slice(0, 256) === b.slice(0, 256) && a.slice(n - 256) === b.slice(n - 256) && a.slice(mid - 128, mid + 128) === b.slice(mid - 128, mid + 128)
+  }
+  if (a === b) return true
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false
+  if (Array.isArray(a) !== Array.isArray(b)) return false
+  const ka = Object.keys(a)
+  if (ka.length !== Object.keys(b).length) return false
+  return ka.every((k) => alike((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]))
 }
 
 /** Each read of the open view is numbered; an answer older than one already shown is dropped. */
@@ -644,15 +936,17 @@ function latest(n: number) {
   return true
 }
 
-async function refresh(sessionId: string) {
+async function refresh(sessionId: string, again = false) {
   const open = state.open
   if (!open || open.sessionId !== sessionId) return
   const n = ++reads
   try {
     const view = await bridge.transcript(open.directory, sessionId)
     if (latest(n)) setOpen((o) => viewPatch(view, o), sessionId)
-  } catch {
-    // The next event reads again.
+  } catch (e) {
+    // Once more after a moment; then the user hears that what shows may be behind.
+    if (!again) setTimeout(() => void refresh(sessionId, true), 1500)
+    else if (state.open?.sessionId === sessionId) set({ notice: `The conversation couldn’t be read again. ${message(e)}` })
   }
 }
 
@@ -667,21 +961,52 @@ function toggle(set: Set<string>, id: string, on: boolean) {
 // Prompting
 // ---------------------------------------------------------------------------
 
-let fills = 0
+/** A message as the user sent it. `resolved`: the core took it (its turn may not have started). */
+type Unsent = { text: string; files: Attachment[]; comments: Comment[]; resolved?: boolean }
 
-/** The last message sent, until its turn starts: a send that fails or is refused before then
- * puts it back in the composer instead of losing what was typed. */
-let unsent: { target: string | { key: string }; text: string; files: Attachment[]; comments: Comment[] } | null =
-  null
+/** Messages sent, by draft key in the order sent, until their turn starts: a send that fails or
+ * is refused before then goes back into that session's draft instead of losing what was typed.
+ * Each send is its own entry, so two in a row can't overwrite each other. */
+const unsent = new Map<string, Unsent[]>()
 
-function putBack(target: string | { key: string }) {
-  const u = unsent
-  if (!u || !same(u.target, target)) return
-  unsent = null
-  if (!showing(target)) return
-  // Only into an empty composer: what the user typed since stays.
-  setOpen({ fill: { text: u.text, files: u.files, n: ++fills, replacing: "" } }, target)
-  if (state.comments.length === 0) set({ comments: u.comments })
+function holdUnsent(key: string, u: Unsent) {
+  unsent.set(key, [...(unsent.get(key) ?? []), u])
+}
+
+/** Takes `u` (or the oldest) out of a key's sends. */
+function dropUnsent(key: string, u?: Unsent): Unsent | undefined {
+  const list = unsent.get(key)
+  if (!list?.length) return undefined
+  const at = u ? list.indexOf(u) : 0
+  if (at < 0) return undefined
+  const [out] = list.splice(at, 1)
+  if (list.length === 0) unsent.delete(key)
+  return out
+}
+
+/** A turn of the session ended: every send the core took is delivered. */
+function settleUnsent(key: string) {
+  const list = unsent.get(key)?.filter((u) => !u.resolved)
+  if (list?.length) unsent.set(key, list)
+  else unsent.delete(key)
+}
+
+/** Messages a running turn took into its queue, by session, as sent: Edit on a queued chip gets
+ * its images back from here (the queue itself only counts them). */
+const sentQueued = new Map<string, Unsent[]>()
+
+/** Puts a message that didn't send (`u`, else the oldest) back in its session's draft; elsewhere,
+ * the notice says where. */
+function putBack(key: string, u?: Unsent) {
+  const back = dropUnsent(key, u)
+  if (!back) return false
+  restoreDraft(key, back)
+  const o = state.open
+  if (!o || draftKey(o) !== key) {
+    const title = state.sessions.find((r) => r.id === key)?.title
+    set({ notice: `Your message${title ? ` to “${title}”` : ""} didn’t send. It’s back in that session’s message box.` })
+  }
+  return true
 }
 
 /** Starts and ends per session (and sends), so a read of its busy state can tell whether one
@@ -698,10 +1023,68 @@ let creating = 0
 const early = new Map<string, CoreEvent>()
 const LIFECYCLE = new Set(["started", "done", "failed", "interrupted", "refused", "settled"])
 
+/** A message sent while its session is still being made: it waits, shown as queued, and goes
+ * into the session once it exists. */
+type Held = { id: string; sent: Unsent; text: string; skills: string[] }
+
+/** A first prompt in flight, by view key: what was sent after it, and whether Stop was pressed. */
+type First = { held: Held[]; stop: boolean }
+const firsts = new Map<string, First>()
+
+/** Ids of held messages' chips. */
+const HELD = "held:"
+let helds = 0
+
+function beginFirst(open: Open): First {
+  creating++
+  const first: First = { held: [], stop: false }
+  firsts.set(open.key, first)
+  return first
+}
+
+function endFirst(open: Open) {
+  firsts.delete(open.key)
+  if (--creating === 0) early.clear()
+}
+
+/** The session exists: what was held goes into it (queued behind its first turn), then a Stop
+ * pressed meanwhile stops it. */
+async function release(open: Open, first: First, sessionId: string) {
+  const view: Open = { ...open, sessionId, status: { kind: "working" } }
+  for (const h of first.held.splice(0)) {
+    setOpen((o) => ({ queued: o.queued.filter((q) => q.id !== h.id) }), sessionId)
+    await deliver(view, h.sent, h.text, h.skills)
+  }
+  if (first.stop) stopSession(open.directory, sessionId)
+}
+
+/** The first prompt failed: what was held goes back to the draft, in the order it was sent. */
+function abandon(open: Open, first: First, key: string) {
+  const held = first.held.splice(0)
+  for (const h of [...held].reverse()) restoreDraft(key, h.sent)
+  if (held.length) setOpen((o) => ({ queued: o.queued.filter((q) => !held.some((h) => h.id === q.id)), stopping: false }), { key: open.key })
+}
+
+/** A held message, taken back (Edit or Remove on its chip). */
+function takeHeld(id: string): Held | null {
+  for (const first of firsts.values()) {
+    const at = first.held.findIndex((h) => h.id === id)
+    if (at >= 0) return first.held.splice(at, 1)[0]
+  }
+  return null
+}
+
 /** A new session's view takes the id its first prompt created, and any end that came first. */
-function adopt(target: string | { key: string }, sessionId: string) {
+function adopt(target: string | { key: string }, sessionId: string, directory: string) {
+  // What was typed while the first prompt was on its way stays with the view.
+  const from = `new:${folderKey(directory)}`
+  if (showing(target)) moveDraft(from, sessionId)
+  const moved = unsent.get(from)
+  if (moved) {
+    unsent.delete(from)
+    unsent.set(sessionId, [...(unsent.get(sessionId) ?? []), ...moved])
+  }
   setOpen({ sessionId }, target)
-  if (unsent && same(unsent.target, target)) unsent = { ...unsent, target: sessionId }
   void loadSessions()
   const e = early.get(sessionId)
   early.delete(sessionId)
@@ -711,62 +1094,239 @@ function adopt(target: string | { key: string }, sessionId: string) {
 
 /** Busy and status read back from the core, for when the events that would say so were lost
  * or never sent. A start or end that came meanwhile says more, so then only the view is taken. */
-async function reconcile(directory: string, sessionId: string) {
+async function reconcile(directory: string, sessionId: string, again = false) {
   const since = activity.get(sessionId)
+  const asked = asks
   const n = ++reads
   try {
     const opened = await bridge.openSession(directory, sessionId)
     const current = activity.get(sessionId) === since
     if (current) set((s) => ({ busy: toggle(s.busy, sessionId, opened.busy) }))
+    if (state.open?.sessionId === sessionId) applyPending(directory, sessionId, opened.pending ?? [], asked)
     setOpen((o) => {
       const shown = o.status.kind === "working" || o.status.kind === "retrying"
       return {
         ...(latest(n) ? viewPatch(opened.view, o) : {}),
-        ...(current && shown && !opened.busy ? { live: [], status: { kind: "idle" } as Status } : {}),
-        ...(current && !shown && opened.busy ? { status: { kind: "working" } as Status } : {}),
+        // Nothing runs: a Stop still waiting for an end that won't come is over.
+        ...(current && !opened.busy ? { stopping: false as const } : {}),
+        ...(current && shown && !opened.busy
+          ? { live: [], status: { kind: "idle" } as Status, stopping: false, started: null }
+          : {}),
+        ...(current && !shown && opened.busy
+          ? { status: { kind: "working" } as Status, started: o.started ?? turnStart(opened.view.items) }
+          : {}),
       }
     }, sessionId)
-  } catch {
-    // The next event says more.
+  } catch (e) {
+    // Once more after a moment; then the user hears that the state shown may be behind.
+    if (!again) setTimeout(() => void reconcile(directory, sessionId, true), 1500)
+    else if (state.open?.sessionId === sessionId)
+      set({ notice: `This session’s state couldn’t be read again. ${message(e)}` })
   }
+}
+
+/** True while a turn runs in the open view, including one being stopped. */
+export function isRunning(o: Open) {
+  return o.status.kind === "working" || o.status.kind === "retrying"
 }
 
 export async function send(text: string, files: Attachment[] = [], skills: string[] = []) {
   const open = state.open
   if (!open || (!text.trim() && files.length === 0 && state.comments.length === 0)) return
+  const sent: Unsent = { text, files, comments: state.comments }
+  const full = withComments(text)
+  setDraft(draftKey(open), { comments: [] })
+  const first = open.sessionId ? undefined : firsts.get(open.key)
+  if (first) {
+    // The session is still being made: a second send would make another. This one waits for it.
+    const id = `${HELD}${++helds}`
+    first.held.push({ id, sent, text: full, skills })
+    setOpen((o) => ({ queued: [...o.queued, { id, text: full, images: files.length, delivery: "queue" }] }), { key: open.key })
+    return
+  }
+  await deliver(open, sent, full, skills)
+}
+
+/** Sends into `open` as it was when the user sent (or as the held message's session now is). */
+async function deliver(open: Open, sent: Unsent, text: string, skills: string[]) {
   let target = whose(open)
-  unsent = { target, text, files, comments: state.comments }
-  text = withComments(text)
-  set({ comments: [] })
+  const key = draftKey(open)
+  holdUnsent(key, sent)
+  // While a turn runs the message waits in its queue: the status stays as it is.
+  const running = isRunning(open)
   // The prompt makes a staged rewind final.
-  setOpen({ status: { kind: "working" }, revert: null })
-  const draft = !open.sessionId
+  if (!running) setOpen({ status: { kind: "working" }, revert: null, started: Date.now(), stopping: false }, target)
+  const first = open.sessionId ? null : beginFirst(open)
   if (open.sessionId) touch(open.sessionId)
-  else creating++
   try {
     const { sessionId, queued } = await bridge.prompt(open.directory, {
       sessionId: open.sessionId,
       text,
       mode: state.mode,
       // A new session takes the model picked before it existed.
-      model: draft ? (open.info?.modelId ?? null) : null,
-      variant: draft ? (open.info?.variant ?? null) : null,
-      agent: draft ? (open.info?.agent ?? null) : null,
-      files,
+      model: first ? (open.info?.modelId ?? null) : null,
+      variant: first ? (open.info?.variant ?? null) : null,
+      agent: first ? (open.info?.agent ?? null) : null,
+      files: sent.files,
       skills,
     })
-    if (draft) target = adopt(target, sessionId)
+    // Before the adoption, which may replay the turn's end.
+    if (!queued) sent.resolved = true
+    if (first) target = adopt(target, sessionId, open.directory)
     // A running turn took it: it is delivered, whatever that turn does next.
-    if (queued && unsent && same(unsent.target, target)) unsent = null
+    if (queued && dropUnsent(sessionId, sent)) sentQueued.set(sessionId, [...(sentQueued.get(sessionId) ?? []), sent])
+    else sent.resolved = true
+    if (first) void release(open, first, sessionId)
     // Busy comes from `started`: the turn is spawned before this answer, and its end can
     // arrive first.
     await refresh(sessionId)
   } catch (e) {
-    failed(target, e)
-    putBack(target)
+    if (running) set({ notice: message(e) })
+    else failed(target, e)
+    if (first) abandon(open, first, key)
+    putBack(typeof target === "string" ? target : key, sent)
   } finally {
-    if (draft && --creating === 0) early.clear()
+    if (first) endFirst(open)
   }
+}
+
+// ---------------------------------------------------------------------------
+// The queue
+// ---------------------------------------------------------------------------
+
+/** A queued message's text and images as sent, matched by text and image count. */
+function takeSent(sessionId: string, q: Queued): Unsent {
+  const list = sentQueued.get(sessionId) ?? []
+  const at = list.findIndex((u) => commentsText(u.text, u.comments) === q.text && u.files.length === q.images)
+  if (at < 0) return { text: q.text, files: [], comments: [] }
+  const [u] = list.splice(at, 1)
+  return u
+}
+
+/** Queue calls answer with the view; a failure says so and leaves the chips as they were. */
+async function queueStep(step: (directory: string, sessionId: string) => Promise<View | void>) {
+  const open = state.open
+  if (!open?.sessionId) return false
+  const sessionId = open.sessionId
+  try {
+    const view = await step(open.directory, sessionId)
+    if (view) setOpen((o) => ({ queued: view.queued ?? [], context: view.context ?? o.context, background: view.background ?? o.background }), sessionId)
+    else await refresh(sessionId)
+    return true
+  } catch (e) {
+    set({ notice: message(e) })
+    await refresh(sessionId)
+    return false
+  }
+}
+
+/** Edit: the queued message comes back to the composer (after what is typed there). */
+export async function queueEdit(q: Queued) {
+  const open = state.open
+  if (open && q.id.startsWith(HELD)) {
+    const h = takeHeld(q.id)
+    setOpen((o) => ({ queued: o.queued.filter((x) => x.id !== q.id) }), { key: open.key })
+    if (h) restoreDraft(draftKey(state.open ?? open), h.sent)
+    return
+  }
+  if (!open?.sessionId) return
+  const sessionId = open.sessionId
+  const ok = await queueStep((d, s) => bridge.queueCancel(d, s, q.id))
+  if (ok) {
+    restoreDraft(sessionId, takeSent(sessionId, q))
+  }
+}
+
+export async function queueRemove(q: Queued) {
+  const open = state.open
+  if (open && q.id.startsWith(HELD)) {
+    takeHeld(q.id)
+    setOpen((o) => ({ queued: o.queued.filter((x) => x.id !== q.id) }), { key: open.key })
+    return
+  }
+  if (!open?.sessionId) return
+  const sessionId = open.sessionId
+  if (await queueStep((d, s) => bridge.queueCancel(d, s, q.id))) takeSent(sessionId, q)
+}
+
+/** Send now: the message joins the running turn at its next step. */
+export async function queueSteer(q: Queued) {
+  await queueStep((d, s) => bridge.queueSteer(d, s, q.id))
+}
+
+/** After a stop or a failure: what waits in the queue runs. */
+export async function queueSend() {
+  const open = state.open
+  if (!open?.sessionId) return
+  const sessionId = open.sessionId
+  setOpen({ status: { kind: "working" }, started: Date.now(), stopping: false }, sessionId)
+  touch(sessionId)
+  try {
+    await bridge.queueSend(open.directory, sessionId, state.mode)
+    sentQueued.delete(sessionId)
+    await refresh(sessionId)
+  } catch (e) {
+    setOpen({ status: { kind: "failed", error: message(e), retry: false } }, sessionId)
+  }
+}
+
+/** Stops a command the agent left running in the background. */
+export async function backgroundStop(id: string) {
+  const open = state.open
+  if (!open?.sessionId) return
+  const sessionId = open.sessionId
+  try {
+    const stopped = await bridge.backgroundStop(open.directory, id)
+    if (!stopped) set({ notice: "That command had already ended." })
+  } catch (e) {
+    set({ notice: message(e) })
+  }
+  setOpen((o) => ({ background: o.background.filter((b) => b.id !== id) }), sessionId)
+  await refresh(sessionId)
+}
+
+/** A sent message's images, read once per message. */
+const imageReads = new Map<string, Promise<string[]>>()
+
+export function messageImages(directory: string, sessionId: string, messageId: string): Promise<string[]> {
+  const key = `${sessionId}:${messageId}`
+  let read = imageReads.get(key)
+  if (!read) {
+    read = bridge.messageImages(directory, sessionId, messageId)
+    read.catch(() => imageReads.delete(key))
+    imageReads.set(key, read)
+  }
+  return read
+}
+
+export async function revealFile(path: string, directory?: string) {
+  if (elsewhere(path, directory)) return
+  try {
+    await bridge.revealPath(path)
+  } catch (e) {
+    set({ notice: message(e) })
+  }
+}
+
+/**
+ * A path on another computer (`\\host\share`, `//host/share`) outside the project folder: a
+ * click on it would make the app reach that computer, so it isn't followed. Says so.
+ */
+function elsewhere(path: string, directory?: string) {
+  if (!remotePath(path)) return false
+  const key = folderKey(path)
+  if (directory && remotePath(directory)) {
+    const root = folderKey(directory)
+    if (key === root || key.startsWith(`${root}\\`)) return false
+  }
+  set({ notice: "That file is on another computer, so it isn’t opened from here." })
+  return true
+}
+
+/** A network path: two separators first, except a local `\\?\C:\…` one. */
+export function remotePath(path: string) {
+  const p = path.trim().replace(/\//g, "\\")
+  return p.startsWith("\\\\") && !/^\\\\[?.]\\[a-z]:/i.test(p)
 }
 
 export async function chooseModel(modelId: string, variant: string | null) {
@@ -807,7 +1367,11 @@ export async function rewind(messageId: string) {
   try {
     const { text, view, filesKept } = await bridge.revert(open.directory, sessionId, messageId)
     latest(n)
-    setOpen((o) => ({ ...viewPatch(view, o), live: [], status: { kind: "idle" }, fill: { text, n: ++fills } }), sessionId)
+    setOpen((o) => ({ ...viewPatch(view, o), live: [], status: { kind: "idle" } }), sessionId)
+    // The message returns to the composer, in front of what was being typed there (kept, as are
+    // folded pastes); Redo takes it out again.
+    rewound.set(sessionId, text)
+    if (text) restoreDraft(sessionId, { text })
     if (filesKept)
       set({ notice: "This folder isn’t a git repository, so the files those turns changed stay as they are." })
   } catch (e) {
@@ -834,20 +1398,27 @@ export async function redo() {
   try {
     const view = await bridge.unrevert(open.directory, sessionId)
     latest(n)
-    // The rewound message leaves the composer unless the user changed it.
-    const replacing = open.fill?.text
-    setOpen((o) => ({ ...viewPatch(view, o), fill: { text: "", n: ++fills, replacing } }), sessionId)
+    setOpen((o) => viewPatch(view, o), sessionId)
+    // The rewound message leaves the composer unless the user changed it; what they had typed stays.
+    const text = rewound.get(sessionId)
+    rewound.delete(sessionId)
+    const now = state.drafts[sessionId]?.text
+    if (text && now === text) setDraft(sessionId, { text: "", stamp: ++stamps })
+    else if (text && now?.startsWith(`${text}\n\n`)) setDraft(sessionId, { text: now.slice(text.length + 2), stamp: ++stamps })
   } catch (e) {
     set({ notice: message(e) })
   }
 }
+
+/** The text a rewind put in a session's composer, so Redo can take it out again. */
+const rewound = new Map<string, string>()
 
 /** Sends a message again from where it was, with new text, or as it was when `text` is null. */
 export async function resend(messageId: string, text: string | null) {
   const open = state.open
   if (!open?.sessionId) return
   const sessionId = open.sessionId
-  setOpen({ status: { kind: "working" }, live: [], revert: null }, sessionId)
+  setOpen({ status: { kind: "working" }, live: [], revert: null, started: Date.now(), stopping: false }, sessionId)
   touch(sessionId)
   try {
     await bridge.resend(open.directory, sessionId, messageId, text, state.mode)
@@ -857,10 +1428,20 @@ export async function resend(messageId: string, text: string | null) {
   }
 }
 
-/** Sends the last message again. */
+/** Sends the last message again: only after a turn that failed on its own (a message that never
+ * started went back to the composer; resending the one before it would be a surprise). */
 export async function retry() {
   const open = state.open
-  const last = open && lastUser(open)
+  if (!open) return
+  const last = lastUser(open)
+  const tail = open.items[open.items.length - 1]
+  const refused =
+    (open.status.kind === "failed" && open.status.retry === false) ||
+    (open.status.kind !== "failed" && tail?.kind === "error" && tail.retry === false)
+  if (refused) {
+    set({ notice: "There’s nothing to try again: sending again won’t help with this one." })
+    return
+  }
   if (last) await resend(last.id, null)
 }
 
@@ -886,30 +1467,34 @@ export async function runCommand(name: string, args: string) {
   const open = state.open
   if (!open) return
   let target = whose(open)
-  unsent = { target, text: args ? `/${name} ${args}` : `/${name}`, files: [], comments: [] }
-  setOpen({ status: { kind: "working" }, revert: null })
-  const draft = !open.sessionId
+  const key = draftKey(open)
+  const sent: Unsent = { text: args ? `/${name} ${args}` : `/${name}`, files: [], comments: [] }
+  holdUnsent(key, sent)
+  setOpen({ status: { kind: "working" }, revert: null, started: Date.now(), stopping: false }, target)
+  const first = open.sessionId ? null : beginFirst(open)
   if (open.sessionId) touch(open.sessionId)
-  else creating++
   try {
     const { sessionId } = await bridge.runCommand(open.directory, {
       sessionId: open.sessionId,
       name,
       arguments: args,
       mode: state.mode,
-      model: draft ? (open.info?.modelId ?? null) : null,
-      variant: draft ? (open.info?.variant ?? null) : null,
-      agent: draft ? (open.info?.agent ?? null) : null,
+      model: first ? (open.info?.modelId ?? null) : null,
+      variant: first ? (open.info?.variant ?? null) : null,
+      agent: first ? (open.info?.agent ?? null) : null,
     })
-    if (draft) target = adopt(target, sessionId)
+    sent.resolved = true
+    if (first) target = adopt(target, sessionId, open.directory)
+    if (first) void release(open, first, sessionId)
     // Busy comes from `started`: the turn is spawned before this answer, and its end can
     // arrive first.
     await refresh(sessionId)
   } catch (e) {
     failed(target, e)
-    putBack(target)
+    if (first) abandon(open, first, key)
+    putBack(typeof target === "string" ? target : key, sent)
   } finally {
-    if (draft && --creating === 0) early.clear()
+    if (first) endFirst(open)
   }
 }
 
@@ -920,7 +1505,8 @@ export async function compact() {
     return
   }
   const sessionId = open.sessionId
-  setOpen({ status: { kind: "working" } }, sessionId)
+  setOpen({ status: { kind: "working" }, started: Date.now(), stopping: false }, sessionId)
+  touch(sessionId)
   try {
     await bridge.compact(open.directory, sessionId)
   } catch (e) {
@@ -949,8 +1535,14 @@ export async function chooseAgent(agent: string) {
 
 /** Plan approved: the session switches to Build and carries the plan out. */
 export async function buildPlan() {
+  const open = state.open
+  if (!open?.sessionId) return
+  const sessionId = open.sessionId
   await chooseAgent("build")
-  await send("Go ahead with the plan.")
+  // Another session may be open by now: the go-ahead still goes to the plan's own.
+  const text = "Go ahead with the plan."
+  if (state.open?.sessionId === sessionId) await send(text)
+  else await deliver(open, { text, files: [], comments: [] }, text, [])
 }
 
 export async function peekAt(directory: string, sessionId: string, title: string) {
@@ -973,13 +1565,98 @@ async function refreshPeek() {
   }
 }
 
-export async function answer(q: Asked, answers: string[][] | null) {
-  set((s) => ({ questions: s.questions.filter((x) => x.requestId !== q.requestId) }))
+const GONE = "This request is no longer waiting."
+
+/**
+ * Sends an answer: its card stays, disabled, until the answer arrives (then goes), so a failure
+ * leaves it as it was with what was typed or picked in it. Its id is marked closed from the start,
+ * so a read of what is pending that began before can't bring the card back.
+ */
+async function answerAsk(id: string, drop: (s: State) => Partial<State>, call: () => Promise<boolean>) {
+  if (state.sending.has(id)) return
+  closed.add(id)
+  set((s) => ({ sending: toggle(s.sending, id, true) }))
   try {
-    await bridge.replyQuestion(q.directory, q.requestId, answers)
+    const waiting = await call()
+    set((s) => ({ ...drop(s), sending: toggle(s.sending, id, false), ...(waiting ? {} : { notice: GONE }) }))
   } catch (e) {
-    set({ notice: message(e) })
+    // The answer didn't reach it: the card is there to answer again.
+    closed.delete(id)
+    set((s) => ({ sending: toggle(s.sending, id, false), notice: message(e) }))
   }
+}
+
+export async function answer(q: Asked, answers: string[][] | null) {
+  await answerAsk(
+    q.requestId,
+    (s) => ({ questions: s.questions.filter((x) => x.requestId !== q.requestId) }),
+    () => bridge.replyQuestion(q.directory, q.requestId, answers)
+  )
+}
+
+/** An MCP form's answer; a form that is no longer waiting just goes. */
+export async function replyForm(f: FormRequest, answer: FormAnswer) {
+  await answerAsk(
+    f.formId,
+    (s) => ({ forms: s.forms.filter((x) => x.formId !== f.formId) }),
+    () => bridge.replyForm(f.directory, f.formId, answer)
+  )
+}
+
+/** Which asks arrived when, so a read of what is pending keeps the cards that came meanwhile. */
+let asks = 0
+const arrived = new Map<string, number>()
+
+/** Asks answered (or ended with their turn) since the window started: a read that began before
+ * still lists them, and must not bring their cards back. */
+const closed = new Set<string>()
+
+/** Reads what waits under a session that isn't open (after events were lost). */
+async function readPending(directory: string, sessionId: string) {
+  const since = asks
+  try {
+    applyPending(directory, sessionId, await bridge.pending(directory, sessionId), since)
+  } catch {
+    // The next event or opening the session reads it again.
+  }
+}
+
+/** What waits for an answer under `rootId` (and its folder's forms), as the core says: the cards
+ * shown for it are replaced, except ones whose event came after the read began. */
+function applyPending(directory: string, rootId: string, list: PendingRequest[], since: number) {
+  const newer = (id: string) => (arrived.get(id) ?? 0) > since
+  const permissions: Permission[] = []
+  const questions: Asked[] = []
+  const forms: FormRequest[] = []
+  for (const r of list) {
+    if (closed.has(r.type === "form" ? r.formId : r.requestId)) continue
+    if (r.type === "permission")
+      permissions.push({ ...r, rootId: r.rootId ?? rootId, directory: r.directory || directory })
+    else if (r.type === "question")
+      questions.push({
+        requestId: r.requestId,
+        sessionId: r.sessionId,
+        rootId: r.rootId ?? rootId,
+        directory: r.directory || directory,
+        questions: r.questions,
+      })
+    else forms.push({ ...r, directory: r.directory || directory })
+  }
+  set((s) => ({
+    // A card whose answer is on its way stays: should the answer fail, it is answered again there.
+    permissions: [
+      ...s.permissions.filter((p) => p.rootId !== rootId || newer(p.requestId) || s.sending.has(p.requestId)),
+      ...permissions.filter((p) => !s.permissions.some((x) => x.requestId === p.requestId && newer(x.requestId))),
+    ],
+    questions: [
+      ...s.questions.filter((q) => q.rootId !== rootId || newer(q.requestId) || s.sending.has(q.requestId)),
+      ...questions.filter((q) => !s.questions.some((x) => x.requestId === q.requestId && newer(x.requestId))),
+    ],
+    forms: [
+      ...s.forms.filter((f) => !sameFolder(f.directory, directory) || newer(f.formId) || s.sending.has(f.formId)),
+      ...forms.filter((f) => !s.forms.some((x) => x.formId === f.formId && newer(x.formId))),
+    ],
+  }))
 }
 
 export async function renameSession(row: SessionRow, title: string) {
@@ -1000,14 +1677,23 @@ export async function deleteSession(row: SessionRow) {
 export async function deleteSessions(rows: SessionRow[]) {
   const gone = new Set<string>()
   const kept: string[] = []
+  const errors: string[] = []
   for (const row of rows) {
     try {
+      // False: it was already gone, which is what was asked.
       await bridge.deleteSession(row.directory, row.id)
       gone.add(row.id)
-    } catch {
-      kept.push(row.title)
+    } catch (e) {
+      // The core refuses a running session; anything else is its own error.
+      if (state.busy.has(row.id) || /\bstop\b/i.test(message(e))) kept.push(row.title)
+      else errors.push(`“${row.title}” wasn’t deleted. ${message(e)}`)
     }
   }
+  for (const id of gone) {
+    unsent.delete(id)
+    if (state.drafts[id]) setDraft(id, { ...EMPTY_DRAFT })
+  }
+  if (errors.length) set({ notice: errors.length === 1 ? errors[0] : `${errors.length} sessions weren’t deleted. ${errors[0]}` })
   if (state.open?.sessionId && gone.has(state.open.sessionId)) set({ open: null })
   set((s) => {
     const pinned = new Set([...s.pinned].filter((id) => !gone.has(id)))
@@ -1054,20 +1740,26 @@ export async function reveal(directory: string) {
 // Review and git
 // ---------------------------------------------------------------------------
 
-/** The session's net file changes (null outside git: the window sums the edits instead). */
-export async function readChanges(): Promise<FileDiff[] | null> {
+/** The session's net file changes (null outside git: the window sums the edits instead), or why
+ * they couldn't be read. */
+export async function readChanges(): Promise<FileDiff[] | null | { error: string }> {
   const open = state.open
   if (!open?.sessionId) return null
   try {
     return await bridge.changes(open.directory, open.sessionId)
-  } catch {
-    return null
+  } catch (e) {
+    return { error: message(e) }
   }
 }
 
-/** Puts one file back as it was before the session changed it. */
-export async function restoreFile(file: string) {
-  const open = state.open
+/** The open view, for a run of steps that must all go to where they started. */
+export function openNow() {
+  return state.open
+}
+
+/** Puts one file back as it was before the session changed it (`open`: the session it was asked
+ * in, when one of several). */
+export async function restoreFile(file: string, open = state.open) {
   if (!open?.sessionId) return false
   try {
     await bridge.restoreFile(open.directory, open.sessionId, file)
@@ -1082,17 +1774,23 @@ export async function restoreFile(file: string) {
 let comments = 0
 
 export function addComment(c: Omit<Comment, "id">) {
-  set((s) => ({ comments: [...s.comments, { ...c, id: ++comments }] }))
+  const open = state.open
+  if (open) setDraft(draftKey(open), (d) => ({ comments: [...d.comments, { ...c, id: ++comments }] }))
 }
 
 export function removeComment(id: number) {
-  set((s) => ({ comments: s.comments.filter((c) => c.id !== id) }))
+  const open = state.open
+  if (open) setDraft(draftKey(open), (d) => ({ comments: d.comments.filter((c) => c.id !== id) }))
 }
 
 /** The comments as text the model reads after the message. */
 function withComments(text: string) {
-  if (state.comments.length === 0) return text
-  const list = state.comments
+  return commentsText(text, state.comments)
+}
+
+function commentsText(text: string, comments: Comment[]) {
+  if (comments.length === 0) return text
+  const list = comments
     .map((c) => {
       const where = c.removed ? `${c.file}, removed line ${c.line}` : `${c.file}:${c.line}`
       const code = c.code.trim() ? ` (\`${c.code.trim()}\`)` : ""
@@ -1108,9 +1806,10 @@ export async function refreshGit(directory = state.open?.directory) {
   try {
     const status = await bridge.gitStatus(directory)
     if (state.open && !sameFolder(state.open.directory, directory)) return
-    set({ git: { ...status, directory } })
-  } catch {
-    set({ git: null })
+    set({ git: { ...status, directory }, gitError: null })
+  } catch (e) {
+    if (state.open && !sameFolder(state.open.directory, directory)) return
+    set({ git: null, gitError: { directory, message: message(e) } })
   }
 }
 
@@ -1128,9 +1827,33 @@ async function gitStep(step: (directory: string) => Promise<unknown>): Promise<s
   }
 }
 
-export const gitCommit = (text: string) => gitStep((d) => bridge.gitCommit(d, text))
+/** `files` null commits every change. */
+export const gitCommit = (text: string, files: string[] | null = null) => gitStep((d) => bridge.gitCommit(d, text, files))
 export const gitPush = () => gitStep((d) => bridge.gitPush(d))
+export const gitPull = () => gitStep((d) => bridge.gitPull(d))
 export const gitBranch = (name: string) => gitStep((d) => bridge.gitBranch(d, name))
+export const gitIdentity = (name: string, email: string) => gitStep(() => bridge.gitIdentity(name, email))
+
+/** The folder (`path` null) or a file of it in the preferred editor; a failure goes to the notice. */
+export async function openInEditor(directory: string, path: string | null = null, line: number | null = null) {
+  if (path && elsewhere(path, directory)) return
+  try {
+    await bridge.openInEditor(directory, path, line)
+  } catch (e) {
+    set({ notice: message(e) })
+  }
+}
+
+/** Puts text in the open view's composer (a starter prompt); what the user typed is replaced. */
+export function fillComposer(text: string) {
+  const open = state.open
+  if (open) setDraft(draftKey(open), { text, pasted: [], stamp: ++stamps })
+}
+
+/** Leaves the open session for the empty window (its delete waits behind an Undo). */
+export function closeSession() {
+  set({ open: null })
+}
 
 export async function gitPr(title: string, body: string): Promise<{ url: string; created: boolean } | string> {
   const open = state.open
@@ -1160,18 +1883,37 @@ export function openExternal(url: string) {
 /** How long a stop waits for the turn's end before asking whether anything was running. */
 const STOP_GRACE = 1500
 
+/** After this long without an end, Stop can be pressed again (the first may have been lost). */
+export const STOP_AGAIN = 4000
+
 export function stop() {
   const open = state.open
-  if (!open?.sessionId) return
-  const { directory, sessionId } = open
+  if (!open || (open.stopping && Date.now() - open.stopping < STOP_AGAIN)) return
+  if (!open.sessionId) {
+    // A new session's first prompt: there is nothing to stop until the session exists.
+    const first = firsts.get(open.key)
+    if (!first) return
+    first.stop = true
+    setOpen({ stopping: Date.now() }, { key: open.key })
+    return
+  }
+  stopSession(open.directory, open.sessionId)
+}
+
+function stopSession(directory: string, sessionId: string) {
   const since = activity.get(sessionId)
+  // Said at once; the turn's end (and the "Stopped" note the core adds) follows.
+  setOpen({ stopping: Date.now() }, sessionId)
   bridge.interrupt(directory, sessionId).then(
     // Stopping a session with nothing running sends no event; "Working" would stay.
     () =>
       setTimeout(() => {
         if (activity.get(sessionId) === since) void reconcile(directory, sessionId)
       }, STOP_GRACE),
-    (e) => set({ notice: message(e) })
+    (e) => {
+      setOpen({ stopping: false }, sessionId)
+      set({ notice: message(e) })
+    }
   )
 }
 
@@ -1185,17 +1927,27 @@ export function setMode(mode: Mode) {
   // The open session's floor follows at once; a running turn picks it up at its next step.
   // An ask already waiting stays for the user: the floor only adds asks, so it came from a rule.
   const open = state.open
-  if (open?.sessionId)
-    void bridge.setMode(open.directory, open.sessionId, mode).catch((e) => set({ notice: message(e) }))
+  if (open?.sessionId) applyMode(open.directory, open.sessionId, mode)
 }
 
 export async function reply(p: Permission, answer: PermissionReply) {
-  set((s) => ({ permissions: s.permissions.filter((x) => x.requestId !== p.requestId) }))
-  try {
-    await bridge.replyPermission(p.directory, p.requestId, answer)
-  } catch (e) {
-    set({ notice: message(e) })
-  }
+  await answerAsk(
+    p.requestId,
+    (s) => ({ permissions: s.permissions.filter((x) => x.requestId !== p.requestId) }),
+    () => bridge.replyPermission(p.directory, p.requestId, answer)
+  )
+}
+
+/** The close confirm's answers. */
+export function quitNow() {
+  set({ closing: null })
+  void runBeforeClose()
+    .then(() => bridge.quit())
+    .catch((e) => set({ notice: message(e) }))
+}
+
+export function keepWorking() {
+  set({ closing: null })
 }
 
 // ---------------------------------------------------------------------------
@@ -1207,22 +1959,51 @@ function directoryOf(sessionId: string) {
   return state.sessions.find((s) => s.id === sessionId)?.directory ?? ""
 }
 
+/** Kinds of failure that sending the same message again won't fix. */
+const NO_RETRY = new Set<ErrorKind>(["limit", "auth", "model", "elsewhere"])
+
+/** A session's turn is over: the install that waited for it may go ahead. */
+function turnEnded() {
+  if (state.update?.waiting && state.busy.size === 0) void installUpdate(true)
+}
+
 function onEvent(e: CoreEvent) {
-  if (e.type === "notice") {
-    // An MCP server's trouble is fixed in Settings: the notice links there.
-    set({ notice: e.message, noticeLink: /\bMCP\b/i.test(e.message) ? "mcp" : null })
-    return
-  }
-  if (e.type === "mcp") {
-    set((s) => ({ mcpChanged: s.mcpChanged + 1 }))
-    return
-  }
-  if (e.type === "lagged") {
-    // Lost events may have started or ended turns: read busy and status back, not only the text.
-    const open = state.open
-    if (open?.sessionId && sameFolder(open.directory, e.directory)) void reconcile(open.directory, open.sessionId)
-    void loadSessions().catch(() => {})
-    return
+  switch (e.type) {
+    case "notice":
+      // An MCP server's trouble is fixed in Settings: the notice links there.
+      set({ notice: e.message, noticeLink: /\bMCP\b/i.test(e.message) ? "mcp" : null })
+      return
+    case "mcp":
+      set((s) => ({ mcpChanged: s.mcpChanged + 1 }))
+      return
+    case "lagged": {
+      // Lost events may have started or ended turns, or asked something: read busy, status and
+      // what waits back, not only the text.
+      const open = state.open
+      if (open?.sessionId && sameFolder(open.directory, e.directory)) void reconcile(open.directory, open.sessionId)
+      // The folder's other running sessions may have asked something meanwhile (the sidebar
+      // marks them): only what waits is read for those.
+      for (const id of state.busy) {
+        const row = state.sessions.find((r) => r.id === id)
+        if (id !== open?.sessionId && row && sameFolder(row.directory, e.directory)) void readPending(row.directory, id)
+      }
+      void loadSessions()
+      return
+    }
+    case "form":
+      arrived.set(e.formId, ++asks)
+      set((s) => ({ forms: [...s.forms.filter((f) => f.formId !== e.formId), e] }))
+      return
+    case "formReplied":
+      closed.add(e.formId)
+      set((s) => ({ forms: s.forms.filter((f) => f.formId !== e.formId) }))
+      return
+    case "closeRequested":
+      set({ closing: e.busy })
+      return
+    case "update":
+      if (state.update) set({ update: { ...state.update, installing: true, progress: { downloaded: e.downloaded, total: e.total } } })
+      return
   }
   const id = e.sessionId
   const here = state.open?.sessionId === id
@@ -1234,9 +2015,11 @@ function onEvent(e: CoreEvent) {
     void refreshPeek()
   switch (e.type) {
     case "started":
-      if (unsent?.target === id) unsent = null
-      set((s) => ({ busy: toggle(s.busy, id, true) }))
-      if (here) setOpen({ status: { kind: "working" } }, id)
+      // The oldest send's turn started: it is delivered.
+      dropUnsent(id)
+      set((s) => ({ busy: toggle(s.busy, id, true), offline: false }))
+      if (here)
+        setOpen((o) => ({ status: { kind: "working" }, stopping: false, started: isRunning(o) && o.started ? o.started : Date.now() }), id)
       break
     case "text":
     case "reasoning":
@@ -1263,11 +2046,14 @@ function onEvent(e: CoreEvent) {
     case "permission": {
       // The mode is the session's floor in the core; an ask that reaches here is one a rule
       // (`read *.env`, the user's own) wants asked, whatever the mode.
-      const p: Permission = { ...e, rootId: e.rootId ?? id, directory: e.directory || directoryOf(id) }
+      arrived.set(e.requestId, ++asks)
+      const { type: _, ...rest } = e
+      const p: Permission = { ...rest, rootId: e.rootId ?? id, directory: e.directory || directoryOf(id) }
       set((s) => ({ permissions: [...s.permissions.filter((x) => x.requestId !== e.requestId), p] }))
       break
     }
     case "question":
+      arrived.set(e.requestId, ++asks)
       set((s) => ({
         questions: [
           ...s.questions.filter((x) => x.requestId !== e.requestId),
@@ -1282,7 +2068,12 @@ function onEvent(e: CoreEvent) {
       }))
       break
     case "permissionReplied":
+      closed.add(e.requestId)
       set((s) => ({ permissions: s.permissions.filter((x) => x.requestId !== e.requestId) }))
+      break
+    case "questionReplied":
+      closed.add(e.requestId)
+      set((s) => ({ questions: s.questions.filter((x) => x.requestId !== e.requestId) }))
       break
     case "title":
       set((s) => ({ sessions: s.sessions.map((r) => (r.id === id ? { ...r, title: e.title } : r)) }))
@@ -1290,23 +2081,35 @@ function onEvent(e: CoreEvent) {
       break
     case "done":
     case "failed":
-    case "interrupted":
-      if (unsent?.target === id) unsent = null
+    case "interrupted": {
+      // A message that never started goes back where it was typed; any other was delivered.
+      const back = e.type === "failed" && e.unsent ? putBack(id) : (settleUnsent(id), false)
+      // Its asks end with it.
+      for (const p of state.permissions) if (p.sessionId === id || p.rootId === id) closed.add(p.requestId)
+      for (const q of state.questions) if (q.sessionId === id || q.rootId === id) closed.add(q.requestId)
       set((s) => ({
         busy: toggle(s.busy, id, false),
         permissions: s.permissions.filter((p) => p.sessionId !== id && p.rootId !== id),
         questions: s.questions.filter((q) => q.sessionId !== id && q.rootId !== id),
+        ...(e.type === "failed" && e.kind === "offline" ? { offline: true } : {}),
       }))
       void loadAccount()
       if (here) {
         setOpen(
           {
             live: [],
+            stopping: false,
+            started: null,
             status:
               e.type === "done"
                 ? { kind: "idle" }
                 : e.type === "failed"
-                  ? { kind: "failed", error: e.error, retry: true }
+                  ? {
+                      kind: "failed",
+                      error: e.error,
+                      retry: !back && !e.unsent && !(e.kind && NO_RETRY.has(e.kind)),
+                      errorKind: e.kind,
+                    }
                   : { kind: "stopped", reason: e.reason },
           },
           id
@@ -1316,24 +2119,29 @@ function onEvent(e: CoreEvent) {
         void refreshGit()
       }
       void loadSessions()
+      turnEnded()
       break
+    }
     case "refused":
       set((s) => ({ busy: toggle(s.busy, id, false) }))
+      // Kept in that session's draft, open or not; the notice says so when it isn't.
+      putBack(id)
       if (here) {
-        setOpen({ live: [], status: { kind: "failed", error: e.error } }, id)
-        putBack(id)
+        setOpen({ live: [], stopping: false, started: null, status: { kind: "failed", error: e.error, retry: false, errorKind: e.kind } }, id)
         void refresh(id)
       }
+      turnEnded()
       break
     case "settled":
-      if (unsent?.target === id) unsent = null
+      settleUnsent(id)
       set((s) => ({ busy: toggle(s.busy, id, false) }))
       if (here) {
-        setOpen((o) => (o.status.kind === "working" ? { live: [], status: { kind: "idle" } } : {}), id)
+        setOpen((o) => (isRunning(o) ? { live: [], status: { kind: "idle" }, stopping: false, started: null } : {}), id)
         void refresh(id)
         void refreshGit()
       }
       void loadSessions()
+      turnEnded()
       break
     case "usage":
       if (here && e.fiveHour !== null) setOpen((o) => ({ info: o.info && { ...o.info, fiveHour: e.fiveHour } }), id)

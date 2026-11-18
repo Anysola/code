@@ -163,7 +163,8 @@
   --accent-soft-hover: oklch(0.25 0.01 70 / 11%);
   --field-background: oklch(0.985 0.004 80);
   --field-foreground: var(--foreground);
-  --field-placeholder: oklch(0.58 0.012 70);
+  /* 4.8:1 on a field, 4:1 on --default (measured); 0.58 read as disabled on paper. */
+  --field-placeholder: oklch(0.54 0.012 70);
   --segment: oklch(0.86 0.008 78);
   --segment-foreground: var(--foreground);
   --border: oklch(0.87 0.007 78);

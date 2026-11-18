@@ -9,7 +9,7 @@ import { useSyncExternalStore } from "react"
 import type { Bridge, Prefs } from "./bridge"
 
 export const DEFAULT_PREFS: Prefs = {
-  general: { defaultFolder: null, startMode: "last", checkUpdates: true },
+  general: { defaultFolder: null, startMode: "last", checkUpdates: true, editor: null },
   appearance: { theme: "dark", textSize: "default", width: "default", wrapCode: false, reduceMotion: false },
   conversation: { changes: "closed", commands: "closed", lookups: "grouped", shorten: true, send: "enter" },
   notifications: { enabled: true, approval: true, question: true, finished: true, failed: true },

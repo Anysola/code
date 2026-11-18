@@ -7,7 +7,7 @@ import { useEffect, useRef, type ComponentType } from "react"
 
 import { reloadPrefs } from "../prefs"
 import { closeSettings, openSettings, useStore, type SettingsSection } from "../store"
-import { btn, cn, Kbd, TitleBar } from "../ui"
+import { btn, cn, Kbd, TitleBar, useEscape } from "../ui"
 import { AccountSection, BillingSection, UsageSection } from "./account"
 import { AdvancedSection, CommandsSection, InstructionsSection, PermissionsSection, SkillsSection } from "./agent"
 import { AppearanceSection, ConversationSection, GeneralSection, KeyboardSection, NotificationsSection } from "./app"
@@ -68,21 +68,14 @@ export function Settings({ section }: { section: SettingsSection }) {
   }, [section])
   // Escape goes back, unless a menu, a confirm or a field took it first: in a text field the
   // first Escape leaves the field.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented) return
-      const target = e.target as HTMLElement | null
-      if (target?.matches("input, textarea, select")) {
-        target.blur()
-        return
-      }
-      closeSettings()
-    }
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
-  }, [])
+  const root = useRef<HTMLDivElement>(null)
+  useEscape(root, (e) => {
+    const target = e.target as HTMLElement | null
+    if (target?.matches("input, textarea, select") && root.current?.contains(target)) target.blur()
+    else closeSettings()
+  })
   return (
-    <div data-settings className="absolute inset-0 z-20 flex bg-background">
+    <div ref={root} data-settings className="absolute inset-0 z-20 flex bg-background">
       <aside className="flex w-64 shrink-0 flex-col">
         <TitleBar>
           <div className="flex items-center px-2">
