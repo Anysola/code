@@ -101,11 +101,15 @@ Put them under `hooks` in any config file:
 ```
 
 Hooks can only make the agent more careful: a hook can block a call or have you asked about it, never allow
-something your permissions would not. Hooks from `~/.anysola/config.json` run right away; hooks that come with a
-project run only after you approve them, and again after they change. `anysola hooks` lists every hook and whether it
-runs, `anysola hooks trust` approves the project's hooks and `anysola hooks deny` refuses them. `anysola run` never
-asks: it skips hooks nobody approved and says so. `"disable_hooks": true` or `ANYSOLA_DISABLE_HOOKS=1` turns hooks
-off (a project file can only turn off its own); hooks from managed settings always run.
+something your permissions would not. Hooks from `~/.anysola/config.json` run right away. Hooks from a project run
+only after you approve them, and a change to them waits for your approval again (until then, hooks you already
+approved keep running). `anysola hooks` lists every hook and whether it runs, `anysola hooks trust` approves the
+project's hooks and `anysola hooks deny` refuses them. `anysola run` never asks: it skips hooks nobody approved and
+says so. `"disable_hooks": true` in `~/.anysola/config.json` or `ANYSOLA_DISABLE_HOOKS=1` turns hooks off; hooks from
+managed settings always run.
+
+Approval covers a hook's command line, not the scripts it runs. A guard that must hold against the agent belongs in
+your own config (`~/.anysola/config.json`) or in managed config, not in a file the agent can edit.
 
 Not in this version: other events (`PreCompact`, `SubagentStop`, `Notification`, …), hook types other than
 `command`, `allow` decisions and rewriting a call's input or output, and reading `.claude/settings.json`.

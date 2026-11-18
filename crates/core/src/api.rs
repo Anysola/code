@@ -316,6 +316,10 @@ impl Core {
             hooks: Default::default(),
         });
         shared.arm_watch(&shared.loaded());
+        shared
+            .hooks
+            .approved
+            .sync(&shared.loaded().config.hooks, &shared.db);
         if shared.gateway.token().is_some() {
             tokio::spawn(state::poll_remote(Arc::downgrade(&shared)));
         }
@@ -490,7 +494,11 @@ impl Core {
     /// The project documents that define hooks, with the user's decision on their current
     /// content ([`HookDocument::decision`] `None`: ask the user).
     pub fn hook_documents(&self) -> Vec<HookDocument> {
-        crate::hooks::documents(&self.loaded().config.hooks, &self.shared.db)
+        crate::hooks::documents_with(
+            &self.loaded().config.hooks,
+            &self.shared.db,
+            &self.shared.hooks.approved,
+        )
     }
 
     /// Records the user's decision on a project document's hooks as they are now (`digest` from
@@ -498,6 +506,10 @@ impl Core {
     /// [`Event::HooksChanged`].
     pub fn trust_hooks(&self, path: &str, digest: &str, allow: bool) -> Result<(), CoreError> {
         crate::hooks::trust(&self.shared.db, path, digest, allow)?;
+        self.shared
+            .hooks
+            .approved
+            .sync(&self.loaded().config.hooks, &self.shared.db);
         self.emit(Event::HooksChanged);
         Ok(())
     }

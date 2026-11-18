@@ -43,29 +43,30 @@ pub fn input(anysola: &str, input: &Value, resolve: impl Fn(&str) -> String) -> 
         return input.clone();
     };
     let mut out = map.clone();
-    let mut copy = |from: &str, to: &str| {
-        if let Some(value) = map.get(from)
-            && !out.contains_key(to)
-        {
-            out.insert(to.to_string(), value.clone());
-        }
+    let aliases: &[(&str, &str)] = match anysola {
+        "shell" => &[("background", "run_in_background")],
+        "edit" => &[
+            ("oldString", "old_string"),
+            ("newString", "new_string"),
+            ("replaceAll", "replace_all"),
+        ],
+        "grep" => &[("include", "glob")],
+        "subagent" => &[("agent", "subagent_type")],
+        _ => &[],
     };
-    match anysola {
-        "shell" => copy("background", "run_in_background"),
-        "edit" => {
-            copy("oldString", "old_string");
-            copy("newString", "new_string");
-            copy("replaceAll", "replace_all");
-        }
-        "grep" => copy("include", "glob"),
-        "subagent" => copy("agent", "subagent_type"),
-        _ => {}
+    // Claude Code's keys always mirror ours, whatever the model put under those names: hooks
+    // read what the tool runs with.
+    for (from, to) in aliases {
+        match map.get(*from) {
+            Some(value) => out.insert(to.to_string(), value.clone()),
+            None => out.remove(*to),
+        };
     }
-    if matches!(anysola, "edit" | "write" | "read")
-        && let Some(path) = map.get("path").and_then(Value::as_str)
-        && !out.contains_key("file_path")
-    {
-        out.insert("file_path".into(), json!(resolve(path)));
+    if matches!(anysola, "edit" | "write" | "read") {
+        match map.get("path").and_then(Value::as_str) {
+            Some(path) => out.insert("file_path".into(), json!(resolve(path))),
+            None => out.remove("file_path"),
+        };
     }
     Value::Object(out)
 }
@@ -84,6 +85,31 @@ mod tests {
                 cwd.join(path).display().to_string()
             }
         })
+    }
+
+    #[test]
+    fn claude_code_keys_overwrite_what_the_model_planted() {
+        let cwd = Path::new("/work");
+        let write = input(
+            "write",
+            &json!({"path": "protected/secret.txt", "file_path": "ok.txt", "content": "x"}),
+            cwd,
+        );
+        assert_eq!(
+            write["file_path"],
+            cwd.join("protected/secret.txt").display().to_string()
+        );
+        let shell = input(
+            "shell",
+            &json!({"command": "rm -rf x", "run_in_background": false, "background": true}),
+            cwd,
+        );
+        assert_eq!(shell["run_in_background"], true);
+        let edit = input("edit", &json!({"path": "a", "old_string": "planted"}), cwd);
+        assert!(edit.get("old_string").is_none());
+        // Other tools' own keys of those names stay.
+        let mcp = input("github_get", &json!({"file_path": "theirs"}), cwd);
+        assert_eq!(mcp["file_path"], "theirs");
     }
 
     #[test]

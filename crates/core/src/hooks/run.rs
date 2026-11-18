@@ -1,6 +1,9 @@
 //! Running one hook command: the `shell` tool's shell and process group, the event on stdin,
-//! stdout and stderr read apart. The process (and its group) dies with a timeout, an interrupted
-//! turn, a dropped call and the process's own exit, the same way the `shell` tool's commands do.
+//! stdout and stderr read apart. The hook and its process group are killed on a timeout, an
+//! interrupted turn, a dropped call and the process's own exit, the same way the `shell` tool's
+//! commands are. After the hook exits on its own, whatever it left holding its output pipes is
+//! killed too; a child it detached with its output redirected elsewhere survives, as in Claude
+//! Code.
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -61,10 +64,12 @@ impl Drop for Group {
     }
 }
 
-async fn read(pipe: Option<impl AsyncRead + Unpin>) -> String {
+/// The stream as text, and whether it was longer than [`MAX_OUTPUT`].
+async fn read(pipe: Option<impl AsyncRead + Unpin>) -> (String, bool) {
     let Some(mut pipe) = pipe else {
-        return String::new();
+        return (String::new(), false);
     };
+    let mut cut = false;
     let mut out = Vec::new();
     let mut buffer = vec![0; 16 * 1024];
     loop {
@@ -72,11 +77,12 @@ async fn read(pipe: Option<impl AsyncRead + Unpin>) -> String {
             Ok(0) | Err(_) => break,
             Ok(n) => {
                 let room = MAX_OUTPUT.saturating_sub(out.len());
+                cut |= n > room;
                 out.extend_from_slice(&buffer[..n.min(room)]);
             }
         }
     }
-    String::from_utf8_lossy(&out).into_owned()
+    (String::from_utf8_lossy(&out).into_owned(), cut)
 }
 
 pub async fn run(job: Job<'_>, cancel: &CancellationToken) -> Ran {
@@ -152,8 +158,13 @@ pub async fn run(job: Job<'_>, cancel: &CancellationToken) -> Ran {
             )
         }
     };
+    let ((stdout, cut), (stderr, _)) = (stdout, stderr);
+    let code = status.and_then(|s| s.code());
+    if cut && code == Some(0) {
+        return Ran::OutputTooLarge;
+    }
     Ran::Exited {
-        code: status.and_then(|s| s.code()),
+        code,
         stdout,
         stderr,
     }

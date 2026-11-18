@@ -1377,6 +1377,12 @@ fn handle(
                 hooks: hooks.clone(),
             };
             let tools = ctx.tools.clone();
+            let schema = hook_identity(&tools, &name).and_then(|(anysola, _)| {
+                ctx.definitions
+                    .iter()
+                    .find(|d| d.name == anysola)
+                    .map(|d| d.input_schema.clone())
+            });
             let output_dir = shared.paths.tool_output_dir();
             let images = crate::media::Limits::from_config(selection.sources.config.get("media"));
             let limits = tool_ctx.limits;
@@ -1386,7 +1392,8 @@ fn handle(
                     out.content = crate::media::normalize_content(out.content, &images);
                     out
                 };
-                let (result, hooks) = call(&tools, &name, input, tool_ctx, capped, finish).await;
+                let (result, hooks) =
+                    call(&tools, &name, input, schema, tool_ctx, capped, finish).await;
                 (part, result, hooks)
             });
         }
@@ -1394,6 +1401,21 @@ fn handle(
 }
 
 /// The tool a call names (`bash` runs as `shell`): our name and the one hooks match.
+const GLOBAL_CONFIG: &str = "This call changes Anysola Code's own configuration or data, which needs the user's approval, and nobody can approve it here.";
+
+/// An `edit` or `write` of a file under the global config roots (data dir and database, legacy
+/// config dir, system dir).
+fn writes_global_config(anysola: &str, input: &Value, ctx: &ToolContext) -> bool {
+    if !matches!(anysola, "edit" | "write") {
+        return false;
+    }
+    let Some(path) = input.get("path").and_then(Value::as_str) else {
+        return false;
+    };
+    let target = crate::tool::access::resolve_path(ctx, path);
+    crate::config::protected(&ctx.paths, &target)
+}
+
 fn hook_identity(tools: &[Arc<dyn Tool>], name: &str) -> Option<(String, String)> {
     let find = |name: &str| tools.iter().find(|t| t.name() == name);
     let tool = find(name).or_else(|| (name == "bash").then(|| find("shell")).flatten())?;
@@ -1407,22 +1429,51 @@ fn hook_identity(tools: &[Arc<dyn Tool>], name: &str) -> Option<(String, String)
 /// A tool call with its hooks: PreToolUse may block it (before anything is asked) or have it
 /// asked about; PostToolUse sees the result as the model will. `finish` bounds the output.
 /// Returns the result and the hook entries for the part's metadata.
+///
+/// The input is first repaired and validated against the tool's `schema` exactly as the tool
+/// would, so hooks and permission checks see the call that runs; input that cannot be repaired
+/// fails in the tool as before, without hooks.
+#[allow(clippy::too_many_arguments)]
 async fn call(
     tools: &[Arc<dyn Tool>],
     name: &str,
     input: Value,
+    schema: Option<Value>,
     ctx: ToolContext,
     capped: bool,
     finish: impl Fn(ToolOutput) -> ToolOutput,
 ) -> (Result<ToolOutput, ToolError>, Vec<Value>) {
     use crate::hooks::fire::{self, Call};
-    let identity = (!capped && ctx.hooks.wants())
-        .then(|| hook_identity(tools, name))
-        .flatten();
-    let Some((anysola, hook)) = identity else {
-        let result = execute(tools, name, input, &ctx, capped).await.map(finish);
-        return (result, Vec::new());
+    let finish = &finish;
+    let plain = |input: Value, ctx: ToolContext| async move {
+        (
+            execute(tools, name, input, &ctx, capped).await.map(finish),
+            Vec::new(),
+        )
     };
+    let identity = (!capped).then(|| hook_identity(tools, name)).flatten();
+    let Some((anysola, hook)) = identity else {
+        return plain(input, ctx).await;
+    };
+    let input = match schema {
+        Some(schema) => match crate::tool::input::repaired(&anysola, &schema, input.clone()) {
+            Ok(repaired) => repaired,
+            Err(_) => return plain(input, ctx).await,
+        },
+        None => input,
+    };
+    let mut ctx = ctx;
+    if writes_global_config(&anysola, &input, &ctx) {
+        // Config files outside the project decide what runs unattended (hooks, rules): changing
+        // them is always the user's call, saved "always" rules notwithstanding.
+        match ctx.permissions.asking() {
+            Some(gate) => ctx.permissions = gate,
+            None => return (Err(ToolError::execution(GLOBAL_CONFIG)), Vec::new()),
+        }
+    }
+    if !ctx.hooks.wants() {
+        return plain(input, ctx).await;
+    }
     let hook_input =
         crate::hooks::tool::input(&anysola, &input, crate::hooks::tool::resolver(&ctx));
     let call = Call {

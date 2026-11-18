@@ -31,6 +31,20 @@ pub fn parse_input<T: DeserializeOwned>(
     )))
 }
 
+/// The input a tool will run with: repaired and validated as [`parse_input`] does, before
+/// anything (hooks, permission checks) looks at it. The error is [`parse_input`]'s.
+pub(crate) fn repaired(tool: &str, schema: &Value, input: Value) -> Result<Value, ToolError> {
+    let repaired = repair(input, schema, 0);
+    let mut issues = Vec::new();
+    validate(&repaired, schema, "", &mut issues);
+    if issues.is_empty() {
+        return Ok(repaired);
+    }
+    Err(ToolError::execution(format_issues(
+        tool, &issues, &repaired,
+    )))
+}
+
 pub(crate) fn format_issues(tool: &str, issues: &[(String, String)], value: &Value) -> String {
     let mut lines: Vec<String> = issues
         .iter()

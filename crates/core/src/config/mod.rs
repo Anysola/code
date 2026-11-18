@@ -520,6 +520,15 @@ fn system_dir() -> PathBuf {
     }
 }
 
+/// Whether `path` lies under a global config root: the data dir (config, database), the legacy
+/// config dir or the system dir. Writing there changes what runs without asking.
+pub fn protected(paths: &Paths, path: &Path) -> bool {
+    let target = resolve(path);
+    [paths.data.clone(), paths.legacy_config_dir(), system_dir()]
+        .iter()
+        .any(|root| target.starts_with(resolve(root)))
+}
+
 /// A path with symlinks resolved as far as it exists, so a symlinked global root is recognized.
 fn resolve(path: &Path) -> PathBuf {
     if let Ok(real) = crate::paths::canonicalize(path) {
@@ -1006,7 +1015,15 @@ mod tests {
                 ("project".to_string(), crate::hooks::HookScope::Project),
             ]
         );
-        assert!(config.hooks.disabled_by_project && !config.hooks.disabled_by_user);
+        assert!(!config.hooks.disabled_by_project && !config.hooks.disabled_by_user);
+        assert!(
+            config
+                .warnings
+                .iter()
+                .any(|w| w.contains("\"disable_hooks\"") && w.contains("your own config")),
+            "{:?}",
+            config.warnings
+        );
         assert_eq!(
             config.hooks.shell, None,
             "a project's shell does not run hooks"

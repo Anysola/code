@@ -14,7 +14,8 @@ pub mod output;
 mod run;
 pub mod tool;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 
 use serde_json::{Value, json};
 
@@ -24,6 +25,34 @@ pub use fire::ToolHooks;
 
 /// The error kind of a turn that ended because a UserPromptSubmit hook blocked its prompt.
 pub const BLOCKED: &str = "hook.blocked";
+
+/// `text` safe to show in a terminal: control characters (C0 including newline and tab, DEL,
+/// C1, and so every escape sequence's ESC) and bidirectional overrides are written out as
+/// `\x1b` / `\u{202e}`, so a command cannot hide behind what it makes the terminal draw.
+pub fn display(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        let code = c as u32;
+        let bidi = matches!(code, 0x200e | 0x200f | 0x202a..=0x202e | 0x2066..=0x2069);
+        if code < 0x20 || code == 0x7f || (0x80..0xa0).contains(&code) {
+            out.push_str(&format!("\\x{code:02x}"));
+        } else if bidi {
+            out.push_str(&format!("\\u{{{code:04x}}}"));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The timeout a handler gets when none is configured, in seconds.
+pub fn default_timeout(event: &str) -> u64 {
+    if event == Event::UserPromptSubmit.as_str() {
+        30
+    } else {
+        600
+    }
+}
 
 /// The events 1.0.9 runs hooks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -129,8 +158,8 @@ pub struct Configured {
     pub documents: Vec<Document>,
     /// `"disable_hooks": true` in a user document: user and project hooks are off.
     pub disabled_by_user: bool,
-    /// `"disable_hooks": true` in a project document: that turns off project hooks only, so a
-    /// cloned repository cannot switch off the user's own guards.
+    /// Always false since 1.0.9: `disable_hooks` in a project document is ignored (the agent can
+    /// edit that file). Kept for source compatibility.
     pub disabled_by_project: bool,
     /// `shell` of the last user or managed document: hooks run with it, never with a shell a
     /// project document names (an unapproved repository must not pick what runs trusted hooks).
@@ -304,35 +333,212 @@ pub fn unapproved(configured: &Configured, db: &Db) -> usize {
         .sum()
 }
 
+/// Precedence when one command is configured in several documents.
+fn rank(scope: HookScope) -> u8 {
+    match scope {
+        HookScope::Managed => 2,
+        HookScope::User => 1,
+        HookScope::Project => 0,
+    }
+}
+
 /// The handlers that run for `event` on `names` (a tool's two names, a session source; empty for
-/// events that ignore their matcher): trusted, not switched off, matching, and each command
-/// once, in config order.
+/// events that ignore their matcher): trusted, not switched off and matching, in config order.
+/// A command configured in several documents runs once, as the highest scope configured it
+/// (managed, user, project; the longer timeout within a scope), so a weaker document repeating
+/// a guard cannot weaken it. With `approved`, a project document whose current content is
+/// undecided runs its last approved version; the second value names those documents with their
+/// current digest.
 pub(crate) fn matching(
     configured: &Configured,
     db: &Db,
+    approved: Option<&Approved>,
     event: Event,
     names: &[&str],
-) -> Vec<Handler> {
-    if !configured.any(event) {
-        return Vec::new();
+) -> (Vec<Handler>, Vec<(String, String)>) {
+    let standing = approved
+        .map(|a| a.standing(configured, db))
+        .unwrap_or_default();
+    let wanted = |d: &Document| d.handlers.iter().any(|h| h.event == event);
+    if !configured.any(event) && !standing.values().any(|(d, _)| wanted(d)) {
+        return (Vec::new(), Vec::new());
     }
     let mut decisions = decisions(db);
-    let mut out: Vec<Handler> = Vec::new();
-    for document in &configured.documents {
-        if !document.handlers.iter().any(|h| h.event == event)
-            || !decisions.runs(configured, document)
-        {
-            continue;
-        }
+    let mut runs: Vec<(Handler, HookScope)> = Vec::new();
+    let mut stood = Vec::new();
+    let mut add = |document: &Document| {
         for handler in &document.handlers {
             let applies = handler.event == event
                 && (!event.uses_matcher() || handler.compiled.matches(names));
-            if applies && !out.iter().any(|h| h.command == handler.command) {
-                out.push(handler.clone());
+            if !applies {
+                continue;
+            }
+            match runs.iter_mut().find(|(h, _)| h.command == handler.command) {
+                Some(existing) => {
+                    let stronger = rank(document.scope) > rank(existing.1)
+                        || (rank(document.scope) == rank(existing.1)
+                            && handler.timeout > existing.0.timeout);
+                    if stronger {
+                        *existing = (handler.clone(), document.scope);
+                    }
+                }
+                None => runs.push((handler.clone(), document.scope)),
             }
         }
+    };
+    let projects_on = !configured.off(HookScope::Project);
+    for document in &configured.documents {
+        if document.scope == HookScope::Project
+            && let Some((snapshot, digest)) = standing.get(&document.path)
+        {
+            if projects_on && wanted(snapshot) {
+                add(snapshot);
+                stood.push((document.path.clone(), digest.clone()));
+            }
+            continue;
+        }
+        if wanted(document) && decisions.runs(configured, document) {
+            add(document);
+        }
     }
+    // Approved documents whose hooks were removed since (or whose file is gone).
+    let mut removed: Vec<_> = standing
+        .iter()
+        .filter(|(path, _)| !configured.documents.iter().any(|d| &d.path == *path))
+        .collect();
+    removed.sort_by(|a, b| a.0.cmp(b.0));
+    for (path, (snapshot, digest)) in removed {
+        if projects_on && wanted(snapshot) {
+            add(snapshot);
+            stood.push((path.clone(), digest.clone()));
+        }
+    }
+    (runs.into_iter().map(|(h, _)| h).collect(), stood)
+}
+
+/// The digest of a project document that no longer defines hooks (or no longer exists).
+pub fn removed_digest() -> String {
+    config::digest(&Value::Null)
+}
+
+/// Approved project hooks of this process. Once a project document's hooks were approved and
+/// loaded, a change to them (an edit, their removal, the file's deletion) takes effect only once
+/// the user decided on the new content; until then the approved version keeps running. A new
+/// process starts with none: undecided content runs nothing there.
+#[derive(Default)]
+pub struct Approved {
+    documents: Mutex<HashMap<String, Document>>,
+    /// `(path, current digest)` the user was told about.
+    noticed: Mutex<HashSet<(String, String)>>,
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+impl Approved {
+    /// Content approved now becomes the snapshot; a decision on the current content (or on the
+    /// removal of the hooks) replaces or drops it.
+    pub(crate) fn sync(&self, configured: &Configured, db: &Db) {
+        let mut documents = lock(&self.documents);
+        let projects: Vec<&Document> = configured
+            .documents
+            .iter()
+            .filter(|d| d.scope == HookScope::Project)
+            .collect();
+        for document in &projects {
+            match decision(db, &document.path, &document.digest) {
+                Some(true) => {
+                    documents.insert(document.path.clone(), (*document).clone());
+                }
+                Some(false) => {
+                    documents.remove(&document.path);
+                }
+                None => {}
+            }
+        }
+        let removed = removed_digest();
+        documents.retain(|path, _| {
+            projects.iter().any(|d| &d.path == path) || decision(db, path, &removed).is_none()
+        });
+    }
+
+    /// The snapshots standing in for undecided content: path → (snapshot, current digest).
+    fn standing(&self, configured: &Configured, db: &Db) -> HashMap<String, (Document, String)> {
+        if lock(&self.documents).is_empty() {
+            return HashMap::new();
+        }
+        self.sync(configured, db);
+        let documents = lock(&self.documents);
+        documents
+            .iter()
+            .filter_map(|(path, snapshot)| {
+                let digest = configured
+                    .documents
+                    .iter()
+                    .find(|d| d.scope == HookScope::Project && &d.path == path)
+                    .map_or_else(removed_digest, |d| d.digest.clone());
+                (decision(db, path, &digest).is_none() && digest != snapshot.digest)
+                    .then(|| (path.clone(), (snapshot.clone(), digest)))
+            })
+            .collect()
+    }
+
+    /// Whether an approved snapshot has a handler for `event` (it may not be standing in).
+    pub(crate) fn any(&self, event: Event) -> bool {
+        lock(&self.documents)
+            .values()
+            .any(|d| d.handlers.iter().any(|h| h.event == event))
+    }
+
+    /// Whether the user still has to be told that `path`'s approved hooks keep running for this
+    /// change; true once.
+    pub(crate) fn first_notice(&self, path: &str, digest: &str) -> bool {
+        lock(&self.noticed).insert((path.to_string(), digest.to_string()))
+    }
+
+    /// Project documents that no longer define hooks while their approved hooks still run here.
+    fn removed(&self, configured: &Configured, db: &Db) -> Vec<HookDocument> {
+        let mut out: Vec<HookDocument> = self
+            .standing(configured, db)
+            .into_iter()
+            .filter(|(path, _)| !configured.documents.iter().any(|d| &d.path == path))
+            .map(|(path, (_, digest))| HookDocument {
+                path,
+                digest,
+                decision: None,
+                hooks: Vec::new(),
+            })
+            .collect();
+        out.sort_by(|a, b| a.path.cmp(&b.path));
+        out
+    }
+}
+
+/// [`documents`] plus, with `approved`, the documents whose approved hooks were removed:
+/// `{path, digest: removed_digest(), decision: None, hooks: []}` until the user decides.
+pub(crate) fn documents_with(
+    configured: &Configured,
+    db: &Db,
+    approved: &Approved,
+) -> Vec<HookDocument> {
+    approved.sync(configured, db);
+    let mut out = documents(configured, db);
+    out.extend(approved.removed(configured, db));
     out
+}
+
+/// [`undecided`] with the removed documents of [`documents_with`].
+pub(crate) fn undecided_with(
+    configured: &Configured,
+    db: &Db,
+    approved: &Approved,
+) -> Vec<(String, String)> {
+    documents_with(configured, db, approved)
+        .into_iter()
+        .filter(|d| d.decision.is_none())
+        .map(|d| (d.path, d.digest))
+        .collect()
 }
 
 /// Reads a document's `hooks` and `disable_hooks` into `configured` (the config loader calls
@@ -355,7 +561,9 @@ pub(crate) fn apply(
     if disable == Some(Value::Bool(true)) {
         match scope {
             HookScope::User => configured.disabled_by_user = true,
-            HookScope::Project => configured.disabled_by_project = true,
+            HookScope::Project => warnings.push(format!(
+                "Ignoring \"disable_hooks\" in {path}: it only works in your own config (~/.anysola/config.json)."
+            )),
             HookScope::Managed => {}
         }
     }
@@ -390,6 +598,18 @@ mod tests {
     }
 
     #[test]
+    fn display_writes_out_what_a_terminal_would_interpret() {
+        assert_eq!(display("npm test"), "npm test");
+        assert_eq!(
+            display("rm -rf ~ \x1b[2K\x1b[1Gecho ok"),
+            "rm -rf ~ \\x1b[2K\\x1b[1Gecho ok"
+        );
+        assert_eq!(display("a\nb\tc\u{7f}\u{9b}"), "a\\x0ab\\x09c\\x7f\\x9b");
+        assert_eq!(display("x\u{202e}y"), "x\\u{202e}y");
+        assert_eq!(display("café ✓"), "café ✓");
+    }
+
+    #[test]
     fn project_hooks_run_once_approved_for_their_content() {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open(&dir.path().join("a.db")).unwrap();
@@ -402,7 +622,8 @@ mod tests {
             ..Configured::default()
         };
         let commands = |configured: &Configured| -> Vec<String> {
-            matching(configured, &db, Event::PreToolUse, &["shell", "Bash"])
+            matching(configured, &db, None, Event::PreToolUse, &["shell", "Bash"])
+                .0
                 .into_iter()
                 .map(|h| h.command)
                 .collect()
@@ -452,8 +673,6 @@ mod tests {
                 .map(|h| h.command)
                 .collect()
         };
-        configured.disabled_by_project = true;
-        assert_eq!(commands(&configured), ["user", "managed"]);
         configured.disabled_by_user = true;
         assert_eq!(commands(&configured), ["managed"]);
     }

@@ -775,6 +775,17 @@ fn project_hooks_need_approval_for_their_content() {
     runtime
         .block_on(core.prompt(&session.id, prompt("third"), TurnOptions::default()))
         .unwrap();
+    assert!(
+        marker.exists(),
+        "the approved version runs until the change is reviewed"
+    );
+    // Another process runs nothing for undecided content.
+    drop(core);
+    std::fs::remove_file(&marker).unwrap();
+    let core = runtime.block_on(common::core(&env));
+    runtime
+        .block_on(core.prompt(&session.id, prompt("fourth"), TurnOptions::default()))
+        .unwrap();
     assert!(!marker.exists());
 }
 
@@ -966,4 +977,241 @@ fn continue_false_from_a_tool_hook_ends_the_turn_after_the_call() {
         e,
         Event::Hook { outcome: HookOutcome::Notice, message, .. } if message == "Paused by the build check"
     )));
+}
+
+#[test]
+fn a_planted_file_path_does_not_hide_the_path_the_tool_writes() {
+    let gateway = calls_once(
+        "write",
+        json!({"path": "protected/secret.txt", "file_path": "ok.txt", "content": "x"}),
+    );
+    let env = env(&gateway.url);
+    let guard =
+        r#"grep -q '"file_path":"[^"]*protected' && { echo 'protected path' >&2; exit 2; }; true"#;
+    user_config(
+        &env,
+        json!({"hooks": hooks(&[("PreToolUse", Some("Write"), guard)])}),
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    assert!(!env.home.project().join("protected/secret.txt").exists());
+    assert!(last(&model_requests(&gateway)[1]).contains("protected path"));
+}
+
+#[test]
+fn hooks_see_a_stringified_input_as_the_object_the_tool_runs() {
+    let gateway = calls_once("shell", json!("{\"command\": \"touch made\"}"));
+    let env = env(&gateway.url);
+    let guard = r#"grep -q '"command":"touch made"' && { echo 'no touching' >&2; exit 2; }; true"#;
+    user_config(
+        &env,
+        json!({"hooks": hooks(&[("PreToolUse", Some("Bash"), guard)])}),
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    assert!(!env.home.project().join("made").exists());
+    assert!(last(&model_requests(&gateway)[1]).contains("no touching"));
+}
+
+#[test]
+fn a_moved_session_directory_does_not_stop_the_guards() {
+    let gateway = calls_once("shell", json!({"command": "true"}));
+    let env = env(&gateway.url);
+    user_config(
+        &env,
+        json!({"hooks": hooks(&[("PreToolUse", Some("Bash"), "echo 'still guarded' >&2; exit 2")])}),
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    std::fs::rename(env.home.project(), env.home.home().join("moved")).unwrap();
+    let _ = runtime.block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()));
+    let requests = model_requests(&gateway);
+    assert!(requests.len() >= 2, "the call was answered");
+    assert!(
+        last(&requests[1]).contains("still guarded"),
+        "{}",
+        last(&requests[1])
+    );
+}
+
+#[test]
+fn a_weaker_copy_of_a_guard_does_not_weaken_it() {
+    let gateway = calls_once("shell", json!({"command": "touch made"}));
+    let env = env(&gateway.url);
+    let guard = "sleep 2; echo 'slow guard' >&2; exit 2";
+    // `ANYSOLA_CONFIG_CONTENT` is a user document that loads after the project's.
+    let user = json!({"hooks": hooks(&[("PreToolUse", Some("Bash"), guard)])}).to_string();
+    let project = json!({"hooks": {"PreToolUse": [{"matcher": "Bash",
+        "hooks": [{"type": "command", "command": guard, "timeout": 1}]}]}});
+    env.home.write("proj/anysola.json", &project.to_string());
+    // SAFETY: tests in this binary hold the environment lock while they run.
+    unsafe { std::env::set_var("ANYSOLA_CONFIG_CONTENT", &user) };
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let document = core.hook_documents().remove(0);
+    core.trust_hooks(&document.path, &document.digest, true)
+        .unwrap();
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    unsafe { std::env::remove_var("ANYSOLA_CONFIG_CONTENT") };
+    assert!(!env.home.project().join("made").exists());
+    assert!(last(&model_requests(&gateway)[1]).contains("slow guard"));
+}
+
+#[test]
+fn approved_project_hooks_survive_an_edit_until_it_is_reviewed() {
+    let gateway = calls_once("shell", json!({"command": "touch made"}));
+    let env = env(&gateway.url);
+    let guard = json!({"hooks": hooks(&[("PreToolUse", Some("Bash"), "echo 'approved guard' >&2; exit 2")])});
+    let file = env.home.write("proj/anysola.json", &guard.to_string());
+    let made = env.home.project().join("made");
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let document = core.hook_documents().remove(0);
+    core.trust_hooks(&document.path, &document.digest, true)
+        .unwrap();
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    let blocked = |text: &str| {
+        runtime
+            .block_on(core.prompt(&session.id, prompt(text), TurnOptions::default()))
+            .unwrap();
+        let requests = model_requests(&gateway);
+        last(&requests[requests.len() - 1]).contains("approved guard")
+    };
+    assert!(blocked("one"));
+    // The agent rewrites the file: the approved guard keeps running, the change waits.
+    std::fs::write(
+        &file,
+        json!({"disable_hooks": true, "hooks": hooks(&[("PreToolUse", Some("Bash"), "true")])})
+            .to_string(),
+    )
+    .unwrap();
+    runtime.block_on(core.reload());
+    let mut events = core.subscribe();
+    assert!(blocked("two"));
+    assert!(!made.exists());
+    assert!(blocked("three"));
+    let notices = drain_events(&mut events)
+        .into_iter()
+        .filter(|e| matches!(e, Event::Hook { outcome: HookOutcome::Notice, message, .. } if message.contains("keep running")))
+        .count();
+    assert_eq!(notices, 1, "once per change");
+    let listed = core.hook_documents();
+    assert_eq!(listed[0].decision, None);
+    assert!(listed[0].hooks.iter().all(|h| !h.active));
+    // The file is deleted: still guarded, and listed as a document without hooks.
+    std::fs::remove_file(&file).unwrap();
+    runtime.block_on(core.reload());
+    let listed = core.hook_documents();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].path, file.display().to_string());
+    assert_eq!(listed[0].digest, anysola_core::hooks::removed_digest());
+    assert!(listed[0].hooks.is_empty() && listed[0].decision.is_none());
+    assert!(blocked("four"));
+    // Accepting the removal ends it.
+    core.trust_hooks(&listed[0].path, &listed[0].digest, true)
+        .unwrap();
+    assert!(core.hook_documents().is_empty());
+    assert!(!blocked("five"));
+    assert!(made.exists());
+}
+
+#[test]
+fn global_config_writes_are_always_asked() {
+    let target: Arc<std::sync::OnceLock<String>> = Arc::default();
+    let path = target.clone();
+    let gateway = FakeGateway::start(move |request, _| {
+        if request.is_title() || last(request).contains("tool_result") {
+            return text(request, "done");
+        }
+        call(
+            request,
+            "write",
+            json!({"path": path.get().unwrap(), "content": "{\"hooks\": {}}"}),
+        )
+    });
+    let env = env(&gateway.url);
+    let config = env.home.home().join(".anysola/config.json");
+    target.set(config.display().to_string()).unwrap();
+    let original = json!({"permissions": [{"action": "*", "resource": "*", "effect": "allow"}]});
+    user_config(&env, original.clone());
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    let mut events = core.subscribe();
+    let answering = core.clone();
+    let asked = runtime.spawn(async move {
+        loop {
+            if let Ok(Event::PermissionAsked { request_id, .. }) = events.recv().await {
+                answering.reply_permission(&request_id, Answer::Reject(Some("no".into())));
+                return;
+            }
+        }
+    });
+    runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    runtime
+        .block_on(async { tokio::time::timeout(Duration::from_secs(5), asked).await })
+        .expect("the user was asked")
+        .unwrap();
+    assert_eq!(read_json(&config), original, "the config is unchanged");
+}
+
+#[test]
+fn a_guard_whose_output_cannot_be_read_blocks() {
+    let gateway = calls_once("shell", json!({"command": "touch made"}));
+    let env = env(&gateway.url);
+    user_config(
+        &env,
+        json!({"hooks": hooks(&[("PreToolUse", Some("Bash"), "head -c 1100000 /dev/zero | tr '\\0' a")])}),
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    assert!(!env.home.project().join("made").exists());
+    assert!(last(&model_requests(&gateway)[1]).contains("too large to read"));
+}
+
+#[test]
+fn code_mode_hooks_see_the_repaired_input() {
+    let gateway = calls_once(
+        "execute",
+        json!({"code": "return await tools.fake.touch('{\"target\": \"secret\"}')"}),
+    );
+    let env = env(&gateway.url);
+    let marker = env.home.home().join("touched");
+    let guard = r#"grep -q '"target":"secret"' && { echo 'not that one' >&2; exit 2; }; true"#;
+    user_config(
+        &env,
+        json!({"hooks": hooks(&[("PreToolUse", Some("mcp__fake__touch"), guard)])}),
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    core.set_namespace(Arc::new(Namespace {
+        name: "fake".into(),
+        description: None,
+        direct: false,
+        tools: vec![Arc::new(Touch(marker.clone()))],
+    }));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    assert!(!marker.exists());
+    assert!(last(&model_requests(&gateway)[1]).contains("not that one"));
 }

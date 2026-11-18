@@ -130,8 +130,9 @@ impl Shared {
             ));
         }
         let config = next.config.clone();
-        let asked =
-            |config: &crate::config::Config| crate::hooks::undecided(&config.hooks, &self.db);
+        let asked = |config: &crate::config::Config| {
+            crate::hooks::undecided_with(&config.hooks, &self.db, &self.hooks.approved)
+        };
         let hooks_changed = asked(&previous.config) != asked(&config);
         *self.loaded.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(next);
         self.applied.store(generation, Ordering::SeqCst);

@@ -22,6 +22,8 @@ pub enum Ran {
     TimedOut {
         seconds: u64,
     },
+    /// The hook exited 0 but printed more than can be read: its answer is unknown.
+    OutputTooLarge,
     /// The turn was interrupted; the hook was killed and means nothing.
     Interrupted,
 }
@@ -96,6 +98,16 @@ pub fn interpret(event: Event, ran: &Ran) -> Verdict {
         }
         Ran::TimedOut { seconds } => {
             verdict.error = Some(format!("The hook timed out after {seconds} s"));
+            return verdict;
+        }
+        Ran::OutputTooLarge => {
+            let reason = "The hook's output was too large to read".to_string();
+            // A guard whose answer cannot be read must not let the call through.
+            if event == Event::PreToolUse {
+                verdict.block = Some(reason);
+            } else {
+                verdict.error = Some(reason);
+            }
             return verdict;
         }
         Ran::Exited {
@@ -326,6 +338,14 @@ mod tests {
         assert_eq!(verdict.block, None);
         assert!(verdict.context.is_empty());
         assert!(verdict.error.unwrap().contains("PostToolUse"));
+    }
+
+    #[test]
+    fn unreadable_output_blocks_a_tool_call_and_is_an_error_elsewhere() {
+        let pre = interpret(Event::PreToolUse, &Ran::OutputTooLarge);
+        assert!(pre.block.unwrap().contains("too large"));
+        let post = interpret(Event::PostToolUse, &Ran::OutputTooLarge);
+        assert!(post.block.is_none() && post.error.is_some());
     }
 
     #[test]

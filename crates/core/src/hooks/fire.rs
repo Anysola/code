@@ -44,7 +44,9 @@ pub(crate) struct Context {
     pub child: bool,
     pub cwd: PathBuf,
     pub project_dir: PathBuf,
+    pub home: PathBuf,
     pub agent: String,
+    pub approved: Arc<super::Approved>,
 }
 
 impl Context {
@@ -64,6 +66,8 @@ impl Context {
             child: session.parent_id.is_some(),
             cwd: PathBuf::from(&session.directory),
             project_dir: shared.project.worktree.clone(),
+            home: shared.paths.home.clone(),
+            approved: shared.hooks.approved.clone(),
             agent: agent.to_string(),
         }
     }
@@ -120,21 +124,40 @@ impl Context {
         extra: Map<String, Value>,
         cancel: &CancellationToken,
     ) -> Fired {
-        let handlers = super::matching(&self.config.hooks, &self.db, event, names);
+        let hooks = &self.config.hooks;
+        if hooks
+            .documents
+            .iter()
+            .any(|d| d.scope == super::HookScope::Project)
+        {
+            self.approved.sync(hooks, &self.db);
+        }
+        let (handlers, stood) =
+            super::matching(hooks, &self.db, Some(&self.approved), event, names);
+        let mut notices = Fired::default();
+        for (path, digest) in stood {
+            if self.approved.first_notice(&path, &digest) {
+                let message = format!(
+                    "The approved hooks of {path} keep running until the change to them is reviewed."
+                );
+                self.note(&mut notices, event, "", HookOutcome::Notice, &message);
+            }
+        }
         if handlers.is_empty() {
-            return Fired::default();
+            return notices;
         }
         let mut payload = self.common(event);
         payload.extend(extra);
         let input = serde_json::to_vec(&Value::Object(payload)).unwrap_or_default();
         let env = self.environment();
         let shell = crate::tool::shell::select::resolve(self.shell.as_deref());
+        let cwd = working_dir(&[&self.cwd, &self.project_dir, &self.home]);
         let runs = handlers.iter().map(|handler| {
             run(
                 Job {
                     shell: &shell,
                     command: &handler.command,
-                    cwd: &self.cwd,
+                    cwd: &cwd,
                     env: env.clone(),
                     input: input.clone(),
                     timeout: handler.timeout,
@@ -143,7 +166,7 @@ impl Context {
             )
         });
         let ran = futures_util::future::join_all(runs).await;
-        let mut fired = Fired::default();
+        let mut fired = notices;
         for (handler, ran) in handlers.iter().zip(ran) {
             let verdict = output::interpret(event, &ran);
             self.record(event, handler, verdict, &mut fired);
@@ -225,6 +248,17 @@ impl Context {
     }
 }
 
+/// Where hooks run: the first of `candidates` that still exists (the session directory may have
+/// been moved or deleted; a guard that cannot start would let the call through), else the system
+/// temp directory.
+fn working_dir(candidates: &[&std::path::Path]) -> PathBuf {
+    candidates
+        .iter()
+        .find(|dir| dir.is_dir())
+        .map(|dir| dir.to_path_buf())
+        .unwrap_or_else(std::env::temp_dir)
+}
+
 /// The combined answer of every hook that ran for one event.
 #[derive(Debug, Default)]
 pub(crate) struct Fired {
@@ -241,6 +275,8 @@ pub(crate) struct Fired {
 /// Process-wide hook state of the sessions a core drives.
 #[derive(Default)]
 pub(crate) struct State {
+    /// Approved project hooks that keep running while a change to them waits for the user.
+    pub approved: Arc<super::Approved>,
     /// Sessions this process fired SessionStart for (or decided not to).
     started: Mutex<HashSet<String>>,
     /// Root sessions whose turn a tool hook ended with `continue: false`: their Stop hooks do not
@@ -288,7 +324,11 @@ impl ToolHooks {
     pub(crate) fn wants(&self) -> bool {
         self.0.as_ref().is_some_and(|scope| {
             let hooks = &scope.context.config.hooks;
-            hooks.any(Event::PreToolUse) || hooks.any(Event::PostToolUse)
+            let approved = &scope.context.approved;
+            hooks.any(Event::PreToolUse)
+                || hooks.any(Event::PostToolUse)
+                || approved.any(Event::PreToolUse)
+                || approved.any(Event::PostToolUse)
         })
     }
 
@@ -377,6 +417,11 @@ pub(crate) fn response(output: Result<(&str, &Map<String, Value>), &str>) -> Val
     }
 }
 
+/// Whether any hook may run for `event`: configured, or approved earlier in this process.
+fn wanted(shared: &Shared, config: &Config, event: Event) -> bool {
+    config.hooks.any(event) || shared.hooks.approved.any(event)
+}
+
 fn synthetic(db: &Db, session_id: &str, text: &str, description: &str) {
     let data = encode(&SyntheticData {
         time: Created {
@@ -399,7 +444,7 @@ pub(crate) async fn session_start(
     if session.parent_id.is_some() || !lock(&shared.hooks.started).insert(session.id.clone()) {
         return;
     }
-    if !shared.loaded().config.hooks.any(Event::SessionStart) {
+    if !wanted(shared, &shared.loaded().config, Event::SessionStart) {
         return;
     }
     let history = shared
@@ -441,7 +486,7 @@ pub(crate) async fn promote(
     cancel: &CancellationToken,
 ) -> crate::storage::Result<Promoted> {
     let config = shared.loaded().config.clone();
-    if session.parent_id.is_some() || !config.hooks.any(Event::UserPromptSubmit) {
+    if session.parent_id.is_some() || !wanted(shared, &config, Event::UserPromptSubmit) {
         return inbox::promote(&shared.db, &session.id, scope).map(Promoted::Rows);
     }
     let Some(rows) = inbox::plan(&shared.db, &session.id, scope)? else {
@@ -548,7 +593,7 @@ pub(crate) async fn stop(
     let Ok(Some(session)) = shared.db.session(session_id) else {
         return false;
     };
-    if session.parent_id.is_some() || !shared.loaded().config.hooks.any(Event::Stop) {
+    if session.parent_id.is_some() || !wanted(shared, &shared.loaded().config, Event::Stop) {
         return false;
     }
     if let Some(mark) = &rounds.mark {
@@ -600,5 +645,20 @@ pub(crate) async fn stop(
             true
         }
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hooks_run_in_the_first_directory_that_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("gone");
+        let root = dir.path().join("root");
+        std::fs::create_dir(&root).unwrap();
+        assert_eq!(working_dir(&[&gone, &root, dir.path()]), root);
+        assert_eq!(working_dir(&[&gone]), std::env::temp_dir());
     }
 }

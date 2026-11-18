@@ -10,7 +10,18 @@ use anysola_core::storage::Db;
 
 use crate::cli::HooksCommand;
 
+/// Set in every command the agent's shell tool runs.
+const AGENT_MARKERS: [&str; 2] = ["ANYSOLA_SESSION_ID", "OPENCODE_SESSION_ID"];
+
 pub fn hooks(command: Option<HooksCommand>) -> i32 {
+    // The agent must not approve hooks for itself.
+    if command.is_some()
+        && AGENT_MARKERS
+            .iter()
+            .any(|name| std::env::var_os(name).is_some_and(|v| !v.is_empty()))
+    {
+        return crate::fail("Approve hooks yourself, outside the agent.");
+    }
     let paths = Paths::from_env();
     let directory = match std::env::current_dir() {
         Ok(dir) => dir,
@@ -31,15 +42,27 @@ pub fn hooks(command: Option<HooksCommand>) -> i32 {
     }
 }
 
-/// `  PreToolUse (Bash): ./guard.sh`
+/// `  PreToolUse (Bash): ./guard.sh`, with ` (timeout 30 s)` when not the default. Everything
+/// taken from a document is shown escaped: a repository cannot hide a command behind terminal
+/// escapes.
 fn line(hook: &HookInfo) -> String {
+    let command = hooks::display(&hook.command);
+    let timeout = if hook.timeout == hooks::default_timeout(&hook.event) {
+        String::new()
+    } else {
+        format!(" (timeout {} s)", hook.timeout)
+    };
     match hook
         .matcher
         .as_deref()
         .filter(|m| !m.is_empty() && *m != "*")
     {
-        Some(matcher) => format!("  {} ({matcher}): {}", hook.event, hook.command),
-        None => format!("  {}: {}", hook.event, hook.command),
+        Some(matcher) => format!(
+            "  {} ({}): {command}{timeout}",
+            hook.event,
+            hooks::display(matcher)
+        ),
+        None => format!("  {}: {command}{timeout}", hook.event),
     }
 }
 
@@ -74,7 +97,7 @@ fn list(all: &[HookInfo], documents: &[HookDocument]) -> i32 {
             let _ = writeln!(
                 out,
                 "{} ({}) · {}",
-                hook.source,
+                hooks::display(&hook.source),
                 hook.scope.as_str(),
                 status(hook, decision)
             );
@@ -92,7 +115,7 @@ fn list(all: &[HookInfo], documents: &[HookDocument]) -> i32 {
 
 fn show(documents: &[&HookDocument]) {
     for document in documents {
-        println!("{}", document.path);
+        println!("{}", hooks::display(&document.path));
         for hook in &document.hooks {
             println!("{}", line(hook));
         }
@@ -126,7 +149,7 @@ fn trust(db: &Db, documents: Vec<HookDocument>, yes: bool) -> i32 {
         if let Err(error) = hooks::trust(db, &document.path, &document.digest, true) {
             return crate::fail(&error.to_string());
         }
-        println!("Approved the hooks of {}", document.path);
+        println!("Approved the hooks of {}", hooks::display(&document.path));
     }
     0
 }
@@ -144,7 +167,7 @@ fn deny(db: &Db, documents: Vec<HookDocument>) -> i32 {
         if let Err(error) = hooks::trust(db, &document.path, &document.digest, false) {
             return crate::fail(&error.to_string());
         }
-        println!("Refused the hooks of {}", document.path);
+        println!("Refused the hooks of {}", hooks::display(&document.path));
     }
     0
 }

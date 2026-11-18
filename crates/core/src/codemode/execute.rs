@@ -345,6 +345,15 @@ async fn call(
     let row = calls.start(&name, display_input(&input));
     let anysola = direct_name(&namespace.name, tool.name());
     let hook = hook_name(&namespace.name, tool.name());
+    // Hooks see the input the tool runs with; one that cannot be repaired fails as it would in
+    // the tool, without hooks.
+    let input = match crate::tool::input::repaired(&anysola, tool.input_schema(), input) {
+        Ok(input) => input,
+        Err(error) => {
+            calls.settle(row, false);
+            return Err(HostError::plain(error.message));
+        }
+    };
     let result = with_hooks(
         ctx,
         calls,
