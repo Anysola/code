@@ -473,14 +473,22 @@ async fn turn(
         *unsent = drop_next_input(shared, &session.id);
         return Outcome::Failed(error);
     }
-    let promoted = match inbox::promote(&shared.db, &session.id, inbox::Scope::Input) {
-        Ok(Some(promoted)) => promoted,
-        Ok(None) => return Outcome::Succeeded,
-        Err(error) => return Outcome::Failed(storage(error)),
-    };
+    crate::hooks::fire::turn_started(shared, &session.id);
+    crate::hooks::fire::session_start(shared, session, cancel).await;
+    use crate::hooks::fire::Promoted;
+    let promoted =
+        match crate::hooks::fire::promote(shared, session, inbox::Scope::Input, cancel).await {
+            Ok(Promoted::Rows(Some(promoted))) => promoted,
+            Ok(Promoted::Rows(None)) => return Outcome::Succeeded,
+            Ok(Promoted::Blocked(reason)) => {
+                *unsent = true;
+                return Outcome::Failed(SessionError::new(crate::hooks::BLOCKED, reason));
+            }
+            Err(error) => return Outcome::Failed(storage(error)),
+        };
     let title = (promoted > 0 && is_fallback_title(session))
         .then(|| tokio::spawn(title::generate(shared.clone(), session.clone())));
-    let outcome = step::drive(shared, session, options, cancel).await;
+    let outcome = step::drive(shared, session, options, cancel, unsent).await;
     if let Some(title) = title {
         // The turn waits briefly for the title (a normal call lands within a few seconds); a
         // slow or stalled one finishes on its own and must not keep the session busy, and an
@@ -532,6 +540,7 @@ pub(crate) async fn drain(
     let mut outcome = Outcome::Succeeded;
     let mut open = false;
     let mut unsent = false;
+    let mut stops = crate::hooks::fire::StopRounds::default();
     loop {
         let session = match shared.db.session(session_id) {
             Ok(Some(session)) => session,
@@ -544,6 +553,10 @@ pub(crate) async fn drain(
         };
         let Some(next) = next else {
             if open {
+                // Stop hooks go first: a turn they continue does not consult the goal reviewer.
+                if crate::hooks::fire::stop(&shared, session_id, &mut stops, &cancel).await {
+                    continue;
+                }
                 if goal::idle(&shared, session_id).await {
                     continue;
                 }

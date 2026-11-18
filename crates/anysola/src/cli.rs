@@ -72,6 +72,7 @@ pub enum Command {
     Acp(AcpArgs),
     Debug(DebugArgs),
     Mcp(McpArgs),
+    Hooks(HooksArgs),
     Plugin(PluginArgs),
     Models,
     Run(RunArgs),
@@ -197,6 +198,21 @@ pub struct McpAddArgs {
     pub env: Vec<(String, String)>,
     #[arg(long)]
     pub global: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct HooksArgs {
+    #[command(subcommand)]
+    pub command: Option<HooksCommand>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum HooksCommand {
+    Trust {
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+    Deny,
 }
 
 #[derive(Debug, Args)]
@@ -335,6 +351,9 @@ pub fn help(path: &[String]) -> &'static str {
         "mcp_add" => include_str!("help/mcp_add.txt"),
         "mcp_auth" => include_str!("help/mcp_auth.txt"),
         "mcp_logout" => include_str!("help/mcp_logout.txt"),
+        "hooks" => include_str!("help/hooks.txt"),
+        "hooks_trust" => include_str!("help/hooks_trust.txt"),
+        "hooks_deny" => include_str!("help/hooks_deny.txt"),
         "plugin" => include_str!("help/plugin.txt"),
         "models" => include_str!("help/models.txt"),
         "run" => include_str!("help/run.txt"),

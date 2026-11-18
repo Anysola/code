@@ -179,6 +179,7 @@ pub fn context(dir: &Path) -> TestContext {
         web_search: Arc::new(NoSearch),
         host: Arc::new(TestHost::new()),
         session: session.clone(),
+        hooks: Default::default(),
     };
     TestContext {
         ctx,

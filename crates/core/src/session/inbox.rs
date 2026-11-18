@@ -134,10 +134,14 @@ fn publish(db: &Db, session_id: &str, rows: &[InboxRow]) -> Result<usize> {
     Ok(promoted)
 }
 
-/// Moves pending input into the transcript: every steer up to the first control item, or with an
-/// idle scope and no steers, the oldest queued item and the steers that arrived meanwhile. Returns
-/// how many were promoted; `None` when a control item comes first.
-pub fn promote(db: &Db, session_id: &str, scope: Scope) -> Result<Option<usize>> {
+/// One pending item into the transcript; false when a concurrent cancel removed it first.
+pub fn publish_one(db: &Db, session_id: &str, row: &InboxRow) -> Result<bool> {
+    publish(db, session_id, std::slice::from_ref(row)).map(|n| n > 0)
+}
+
+/// What [`promote`] would move into the transcript now, in order; `None` when a control item
+/// comes first.
+pub fn plan(db: &Db, session_id: &str, scope: Scope) -> Result<Option<Vec<InboxRow>>> {
     let steers = |db: &Db| -> Result<Vec<InboxRow>> {
         Ok(db
             .inbox(session_id)?
@@ -153,22 +157,31 @@ pub fn promote(db: &Db, session_id: &str, scope: Scope) -> Result<Option<usize>>
         if pending.first().is_some_and(is_control) {
             return Ok(None);
         }
-        return publish(db, session_id, &before_control(pending)).map(Some);
+        return Ok(Some(before_control(pending)));
     }
     let Some(queued) = db
         .inbox(session_id)?
         .into_iter()
         .find(|r| r.delivery == "queue")
     else {
-        return Ok(Some(0));
+        return Ok(Some(Vec::new()));
     };
     if is_control(&queued) {
         return Ok(None);
     }
-    let promoted = publish(db, session_id, &[queued])?;
-    Ok(Some(
-        promoted + publish(db, session_id, &before_control(steers(db)?))?,
-    ))
+    let mut rows = vec![queued];
+    rows.extend(before_control(steers(db)?));
+    Ok(Some(rows))
+}
+
+/// Moves pending input into the transcript: every steer up to the first control item, or with an
+/// idle scope and no steers, the oldest queued item and the steers that arrived meanwhile. Returns
+/// how many were promoted; `None` when a control item comes first.
+pub fn promote(db: &Db, session_id: &str, scope: Scope) -> Result<Option<usize>> {
+    match plan(db, session_id, scope)? {
+        Some(rows) => publish(db, session_id, &rows).map(Some),
+        None => Ok(None),
+    }
 }
 
 /// After a turn that did not succeed: the prompts sent to steer it stay for the user to send or

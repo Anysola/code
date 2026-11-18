@@ -104,4 +104,9 @@ pub trait PermissionGate: Send + Sync {
     fn denies(&self, _action: &str, _resources: &[String]) -> bool {
         false
     }
+    /// This gate asking about every request even where the rules allow it (a PreToolUse hook's
+    /// `"ask"`); denials stay denials. `None` when nobody can be asked.
+    fn asking(&self) -> Option<std::sync::Arc<dyn PermissionGate>> {
+        None
+    }
 }

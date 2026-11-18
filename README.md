@@ -60,6 +60,7 @@ Coming from 0.5.x: the first start imports your sessions, settings and sign-in f
 | `anysola models` | List the models your plan can use |
 | `anysola session list\|export\|import\|delete` | Manage stored sessions |
 | `anysola mcp list\|add\|auth\|logout` | Manage MCP servers |
+| `anysola hooks [trust\|deny]` | List hooks; approve or refuse the ones the current project defines |
 | `anysola acp` | Run as an Agent Client Protocol server for editors |
 | `anysola update` | Install the latest release the way this copy was installed (install script or npm) |
 | `anysola uninstall` | Remove the binary and its `PATH` entry; your data and config stay |
@@ -77,6 +78,37 @@ settings are `ANYSOLA_*` (`ANYSOLA_CONFIG`, `ANYSOLA_CONFIG_CONTENT`, `ANYSOLA_L
 
 For compatibility, the 0.5.x names are still read: `opencode.json[c]`, `.opencode/`, `~/.config/opencode/` and each
 `OPENCODE_*` variable. Where both names exist, the `anysola` one wins.
+
+## Hooks
+
+Hooks are commands Anysola Code runs at fixed moments: `PreToolUse` and `PostToolUse` around each tool call,
+`UserPromptSubmit` when you send a prompt, `Stop` when the agent would stop, and `SessionStart`. The format is Claude
+Code's, so existing hook scripts work: the event comes as JSON on stdin (tools under their Claude Code names, `Bash`,
+`Edit`, `Write`, …), exit code 2 blocks with stderr as the reason, and JSON on stdout can add context or deny a call.
+Put them under `hooks` in any config file:
+
+```jsonc
+"hooks": {
+  // Block a command: the model gets the reason instead of a result.
+  "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command",
+    "command": "jq -r .tool_input.command | grep -q 'rm -rf' && { echo 'Not here.' >&2; exit 2; } || true" }] }],
+  // Lint after edits: what the linter prints on stderr reaches the model next to the edit's result.
+  "PostToolUse": [{ "matcher": "Edit|Write", "hooks": [{ "type": "command",
+    "command": "npm run lint --silent >&2 || exit 2" }] }],
+  // Tests must pass before stopping: the agent keeps going with the failure as its next instruction.
+  "Stop": [{ "hooks": [{ "type": "command", "command": "npm test --silent >&2 || exit 2" }] }]
+}
+```
+
+Hooks can only make the agent more careful: a hook can block a call or have you asked about it, never allow
+something your permissions would not. Hooks from `~/.anysola/config.json` run right away; hooks that come with a
+project run only after you approve them, and again after they change. `anysola hooks` lists every hook and whether it
+runs, `anysola hooks trust` approves the project's hooks and `anysola hooks deny` refuses them. `anysola run` never
+asks: it skips hooks nobody approved and says so. `"disable_hooks": true` or `ANYSOLA_DISABLE_HOOKS=1` turns hooks
+off (a project file can only turn off its own); hooks from managed settings always run.
+
+Not in this version: other events (`PreCompact`, `SubagentStop`, `Notification`, …), hook types other than
+`command`, `allow` decisions and rewriting a call's input or output, and reading `.claude/settings.json`.
 
 ## Usage limits
 

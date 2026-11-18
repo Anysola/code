@@ -358,6 +358,25 @@ fn capped(bytes: &[u8]) -> String {
 async fn run_shell(ctx: &ToolContext, condition: &Value, state: &Value) -> Outcome {
     let run = condition["run"].as_str().unwrap_or_default();
     let (shell, target) = shell_target(ctx);
+    // The check's command is the model's: PreToolUse sees it as a shell call. Nobody can answer
+    // an ask here, so one refuses it.
+    if ctx.hooks.wants() {
+        use crate::hooks::fire::{self, Call};
+        let input = json!({"command": run});
+        let call = Call {
+            anysola: "shell",
+            name: "Bash",
+            input: &input,
+            id: &ctx.call_id,
+        };
+        let pre = ctx.hooks.pre(&call).await;
+        if !pre.block.is_empty() {
+            return failed(fire::blocked(&pre.block));
+        }
+        if pre.ask {
+            return failed(fire::UNANSWERABLE.to_string());
+        }
+    }
     if let Err(error) = crate::tool::shell::authorize(ctx, run, &shell, &target).await {
         return failed(error.message);
     }
@@ -640,6 +659,15 @@ pub(crate) fn unattended(
         session: Arc::new(crate::session::host::Host {
             shared: shared.clone(),
         }),
+        hooks: crate::hooks::ToolHooks::new(
+            crate::hooks::fire::Context::new(
+                shared,
+                session,
+                selection.sources.config.clone(),
+                &selection.agent.id,
+            ),
+            tokio_util::sync::CancellationToken::new(),
+        ),
     })
 }
 

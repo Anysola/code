@@ -232,6 +232,21 @@ pub enum Event {
         reason: String,
         error: SessionError,
     },
+    /// A hook did something the user should see: blocked, gave feedback, added context, failed,
+    /// or has a message (silent successes report nothing). `event` is the hook event
+    /// (`PreToolUse`, …), `command` the configured command (empty for a notice of the core's own,
+    /// such as the Stop-hook cap).
+    Hook {
+        session_id: String,
+        event: String,
+        command: String,
+        outcome: crate::hooks::HookOutcome,
+        message: String,
+    },
+    /// A config load changed which project documents have hooks nobody decided on yet
+    /// ([`crate::api::Core::hook_documents`]); also sent after [`crate::api::Core::trust_hooks`].
+    /// Session [`crate::mcp::GLOBAL`].
+    HooksChanged,
 }
 
 impl Event {
@@ -265,11 +280,13 @@ impl Event {
             | Event::Started { session_id }
             | Event::CompactionStarted { session_id, .. }
             | Event::CompactionEnded { session_id, .. }
-            | Event::CompactionFailed { session_id, .. } => session_id,
+            | Event::CompactionFailed { session_id, .. }
+            | Event::Hook { session_id, .. } => session_id,
             Event::Usage(snapshot) => &snapshot.session_id,
             Event::FormAsked { .. }
             | Event::FormReplied { .. }
-            | Event::McpStatusChanged { .. } => crate::mcp::GLOBAL,
+            | Event::McpStatusChanged { .. }
+            | Event::HooksChanged => crate::mcp::GLOBAL,
         }
     }
 }

@@ -124,6 +124,17 @@ pub async fn run(args: RunArgs) -> i32 {
         Err(error) => return report(mode, &error.to_string(), ""),
     };
     let mcp = anysola_mcp::Runtime::attach(&core);
+    let skipped = anysola_core::hooks::unapproved(&core.loaded().config.hooks, core.db());
+    if skipped > 0 {
+        let hooks = if skipped == 1 {
+            "hook that is"
+        } else {
+            "hooks that are"
+        };
+        eprintln!(
+            "Skipped {skipped} project {hooks} not approved. Run `anysola hooks trust` to review them."
+        );
+    }
     let target = match (&args.session, args.continue_last) {
         (Some(id), _) => Target::Id(id.clone()),
         (None, true) => Target::Continue,

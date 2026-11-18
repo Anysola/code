@@ -402,6 +402,29 @@ impl Renderer {
                 return true;
             }
             Event::Interrupted { .. } | Event::Succeeded { .. } => return true,
+            Event::Hook {
+                event,
+                command,
+                outcome,
+                message,
+                ..
+            } => {
+                if self.json() {
+                    self.emit(
+                        "hook",
+                        at,
+                        json!({"event": event, "command": command, "outcome": outcome.as_str(), "message": message}),
+                    );
+                } else if *outcome != anysola_core::hooks::HookOutcome::Context {
+                    let line = message.lines().next().unwrap_or_default();
+                    ui::println(&format!(
+                        "{}{event} hook {}: {line}{}",
+                        ui::DIM,
+                        outcome.as_str(),
+                        ui::NORMAL
+                    ));
+                }
+            }
             Event::RetryScheduled { .. }
             | Event::TextDelta { .. }
             | Event::ReasoningDelta { .. }
@@ -420,7 +443,8 @@ impl Renderer {
             | Event::Started { .. }
             | Event::CompactionStarted { .. }
             | Event::CompactionEnded { .. }
-            | Event::CompactionFailed { .. } => {}
+            | Event::CompactionFailed { .. }
+            | Event::HooksChanged => {}
         }
         false
     }

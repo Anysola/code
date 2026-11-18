@@ -35,6 +35,15 @@ pub fn kill_background_shells() {
     }
 }
 
+/// Puts a command started elsewhere (a hook) on the list [`kill_background_shells`] kills.
+pub(crate) fn register(pid: u32) {
+    running().push(pid);
+}
+
+pub(crate) fn unregister(pid: u32) {
+    running().retain(|&other| other != pid);
+}
+
 pub struct Job<'a> {
     pub program: &'a str,
     pub args: Vec<String>,
@@ -194,7 +203,7 @@ fn exited(status: Option<ExitStatus>) -> Outcome {
 }
 
 /// SIGTERM to the group, SIGKILL if it is still alive 3 s later; returns the reaped status.
-async fn terminate(child: &mut Child, pid: u32) -> Option<ExitStatus> {
+pub(crate) async fn terminate(child: &mut Child, pid: u32) -> Option<ExitStatus> {
     #[cfg(unix)]
     if !signal_group(pid, libc::SIGTERM) {
         let _ = child.start_kill();
@@ -212,7 +221,7 @@ async fn terminate(child: &mut Child, pid: u32) -> Option<ExitStatus> {
 }
 
 #[cfg(unix)]
-fn signal_group(pid: u32, signal: i32) -> bool {
+pub(crate) fn signal_group(pid: u32, signal: i32) -> bool {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return false;
     };
@@ -221,12 +230,12 @@ fn signal_group(pid: u32, signal: i32) -> bool {
 }
 
 #[cfg(unix)]
-fn force_kill(pid: u32) {
+pub(crate) fn force_kill(pid: u32) {
     signal_group(pid, libc::SIGKILL);
 }
 
 #[cfg(windows)]
-fn force_kill(pid: u32) {
+pub(crate) fn force_kill(pid: u32) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let _ = std::process::Command::new("taskkill")

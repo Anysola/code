@@ -73,6 +73,10 @@ impl Tool for ExecuteTool {
 struct Calls {
     rows: Mutex<Vec<Value>>,
     files: Mutex<Vec<(usize, Vec<ToolContent>)>>,
+    /// What the calls' hooks did (`hooks` metadata entries), in the order they ran.
+    hooks: Mutex<Vec<Value>>,
+    /// What the calls' hooks tell the model, added after the program's result.
+    notes: Mutex<Vec<String>>,
 }
 
 impl Calls {
@@ -90,6 +94,96 @@ impl Calls {
         let mut rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
         rows[index]["status"] = json!(if ok { "completed" } else { "error" });
     }
+
+    /// Records a call's hook entries on its row and the tool's, and its notes for the model.
+    fn hooked(&self, index: usize, path: &str, entries: Vec<Value>, notes: Vec<String>) {
+        if !entries.is_empty() {
+            let mut rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
+            rows[index]["hooks"] = Value::Array(entries.clone());
+            drop(rows);
+            self.hooks
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .extend(entries);
+        }
+        self.notes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .extend(notes.into_iter().map(|note| format!("[{path}] {note}")));
+    }
+}
+
+/// The name hooks match for a namespace tool: `mcp__<server>__<tool>` for an MCP server's,
+/// the direct name for our own (`opencode_session_rename`).
+pub(crate) fn hook_name(namespace: &str, tool: &str) -> String {
+    if namespace == super::opencode::NAME {
+        direct_name(namespace, tool)
+    } else {
+        crate::hooks::tool::mcp_name(namespace, tool)
+    }
+}
+
+/// A call's hooks around `work`: PreToolUse may block it or have it asked about, PostToolUse
+/// sees its result. `ctx` is the program's context; `work` gets the one the call runs with.
+async fn with_hooks<T, W, F>(
+    ctx: &ToolContext,
+    calls: &Calls,
+    row: usize,
+    path: &str,
+    (anysola, name, input): (&str, &str, &Value),
+    work: W,
+    output: impl Fn(&T) -> String,
+) -> Result<T, HostError>
+where
+    W: FnOnce(ToolContext) -> F,
+    F: std::future::Future<Output = Result<T, HostError>>,
+{
+    use crate::hooks::fire::{self, Call};
+    if !ctx.hooks.wants() {
+        return work(ctx.clone()).await;
+    }
+    let input = crate::hooks::tool::input(anysola, input, crate::hooks::tool::resolver(ctx));
+    let id = format!("{}#{row}", ctx.call_id);
+    let call = Call {
+        anysola,
+        name,
+        input: &input,
+        id: &id,
+    };
+    let pre = ctx.hooks.pre(&call).await;
+    let mut entries = pre.entries.clone();
+    if !pre.block.is_empty() {
+        calls.hooked(row, path, entries, Vec::new());
+        return Err(HostError::plain(fire::blocked(&pre.block)));
+    }
+    let mut run = ctx.clone();
+    if pre.ask {
+        match ctx.permissions.asking() {
+            Some(gate) => run.permissions = gate,
+            None => {
+                calls.hooked(row, path, entries, Vec::new());
+                return Err(HostError::plain(fire::UNANSWERABLE));
+            }
+        }
+    }
+    let started = std::time::Instant::now();
+    let result = work(run).await;
+    if ctx.cancel.is_cancelled() {
+        calls.hooked(row, path, entries, Vec::new());
+        return result;
+    }
+    let empty = Map::new();
+    let response = match &result {
+        Ok(value) => fire::response(Ok((&output(value), &empty))),
+        Err(error) => fire::response(Err(&error.message)),
+    };
+    let post = ctx
+        .hooks
+        .post(&call, response, started.elapsed().as_millis() as u64)
+        .await;
+    entries.extend(post.entries.iter().cloned());
+    calls.hooked(row, path, entries, fire::notes(&pre, &post));
+    result
 }
 
 /// What the call row shows of a tool's input.
@@ -177,6 +271,13 @@ pub(crate) async fn run(inventory: &Inventory, code: String, ctx: &ToolContext) 
         }
         text.push_str(&format!("Logs:\n{}", logs.join("\n")));
     }
+    let notes = std::mem::take(&mut *calls.notes.lock().unwrap_or_else(|e| e.into_inner()));
+    if !notes.is_empty() {
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        text.push_str(&format!("Hooks:\n{}", notes.join("\n")));
+    }
     let mut content = vec![ToolContent::text(text)];
     let mut files = std::mem::take(&mut *calls.files.lock().unwrap_or_else(|e| e.into_inner()));
     files.sort_by_key(|(index, _)| *index);
@@ -184,6 +285,10 @@ pub(crate) async fn run(inventory: &Inventory, code: String, ctx: &ToolContext) 
     let mut metadata = Map::new();
     let rows = std::mem::take(&mut *calls.rows.lock().unwrap_or_else(|e| e.into_inner()));
     metadata.insert("toolCalls".into(), Value::Array(rows));
+    let hooks = std::mem::take(&mut *calls.hooks.lock().unwrap_or_else(|e| e.into_inner()));
+    if !hooks.is_empty() {
+        metadata.insert("hooks".into(), Value::Array(hooks));
+    }
     if failed {
         metadata.insert("error".into(), Value::Bool(true));
     }
@@ -238,9 +343,28 @@ async fn call(
         }
     };
     let row = calls.start(&name, display_input(&input));
-    let result = invoke(namespace, tool, input, ctx).await;
+    let anysola = direct_name(&namespace.name, tool.name());
+    let hook = hook_name(&namespace.name, tool.name());
+    let result = with_hooks(
+        ctx,
+        calls,
+        row,
+        &name,
+        (&anysola, &hook, &input.clone()),
+        |ctx| async move {
+            invoke(namespace, tool, input, &ctx)
+                .await
+                .map_err(|e| HostError::plain(e.message))
+        },
+        |called: &super::Called| match called.value() {
+            Value::String(text) => text,
+            Value::Null => String::new(),
+            other => crate::json::compact(&other),
+        },
+    )
+    .await;
     calls.settle(row, result.is_ok());
-    let called = result.map_err(|e| HostError::plain(e.message))?;
+    let called = result?;
     let files: Vec<ToolContent> = called
         .content
         .iter()
@@ -280,11 +404,19 @@ struct FetchInit {
 async fn fetch(ctx: &ToolContext, calls: &Calls, init: Value) -> Result<Value, HostError> {
     let init: FetchInit =
         serde_json::from_value(init).map_err(|e| HostError::typed("TypeError", e.to_string()))?;
-    let row = calls.start(
+    let shown = json!({"method": init.method, "url": init.url});
+    let row = calls.start("fetch", Some(shown.clone()));
+    // A program's fetch() is a web fetch to hooks as it is to permissions.
+    let result = with_hooks(
+        ctx,
+        calls,
+        row,
         "fetch",
-        Some(json!({"method": init.method, "url": init.url})),
-    );
-    let result = send(ctx, init).await;
+        ("webfetch", "WebFetch", &shown),
+        |ctx| async move { send(&ctx, init).await },
+        |response: &Value| format!("HTTP {}", response["status"]),
+    )
+    .await;
     calls.settle(row, result.is_ok());
     result
 }
@@ -399,6 +531,10 @@ impl Tool for DirectTool {
 
     fn permission(&self) -> &str {
         self.tool.permission().unwrap_or(&self.name)
+    }
+
+    fn hook_name(&self) -> Option<String> {
+        Some(hook_name(&self.namespace.name, self.tool.name()))
     }
 
     fn definition(&self, _: &DefinitionEnv) -> ToolDefinition {

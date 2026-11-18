@@ -35,6 +35,7 @@ mod front;
 mod revert;
 mod state;
 
+pub use crate::hooks::{HookDocument, HookInfo, HookScope};
 pub use state::Loaded;
 
 #[derive(Debug, thiserror::Error)]
@@ -156,6 +157,7 @@ pub(crate) struct Shared {
     pub precomputed: Mutex<std::collections::HashMap<String, crate::session::compaction::Held>>,
     /// Set once the front end shuts down: background completions no longer wake sessions.
     pub closing: std::sync::atomic::AtomicBool,
+    pub hooks: crate::hooks::fire::State,
 }
 
 impl crate::codemode::Host for Shared {
@@ -311,6 +313,7 @@ impl Core {
             goals: Default::default(),
             precomputed: Mutex::default(),
             closing: Default::default(),
+            hooks: Default::default(),
         });
         shared.arm_watch(&shared.loaded());
         if shared.gateway.token().is_some() {
@@ -477,6 +480,26 @@ impl Core {
     pub async fn reload(&self) {
         self.shared.changes.mark();
         self.shared.refresh().await
+    }
+
+    /// Every configured hook, in run order, with its source and whether it runs.
+    pub fn hooks(&self) -> Vec<HookInfo> {
+        crate::hooks::list(&self.loaded().config.hooks, &self.shared.db)
+    }
+
+    /// The project documents that define hooks, with the user's decision on their current
+    /// content ([`HookDocument::decision`] `None`: ask the user).
+    pub fn hook_documents(&self) -> Vec<HookDocument> {
+        crate::hooks::documents(&self.loaded().config.hooks, &self.shared.db)
+    }
+
+    /// Records the user's decision on a project document's hooks as they are now (`digest` from
+    /// [`HookDocument::digest`]); takes effect at once. "Not now" is `allow: false`. Sends
+    /// [`Event::HooksChanged`].
+    pub fn trust_hooks(&self, path: &str, digest: &str, allow: bool) -> Result<(), CoreError> {
+        crate::hooks::trust(&self.shared.db, path, digest, allow)?;
+        self.emit(Event::HooksChanged);
+        Ok(())
     }
 
     /// Fetches the remote config document again (done every 10 minutes while signed in).

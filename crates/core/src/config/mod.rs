@@ -50,6 +50,8 @@ struct Document {
     dir: Option<PathBuf>,
     /// The file (or variable) it came from; `None` for the gateway's document.
     source: Option<String>,
+    /// Found by the upward walk from the session directory (its hooks need approval).
+    project: bool,
 }
 
 /// A config source as `anysola debug config` lists it.
@@ -106,6 +108,8 @@ pub struct Config {
     policies: Vec<Policy>,
     /// Policy statements of managed documents, earliest-loaded last.
     managed_policies: Vec<Policy>,
+    /// `hooks` of every local document, each with its source and scope (never in `values`).
+    pub hooks: crate::hooks::Configured,
 }
 
 impl Config {
@@ -215,6 +219,7 @@ impl Config {
                 managed: false,
                 dir: None,
                 source: None,
+                project: false,
             });
         }
         config
@@ -222,6 +227,27 @@ impl Config {
 
     fn apply(&mut self, document: Document) {
         let mut data = document.data;
+        let hooks = data.remove("hooks");
+        let disable = data.remove("disable_hooks");
+        // The gateway's document has no source and runs no hooks.
+        if let Some(source) = &document.source {
+            let scope = if document.managed {
+                crate::hooks::HookScope::Managed
+            } else if document.project {
+                crate::hooks::HookScope::Project
+            } else {
+                crate::hooks::HookScope::User
+            };
+            crate::hooks::apply(
+                &mut self.hooks,
+                &data,
+                hooks,
+                disable,
+                source,
+                scope,
+                &mut self.warnings,
+            );
+        }
         let statements = policy_statements(&mut data);
         let list = if document.managed {
             &mut self.managed_policies
@@ -564,6 +590,8 @@ struct Loader<'a> {
     paths: &'a Paths,
     config: Config,
     managed: bool,
+    /// Loading the documents of the upward project walk.
+    project: bool,
 }
 
 /// One local document as the loader takes it: variables substituted, the 0.5.x keys moved to
@@ -593,6 +621,7 @@ impl Loader<'_> {
                     managed: self.managed,
                     dir: Some(dir.to_path_buf()),
                     source: Some(source.to_string()),
+                    project: self.project,
                 });
             }
             _ => self
@@ -632,6 +661,7 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
         paths,
         config: Config::default(),
         managed: false,
+        project: false,
     };
     if let Some(remote) = options
         .remote
@@ -643,6 +673,7 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
             managed: false,
             dir: None,
             source: None,
+            project: false,
         });
     }
     let legacy = paths.legacy_config_dir();
@@ -669,6 +700,7 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
         .chain([resolve(&paths.data.join("config.json"))])
         .collect();
     if !project_disabled && !config_roots.contains(&resolve(directory)) {
+        loader.project = true;
         let walk: Vec<PathBuf> = upward(directory, &paths.home).into_iter().rev().collect();
         for dir in &walk {
             for name in NAMES {
@@ -686,6 +718,7 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
                 }
             }
         }
+        loader.project = false;
     }
     if let Some(content) = crate::env::var("CONFIG_CONTENT")
         && !content.trim().is_empty()
@@ -721,6 +754,7 @@ mod tests {
             managed,
             dir: None,
             source: None,
+            project: false,
         };
         let deny =
             |resource: &str| json!({"action": "tool.use", "resource": resource, "effect": "deny"});
@@ -926,6 +960,58 @@ mod tests {
         );
         assert_eq!(config.mcp_source("shared"), Some(local.as_str()));
         assert_eq!(config.mcp_source("none"), None);
+    }
+
+    #[test]
+    fn hooks_accumulate_with_their_scope_and_stay_out_of_values() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let project = home.join("proj");
+        std::fs::create_dir_all(project.join(".anysola")).unwrap();
+        std::fs::create_dir_all(home.join(".anysola")).unwrap();
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        let hooks = |command: &str| {
+            format!(
+                r#"{{"hooks": {{"Stop": [{{"hooks": [{{"type": "command", "command": "{command}"}}]}}]}}}}"#
+            )
+        };
+        let paths = Paths::isolated(home.clone());
+        std::fs::write(paths.config_file(), hooks("user")).unwrap();
+        std::fs::write(
+            project.join("anysola.json"),
+            hooks("project").replacen('{', r#"{"shell": "./evil.sh", "#, 1),
+        )
+        .unwrap();
+        std::fs::write(
+            project.join(".anysola").join("anysola.json"),
+            r#"{"disable_hooks": true}"#,
+        )
+        .unwrap();
+        std::fs::write(home.join(".claude").join("settings.json"), hooks("claude")).unwrap();
+        let options = LoadOptions {
+            remote: Some(serde_json::from_str(&hooks("remote")).unwrap()),
+            api_url: "http://x".into(),
+        };
+        let config = load(&paths, &project, &options);
+        let summary: Vec<(String, crate::hooks::HookScope)> = config
+            .hooks
+            .documents
+            .iter()
+            .map(|d| (d.handlers[0].command.clone(), d.scope))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("user".to_string(), crate::hooks::HookScope::User),
+                ("project".to_string(), crate::hooks::HookScope::Project),
+            ]
+        );
+        assert!(config.hooks.disabled_by_project && !config.hooks.disabled_by_user);
+        assert_eq!(
+            config.hooks.shell, None,
+            "a project's shell does not run hooks"
+        );
+        assert!(config.get("hooks").is_none() && config.get("disable_hooks").is_none());
     }
 
     #[test]

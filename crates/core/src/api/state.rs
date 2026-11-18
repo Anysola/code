@@ -130,8 +130,14 @@ impl Shared {
             ));
         }
         let config = next.config.clone();
+        let asked =
+            |config: &crate::config::Config| crate::hooks::undecided(&config.hooks, &self.db);
+        let hooks_changed = asked(&previous.config) != asked(&config);
         *self.loaded.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(next);
         self.applied.store(generation, Ordering::SeqCst);
+        if hooks_changed {
+            let _ = self.events.send(crate::events::Event::HooksChanged);
+        }
         if let Some(mcp) = self.mcp.get() {
             mcp.reconcile(config);
         }

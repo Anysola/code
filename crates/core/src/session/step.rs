@@ -209,6 +209,7 @@ pub(crate) async fn drive(
     session: &SessionRow,
     options: TurnOptions,
     cancel: &CancellationToken,
+    unsent: &mut bool,
 ) -> Outcome {
     let mut length_finishes = 0;
     let mut incomplete_streams: u32 = 0;
@@ -242,11 +243,16 @@ pub(crate) async fn drive(
             if let Err(error) = settle_context(shared, session, selection) {
                 return Outcome::Failed(error);
             }
-            if let Ok(Some(promoted)) =
-                super::inbox::promote(&shared.db, &session.id, super::inbox::Scope::Steer)
-                && promoted > 0
+            use crate::hooks::fire::Promoted;
+            match crate::hooks::fire::promote(shared, session, super::inbox::Scope::Steer, cancel)
+                .await
             {
-                number = 1;
+                Ok(Promoted::Rows(Some(promoted))) if promoted > 0 => number = 1,
+                Ok(Promoted::Blocked(reason)) => {
+                    *unsent = true;
+                    return Outcome::Failed(SessionError::new(crate::hooks::BLOCKED, reason));
+                }
+                _ => {}
             }
         }
         let capped = selection.agent.steps == Some(number);
@@ -754,6 +760,7 @@ fn interrupt(
             &mut running,
             index,
             Err(ToolError::interrupted()),
+            Vec::new(),
             &error,
         );
     }
@@ -793,18 +800,22 @@ fn settle(
     running: &mut Running,
     index: usize,
     result: Result<ToolOutput, ToolError>,
+    hooks: Vec<Value>,
     interrupted: &SessionError,
 ) {
-    let output = match result {
+    let mut hooked = Map::new();
+    with_hooks(&mut hooked, hooks.clone());
+    let mut output = match result {
         Ok(output) => output,
         Err(error) => {
             let error = match error.kind {
                 ToolErrorKind::Interrupted => interrupted.clone(),
                 _ => SessionError::new(error.type_tag(), error.message),
             };
-            return fail_part(shared, running, index, error);
+            return fail_part(shared, running, index, error, hooked);
         }
     };
+    with_hooks(&mut output.metadata, hooks);
     let Some(Part::Tool {
         id, state, time, ..
     }) = running.data.content.get_mut(index)
@@ -833,6 +844,20 @@ fn settle(
     );
 }
 
+/// Adds a call's hook entries to its metadata's `hooks` (a Code Mode program's calls may have put
+/// theirs there first).
+fn with_hooks(metadata: &mut Map<String, Value>, entries: Vec<Value>) {
+    if entries.is_empty() {
+        return;
+    }
+    match metadata.get_mut("hooks") {
+        Some(Value::Array(list)) => list.extend(entries),
+        _ => {
+            metadata.insert("hooks".into(), Value::Array(entries));
+        }
+    }
+}
+
 /// The input a still-open call settles with; `None` once it has settled.
 fn settled_input(state: &ToolState) -> Option<Value> {
     match state {
@@ -843,7 +868,13 @@ fn settled_input(state: &ToolState) -> Option<Value> {
 }
 
 /// Records a tool call as failed and reports it.
-fn fail_part(shared: &Shared, running: &mut Running, index: usize, error: SessionError) {
+fn fail_part(
+    shared: &Shared,
+    running: &mut Running,
+    index: usize,
+    error: SessionError,
+    metadata: Map<String, Value>,
+) {
     let Some(Part::Tool {
         id, state, time, ..
     }) = running.data.content.get_mut(index)
@@ -858,7 +889,7 @@ fn fail_part(shared: &Shared, running: &mut Running, index: usize, error: Sessio
         input,
         error: error.clone(),
         content: Vec::new(),
-        metadata: Map::new(),
+        metadata: metadata.clone(),
     };
     let call_id = id.clone();
     send(
@@ -869,12 +900,13 @@ fn fail_part(shared: &Shared, running: &mut Running, index: usize, error: Sessio
             call_id,
             error,
             content: Vec::new(),
-            metadata: Map::new(),
+            metadata,
         },
     );
 }
 
-type ToolTask = (usize, Result<ToolOutput, ToolError>);
+/// A call's part, its result and its hook entries.
+type ToolTask = (usize, Result<ToolOutput, ToolError>, Vec<Value>);
 
 #[allow(clippy::too_many_arguments)]
 async fn run_stream(
@@ -908,6 +940,15 @@ async fn run_stream(
         }),
         asks: shared.asks.clone(),
     });
+    let hooks = crate::hooks::ToolHooks::new(
+        crate::hooks::fire::Context::new(
+            shared,
+            session,
+            selection.sources.config.clone(),
+            &selection.agent.id,
+        ),
+        tool_cancel.clone(),
+    );
     let mut tasks: JoinSet<ToolTask> = JoinSet::new();
     let mut assembly = Assembly::default();
     let mut ended_ok = false;
@@ -955,6 +996,7 @@ async fn run_stream(
                 action,
                 capped,
                 &gate,
+                &hooks,
                 &tool_cancel,
                 &mut tasks,
             );
@@ -1047,7 +1089,12 @@ async fn run_stream(
     }
     let end = end_snapshot(shared, &mut running);
     running.save(shared);
-    let continues = (ran_tools && !capped) || finish == "length";
+    // A tool hook's `continue: false` ends the turn once this step's calls settled.
+    let stopped = hooks.stopped().is_some();
+    if stopped {
+        crate::hooks::fire::mark_stopped(shared, session);
+    }
+    let continues = ((ran_tools && !capped) || finish == "length") && !stopped;
     send(
         shared,
         Event::StepEnded {
@@ -1070,7 +1117,7 @@ async fn run_stream(
 /// Fails the calls the response left without an outcome (`Assembly::unfinished`).
 fn settle_unfinished(shared: &Shared, running: &mut Running, assembly: &Assembly) {
     for (index, error) in assembly.unfinished() {
-        fail_part(shared, running, index, error);
+        fail_part(shared, running, index, error, Map::new());
     }
     running.save(shared);
 }
@@ -1094,6 +1141,7 @@ fn settle_crashed(shared: &Shared, running: &mut Running, indexes: Vec<usize>) {
             running,
             index,
             SessionError::new("unknown", "The tool crashed before it produced a result"),
+            Map::new(),
         );
     }
     running.save(shared);
@@ -1170,8 +1218,8 @@ async fn collect(
 ) -> Vec<usize> {
     while let Some(joined) = tasks.join_next().await {
         match joined {
-            Ok((index, result)) => {
-                settle(shared, running, index, result, &interrupted_error());
+            Ok((index, result, hooks)) => {
+                settle(shared, running, index, result, hooks, &interrupted_error());
                 running.save(shared);
             }
             // A tool task that panicked: its part would stay running and the next request
@@ -1210,6 +1258,7 @@ fn handle(
     action: Action,
     capped: bool,
     gate: &Arc<RuleGate>,
+    hooks: &crate::hooks::ToolHooks,
     cancel: &CancellationToken,
     tasks: &mut JoinSet<ToolTask>,
 ) {
@@ -1325,21 +1374,122 @@ fn handle(
                 session: Arc::new(super::host::Host {
                     shared: shared.clone(),
                 }),
+                hooks: hooks.clone(),
             };
             let tools = ctx.tools.clone();
             let output_dir = shared.paths.tool_output_dir();
             let images = crate::media::Limits::from_config(selection.sources.config.get("media"));
+            let limits = tool_ctx.limits;
             tasks.spawn(async move {
-                let result = execute(&tools, &name, input, &tool_ctx, capped).await;
-                let result = result.map(|out| {
-                    let mut out = crate::tool::bound::bound(out, tool_ctx.limits, &output_dir);
+                let finish = |out: ToolOutput| {
+                    let mut out = crate::tool::bound::bound(out, limits, &output_dir);
                     out.content = crate::media::normalize_content(out.content, &images);
                     out
-                });
-                (part, result)
+                };
+                let (result, hooks) = call(&tools, &name, input, tool_ctx, capped, finish).await;
+                (part, result, hooks)
             });
         }
     }
+}
+
+/// The tool a call names (`bash` runs as `shell`): our name and the one hooks match.
+fn hook_identity(tools: &[Arc<dyn Tool>], name: &str) -> Option<(String, String)> {
+    let find = |name: &str| tools.iter().find(|t| t.name() == name);
+    let tool = find(name).or_else(|| (name == "bash").then(|| find("shell")).flatten())?;
+    let anysola = tool.name().to_string();
+    let hook = tool
+        .hook_name()
+        .unwrap_or_else(|| crate::hooks::tool::claude_name(&anysola));
+    Some((anysola, hook))
+}
+
+/// A tool call with its hooks: PreToolUse may block it (before anything is asked) or have it
+/// asked about; PostToolUse sees the result as the model will. `finish` bounds the output.
+/// Returns the result and the hook entries for the part's metadata.
+async fn call(
+    tools: &[Arc<dyn Tool>],
+    name: &str,
+    input: Value,
+    ctx: ToolContext,
+    capped: bool,
+    finish: impl Fn(ToolOutput) -> ToolOutput,
+) -> (Result<ToolOutput, ToolError>, Vec<Value>) {
+    use crate::hooks::fire::{self, Call};
+    let identity = (!capped && ctx.hooks.wants())
+        .then(|| hook_identity(tools, name))
+        .flatten();
+    let Some((anysola, hook)) = identity else {
+        let result = execute(tools, name, input, &ctx, capped).await.map(finish);
+        return (result, Vec::new());
+    };
+    let hook_input =
+        crate::hooks::tool::input(&anysola, &input, crate::hooks::tool::resolver(&ctx));
+    let call = Call {
+        anysola: &anysola,
+        name: &hook,
+        input: &hook_input,
+        id: &ctx.call_id,
+    };
+    let pre = ctx.hooks.pre(&call).await;
+    let mut entries = pre.entries.clone();
+    if !pre.block.is_empty() {
+        return (
+            Err(ToolError::execution(fire::blocked(&pre.block))),
+            entries,
+        );
+    }
+    let mut run = ctx.clone();
+    if pre.ask {
+        match ctx.permissions.asking() {
+            Some(gate) => run.permissions = gate,
+            None => return (Err(ToolError::execution(fire::UNANSWERABLE)), entries),
+        }
+    }
+    let started = std::time::Instant::now();
+    let result = execute(tools, name, input, &run, capped).await.map(finish);
+    // A declined or interrupted call ends the step as it is: `run_stream` recognizes a decline by
+    // its exact message, and nothing ran for PostToolUse to look at.
+    let ended = matches!(&result, Err(e) if matches!(e.kind, ToolErrorKind::Interrupted | ToolErrorKind::Declined)
+        || e.message == crate::tool::question::DISMISSED);
+    if ended || ctx.cancel.is_cancelled() {
+        return (result, entries);
+    }
+    let response = match &result {
+        Ok(output) => {
+            let text: Vec<&str> = output
+                .content
+                .iter()
+                .filter_map(|c| match c {
+                    crate::tool::ToolContent::Text { text } => Some(text.as_str()),
+                    crate::tool::ToolContent::File { .. } => None,
+                })
+                .collect();
+            fire::response(Ok((&text.join("\n"), &output.metadata)))
+        }
+        Err(error) => fire::response(Err(&error.message)),
+    };
+    let post = ctx
+        .hooks
+        .post(&call, response, started.elapsed().as_millis() as u64)
+        .await;
+    entries.extend(post.entries.iter().cloned());
+    let notes = fire::notes(&pre, &post);
+    if notes.is_empty() {
+        return (result, entries);
+    }
+    let notes = notes.join("\n\n");
+    let result = match result {
+        Ok(mut output) => {
+            output.content.push(crate::tool::ToolContent::text(notes));
+            Ok(output)
+        }
+        Err(mut error) => {
+            error.message = format!("{}\n\n{notes}", error.message);
+            Err(error)
+        }
+    };
+    (result, entries)
 }
 
 async fn execute(

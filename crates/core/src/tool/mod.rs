@@ -185,6 +185,12 @@ pub trait Tool: Send + Sync {
         false
     }
 
+    /// The name hooks match when it is not Claude Code's name for [`Tool::name`] (an MCP
+    /// server's tool: `mcp__<server>__<tool>`).
+    fn hook_name(&self) -> Option<String> {
+        None
+    }
+
     fn definition(&self, env: &DefinitionEnv) -> ToolDefinition;
 
     fn execute<'a>(&'a self, input: Value, ctx: &'a ToolContext) -> BoxFuture<'a, ToolResult>;
@@ -259,6 +265,8 @@ pub struct ToolContext {
     pub web_search: Arc<dyn websearch::WebSearch>,
     pub host: Arc<dyn crate::codemode::Host>,
     pub session: Arc<dyn SessionHost>,
+    /// PreToolUse / PostToolUse of the step (calls a Code Mode program makes fire them too).
+    pub hooks: crate::hooks::ToolHooks,
 }
 
 impl ToolContext {

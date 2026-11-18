@@ -40,6 +40,9 @@ pub enum Floor {
     /// Everything that changes files, runs or fetches, MCP server tools included; reading and
     /// searching never ask.
     Changes,
+    /// Every request, saved "always" rules notwithstanding. Not a session mode: the gate of one
+    /// tool call a PreToolUse hook wants asked about ([`PermissionGate::asking`]).
+    Everything,
 }
 
 /// Where a session's floor is kept, in its metadata.
@@ -51,6 +54,7 @@ impl Floor {
             Floor::None => "none",
             Floor::Commands => "commands",
             Floor::Changes => "changes",
+            Floor::Everything => "everything",
         }
     }
 
@@ -77,6 +81,7 @@ impl Floor {
     fn asks(self, action: &str, mcp_tool: bool) -> bool {
         match self {
             Floor::None => false,
+            Floor::Everything => true,
             Floor::Commands => mcp_tool || matches!(action, "shell" | "external_directory"),
             Floor::Changes => {
                 mcp_tool
@@ -91,7 +96,7 @@ impl Floor {
 
 /// The topmost session above `session_id` along `parent_id`; a missing parent or a cycle ends
 /// the walk at the last session found.
-fn root(db: &Db, session_id: &str) -> String {
+pub(crate) fn root(db: &Db, session_id: &str) -> String {
     let mut current = session_id.to_string();
     let mut seen = std::collections::HashSet::new();
     seen.insert(current.clone());
@@ -151,6 +156,7 @@ impl Scope {
         rules.extend(saved.iter().cloned());
         let ask = resources.iter().any(|r| {
             evaluate(action, r, &rules) == Effect::Ask
+                || self.floor == Floor::Everything
                 || (self.floor.asks(action, mcp_tool)
                     && matched(action, r, &saved) != Some(Effect::Allow))
         });
@@ -411,6 +417,19 @@ impl PermissionGate for RuleGate {
             .effect
             == Effect::Deny
     }
+
+    fn asking(&self) -> Option<Arc<dyn PermissionGate>> {
+        Some(Arc::new(RuleGate {
+            session_id: self.session_id.clone(),
+            scope: Arc::new(Scope {
+                configured: self.scope.configured.clone(),
+                project_id: self.scope.project_id.clone(),
+                policies: self.scope.policies.clone(),
+                floor: Floor::Everything,
+            }),
+            asks: self.asks.clone(),
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -505,6 +524,28 @@ mod tests {
         db.save_permissions("prj", "shell", &["ls".into()]).unwrap();
         assert_eq!(effect(&commands, "shell", "ls"), Effect::Allow);
         assert_eq!(effect(&commands, "shell", "make"), Effect::Ask);
+    }
+
+    #[test]
+    fn a_hooks_ask_asks_everything_even_saved_allows_but_keeps_denials() {
+        let setup = setup();
+        let db = &setup.asks.db;
+        db.save_permissions("prj", "shell", &["ls".into()]).unwrap();
+        let rules = vec![
+            Rule::new("*", "*", Effect::Allow),
+            Rule::new("shell", "rm *", Effect::Deny),
+        ];
+        let gate = gate(&setup, "ses_1", rules, Policies::default());
+        let asking = gate.asking().unwrap();
+        assert!(gate.allows("read", &["a".into()]));
+        assert!(!asking.allows("read", &["a".into()]));
+        assert!(!asking.allows("shell", &["ls".into()]), "a saved allow");
+        assert!(asking.denies("shell", &["rm x".into()]));
+        assert_eq!(
+            Floor::parse(Floor::Everything.as_str()),
+            Floor::None,
+            "never a session's mode"
+        );
     }
 
     #[test]

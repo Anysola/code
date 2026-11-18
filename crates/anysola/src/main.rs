@@ -6,6 +6,7 @@ mod cli;
 mod completions;
 mod debug;
 mod gate;
+mod hooks;
 mod install;
 mod mcp;
 mod models;
@@ -124,6 +125,7 @@ fn main() {
             | Command::Devices(_)
             | Command::Acp(_)
             | Command::Mcp(_)
+            | Command::Hooks(_)
             | Command::Models
             | Command::Session(_),
         ) => true,
@@ -168,6 +170,7 @@ fn main() {
             Some(Command::Mcp(McpArgs {
                 command: Some(command),
             })) => mcp::mcp(command).await,
+            Some(Command::Hooks(args)) => hooks::hooks(args.command),
             Some(Command::Plugin(args)) if args.args.is_empty() => group_help("plugin"),
             Some(Command::Plugin(_)) => fail(
                 "Plugins are not supported since Anysola Code 1.0; built-in features are native.",

@@ -34,6 +34,7 @@ SUBCOMMANDS
   acp                Start an Agent Client Protocol server
   debug              Debugging and troubleshooting tools
   mcp                Manage MCP (Model Context Protocol) servers
+  hooks              List hooks and approve the ones a project defines
   plugin             Manage plugins
   models             List all available models
   run                Run Anysola Code with a message

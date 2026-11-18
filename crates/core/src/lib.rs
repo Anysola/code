@@ -11,6 +11,7 @@ pub mod env;
 pub mod events;
 pub mod formatter;
 pub mod gateway;
+pub mod hooks;
 pub mod ids;
 pub mod instructions;
 pub mod json;

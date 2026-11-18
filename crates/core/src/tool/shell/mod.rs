@@ -1,7 +1,7 @@
 //! The `shell` tool: runs a command with the selected shell, captures its combined output to a
 //! file and returns the tail; background commands report back through a synthetic message.
 
-mod exec;
+pub(crate) mod exec;
 mod output;
 pub mod parse;
 pub mod scan;
