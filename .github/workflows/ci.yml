@@ -1,7 +1,6 @@
-# CI on every push and pull request: format, lint, build, test and smoke-run (windows-x64 on branch pushes; the
-# release platforms on tags and manual runs, native runners, no cross-compiling; darwin-arm64 is left out while
-# its runners are short of capacity, darwin-x64 covers macOS), plus the static musl build and the
-# size/latency budgets on Linux.
+# CI on every push and pull request: format, lint and test the agent (crates/: core, mcp, testkit) and the desktop
+# app (desktop/: the window's types and build, then its Rust side). A branch push tests windows-x64; tags
+# and manual runs test the two platforms the app ships for, Windows x64 and Linux x64.
 
 name: ci
 
@@ -22,8 +21,6 @@ env:
   RUST_VERSION: "1.99.0"
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
-  CC_x86_64_unknown_linux_musl: musl-gcc
-  CC_aarch64_unknown_linux_musl: musl-gcc
 
 jobs:
   fmt:
@@ -37,13 +34,14 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
           components: rustfmt
       - run: cargo fmt --all --check
+      - run: cargo fmt --check
+        working-directory: desktop/src-tauri
 
   test:
     strategy:
       fail-fast: false
-      # A branch push tests windows-x64 only; tags and manual runs test five platforms (see the top).
       matrix:
-        include: ${{ fromJSON((startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') && '[{"build":"linux-x64","os":"ubuntu-24.04","musl":"x86_64-unknown-linux-musl"},{"build":"linux-arm64","os":"ubuntu-24.04-arm","musl":"aarch64-unknown-linux-musl"},{"build":"darwin-x64","os":"macos-15-intel"},{"build":"windows-x64","os":"windows-2025"},{"build":"windows-arm64","os":"windows-11-arm"}]' || '[{"build":"windows-x64","os":"windows-2025"}]') }}
+        include: ${{ fromJSON((startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') && '[{"build":"linux-x64","os":"ubuntu-24.04"},{"build":"windows-x64","os":"windows-2025"}]' || '[{"build":"windows-x64","os":"windows-2025"}]') }}
     name: test (${{ matrix.build }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -58,40 +56,39 @@ jobs:
         with:
           toolchain: ${{ env.RUST_VERSION }}
           components: clippy
-          targets: ${{ matrix.musl }}
       - uses: Swatinem/rust-cache@v2
         with:
+          workspaces: |
+            .
+            desktop/src-tauri
           key: ${{ matrix.build }}
-          # A cache saved under a tag is readable from that tag alone; six of them push the
-          # branches' caches out of the repository's 10 GB.
+          # A cache saved under a tag is readable from that tag alone.
           save-if: ${{ github.ref_type == 'branch' }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
       - name: Linux packages
         if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools time
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
-      - name: Clippy
+      - name: Agent (clippy)
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      - name: Test
+      - name: Agent (tests)
         run: cargo test --locked --workspace --no-fail-fast
-      - name: Smoke run
-        run: |
-          set -euo pipefail
-          bin=target/debug/anysola
-          [ -f "$bin" ] || bin=target/debug/anysola.exe
-          out="$("$bin" --version | tr -d '\r')"
-          echo "$out"
-          test "$out" = "Anysola Code $(cargo pkgid -p anysola | sed 's/.*[@#]//')"
-          "$bin" --help | grep -q "anysola <subcommand>"
-          ! "$bin" --help | grep -qi "opencode command line"
 
-      - name: Static musl build
-        if: matrix.musl
+      - name: Window (install)
+        working-directory: desktop
+        run: npm ci
+      - name: Window (types and build)
+        # The Rust side embeds the built window, so it comes first.
+        working-directory: desktop
+        run: npm run build
+      - name: Desktop (clippy and tests)
+        working-directory: desktop/src-tauri
         run: |
-          set -euo pipefail
-          cargo build --locked -p anysola --target ${{ matrix.musl }}
-          bin=target/${{ matrix.musl }}/debug/anysola
-          file "$bin" | tee /dev/stderr | grep -Eq "static(-pie)? linked|statically linked"
-          "$bin" --version
-      - name: Budgets
-        if: matrix.build == 'linux-x64'
-        run: script/budget.sh
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked

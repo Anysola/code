@@ -1,5 +1,5 @@
-# Its own workspace: the CLI's (crates/*) builds static musl binaries and its CI runs
-# `--workspace`, neither of which can take WebKitGTK.
+# Its own workspace, beside the agent's (crates/*): its own lockfile and release profile, and
+# crates/* builds and tests without WebKitGTK.
 [workspace]
 
 [package]

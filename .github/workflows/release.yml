@@ -1,17 +1,14 @@
-# Anysola Code release: build the six platform binaries on a tag push, publish the npm packages, and create the GitHub
-# release the install scripts download from (12 archives, SHA256SUMS, install.sh, install.ps1).
+# Anysola Code release: on a tag push, build the desktop app's installers for Windows (NSIS, per-user) and Linux
+# (AppImage, .deb), sign them for the in-app updater, write the updater's manifest (latest-desktop.json), and
+# create the GitHub release that holds those four files.
 #
-# Tag format: v<anysola version>, for example v1.0.0. Every target builds natively on its own runner; Linux builds
-# are static musl, so one binary fills both the glibc and the -musl asset names (ARCHITECTURE.md "Release").
-# A manual run (workflow_dispatch) is a dry run by default: build, smoke test and pack, no publishing.
+# Tag format: v<version>, for example v1.1.0. A manual run (workflow_dispatch) is a dry run: everything up to and
+# including the four release files (kept as the `release` artifact), nothing published.
 #
-# Secrets: NPM_TOKEN (npm automation token with publish rights on the @anysola scope); TAURI_SIGNING_PRIVATE_KEY and
-# TAURI_SIGNING_PRIVATE_KEY_PASSWORD (the desktop app's updater key, backed up with the server's files).
-#
-# The desktop app (desktop/) ships with the same tag: its Windows and Linux installers and the signed
-# latest-desktop.json the app's updater reads join the release after it exists, so a desktop failure never holds
-# up the CLI.
-# 0.5.1's upstream.yml (daily OpenCode tag merge) has no counterpart: the Rust tree does not track OpenCode.
+# Installed apps (1.0.6 and later) find an update through the version Admin marks latest and then
+# releases/download/v<latest>/latest-desktop.json, so the asset names, the manifest's shape and the signing key
+# must not change. Secrets: TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD (the updater key,
+# backed up with the server's files; desktop/src-tauri/tauri.conf.json holds its public half).
 
 name: release
 
@@ -21,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Build and pack only, do not publish"
+        description: "Build only; a manual run never publishes (kept for the dispatch form)"
         type: boolean
         default: true
 
@@ -35,8 +32,6 @@ concurrency:
 env:
   RUST_VERSION: "1.99.0"
   CARGO_TERM_COLOR: always
-  CC_x86_64_unknown_linux_musl: musl-gcc
-  CC_aarch64_unknown_linux_musl: musl-gcc
 
 jobs:
   version:
@@ -50,195 +45,14 @@ jobs:
           if [ "${GITHUB_REF_TYPE}" != "tag" ]; then tag="0.0.0-ci.${GITHUB_RUN_NUMBER}"; fi
           echo "anysola=$tag" >> "$GITHUB_OUTPUT"
 
-  build:
-    needs: version
-    strategy:
-      fail-fast: true
-      matrix:
-        include:
-          - { build: linux-x64, os: ubuntu-24.04, target: x86_64-unknown-linux-musl }
-          - { build: linux-arm64, os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
-          # Built on the Intel runner: the arm64 macOS runners are short of capacity and a job that
-          # gets none in 15 minutes is cancelled, which held a release up for hours (2026-11-17).
-          - { build: darwin-arm64, os: macos-15-intel, target: aarch64-apple-darwin, cross: true }
-          - { build: darwin-x64, os: macos-15-intel, target: x86_64-apple-darwin }
-          - { build: windows-x64, os: windows-2025, target: x86_64-pc-windows-msvc }
-          - { build: windows-arm64, os: windows-11-arm, target: aarch64-pc-windows-msvc }
-    name: build (${{ matrix.build }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
-    defaults:
-      run:
-        shell: bash
-    env:
-      ANYSOLA_VERSION: ${{ needs.version.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-          targets: ${{ matrix.target }}
-      - name: Linux packages
-        if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
-
-      - name: Build
-        # x64 targets keep rustc's baseline x86-64 CPU (no AVX2), so the -baseline names can share the bytes.
-        run: cargo build --release --locked -p anysola --target ${{ matrix.target }}
-
-      - name: Collect
-        run: |
-          set -euo pipefail
-          mkdir -p "bin/${{ matrix.build }}"
-          exe=anysola
-          case "${{ matrix.build }}" in windows-*) exe=anysola.exe ;; esac
-          cp "target/${{ matrix.target }}/release/$exe" "bin/${{ matrix.build }}/$exe"
-          echo "BIN=bin/${{ matrix.build }}/$exe" >> "$GITHUB_ENV"
-
-      - name: Static check (Linux)
-        if: runner.os == 'Linux'
-        run: file "$BIN" | tee /dev/stderr | grep -Eq "static(-pie)? linked|statically linked"
-
-      - name: Ad-hoc sign (macOS)
-        # Replace with a Developer ID signature and notarization when Anysola has an Apple developer account.
-        if: runner.os == 'macOS'
-        run: codesign --force --sign - "$BIN"
-
-      - name: Architecture (cross-built)
-        # The runner cannot start this binary; its architecture is what can be checked here.
-        if: matrix.cross
-        run: lipo -archs "$BIN" | tee /dev/stderr | grep -qx arm64
-
-      - name: Smoke test
-        if: ${{ !matrix.cross }}
-        run: |
-          set -euo pipefail
-          out="$("$BIN" --version | tr -d '\r')"
-          echo "$out"
-          test "$out" = "Anysola Code ${ANYSOLA_VERSION}"
-          "$BIN" --help | grep -q "anysola <subcommand>"
-          ! "$BIN" --help | grep -qi "opencode command line"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: bin-${{ matrix.build }}
-          path: bin
-          if-no-files-found: error
-
-  pack:
-    needs: [version, build]
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: bin-*
-          path: bin
-          merge-multiple: true
-      - name: Pack archives and npm packages
-        # Fails unless the 15 release assets of spec/verbatim/cli/release.txt come out (names, single 0755 entry,
-        # identical duplicates, SHA256SUMS).
-        run: script/pack.sh "${{ needs.version.outputs.version }}" bin dist
-      - uses: actions/upload-artifact@v4
-        with:
-          name: npm
-          path: dist/npm/*.tgz
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release
-          path: dist/release
-          if-no-files-found: error
-
-  publish:
-    needs: [version, pack]
-    if: github.ref_type == 'tag' || inputs.dry_run == false
-    runs-on: ubuntu-24.04
-    environment: npm
-    steps:
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          registry-url: "https://registry.npmjs.org"
-      - uses: actions/download-artifact@v4
-        with:
-          name: npm
-          path: npm
-      - name: Publish platform packages, then @anysola/code
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          VERSION: ${{ needs.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          tag=latest
-          case "$VERSION" in *-*) tag=next ;; esac
-          # Platform packages first: the main package depends on them by exact version.
-          for file in ./npm/anysola-code-*-"$VERSION".tgz; do
-            npm publish "$file" --access public --tag "$tag"
-          done
-          npm publish "./npm/anysola-code-$VERSION.tgz" --access public --tag "$tag"
-      - name: Wait until the registry serves the release
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          tag=latest
-          case "$VERSION" in *-*) tag=next ;; esac
-          # The registry shows a new version a few minutes after publishing; installs before that
-          # still get the previous one, so the release is done only once both are served.
-          for _ in $(seq 1 40); do
-            served=$(curl -fsS "https://registry.npmjs.org/@anysola%2fcode?t=$(date +%s%N)" \
-              | jq -r --arg tag "$tag" '.["dist-tags"][$tag]' || true)
-            platform=$(curl -s -o /dev/null -w '%{http_code}' \
-              "https://registry.npmjs.org/@anysola%2fcode-windows-x64/$VERSION" || true)
-            echo "$tag=$served windows-x64=$platform"
-            [ "$served" = "$VERSION" ] && [ "$platform" = 200 ] && exit 0
-            sleep 15
-          done
-          echo "The registry does not serve $VERSION after 10 minutes" >&2
-          exit 1
-
-  github-release:
-    # After npm, so `anysola update` from either install finds the same version.
-    needs: [version, publish]
-    if: github.ref_type == 'tag'
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: release
-          path: release
-      - name: Create the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          (cd release && cat SHA256SUMS && sha256sum -c SHA256SUMS)
-          test "$(ls release | wc -l)" -eq 15
-          flags=()
-          case "$VERSION" in *-*) flags+=(--prerelease) ;; esac
-          gh release create "v$VERSION" release/* --repo "$GITHUB_REPOSITORY" --title "Anysola Code $VERSION" \
-            --notes "Install: \`curl -fsSL https://www.anysola.com/install | sh\` (macOS, Linux) or \`irm https://www.anysola.com/install.ps1 | iex\` (Windows), or \`npm i -g @anysola/code\`. Changes: CHANGELOG.md." \
-            --verify-tag "${flags[@]}"
-
   desktop:
     needs: version
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { build: windows-x64, os: windows-2025, bundles: nsis, platform: windows-x86_64 }
-          - { build: linux-x64, os: ubuntu-24.04, bundles: "appimage,deb", platform: linux-x86_64 }
+          - { build: windows-x64, os: windows-2025, bundles: nsis }
+          - { build: linux-x64, os: ubuntu-24.04, bundles: "appimage,deb" }
     name: desktop (${{ matrix.build }})
     runs-on: ${{ matrix.os }}
     defaults:
@@ -289,27 +103,24 @@ jobs:
           path: dist-desktop
           if-no-files-found: error
 
-  desktop-release:
-    needs: [version, github-release, desktop]
-    if: github.ref_type == 'tag'
+  assemble:
+    # Runs on dry runs too, so the files a tag would publish can be checked first.
+    needs: [version, desktop]
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
           pattern: desktop-*
           path: desktop
           merge-multiple: true
-      - name: Add the desktop app to the release
+      - name: The updater's manifest and the release files
         env:
-          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
           cd desktop
           base="https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION"
-          # The updater's manifest: each platform's installer and its signature.
+          # Each platform's installer and its signature, as installed apps read it.
           jq -n --arg v "$VERSION" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg base "$base" \
             --rawfile win anysola-code-desktop-windows-x64-setup.exe.sig \
             --rawfile linux anysola-code-desktop-linux-x64.AppImage.sig \
@@ -319,6 +130,38 @@ jobs:
                 "linux-x86_64": {signature: $linux, url: ($base + "/anysola-code-desktop-linux-x64.AppImage")}
               }}' > latest-desktop.json
           cat latest-desktop.json
-          gh release upload "v$VERSION" --repo "$GITHUB_REPOSITORY" --clobber \
-            anysola-code-desktop-windows-x64-setup.exe anysola-code-desktop-linux-x64.AppImage \
-            anysola-code-desktop-linux-x64.deb latest-desktop.json
+          mkdir ../release
+          cp anysola-code-desktop-windows-x64-setup.exe anysola-code-desktop-linux-x64.AppImage \
+            anysola-code-desktop-linux-x64.deb latest-desktop.json ../release/
+          cd ../release
+          ls -la
+          test "$(ls | sort | tr '\n' ' ')" = "anysola-code-desktop-linux-x64.AppImage anysola-code-desktop-linux-x64.deb anysola-code-desktop-windows-x64-setup.exe latest-desktop.json "
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: release
+          if-no-files-found: error
+
+  github-release:
+    needs: [version, assemble]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: release
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          test "$(ls release | wc -l)" -eq 4
+          flags=()
+          case "$VERSION" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "v$VERSION" release/* --repo "$GITHUB_REPOSITORY" --title "Anysola Code $VERSION" \
+            --notes "Download: https://www.anysola.com/code (Windows, Linux). Installed apps update themselves. Changes: CHANGELOG.md." \
+            --verify-tag "${flags[@]}"
