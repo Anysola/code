@@ -10,16 +10,18 @@ use common::BIN;
 use serde_json::json;
 
 /// A server in `sh`: one tool `ask` whose call asks the client for a name and returns the
-/// client's answer as text.
-const SERVER: &str = r#"read l
+/// client's answer as text. It reads by position, so a request the client gave up on (its
+/// `notifications/cancelled`) is skipped rather than taken for the next one.
+const SERVER: &str = r#"next() { while read l; do case "$l" in *notifications/cancelled*) ;; *) return 0;; esac; done; return 1; }
+next
 echo '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"f","version":"1"}}}'
-read l
-read l
+next
+next
 echo '{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"ask","inputSchema":{"type":"object","properties":{}}}]}}'
-read l
+next
 echo '{"jsonrpc":"2.0","id":"e1","method":"elicitation/create","params":{"mode":"form","message":"Name?","requestedSchema":{"type":"object","properties":{"name":{"type":"string"}}}}}'
-read r
-r=$(printf '%s' "$r" | sed 's/"/\\"/g')
+next
+r=$(printf '%s' "$l" | sed 's/"/\\"/g')
 echo '{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"'"$r"'"}]}}'
 cat >/dev/null
 "#;
@@ -69,13 +71,13 @@ fn elicitation_is_cancelled_and_direct_tools_are_advertised() {
         &json!({"mcp": {"servers": {"f": server, "direct": direct}}}).to_string(),
     );
     let out = home.run(BIN, &["run", "go"], None, None);
-    assert_eq!(out.code, 1, "{}", out.stderr);
     let last = gateway
         .messages()
         .into_iter()
         .rev()
         .find(|r| !r.is_title())
         .unwrap();
+    assert_eq!(out.code, 1, "{}\n{}", out.stderr, last.body);
     assert!(
         last.body
             .contains(r#"\"result\": {\n    \"action\": \"cancel\"\n  }"#),

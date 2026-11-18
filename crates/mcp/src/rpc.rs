@@ -203,7 +203,8 @@ impl Peer {
         let mut outstanding = Outstanding {
             peer: self,
             id,
-            done: false,
+            // The protocol forbids cancelling `initialize`.
+            done: method == "initialize",
         };
         let exchange = async {
             self.transport.send(message).await?;
