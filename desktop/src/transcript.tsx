@@ -1165,6 +1165,7 @@ export function EditCard({
 const NOT_RUN = "(not run: the session's permissions did not allow this shell command)"
 
 const FILE_ASKS = new Set(["read", "edit", "write"])
+const ABSOLUTE = /^([\\/]|[A-Za-z]:[\\/])/
 
 const asks: Record<string, string> = {
   shell: "Run a command?",
@@ -1221,8 +1222,16 @@ function PermissionCard({ permission: p, keys }: { permission: Permission; keys:
               // project's root): the first, and the other said as the same file.
               <>
                 {p.resources[0]}
-                {p.resources.length > 1 && (
-                  <span className="text-2xs block font-sans">Same file as {p.resources.slice(1).join(", ")} in the project</span>
+                {/* A relative name is the project's; an absolute one is where a link leads. */}
+                {p.resources.slice(1).some((r) => !ABSOLUTE.test(r)) && (
+                  <span className="text-2xs block font-sans">
+                    Same file as {p.resources.slice(1).filter((r) => !ABSOLUTE.test(r)).join(", ")} in the project
+                  </span>
+                )}
+                {p.resources.slice(1).some((r) => ABSOLUTE.test(r)) && (
+                  <span className="text-2xs block font-sans">
+                    Leads to {p.resources.slice(1).filter((r) => ABSOLUTE.test(r)).join(", ")}
+                  </span>
                 )}
               </>
             ) : (
