@@ -43,6 +43,23 @@ would not. Hooks in `~/.anysola/config.json` run right away; a project's hooks r
 the conversation, and again after they change. The agent's edit and write tools always ask before changing your
 config files, the files your hooks run and the app's database.
 
+## What a project can change
+
+A repository's own config is read like yours, but it only tightens until you say otherwise. Its rules that ask
+or deny apply at once; its rules that allow, its MCP servers, formatters, hooks and downloads (instruction URLs,
+skill URLs, git references) wait for your approval, asked once per project file in the conversation and again
+after a change. Settings → Permissions, Instructions, MCP servers, Advanced and Hooks list what waits and what you
+allowed, with Stop allowing.
+
+Some things a project can never do, allowed or not: lift a rule or policy of yours that refuses; choose the agent
+your sessions run on when you chose one; turn off, hide or retype a built-in agent or one of yours; replace one of
+your commands; choose the shell or where worktrees are created. Rules name files, not spellings: a rule on
+`secrets/*` holds in a worktree, from a subfolder and through a symlink, and a symlink that leads out of the
+project is an outside path. A subagent is bound by the rules of every session above it.
+
+A project can still choose the model, replace an agent's prompt and turn snapshots off. Shell commands are judged
+by your `shell` rules only: a `read` rule does not stop `cat`.
+
 ## Usage limits
 
 Anysola Code and Anysola Chat share two usage windows per account: a 5-hour window that starts with your first
