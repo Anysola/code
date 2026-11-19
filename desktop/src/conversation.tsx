@@ -302,7 +302,7 @@ export function BackgroundRow({ open }: { open: Open }) {
 function BackgroundCommandRow({ id, command, started }: { id: string; command: string; started: number }) {
   const [stopping, setStopping] = useState(false)
   return (
-    <li className="text-dense flex h-8 items-center gap-2.5 px-2">
+    <li className="text-dense flex h-8 shrink-0 items-center gap-2.5 px-2">
       <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground/80" title={command}>
         {command}
       </span>

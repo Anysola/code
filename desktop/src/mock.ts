@@ -37,6 +37,9 @@
  * Settings: `?settings=<section>` opens one; `?fail=usage,mcpList` makes those calls fail,
  * `?delay=800` slows every settings call, `?theme=light` previews a theme, `?empty=1` empties
  * every settings list, `?changes=open&commands=open&lookups=listed` start with those preferences.
+ *
+ * Review: `?review=long` gives the session five long changed files; `?review=nogit` makes its folder
+ * not a git repository, so Review lists the session's edits (`long,nogit`: the long ones, as edits).
  */
 import type {
   About,
@@ -357,6 +360,15 @@ const reviewFiles: FileDiff[] = [
   "apps/web/test/pricing.test.tsx",
   "apps/web/test/checkout.test.ts",
 ].map((f, i) => bigPatch(f, 6 + i * 3))
+
+/** `?review=long`: five long diffs, few enough that Review opens them all. */
+const longReview: FileDiff[] = [
+  "apps/web/src/lib/plans.ts",
+  "apps/web/src/lib/checkout.ts",
+  "apps/web/src/components/plan-card.tsx",
+  "apps/web/src/routes/pricing.tsx",
+  "apps/web/test/pricing.test.tsx",
+].map((f, i) => bigPatch(f, 48 + i * 18))
 
 const longItems: Item[] = [
   { kind: "user", id: "l1", text: longMessage, images: 0 },
@@ -841,6 +853,12 @@ export function mockBridge(): Bridge {
   if (state === "long") transcripts.set("ses_pricing", longItems)
   if (state === "hooks") transcripts.set("ses_pricing", hookItems)
   if (state === "images" || state === "done") transcripts.set("ses_pricing", [...earlierItems, ...pricingItems])
+  const review = new Set((new URLSearchParams(location.search).get("review") ?? "").split(","))
+  if (review.has("long"))
+    transcripts.set("ses_pricing", [
+      ...transcripts.get("ses_pricing")!,
+      ...longReview.map((f, i) => tool(`rl${i}`, "edit", f.file, { files: [f] })),
+    ])
   if (state === "done")
     transcripts.set(
       "ses_pricing",
@@ -1471,6 +1489,8 @@ export function mockBridge(): Bridge {
     async changes(_directory, sessionId) {
       if (failing.has("changes")) throw new Error("git diff failed: index.lock exists.")
       if (sessionId !== "ses_pricing") return []
+      if (review.has("nogit")) return null
+      if (review.has("long")) return longReview
       return state === "long" ? reviewFiles : [planCard, pricing, test]
     },
     async restoreFile() {},

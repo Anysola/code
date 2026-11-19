@@ -295,7 +295,7 @@ function Notice() {
               dismissNotice()
               openSettings(link)
             }}
-            className={btn("secondary", "sm")}
+            className={btn("secondary", "sm", "shrink-0")}
           >
             Open {sectionLabel(link)}
           </button>

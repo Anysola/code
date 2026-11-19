@@ -607,7 +607,7 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
                 This folder isn’t a git repository, so these are the edits as they were made and files can’t be reverted from here.
               </p>
               {edits.map((f) => (
-                <div key={f.file} className="flex flex-col gap-2">
+                <div key={f.file} className="flex shrink-0 flex-col gap-2">
                   {f.diffs.map((d, i) => (
                     <EditCard key={i} file={d} startOpen={startOpen} />
                   ))}
@@ -697,7 +697,8 @@ function ReviewFile({
   const [working, setWorking] = useState(false)
   const [open, setOpen] = useState(startOpen)
   return (
-    <div className="overflow-hidden rounded-xl bg-surface">
+    // shrink-0: the list scrolls; a card squeezed to fit it would cut its diff off.
+    <div className="shrink-0 overflow-hidden rounded-xl bg-surface">
       <div className="flex h-10 items-center gap-2.5 pr-2 pl-3">
         <button
           onClick={() => setOpen(!open)}
