@@ -911,3 +911,104 @@ mod tests {
         assert_eq!(decisions.of("/q/anysola.json", TrustKind::Mcp, "d1"), None);
     }
 }
+
+/// A permission rule as configured, where it applies and whether it is in effect, for Settings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfiguredRule {
+    pub action: String,
+    pub resource: String,
+    pub effect: crate::permission::Effect,
+    /// The agent it applies to; `None` for every agent.
+    pub agent: Option<String>,
+    /// The config document or agent markdown file that holds it.
+    pub source: String,
+    /// From a project (a document the upward walk found, or one of its agent markdown files).
+    pub project: bool,
+    /// `false` while it waits for that file's `permissions` approval (a project's allow rules);
+    /// a project rule in effect still never weakens a denial of the user's.
+    pub applied: bool,
+}
+
+/// Every permission rule the documents and agent markdown files configure, applied or waiting:
+/// documents in load order (each one's rules for all agents, then its agents' rules), then the
+/// markdown agent files by folder in load order. Built-in rules are not listed.
+pub fn configured_rules(config: &Config) -> Vec<ConfiguredRule> {
+    use crate::permission::Rule;
+    let approved = |path: &str| {
+        config
+            .trust
+            .iter()
+            .any(|s| s.kind == TrustKind::Permissions && s.path == path && s.decision == Some(true))
+    };
+    let mut out = Vec::new();
+    let mut push =
+        |rules: &[Value], agent: Option<&str>, source: &str, project: bool, applied: bool| {
+            for value in rules {
+                let Ok(rule) = serde_json::from_value::<Rule>(value.clone()) else {
+                    continue;
+                };
+                out.push(ConfiguredRule {
+                    applied: applied || !project || !loosens(value),
+                    action: rule.action,
+                    resource: rule.resource,
+                    effect: rule.effect,
+                    agent: agent.map(str::to_string),
+                    source: source.to_string(),
+                    project,
+                });
+            }
+        };
+    let list = |value: Option<&Value>| value.and_then(Value::as_array).cloned().unwrap_or_default();
+    for (path, data) in config.documents() {
+        let project = config.project_documents.iter().any(|p| p == path);
+        let applied = approved(path);
+        push(&list(data.get("permissions")), None, path, project, applied);
+        for (id, agent) in data
+            .get("agents")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            push(
+                &list(agent.get("permissions")),
+                Some(id),
+                path,
+                project,
+                applied,
+            );
+        }
+    }
+    for entry in &config.entries {
+        let crate::config::Entry::Directory(dir) = entry else {
+            continue;
+        };
+        match config.project_agents.iter().find(|(d, _)| d == dir) {
+            Some((_, agents)) => {
+                for (id, agent, file) in agents {
+                    let file = file.clone().unwrap_or_default();
+                    push(&list(agent.get("permissions")), Some(id), &file, true, true);
+                    for (_, _, withheld) in config
+                        .withheld_agent_rules
+                        .iter()
+                        .filter(|(f, i, _)| *f == file && i == id)
+                    {
+                        push(withheld, Some(id), &file, true, false);
+                    }
+                }
+            }
+            None => {
+                for (id, agent, file) in crate::agent::markdown_agents(dir) {
+                    let file = file.unwrap_or_default();
+                    push(
+                        &list(agent.get("permissions")),
+                        Some(&id),
+                        &file,
+                        false,
+                        true,
+                    );
+                }
+            }
+        }
+    }
+    out
+}

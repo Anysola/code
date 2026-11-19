@@ -88,6 +88,9 @@ pub enum Entry {
         commands: Map<String, Value>,
         /// The document's file (or variable); `None` for the gateway's document.
         source: Option<String>,
+        /// Found by the upward project walk: its agents' rules are a project's
+        /// ([`crate::permission::Rule::project`]).
+        project: bool,
     },
     /// A config directory whose `agent/`, `command/`, … folders hold markdown definitions.
     Directory(PathBuf),
@@ -118,6 +121,9 @@ pub struct Config {
     mcp: mcp::Merged,
     /// Policy statements of ordinary documents, earliest-loaded last.
     policies: Vec<Policy>,
+    /// Policy statements of project documents, earliest-loaded last: every other document's
+    /// outrank them (`ANYSOLA_CONFIG_CONTENT` loads after the project but is the user's).
+    project_policies: Vec<Policy>,
     /// Policy statements of managed documents, earliest-loaded last.
     managed_policies: Vec<Policy>,
     /// `hooks` of every local document, each with its source and scope (never in `values`).
@@ -137,6 +143,10 @@ pub struct Config {
     /// with the loosening rules of unapproved files left out: the rules applied are the rules
     /// judged.
     pub(crate) project_agents: Vec<(PathBuf, Vec<crate::agent::Defined>)>,
+    /// What [`Config::project_agents`] left out: `(file, agent id, rules)` of unapproved files.
+    pub(crate) withheld_agent_rules: Vec<(String, String, Vec<Value>)>,
+    /// The documents the upward project walk found, by path.
+    pub project_documents: Vec<String>,
 }
 
 impl Config {
@@ -229,8 +239,9 @@ impl Config {
     /// Every policy statement; the last one matching decides.
     pub fn policies(&self) -> Policies {
         Policies(
-            self.policies
+            self.project_policies
                 .iter()
+                .chain(&self.policies)
                 .chain(&self.managed_policies)
                 .cloned()
                 .collect(),
@@ -313,6 +324,8 @@ impl Config {
         }
         let list = if document.managed {
             &mut self.managed_policies
+        } else if document.project {
+            &mut self.project_policies
         } else {
             &mut self.policies
         };
@@ -321,7 +334,14 @@ impl Config {
             self.permissions.extend(
                 rules
                     .into_iter()
-                    .filter_map(|r| serde_json::from_value(r).ok()),
+                    .filter_map(|r| serde_json::from_value::<Rule>(r).ok())
+                    .map(|r| {
+                        if document.project {
+                            r.from_project()
+                        } else {
+                            r
+                        }
+                    }),
             );
         }
         if let Some(Value::Array(items)) = data.get_mut("instructions") {
@@ -396,6 +416,7 @@ impl Config {
                 agents,
                 commands,
                 source: document.source.clone(),
+                project: document.project,
             });
         }
         if let Some(Value::Object(mut providers)) = data.remove("providers")
@@ -810,6 +831,9 @@ impl Loader<'_> {
                 } else {
                     Withheld::default()
                 };
+                if self.project {
+                    self.config.project_documents.push(source.to_string());
+                }
                 self.config.sources.push(Source::Document {
                     path: source.to_string(),
                     data: data.clone(),
@@ -919,7 +943,11 @@ impl Loader<'_> {
             if decision != Some(true)
                 && let Some(Value::Array(rules)) = agent.get_mut("permissions")
             {
-                rules.retain(|r| !crate::trust::loosens(r));
+                let (withheld, kept) = rules.drain(..).partition(crate::trust::loosens);
+                *rules = kept;
+                self.config
+                    .withheld_agent_rules
+                    .push((file.clone(), id.clone(), withheld));
             }
             self.config.trust.push(Section {
                 path: file.clone(),
@@ -1082,6 +1110,46 @@ mod tests {
     }
 
     #[test]
+    fn a_project_policy_never_outranks_the_users_even_one_loaded_later() {
+        let mut config = Config::default();
+        let doc = |value: Value, project: bool| Document {
+            data: value.as_object().unwrap().clone(),
+            managed: false,
+            dir: None,
+            source: None,
+            project,
+            withheld: Withheld::default(),
+        };
+        let statement = |resource: &str, effect: &str| json!({"action": "tool.use", "resource": resource, "effect": effect});
+        // An approved project allow, then the user's `ANYSOLA_CONFIG_CONTENT` deny.
+        config.apply(doc(
+            json!({"policies": [statement("shell:*", "allow")]}),
+            true,
+        ));
+        config.apply(doc(
+            json!({"policies": [statement("shell:*", "deny")]}),
+            false,
+        ));
+        assert!(
+            config
+                .policies()
+                .tool_denial("shell", &["ls".into()])
+                .is_some()
+        );
+        // A project's own denial still applies.
+        config.apply(doc(
+            json!({"policies": [statement("read:*", "deny")]}),
+            true,
+        ));
+        assert!(
+            config
+                .policies()
+                .tool_denial("read", &["a".into()])
+                .is_some()
+        );
+    }
+
+    #[test]
     fn remote_document_keeps_only_anysola() {
         let body = json!({
             "model": "anysola/claude-sonnet-5-5",
@@ -1157,6 +1225,7 @@ mod tests {
                         .display()
                         .to_string()
                 ),
+                project: true,
             })
         );
     }
@@ -1212,6 +1281,7 @@ mod tests {
                         .display()
                         .to_string()
                 ),
+                project: true,
             })
         );
     }

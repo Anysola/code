@@ -334,6 +334,60 @@ fn plan_mode_reminder_survives_compaction_and_guards_edits() {
     );
 }
 
+/// A session left in Plan mode by 1.1.0 (the older reminder text) is still in Plan mode: no second
+/// enter reminder, and leaving it adds the leave reminder.
+#[test]
+fn a_plan_reminder_from_before_1_1_1_still_counts() {
+    let gateway = FakeGateway::start(|request, _| text(request, "ok"));
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    core.select_agent(&session.id, "plan").unwrap();
+    let plan_dir = env.home.home().join(".anysola").join("plan");
+    let older = format!(
+        "<system-reminder>\nYou are in Plan mode. Discuss the plan with the user directly in the conversation. Do not create or update plan files unless the user explicitly asks you to; when they do, write them only in:\n{}\n\nDo not modify any other files or ask a subagent to do so.\n\nYou remain in Plan mode until the user switches agents. If the user asks you to implement changes, do not do so. Tell them they need to switch agents.\n</system-reminder>",
+        plan_dir.display()
+    );
+    // Replace what selecting Plan recorded with the 1.1.0 text.
+    let db = Db::open(&env.home.home().join(".anysola/anysola.db")).unwrap();
+    for row in db.messages(&session.id).unwrap() {
+        db.delete_message(&row.id).unwrap();
+    }
+    db.append_message(
+        &session.id,
+        "msg_older",
+        "synthetic",
+        &json!({"time": {"created": 1}, "text": older}),
+    )
+    .unwrap();
+    let turn = |text: &str| {
+        runtime
+            .block_on(core.prompt(&session.id, prompt(text), TurnOptions::default()))
+            .unwrap()
+    };
+    turn("still planning");
+    let reminders = |needle: &str| {
+        let last = gateway
+            .messages()
+            .into_iter()
+            .rfind(|r| !r.is_title())
+            .unwrap();
+        transcript(&last)
+            .iter()
+            .filter(|t| t.contains(needle))
+            .count()
+    };
+    assert_eq!(
+        reminders("You are in Plan mode"),
+        1,
+        "no second enter reminder"
+    );
+    core.select_agent(&session.id, "build").unwrap();
+    turn("build it");
+    assert_eq!(reminders("NO LONGER in Plan mode"), 1, "leaving is noticed");
+}
+
 #[test]
 fn session_entries_close_block_two() {
     let gateway = FakeGateway::start(|request, _| text(request, "ok"));

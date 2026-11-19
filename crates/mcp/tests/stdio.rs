@@ -121,6 +121,11 @@ fn server_through_the_stack() {
         .to_string();
     let captured =
         include_str!("../../../spec/verbatim/integrations/codemode-catalog-with-mcp.txt");
+    // 0.5.1's capture; 1.1.1 names itself in the namespace's description.
+    let captured = captured.replace(
+        "Tools for managing OpenCode itself,",
+        "Tools for managing Anysola Code itself,",
+    );
     assert!(
         block2.starts_with(&format!("{}\n\n", captured.trim_end())),
         "{block2}"

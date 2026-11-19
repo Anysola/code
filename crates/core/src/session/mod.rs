@@ -38,6 +38,13 @@ pub const PLAN_LEAVE: &str = "<system-reminder>\nYou are NO LONGER in Plan mode.
 
 pub fn plan_enter(directory: &str) -> String {
     format!(
+        "<system-reminder>\nYou are in Plan mode. Discuss the plan with the user directly in the conversation. Do not create or update plan files unless the user explicitly asks you to; when they do, write them only in:\n{directory}\n\nDo not modify any other files or ask a subagent to do so.\n\nYou remain in Plan mode until the user turns it off. If the user asks you to implement changes, do not do so. Tell them to turn Plan mode off first: Build this plan, or Ask, Edits or Auto instead of Plan.\n</system-reminder>"
+    )
+}
+
+/// The enter reminder sessions recorded before 1.1.1: still Plan mode, so leaving it is noticed.
+fn plan_enter_before_1_1_1(directory: &str) -> String {
+    format!(
         "<system-reminder>\nYou are in Plan mode. Discuss the plan with the user directly in the conversation. Do not create or update plan files unless the user explicitly asks you to; when they do, write them only in:\n{directory}\n\nDo not modify any other files or ask a subagent to do so.\n\nYou remain in Plan mode until the user switches agents. If the user asks you to implement changes, do not do so. Tell them they need to switch agents.\n</system-reminder>"
     )
 }
@@ -118,7 +125,9 @@ fn synthetic(shared: &Shared, session_id: &str, text: String) {
 /// Keeps the plan-mode reminders in step with the agent: entering plan adds the enter reminder,
 /// leaving it adds the leave reminder.
 fn plan_reminders(shared: &Shared, session_id: &str, agent: &str) {
-    let enter = plan_enter(&shared.paths.plan_dir().display().to_string());
+    let directory = shared.paths.plan_dir().display().to_string();
+    let enter = plan_enter(&directory);
+    let older = plan_enter_before_1_1_1(&directory);
     let last = shared
         .db
         .messages(session_id)
@@ -126,12 +135,14 @@ fn plan_reminders(shared: &Shared, session_id: &str, agent: &str) {
         .into_iter()
         .rev()
         .find_map(|row| match Message::decode(&row.kind, &row.data) {
-            Message::Synthetic(data) if data.text == enter || data.text == PLAN_LEAVE => {
+            Message::Synthetic(data)
+                if data.text == enter || data.text == older || data.text == PLAN_LEAVE =>
+            {
                 Some(data.text)
             }
             _ => None,
         });
-    let in_plan = last.as_deref() == Some(enter.as_str());
+    let in_plan = last.as_deref() != Some(PLAN_LEAVE) && last.is_some();
     if agent == "plan" && !in_plan {
         synthetic(shared, session_id, enter);
     } else if agent != "plan" && in_plan {
@@ -143,7 +154,9 @@ fn plan_reminders(shared: &Shared, session_id: &str, agent: &str) {
 /// agent stays put. A missing enter reminder (or a stale one after leaving plan) is added before
 /// the user's prompt and recorded.
 fn plan_context(shared: &Shared, session_id: &str, agent: &str, entries: &mut Vec<lower::Entry>) {
-    let enter = plan_enter(&shared.paths.plan_dir().display().to_string());
+    let directory = shared.paths.plan_dir().display().to_string();
+    let enter = plan_enter(&directory);
+    let older = plan_enter_before_1_1_1(&directory);
     let user = |entry: &lower::Entry| match entry {
         lower::Entry::Turn(message) => {
             message["role"] == "user"
@@ -158,13 +171,14 @@ fn plan_context(shared: &Shared, session_id: &str, agent: &str, entries: &mut Ve
             Some(content) if content.len() == 1 && content[0]["type"] == "text" => {
                 content[0]["text"]
                     .as_str()
-                    .filter(|t| *t == enter || *t == PLAN_LEAVE)
+                    .filter(|t| *t == enter || *t == older || *t == PLAN_LEAVE)
             }
             _ => None,
         },
         _ => None,
     });
-    let text = match (agent == "plan", last == Some(enter.as_str())) {
+    let in_plan = last.is_some_and(|t| t != PLAN_LEAVE);
+    let text = match (agent == "plan", in_plan) {
         (true, false) => enter,
         (false, true) => PLAN_LEAVE.to_string(),
         _ => return,

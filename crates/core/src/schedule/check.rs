@@ -631,6 +631,11 @@ pub(crate) fn unattended(
         session_id: session.id.clone(),
         scope: Arc::new(Scope {
             configured,
+            ancestors: crate::session::gate::ancestors(
+                &shared.db,
+                &selection.sources.agents,
+                &session.id,
+            ),
             project_id: shared.project.id.clone(),
             policies: Arc::new(selection.sources.config.policies()),
             // Checks run unattended: nobody is there to answer a floor's asks.

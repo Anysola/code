@@ -249,6 +249,11 @@ fn catalog_with_another_namespace_matches_capture() {
     let captured =
         include_str!("../../../../spec/verbatim/integrations/codemode-catalog-with-mcp.txt");
     let expected = &captured[..captured.find("\n\n<mcp_instructions>").unwrap()];
+    // 0.5.1's capture; 1.1.1 names itself in the namespace's description.
+    let expected = expected.replace(
+        "Tools for managing OpenCode itself,",
+        "Tools for managing Anysola Code itself,",
+    );
     assert_eq!(catalog::render(&inventory.summary()), expected);
 }
 

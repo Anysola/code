@@ -82,6 +82,8 @@ struct Context {
     tools: Vec<Arc<dyn Tool>>,
     definitions: Vec<crate::tool::ToolDefinition>,
     rules: Vec<crate::permission::Rule>,
+    /// The rules of the sessions above this one ([`super::gate::ancestors`]).
+    ancestors: Vec<Vec<crate::permission::Rule>>,
 }
 
 /// Commits the instruction sources' current values (the baseline on the first step, an update
@@ -151,8 +153,16 @@ fn context(
 ) -> Result<Context, SessionError> {
     let rules = selection.agent.permissions.clone();
     let sources = &selection.sources;
+    let ancestors = super::gate::ancestors(&shared.db, &sources.agents, &session.id);
     let gates = crate::tool::registry::Gates::from_config(&sources.config);
     let mut tools = shared.registry.active_gated(&rules, gates);
+    // What a session above denies wholly is not offered either (the gate would refuse it).
+    tools.retain(|t| {
+        t.name() == "skill"
+            || ancestors
+                .iter()
+                .all(|above| !crate::permission::wholly_disabled(t.permission(), above))
+    });
     if !sources.config.websearch_enabled() {
         tools.retain(|t| t.name() != "websearch");
     }
@@ -162,7 +172,17 @@ fn context(
     let env = DefinitionEnv {
         shell_name: crate::tool::shell::shell_name(sources.config.shell()),
         year: process_year(),
-        subagents: sources.agents.subagents_for(&rules),
+        subagents: sources
+            .agents
+            .subagents_for(&rules)
+            .into_iter()
+            .filter(|(id, _)| {
+                ancestors.iter().all(|above| {
+                    crate::permission::evaluate("subagent", id, above)
+                        != crate::permission::Effect::Deny
+                })
+            })
+            .collect(),
     };
     let definitions = Registry::definitions(&tools, &env);
     let names: Vec<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
@@ -182,6 +202,7 @@ fn context(
         tools,
         definitions,
         rules,
+        ancestors,
     })
 }
 
@@ -935,6 +956,7 @@ async fn run_stream(
         session_id: session.id.clone(),
         scope: Arc::new(Scope {
             configured,
+            ancestors: ctx.ancestors.clone(),
             project_id: shared.project.id.clone(),
             policies: Arc::new(selection.sources.config.policies()),
             floor: crate::session::gate::Floor::of(&shared.db, &session.id),

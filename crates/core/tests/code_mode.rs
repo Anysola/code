@@ -80,5 +80,5 @@ fn programs_run_through_execute() {
         .unwrap()
         .to_string();
     assert!(system.starts_with("# Code Mode\n\n"));
-    assert!(system.contains("- opencode (8 tools) // Tools for managing OpenCode itself"));
+    assert!(system.contains("- opencode (8 tools) // Tools for managing Anysola Code itself"));
 }

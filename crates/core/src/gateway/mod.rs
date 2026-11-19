@@ -259,19 +259,38 @@ impl Gateway {
 
     /// A plain `GET` of a user-configured URL (instruction sources); `None` unless it answers 2xx
     /// within `timeout`.
-    pub async fn fetch_text(&self, url: &str, timeout: Duration) -> Option<String> {
-        let response = self
+    /// A text document (an `instructions` URL), at most [`crate::paths::DOCUMENT_CAP`] bytes of
+    /// UTF-8; the error is a short reason for the user (`404 Not Found`, `timed out`).
+    pub async fn fetch_text(&self, url: &str, timeout: Duration) -> Result<String, String> {
+        let reason = |error: reqwest::Error| {
+            if error.is_timeout() {
+                "timed out".to_string()
+            } else if error.is_connect() {
+                "could not connect".to_string()
+            } else {
+                "the request failed".to_string()
+            }
+        };
+        let mut response = self
             .http
             .get(url)
             .header("user-agent", user_agent())
             .timeout(timeout)
             .send()
             .await
-            .ok()?;
-        if !response.status().is_success() {
-            return None;
+            .map_err(reason)?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(status.to_string());
         }
-        response.text().await.ok()
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(reason)? {
+            body.extend_from_slice(&chunk);
+            if body.len() as u64 > crate::paths::DOCUMENT_CAP {
+                return Err("larger than 1 MiB".into());
+            }
+        }
+        String::from_utf8(body).map_err(|_| "not text".to_string())
     }
 
     /// `POST /search`; errors are the model-visible texts.

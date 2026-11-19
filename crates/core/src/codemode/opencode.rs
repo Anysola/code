@@ -13,7 +13,7 @@ use crate::permission::PermissionRequest;
 use crate::tool::{ToolContent, ToolContext, ToolError, access};
 
 pub const NAME: &str = "opencode";
-const DESCRIPTION: &str = "Tools for managing OpenCode itself, such as working with sessions and worktrees, searching the available models, and reading MCP resources.";
+const DESCRIPTION: &str = "Tools for managing Anysola Code itself, such as working with sessions and worktrees, searching the available models, and reading MCP resources.";
 
 #[derive(Clone, Copy)]
 enum Kind {

@@ -314,26 +314,50 @@ fn is_url(entry: &str) -> bool {
     entry.starts_with("http://") || entry.starts_with("https://")
 }
 
-/// The configured `instructions` entries that are URLs, fetched once when the config loads.
+/// How the last download of a configured URL went.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteStatus {
+    pub url: String,
+    /// `None` when it worked; else a short reason (`404 Not Found`, `timed out`, `not text`,
+    /// `larger than 1 MiB`, `could not connect`).
+    pub error: Option<String>,
+}
+
+/// The configured `instructions` entries that are URLs, fetched when the config loads, with how
+/// each fetch went (in config order).
 pub async fn fetch_remote(
     gateway: &crate::gateway::Gateway,
     configured: &[String],
-) -> Vec<InstructionFile> {
+) -> (Vec<InstructionFile>, Vec<RemoteStatus>) {
     let urls: Vec<String> = configured.iter().filter(|e| is_url(e)).cloned().collect();
     let fetched = futures_util::stream::iter(urls)
         .map(|url: String| async move {
             let content = gateway
                 .fetch_text(&url, std::time::Duration::from_secs(5))
                 .await;
-            if content.is_none() {
-                crate::log::warn("failed to fetch instruction url", &[("url", &url)]);
+            if let Err(error) = &content {
+                crate::log::warn(
+                    "failed to fetch instruction url",
+                    &[("url", &url), ("error", error)],
+                );
             }
-            content.map(|content| InstructionFile { path: url, content })
+            (url, content)
         })
         .buffered(4)
         .collect::<Vec<_>>()
         .await;
-    fetched.into_iter().flatten().collect()
+    let mut files = Vec::new();
+    let mut status = Vec::new();
+    for (url, content) in fetched {
+        status.push(RemoteStatus {
+            url: url.clone(),
+            error: content.as_ref().err().cloned(),
+        });
+        if let Ok(content) = content {
+            files.push(InstructionFile { path: url, content });
+        }
+    }
+    (files, status)
 }
 
 /// `AGENTS.md` files (global, then nearest project file first within the discovery bound) and the

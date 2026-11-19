@@ -12,7 +12,7 @@ use crate::command::Commands;
 use crate::config::{Config, LoadOptions};
 use crate::gateway::Gateway;
 use crate::gateway::config::Remote;
-use crate::instructions::InstructionFile;
+use crate::instructions::{InstructionFile, RemoteStatus};
 use crate::model::Model;
 use crate::paths::Paths;
 use crate::skill::Skill;
@@ -28,6 +28,10 @@ pub struct Loaded {
     pub references: Vec<crate::reference::Reference>,
     /// The configured `instructions` URLs, fetched when the config loaded.
     pub remote_instructions: Vec<InstructionFile>,
+    /// How fetching each configured `instructions` URL went, in config order.
+    pub remote_instruction_status: Vec<RemoteStatus>,
+    /// How fetching each configured `skills` URL's index went, in config order.
+    pub skill_status: Vec<RemoteStatus>,
     /// The formatters edits and writes run, when config `formatter` enables them.
     pub formatters: Option<Arc<crate::formatter::Formatters>>,
 }
@@ -54,13 +58,37 @@ impl Loaded {
         }
         let agents = Agents::load(&config, paths);
         let commands = Commands::load(&config);
-        let remote_instructions = match previous {
+        // Fetched again only when the list changed; with the same list, only the URLs that
+        // failed last time are tried again.
+        let (remote_instructions, remote_instruction_status) = match previous {
             Some(previous) if previous.config.instructions == config.instructions => {
-                previous.remote_instructions.clone()
+                let failed: Vec<String> = previous
+                    .remote_instruction_status
+                    .iter()
+                    .filter(|s| s.error.is_some())
+                    .map(|s| s.url.clone())
+                    .collect();
+                if failed.is_empty() {
+                    (
+                        previous.remote_instructions.clone(),
+                        previous.remote_instruction_status.clone(),
+                    )
+                } else {
+                    let (files, status) = crate::instructions::fetch_remote(gateway, &failed).await;
+                    let mut all_files = previous.remote_instructions.clone();
+                    all_files.extend(files);
+                    let all_status = previous
+                        .remote_instruction_status
+                        .iter()
+                        .map(|s| status.iter().find(|n| n.url == s.url).unwrap_or(s).clone())
+                        .collect();
+                    (all_files, all_status)
+                }
             }
             _ => crate::instructions::fetch_remote(gateway, &config.instructions).await,
         };
-        let mut skills = crate::skill::discover(paths, &config, directory).await;
+        let (mut skills, skill_status) =
+            crate::skill::discover_with_status(paths, &config, directory).await;
         let policies = config.policies();
         skills.retain(|skill| policies.allows("skill.use", &skill.id));
         let models = if config.anysola_allowed("provider.use")
@@ -83,6 +111,8 @@ impl Loaded {
             skills,
             references,
             remote_instructions,
+            remote_instruction_status,
+            skill_status,
         }
     }
 

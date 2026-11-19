@@ -3,6 +3,10 @@
 //! saved rules appended: any `ask` asks, through an [`Event::PermissionAsked`] event answered with
 //! [`Asks::reply`]. Managed policies can still turn the result into a denial.
 //!
+//! A subagent's session never exceeds the sessions above it: each ancestor along `parent_id`
+//! (its agent's rules, its own rules and the saved ones) decides the request too, and the
+//! strictest answer wins (deny over ask over allow). An ancestor's allow lifts nothing.
+//!
 //! A session can also carry a [`Floor`]: what its front end wants asked even where the rules
 //! allow it (the desktop app's Ask and Edits modes). It never lifts a denial, and a saved
 //! "always" rule still answers for it. A subagent's session works under its root session's floor.
@@ -118,9 +122,47 @@ pub(crate) fn root(db: &Db, session_id: &str) -> String {
 pub struct Scope {
     /// The agent's rules followed by the session's own.
     pub configured: Vec<Rule>,
+    /// The same for each session above this one, nearest first ([`ancestors`]); empty for a
+    /// session the user drives.
+    pub ancestors: Vec<Vec<Rule>>,
     pub project_id: String,
     pub policies: Arc<Policies>,
     pub floor: Floor,
+}
+
+/// The rules of each session above `session_id` along `parent_id`, nearest first: its agent's
+/// rules (as `agents` has them now) followed by its own. A missing parent or a cycle ends the
+/// walk. An ancestor whose agent no longer exists denies everything: nothing can say what it
+/// allowed.
+pub(crate) fn ancestors(
+    db: &Db,
+    agents: &crate::agent::Agents,
+    session_id: &str,
+) -> Vec<Vec<Rule>> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    seen.insert(session_id.to_string());
+    let mut current = db.session(session_id).ok().flatten();
+    while let Some(parent) = current.and_then(|row| row.parent_id) {
+        if !seen.insert(parent.clone()) {
+            break;
+        }
+        let Some(row) = db.session(&parent).ok().flatten() else {
+            break;
+        };
+        let agent = match row.agent.as_deref() {
+            Some(id) => agents.get(id),
+            None => agents.default_agent(),
+        };
+        let mut rules = match agent {
+            Some(agent) => agent.permissions.clone(),
+            None => vec![Rule::new("*", "*", Effect::Deny)],
+        };
+        rules.extend(db.session_permissions(&row.id).unwrap_or_default());
+        out.push(rules);
+        current = Some(row);
+    }
+    out
 }
 
 /// The effect of the last rule matching both action and resource, if any does.
@@ -142,9 +184,13 @@ struct Decision {
 
 impl Scope {
     fn decide(&self, db: &Db, action: &str, resources: &[String], mcp_tool: bool) -> Decision {
-        let denied = resources
-            .iter()
-            .any(|r| evaluate(action, r, &self.configured) == Effect::Deny);
+        let denied = std::iter::once(&self.configured)
+            .chain(&self.ancestors)
+            .any(|rules| {
+                resources
+                    .iter()
+                    .any(|r| evaluate(action, r, rules) == Effect::Deny)
+            });
         if denied {
             return Decision {
                 effect: Effect::Deny,
@@ -152,14 +198,21 @@ impl Scope {
             };
         }
         let saved = db.saved_permissions(&self.project_id).unwrap_or_default();
-        let mut rules = self.configured.clone();
-        rules.extend(saved.iter().cloned());
-        let ask = resources.iter().any(|r| {
-            evaluate(action, r, &rules) == Effect::Ask
-                || self.floor == Floor::Everything
-                || (self.floor.asks(action, mcp_tool)
-                    && matched(action, r, &saved) != Some(Effect::Allow))
-        });
+        // Saved "always" answers answer asks at every level, as they do for the session itself.
+        let asks = |configured: &[Rule]| {
+            let mut rules = configured.to_vec();
+            rules.extend(saved.iter().cloned());
+            resources
+                .iter()
+                .any(|r| evaluate(action, r, &rules) == Effect::Ask)
+        };
+        let ask = asks(&self.configured)
+            || self.ancestors.iter().any(|rules| asks(rules))
+            || resources.iter().any(|r| {
+                self.floor == Floor::Everything
+                    || (self.floor.asks(action, mcp_tool)
+                        && matched(action, r, &saved) != Some(Effect::Allow))
+            });
         if let Some(reason) = self.policies.tool_denial(action, resources) {
             return Decision {
                 effect: Effect::Deny,
@@ -423,6 +476,7 @@ impl PermissionGate for RuleGate {
             session_id: self.session_id.clone(),
             scope: Arc::new(Scope {
                 configured: self.scope.configured.clone(),
+                ancestors: self.scope.ancestors.clone(),
                 project_id: self.scope.project_id.clone(),
                 policies: self.scope.policies.clone(),
                 floor: Floor::Everything,
@@ -461,6 +515,7 @@ mod tests {
             session_id: session.into(),
             scope: Arc::new(Scope {
                 configured: rules,
+                ancestors: Vec::new(),
                 project_id: "prj".into(),
                 policies: Arc::new(policies),
                 floor: Floor::None,
@@ -495,6 +550,7 @@ mod tests {
                 Rule::new("*", "*", Effect::Allow),
                 Rule::new("shell", "rm *", Effect::Deny),
             ],
+            ancestors: Vec::new(),
             project_id: "prj".into(),
             policies: Arc::new(Policies::default()),
             floor,
@@ -622,6 +678,7 @@ mod tests {
                 session_id: "s1".into(),
                 scope: Arc::new(Scope {
                     configured: rules.clone(),
+                    ancestors: Vec::new(),
                     // Each floor saves its "always" answer for a project of its own.
                     project_id: format!("prj_{}", floor.as_str()),
                     policies: Arc::new(Policies::default()),
@@ -836,5 +893,235 @@ mod tests {
         let _ = dropped.await;
         assert!(setup.asks.pending_events().is_empty());
         assert!(!setup.asks.reply(&dropped_id, Reply::Once));
+    }
+
+    fn scoped(rules: Vec<Rule>, ancestors: Vec<Vec<Rule>>, floor: Floor) -> Scope {
+        Scope {
+            configured: rules,
+            ancestors,
+            project_id: "prj".into(),
+            policies: Arc::new(Policies::default()),
+            floor,
+        }
+    }
+
+    fn effect_of(db: &Db, scope: &Scope, action: &str, resource: &str) -> Effect {
+        scope
+            .decide(db, action, &[resource.to_string()], false)
+            .effect
+    }
+
+    /// The 1.1.1 table at the gate: a project rule after the user's denial never weakens it, and
+    /// a saved "always" answer does not either.
+    #[test]
+    fn the_gate_keeps_the_users_denials_whatever_a_project_adds() {
+        let setup = setup();
+        let db = &setup.asks.db;
+        let user = Rule::new;
+        let project = |a: &str, r: &str, e| Rule::new(a, r, e).from_project();
+        let builtin = || vec![user("*", "*", Effect::Allow)];
+        let with = |mut rules: Vec<Rule>, more: Vec<Rule>| {
+            rules.extend(more);
+            rules
+        };
+        let cases = [
+            (
+                vec![
+                    user("shell", "*", Effect::Deny),
+                    project("shell", "*", Effect::Ask),
+                ],
+                Effect::Deny,
+            ),
+            (
+                vec![
+                    user("shell", "*", Effect::Deny),
+                    project("shell", "*", Effect::Allow),
+                ],
+                Effect::Deny,
+            ),
+            (
+                vec![
+                    user("shell", "*", Effect::Ask),
+                    project("shell", "*", Effect::Allow),
+                ],
+                Effect::Allow,
+            ),
+            (vec![project("shell", "*", Effect::Allow)], Effect::Allow),
+            (
+                vec![
+                    user("shell", "*", Effect::Allow),
+                    project("shell", "*", Effect::Ask),
+                ],
+                Effect::Ask,
+            ),
+            (
+                vec![
+                    user("shell", "*", Effect::Allow),
+                    project("shell", "*", Effect::Deny),
+                ],
+                Effect::Deny,
+            ),
+            (vec![user("shell", "*", Effect::Ask)], Effect::Ask),
+            (vec![], Effect::Allow),
+        ];
+        for (rules, expected) in cases {
+            let scope = scoped(with(builtin(), rules.clone()), Vec::new(), Floor::None);
+            assert_eq!(
+                effect_of(db, &scope, "shell", "git push"),
+                expected,
+                "{rules:?}"
+            );
+        }
+        // A saved "always" answers the project's ask but never the user's denial.
+        db.save_permissions("prj", "shell", &["*".into()]).unwrap();
+        let denied = scoped(
+            with(
+                builtin(),
+                vec![
+                    user("shell", "*", Effect::Deny),
+                    project("shell", "*", Effect::Ask),
+                ],
+            ),
+            Vec::new(),
+            Floor::None,
+        );
+        assert_eq!(effect_of(db, &denied, "shell", "ls"), Effect::Deny);
+        let gate = gate(&setup, "s1", denied.configured.clone(), Policies::default());
+        assert!(gate.denies("shell", &["ls".into()]));
+        assert!(!gate.allows("shell", &["ls".into()]));
+        assert!(gate.asking().unwrap().denies("shell", &["ls".into()]));
+    }
+
+    #[test]
+    fn a_child_gets_the_strictest_answer_of_itself_and_every_session_above() {
+        let setup = setup();
+        let db = &setup.asks.db;
+        let all = || vec![Rule::new("*", "*", Effect::Allow)];
+        let with = |more: Vec<Rule>| {
+            let mut rules = all();
+            rules.extend(more);
+            rules
+        };
+        let plan = with(vec![
+            Rule::new("edit", "*", Effect::Deny),
+            Rule::new("edit", "/plans/*", Effect::Allow),
+        ]);
+        let child = scoped(all(), vec![plan.clone()], Floor::None);
+        assert_eq!(effect_of(db, &child, "edit", "/src/a.rs"), Effect::Deny);
+        assert_eq!(effect_of(db, &child, "edit", "/plans/p.md"), Effect::Allow);
+        // An ancestor's ask asks; its allow lifts nothing of the child's own.
+        let asking = with(vec![Rule::new("shell", "git push*", Effect::Ask)]);
+        let child = scoped(
+            with(vec![Rule::new("question", "*", Effect::Deny)]),
+            vec![asking],
+            Floor::None,
+        );
+        assert_eq!(effect_of(db, &child, "shell", "git push"), Effect::Ask);
+        assert_eq!(effect_of(db, &child, "shell", "git status"), Effect::Allow);
+        assert_eq!(effect_of(db, &child, "question", "x"), Effect::Deny);
+        // Two levels: the grandparent decides too.
+        let child = scoped(
+            all(),
+            vec![all(), with(vec![Rule::new("shell", "*", Effect::Deny)])],
+            Floor::None,
+        );
+        assert_eq!(effect_of(db, &child, "shell", "ls"), Effect::Deny);
+        assert_eq!(effect_of(db, &child, "read", "a"), Effect::Allow);
+        // A saved "always" answers an ancestor's ask, never its denial.
+        let child = scoped(
+            all(),
+            vec![with(vec![
+                Rule::new("shell", "git push*", Effect::Ask),
+                Rule::new("shell", "rm *", Effect::Deny),
+            ])],
+            Floor::None,
+        );
+        db.save_permissions("prj", "shell", &["git push*".into(), "rm *".into()])
+            .unwrap();
+        assert_eq!(effect_of(db, &child, "shell", "git push"), Effect::Allow);
+        assert_eq!(effect_of(db, &child, "shell", "rm x"), Effect::Deny);
+        // A project rule in the ancestor's set cannot weaken the ancestor's own denial either.
+        let child = scoped(
+            all(),
+            vec![with(vec![
+                Rule::new("webfetch", "*", Effect::Deny),
+                Rule::new("webfetch", "*", Effect::Allow).from_project(),
+            ])],
+            Floor::None,
+        );
+        assert_eq!(effect_of(db, &child, "webfetch", "https://x"), Effect::Deny);
+    }
+
+    #[test]
+    fn a_hooks_ask_in_a_child_keeps_the_ancestors() {
+        let setup = setup();
+        let gate = RuleGate {
+            session_id: "child".into(),
+            scope: Arc::new(scoped(
+                vec![Rule::new("*", "*", Effect::Allow)],
+                vec![vec![
+                    Rule::new("*", "*", Effect::Allow),
+                    Rule::new("shell", "*", Effect::Deny),
+                ]],
+                Floor::None,
+            )),
+            asks: setup.asks.clone(),
+        };
+        let asking = gate.asking().unwrap();
+        assert!(asking.denies("shell", &["ls".into()]));
+        assert!(!asking.allows("read", &["a".into()]));
+        assert!(!asking.denies("read", &["a".into()]));
+    }
+
+    #[test]
+    fn ancestors_follow_the_parents_agents_and_their_own_rules() {
+        let setup = setup();
+        let db = &setup.asks.db;
+        let paths = crate::paths::Paths::isolated("/home/u".into());
+        let agents = crate::agent::Agents::load(&crate::config::Config::default(), &paths);
+        create(db, "ses_root", None);
+        db.set_agent("ses_root", "plan").unwrap();
+        create(db, "ses_child", Some("ses_root"));
+        db.set_agent("ses_child", "general").unwrap();
+        create(db, "ses_grandchild", Some("ses_child"));
+        let mut metadata = db.session_metadata("ses_child").unwrap();
+        metadata.insert("x".into(), json!(1));
+        db.set_session_access(
+            "ses_child",
+            &[Rule::new("webfetch", "*", Effect::Deny)],
+            &metadata,
+        )
+        .unwrap();
+        assert!(ancestors(db, &agents, "ses_root").is_empty());
+        let above = ancestors(db, &agents, "ses_grandchild");
+        assert_eq!(above.len(), 2);
+        assert_eq!(
+            above[0].last(),
+            Some(&Rule::new("webfetch", "*", Effect::Deny)),
+            "the child's own rules follow its agent's"
+        );
+        assert_eq!(above[1], agents.get("plan").unwrap().permissions);
+        let child = scoped(
+            agents.get("general").unwrap().permissions.clone(),
+            above,
+            Floor::None,
+        );
+        let plans = paths.plan_dir().join("p.md").display().to_string();
+        assert_eq!(effect_of(db, &child, "edit", "/src/a.rs"), Effect::Deny);
+        assert_eq!(effect_of(db, &child, "edit", &plans), Effect::Allow);
+        assert_eq!(effect_of(db, &child, "webfetch", "https://x"), Effect::Deny);
+        // A parent whose agent is gone denies everything; a cycle ends the walk.
+        create(db, "ses_lost", None);
+        db.set_agent("ses_lost", "removed-agent").unwrap();
+        create(db, "ses_lost_child", Some("ses_lost"));
+        let child = scoped(
+            vec![Rule::new("*", "*", Effect::Allow)],
+            ancestors(db, &agents, "ses_lost_child"),
+            Floor::None,
+        );
+        assert_eq!(effect_of(db, &child, "read", "a"), Effect::Deny);
+        create(db, "ses_a", Some("ses_b"));
+        create(db, "ses_b", Some("ses_a"));
+        assert_eq!(ancestors(db, &agents, "ses_a").len(), 1);
     }
 }

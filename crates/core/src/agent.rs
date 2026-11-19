@@ -158,13 +158,15 @@ fn expand(rule: Rule, home: &str) -> Rule {
     }
 }
 
-fn rules(value: Option<&Value>, home: &str) -> Vec<Rule> {
+/// An agent definition's rules; `project` marks them as a project's.
+fn rules(value: Option<&Value>, home: &str, project: bool) -> Vec<Rule> {
     value
         .and_then(Value::as_array)
         .map(|list| {
             list.iter()
                 .filter_map(|r| serde_json::from_value::<Rule>(r.clone()).ok())
                 .map(|r| expand(r, home))
+                .map(|r| if project { r.from_project() } else { r })
                 .collect()
         })
         .unwrap_or_default()
@@ -194,16 +196,31 @@ impl Agents {
             // A project's markdown agents as the loader read and judged them (unapproved
             // loosening rules already left out); other folders are read here.
             Entry::Directory(dir) => match config.project_agents.iter().find(|(d, _)| d == dir) {
-                Some((_, agents)) => agents.clone(),
-                None => markdown_agents(dir),
+                Some((_, agents)) => agents.iter().map(|a| (a.clone(), true)).collect(),
+                None => markdown_agents(dir)
+                    .into_iter()
+                    .map(|a| (a, false))
+                    .collect::<Vec<_>>(),
             },
-            Entry::Document { agents, source, .. } => agents
+            Entry::Document {
+                agents,
+                source,
+                project,
+                ..
+            } => agents
                 .iter()
-                .map(|(id, item)| (id.clone(), item.clone(), source.clone()))
+                .map(|(id, item)| ((id.clone(), item.clone(), source.clone()), *project))
                 .collect(),
         });
-        for (id, item, source) in defined {
+        // Agents a project disabled, with their rules: a later definition of the same id starts
+        // from those, so disabling and redefining cannot drop a built-in or user rule.
+        let mut disabled: Vec<(String, Vec<Rule>)> = Vec::new();
+        for ((id, item, source), project) in defined {
             if item.get("disabled").and_then(Value::as_bool) == Some(true) {
+                if project && let Some(agent) = list.iter().find(|a| a.id == id) {
+                    disabled.retain(|(d, _)| *d != id);
+                    disabled.push((id.clone(), agent.permissions.clone()));
+                }
                 list.retain(|a| a.id != id);
                 continue;
             }
@@ -211,12 +228,15 @@ impl Agents {
                 Some(index) => index,
                 None => {
                     let mut agent = Agent::new(&id);
-                    agent.permissions.extend(global.iter().cloned());
+                    match disabled.iter().find(|(d, _)| *d == id) {
+                        Some((_, rules)) => agent.permissions = rules.clone(),
+                        None => agent.permissions.extend(global.iter().cloned()),
+                    }
                     list.push(agent);
                     list.len() - 1
                 }
             };
-            apply(&mut list[index], &item, &home);
+            apply(&mut list[index], &item, &home, project);
             if !builtin.contains(&id) {
                 list[index].source = source;
             }
@@ -302,7 +322,7 @@ pub(crate) fn markdown_agents(dir: &std::path::Path) -> Vec<Defined> {
     out
 }
 
-fn apply(agent: &mut Agent, item: &Value, home: &str) {
+fn apply(agent: &mut Agent, item: &Value, home: &str, project: bool) {
     let text = |key: &str| item.get(key).and_then(Value::as_str).map(str::to_string);
     if let Some(model) = text("model") {
         agent.model = Some(model);
@@ -327,7 +347,7 @@ fn apply(agent: &mut Agent, item: &Value, home: &str) {
     }
     agent
         .permissions
-        .extend(rules(item.get("permissions"), home));
+        .extend(rules(item.get("permissions"), home, project));
 }
 
 #[cfg(test)]
@@ -342,6 +362,7 @@ mod tests {
             agents: config.as_object().unwrap().clone(),
             commands: Default::default(),
             source: Some("/doc.json".into()),
+            project: false,
         }];
         Agents::load(&cfg, &paths)
     }
@@ -411,6 +432,7 @@ mod tests {
                     .clone(),
                 commands: Default::default(),
                 source: Some("/doc.json".into()),
+                project: false,
             },
             Entry::Directory(project.clone()),
         ];

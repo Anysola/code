@@ -440,6 +440,69 @@ pub fn ensure(db: &Db, root: &Path, remote: &Remote, branch: Option<&str>) -> Re
     }
     db.kv_set(&key, &json!({"attemptedAt": now}))
         .map_err(|e| e.to_string())?;
+    let result = update(&path, parent, remote, branch, reuse);
+    // The reason stays with the attempt, for [`status`].
+    if let Err(error) = &result {
+        let _ = db.kv_set(&key, &json!({"attemptedAt": now, "error": short(error)}));
+    }
+    result
+}
+
+/// The first line of git's complaint, without its `fatal: ` prefix.
+fn short(error: &str) -> String {
+    let line = error
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("git failed");
+    let line = line
+        .strip_prefix("fatal: ")
+        .or_else(|| line.strip_prefix("error: "))
+        .unwrap_or(line);
+    line.chars().take(200).collect()
+}
+
+/// How a git reference's checkout stands: whether one exists, when it was last cloned or
+/// updated (or tried), and why the last try failed. `None` for a local reference.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferenceStatus {
+    pub name: String,
+    /// The checkout exists (an earlier clone worked).
+    pub cloned: bool,
+    /// Milliseconds since the epoch of the last clone or update attempt, if any.
+    pub attempted_at: Option<u64>,
+    /// Why the last attempt failed; `None` when it worked or none was made yet.
+    pub error: Option<String>,
+}
+
+pub fn status(db: &Db, reference: &Reference) -> Option<ReferenceStatus> {
+    let Source::Git { .. } = &reference.source else {
+        return None;
+    };
+    let record = db
+        .kv_get(&format!("repository-cache:{}", reference.path.display()))
+        .ok()
+        .flatten()
+        .unwrap_or(Value::Null);
+    Some(ReferenceStatus {
+        name: reference.name.clone(),
+        cloned: reference.path.join(".git").exists(),
+        attempted_at: record.get("attemptedAt").and_then(Value::as_u64),
+        error: record
+            .get("error")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
+}
+
+/// Clones into `path`, or updates the checkout there to its remote.
+fn update(
+    path: &Path,
+    parent: &Path,
+    remote: &Remote,
+    branch: Option<&str>,
+    reuse: bool,
+) -> Result<(), String> {
     if !reuse {
         let target = path.display().to_string();
         let mut args = vec!["clone", "--depth", CLONE_DEPTH];
@@ -449,28 +512,28 @@ pub fn ensure(db: &Db, root: &Path, remote: &Remote, branch: Option<&str>) -> Re
         args.extend(["--", &remote.remote, &target]);
         return git(parent, &args).map(drop);
     }
-    git(&path, &["fetch", "--all", "--prune"])?;
+    git(path, &["fetch", "--all", "--prune"])?;
     if let Some(branch) = branch {
         let spec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
-        git(&path, &["fetch", "origin", &spec])?;
+        git(path, &["fetch", "origin", &spec])?;
     }
     let tracked = match branch {
         Some(branch) => Some(branch.to_string()),
-        None => git(&path, &["symbolic-ref", "refs/remotes/origin/HEAD"])
+        None => git(path, &["symbolic-ref", "refs/remotes/origin/HEAD"])
             .ok()
             .and_then(|r| r.strip_prefix("refs/remotes/origin/").map(str::to_string))
             .filter(|b| !b.is_empty()),
     };
     if let Some(branch) = &tracked {
         git(
-            &path,
+            path,
             &["checkout", "-B", branch, &format!("origin/{branch}")],
         )?;
     }
     let target = tracked
-        .or_else(|| git(&path, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok())
+        .or_else(|| git(path, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok())
         .map_or("HEAD".to_string(), |b| format!("origin/{b}"));
-    git(&path, &["reset", "--hard", &target]).map(drop)
+    git(path, &["reset", "--hard", &target]).map(drop)
 }
 
 /// Clones or refreshes every git reference, off the request path.

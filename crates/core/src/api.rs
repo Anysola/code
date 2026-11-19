@@ -36,7 +36,7 @@ mod revert;
 mod state;
 
 pub use crate::hooks::{HookDocument, HookInfo, HookScope};
-pub use crate::trust::{TrustEntry, TrustItem, TrustKind};
+pub use crate::trust::{ConfiguredRule, TrustEntry, TrustItem, TrustKind};
 pub use state::Loaded;
 
 #[derive(Debug, thiserror::Error)]
@@ -468,6 +468,16 @@ impl Core {
         self.loaded().references.clone()
     }
 
+    /// How each configured git reference's checkout stands (local references are left out), in
+    /// config order: read from what the last clone or update recorded.
+    pub fn reference_status(&self) -> Vec<crate::reference::ReferenceStatus> {
+        self.loaded()
+            .references
+            .iter()
+            .filter_map(|r| crate::reference::status(&self.shared.db, r))
+            .collect()
+    }
+
     /// `@alias[/path]` (without the `@`) as the path it names.
     pub fn resolve_reference(&self, mention: &str) -> Option<PathBuf> {
         crate::reference::resolve(&self.loaded().references, mention)
@@ -518,6 +528,12 @@ impl Core {
         self.emit(Event::HooksChanged);
         self.emit(Event::TrustChanged);
         Ok(())
+    }
+
+    /// Every permission rule the config documents and agent markdown files set, for all agents
+    /// or one, with whether it is in effect or waits for approval ([`crate::trust::configured_rules`]).
+    pub fn configured_rules(&self) -> Vec<crate::trust::ConfiguredRule> {
+        crate::trust::configured_rules(&self.loaded().config)
     }
 
     /// What every project document wants to run, per kind (hooks, MCP servers, formatters), with

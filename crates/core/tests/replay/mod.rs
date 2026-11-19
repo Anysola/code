@@ -17,6 +17,11 @@ use anysola_testkit::{FakeGateway, Recorded, Reply, TestHome};
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
+const OPENCODE_NAMESPACE_0_5: &str = "Tools for managing OpenCode itself,";
+const OPENCODE_NAMESPACE: &str = "Tools for managing Anysola Code itself,";
+const PLAN_LEAVING_0_5: &str = "You remain in Plan mode until the user switches agents. If the user asks you to implement changes, do not do so. Tell them they need to switch agents.";
+const PLAN_LEAVING: &str = "You remain in Plan mode until the user turns it off. If the user asks you to implement changes, do not do so. Tell them to turn Plan mode off first: Build this plan, or Ask, Edits or Auto instead of Plan.";
+
 /// What a headless turn answers a question with (the captures were made with this text).
 pub const QUESTION_CANCELLED: &str = "This non-interactive run cannot ask the user questions, so the question was cancelled. Continue without an answer; make reasonable assumptions and state them.";
 /// What a headless turn answers a permission ask with, unless it runs with `auto`.
@@ -381,7 +386,10 @@ pub fn normalize_body(body: &Value, places: &Places, capture: bool) -> Value {
                     "You are an AI agent running in OpenCode,",
                     "You are an AI agent running in Anysola Code,",
                 )
-                .replace("<HOME>/.opencode/plan", "<HOME>/.anysola/plan");
+                .replace("<HOME>/.opencode/plan", "<HOME>/.anysola/plan")
+                // 1.1.1 names itself in the Code Mode catalog and words Plan mode as the window does.
+                .replace(OPENCODE_NAMESPACE_0_5, OPENCODE_NAMESPACE)
+                .replace(PLAN_LEAVING_0_5, PLAN_LEAVING);
             s = skills.replace_all(&s, "").into_owned();
             s = quoted.replace(&s, "$1$2").into_owned();
             s = quoted_transcript.replace_all(&s, "[User]: $1").into_owned();

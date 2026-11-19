@@ -261,7 +261,18 @@ pub fn local_roots(paths: &Paths, config: &Config, directory: &Path) -> Vec<Path
 
 /// Every skill visible from `directory`.
 pub async fn discover(paths: &Paths, config: &Config, directory: &Path) -> Vec<Skill> {
+    discover_with_status(paths, config, directory).await.0
+}
+
+/// [`discover`], with how fetching each `skills` URL's index went (in config order). Skill files
+/// already downloaded stay in the cache, but a URL whose index fails lists none of them.
+pub async fn discover_with_status(
+    paths: &Paths,
+    config: &Config,
+    directory: &Path,
+) -> (Vec<Skill>, Vec<crate::instructions::RemoteStatus>) {
     let mut skills = Vec::new();
+    let mut status = Vec::new();
     for root in compatibility_roots(paths, directory) {
         load_directory(&root.join("skills"), &mut skills);
     }
@@ -269,13 +280,18 @@ pub async fn discover(paths: &Paths, config: &Config, directory: &Path) -> Vec<S
         match source {
             Source::Directory(dir) => load_directory(&dir, &mut skills),
             Source::Url(url) => {
-                for dir in pull(&paths.data.join("cache").join("skills"), &url).await {
+                let pulled = pull(&paths.data.join("cache").join("skills"), &url).await;
+                status.push(crate::instructions::RemoteStatus {
+                    url: url.clone(),
+                    error: pulled.as_ref().err().cloned(),
+                });
+                for dir in pulled.unwrap_or_default() {
                     load_directory(&dir, &mut skills);
                 }
             }
         }
     }
-    skills
+    (skills, status)
 }
 
 #[derive(Deserialize)]
@@ -369,8 +385,9 @@ async fn download(http: &reqwest::Client, url: &str, destination: &Path) -> bool
         && std::fs::write(destination, &body).is_ok()
 }
 
-/// Downloads the skills of a `<url>/index.json` index into the cache; returns the skill roots.
-async fn pull(cache: &Path, url: &str) -> Vec<PathBuf> {
+/// Downloads the skills of a `<url>/index.json` index into the cache; returns the skill roots,
+/// or why the index could not be read.
+async fn pull(cache: &Path, url: &str) -> Result<Vec<PathBuf>, String> {
     let base = if url.ends_with('/') {
         url.to_string()
     } else {
@@ -381,25 +398,41 @@ async fn pull(cache: &Path, url: &str) -> Vec<PathBuf> {
         .timeout(std::time::Duration::from_secs(30))
         .build()
     else {
-        return Vec::new();
+        return Err("the request failed".into());
     };
     let index_url = format!("{base}index.json");
+    let reason = |error: reqwest::Error| {
+        if error.is_timeout() {
+            "timed out".to_string()
+        } else if error.is_connect() {
+            "could not connect".to_string()
+        } else {
+            "the request failed".to_string()
+        }
+    };
     let index = match http
         .get(&index_url)
         .header("accept", "application/json")
         .send()
         .await
     {
-        Ok(response) if response.status().is_success() => response
-            .bytes()
-            .await
-            .ok()
-            .and_then(|body| serde_json::from_slice::<Index>(&body).ok()),
-        _ => None,
+        Ok(response) if response.status().is_success() => match response.bytes().await {
+            Ok(body) => serde_json::from_slice::<Index>(&body)
+                .map_err(|_| "index.json is not a skill index".to_string()),
+            Err(error) => Err(reason(error)),
+        },
+        Ok(response) => Err(format!("index.json: {}", response.status())),
+        Err(error) => Err(reason(error)),
     };
-    let Some(index) = index else {
-        crate::log::warn("failed to fetch skill index", &[("url", &index_url)]);
-        return Vec::new();
+    let index = match index {
+        Ok(index) => index,
+        Err(error) => {
+            crate::log::warn(
+                "failed to fetch skill index",
+                &[("url", &index_url), ("error", &error)],
+            );
+            return Err(error);
+        }
     };
     let source_root = cache.join(hex::encode(Sha1::digest(base.as_bytes())));
     let mut roots = Vec::new();
@@ -443,7 +476,7 @@ async fn pull(cache: &Path, url: &str) -> Vec<PathBuf> {
             roots.push(root);
         }
     }
-    roots
+    Ok(roots)
 }
 
 /// Skills the rules do not deny.

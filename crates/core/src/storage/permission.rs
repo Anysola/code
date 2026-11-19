@@ -73,6 +73,7 @@ impl Db {
                     action: r.get(0)?,
                     resource: r.get(1)?,
                     effect: Effect::Allow,
+                    project: false,
                 })
             })?;
             rows.collect()

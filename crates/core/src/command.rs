@@ -406,6 +406,7 @@ mod tests {
                     .unwrap()
                     .clone(),
                 source: Some("/p/anysola.json".into()),
+                project: true,
             },
         ];
         let commands = Commands::load(&config);
