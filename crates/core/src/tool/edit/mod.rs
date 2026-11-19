@@ -490,6 +490,9 @@ mod tests {
         );
         assert_eq!(asked[0].action, "external_directory");
         assert_eq!(asked[1].action, "edit");
-        assert_eq!(asked[1].resources, [resource]);
+        assert_eq!(
+            asked[1].resources,
+            crate::tool::test_support::spellings(&path)
+        );
     }
 }

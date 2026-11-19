@@ -461,10 +461,10 @@ mod tests {
             .unwrap();
         let asked = test.gate.asked.lock().unwrap();
         assert_eq!(asked[0].action, "external_directory");
-        // Rule resources always use `/`.
+        // Rule resources always use `/`; the file system's own spelling joins when it differs.
         assert_eq!(
             asked[0].resources,
-            [format!("{}/*", path.replace('\\', "/"))]
+            crate::tool::test_support::folder_spellings(outside.path())
         );
         assert_eq!(asked[1].action, "grep");
         assert_eq!(asked[1].resources, ["x"]);

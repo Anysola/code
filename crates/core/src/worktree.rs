@@ -84,9 +84,16 @@ pub fn place(paths: &crate::paths::Paths, base: &Path, name: &str) -> Result<Pat
         ));
     }
     let target = crate::paths::normalize(&base.join(name));
+    // Also where both really are: another spelling of a folder (a symlink, a Windows 8.3 short
+    // name) is the same folder.
+    let real_target = crate::config::real_path(&target);
     let near = |folder: &Path| {
         let folder = crate::paths::normalize(folder);
-        target.starts_with(&folder) || folder.starts_with(&target)
+        let real_folder = crate::config::real_path(&folder);
+        target.starts_with(&folder)
+            || folder.starts_with(&target)
+            || real_target.starts_with(&real_folder)
+            || real_folder.starts_with(&real_target)
     };
     if let Some(folder) = loaded_folders(paths).iter().find(|f| near(f)) {
         return Err(format!(
@@ -160,9 +167,11 @@ pub async fn create(
 ) -> Result<PathBuf, String> {
     place(paths, base, name)?;
     let source = canonical(root).ok_or("project directory unavailable")?;
+    // The checkout's row holds the folder as the project was opened (on Windows maybe an 8.3
+    // short name): compare where both really are.
     let known = list(db, project_id)
         .iter()
-        .any(|w| Path::new(&w.directory) == source);
+        .any(|w| canonical(Path::new(&w.directory)).as_ref() == Some(&source));
     if !known {
         return Err("project directory is not a known worktree".into());
     }
@@ -304,9 +313,43 @@ mod tests {
                 "{base:?} {name}: {refused}"
             );
         }
+        // Another spelling of a definition folder is the same folder.
+        #[cfg(unix)]
+        {
+            let tmp = tempfile::tempdir().unwrap();
+            let home = crate::paths::canonicalize(tmp.path()).unwrap();
+            let paths = crate::paths::Paths::isolated(home.clone());
+            std::fs::create_dir_all(paths.data.join("agent")).unwrap();
+            std::os::unix::fs::symlink(paths.data.join("agent"), home.join("short")).unwrap();
+            let refused = place(&paths, &home.join("short"), "x").unwrap_err();
+            assert!(refused.contains("loads your own"), "{refused}");
+        }
         // Next to the definition folders is fine.
         assert!(place(&paths, &data, "trees").is_ok());
         assert!(place(&paths, &paths.home, "code").is_ok());
+    }
+
+    /// The project opened under another spelling of its folder (a Windows 8.3 short name; here
+    /// a symlink) still creates worktrees.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn create_from_a_project_opened_under_another_spelling() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = crate::paths::canonicalize(tmp.path()).unwrap();
+        let project = root.join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        repo(&project);
+        let alias = root.join("alias");
+        std::os::unix::fs::symlink(&project, &alias).unwrap();
+        let db = Db::open(&root.join("db.sqlite")).unwrap();
+        let opened = crate::project::identify(&alias);
+        db.upsert_project(&opened).unwrap();
+        let paths = crate::paths::Paths::isolated(root.join("home"));
+        let base = root.join("home/.anysola/worktree/abc");
+        let created = create(&db, &paths, &base, &opened.id, &alias, "wt")
+            .await
+            .unwrap();
+        assert!(created.ends_with("wt"));
     }
 
     #[tokio::test]

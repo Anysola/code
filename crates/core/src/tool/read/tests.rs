@@ -430,10 +430,13 @@ async fn external_read_asks_directory_first_and_skips_instructions() {
     assert_eq!(asked[0].action, "external_directory");
     assert_eq!(
         asked[0].resources,
-        [access::slash(&outside.path().join("*"))]
+        crate::tool::test_support::folder_spellings(outside.path())
     );
     assert_eq!(asked[1].action, "read");
-    assert_eq!(asked[1].resources, [access::slash(&path)]);
+    assert_eq!(
+        asked[1].resources,
+        crate::tool::test_support::spellings(&path)
+    );
 }
 
 #[tokio::test]

@@ -394,7 +394,9 @@ mod tests {
         let asked = test.gate.asked.lock().unwrap();
         assert_eq!(asked.len(), 1);
         assert_eq!(asked[0].action, "external_directory");
-        assert_eq!(asked[0].resources, vec![slash(&outside.join("*"))]);
-        assert_eq!(asked[0].save, vec![slash(&outside.join("*"))]);
+        // As written, and as the file system spells it when that differs (Windows short names).
+        let folder = crate::tool::test_support::folder_spellings(&outside);
+        assert_eq!(asked[0].resources, folder);
+        assert_eq!(asked[0].save, folder);
     }
 }

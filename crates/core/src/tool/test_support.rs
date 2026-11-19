@@ -188,3 +188,24 @@ pub fn context(dir: &Path) -> TestContext {
         session,
     }
 }
+
+/// The names a permission request carries for `path` outside the project: as written, then as
+/// the file system spells it when that differs (a Windows 8.3 short name such as `RUNNER~1`, a
+/// symlinked temp folder).
+pub fn spellings(path: &Path) -> Vec<String> {
+    let written = super::access::slash(path);
+    let real = super::access::slash(&crate::config::real_path(path));
+    if real == written {
+        vec![written]
+    } else {
+        vec![written, real]
+    }
+}
+
+/// [`spellings`] of a folder as `external_directory` asks for it (`<folder>/*`).
+pub fn folder_spellings(folder: &Path) -> Vec<String> {
+    spellings(folder)
+        .into_iter()
+        .map(|name| format!("{name}/*"))
+        .collect()
+}

@@ -433,20 +433,31 @@ fn session_move_goes_to_the_project_root_or_a_worktree_only() {
         results[0]["content"]
             .as_str()
             .is_some_and(|c| c.contains("\"sessionID\"")),
-        "the root"
+        "the root: {results:?}"
+    );
+    assert!(
+        !results[1]["content"].to_string().contains("Unable"),
+        "the worktree is created: {results:?}"
     );
     assert!(
         results[2]["content"]
             .as_str()
             .is_some_and(|c| c.contains("\"sessionID\"")),
-        "a worktree"
+        "a worktree: {results:?}"
     );
     assert!(
         results[3]["content"]
             .to_string()
-            .contains("can only move to the project's root")
+            .contains("can only move to the project's root"),
+        "{results:?}"
     );
-    assert_ne!(moved, project.display().to_string(), "now in the worktree");
+    // Compared where they really are: on Windows the project may be written as a short name.
+    let real = |p: &std::path::Path| std::fs::canonicalize(p).unwrap();
+    assert_ne!(
+        real(std::path::Path::new(&moved)),
+        real(&project),
+        "now in the worktree: {results:?}"
+    );
     assert!(std::path::Path::new(&moved).join("README.md").exists());
 }
 
