@@ -99,7 +99,7 @@ async fn edit(input: &Input, ctx: &ToolContext) -> ToolResult {
         .then(|| json!({ "files": [FileDiff::new(&target.resource, source, &replaced, Status::Modified).to_value()] }));
     ctx.ask(PermissionRequest {
         action: "edit".into(),
-        resources: vec![target.resource.clone()],
+        resources: target.resources(),
         save: vec!["*".into()],
         metadata: preview.unwrap_or(Value::Null),
     })
@@ -107,9 +107,7 @@ async fn edit(input: &Input, ctx: &ToolContext) -> ToolResult {
 
     if count == 0 {
         // The hint shows file contents, so only when reading this file is already allowed.
-        let readable = ctx
-            .permissions
-            .allows("read", std::slice::from_ref(&target.resource));
+        let readable = ctx.permissions.allows("read", &target.resources());
         let hint = readable
             .then(|| hint::miss_hint(source, &input.old_string, &input.new_string))
             .flatten()

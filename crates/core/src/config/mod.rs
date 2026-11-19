@@ -275,6 +275,17 @@ impl Config {
         let mut data = document.data;
         let hooks = data.remove("hooks");
         let disable = data.remove("disable_hooks");
+        // Where worktrees are checked out: a repository could aim it at the user's own agent
+        // folders.
+        if document.project
+            && let Some(Value::Object(worktree)) = data.get_mut("worktree")
+            && worktree.remove("directory").is_some()
+        {
+            self.warnings.push(format!(
+                "Ignoring \"worktree.directory\" in {}: it only works in your own config (~/.anysola/config.json).",
+                document.source.as_deref().unwrap_or("a project document")
+            ));
+        }
         // The shell runs every command and hook: a repository must not choose it.
         if document.project && data.remove("shell").is_some() {
             self.warnings.push(format!(
@@ -660,7 +671,7 @@ pub fn upward(start: &Path, home: &Path) -> Vec<PathBuf> {
 }
 
 /// The system configuration directory: managed settings that override everything.
-fn system_dir() -> PathBuf {
+pub(crate) fn system_dir() -> PathBuf {
     if cfg!(windows) {
         let base = std::env::var_os("ProgramData").unwrap_or_else(|| "C:\\ProgramData".into());
         PathBuf::from(base).join("opencode")

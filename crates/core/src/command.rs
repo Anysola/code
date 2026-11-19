@@ -185,6 +185,21 @@ impl Commands {
                 .collect(),
         });
         for command in defined {
+            // A project may redefine a built-in command, never one of the user's own.
+            if command.project
+                && list
+                    .iter()
+                    .any(|c| c.name == command.name && !c.project && c.source.is_some())
+            {
+                crate::log::warn(
+                    "ignoring a project's command: your own command has the same name",
+                    &[
+                        ("command", &command.name),
+                        ("file", command.source.as_deref().unwrap_or_default()),
+                    ],
+                );
+                continue;
+            }
             list.retain(|c| c.name != command.name);
             list.push(command);
         }
@@ -278,13 +293,19 @@ pub fn substitute(template: &str, input: &str) -> String {
     }
 }
 
+/// What replaces a ``!`cmd` `` the session's permissions did not let run.
+pub const NOT_RUN: &str = "(not run: the session's permissions did not allow this shell command)";
+
 /// Replaces every ``!`cmd` `` with the command's combined output (two at a time, the configured
-/// shell, run in `cwd`).
+/// shell, run in `cwd`). With a `gate` (a project's command), each one is first a `shell`
+/// request to that session's permissions, as the shell tool makes it; one not allowed does not
+/// run and leaves [`NOT_RUN`].
 pub async fn interpolate(
     text: &str,
     shell: Option<&str>,
     cwd: &Path,
     env: &[(std::ffi::OsString, std::ffi::OsString)],
+    gate: Option<&crate::tool::ToolContext>,
 ) -> Result<String, String> {
     static SHELL: OnceLock<Regex> = OnceLock::new();
     let pattern = regex(&SHELL, r"!`([^`]+)`");
@@ -297,6 +318,21 @@ pub async fn interpolate(
     }
     let outputs: Vec<Result<String, String>> = futures_util::stream::iter(sources)
         .map(|source| async move {
+            if let Some(ctx) = gate {
+                let shell = crate::tool::shell::select::resolve(shell);
+                let directory = cwd.to_string_lossy();
+                let target = crate::tool::access::resolve(
+                    ctx,
+                    &directory,
+                    Some(crate::tool::access::Kind::Directory),
+                );
+                if crate::tool::shell::authorize(ctx, &source, &shell, &target)
+                    .await
+                    .is_err()
+                {
+                    return Ok(NOT_RUN.to_string());
+                }
+            }
             let (program, args) = crate::tool::shell::invocation(shell, &source);
             let output = crate::console::tokio_command(&program)
                 .args(&args)
@@ -337,6 +373,8 @@ pub struct RenderEnv<'a> {
     pub cwd: &'a Path,
     pub env: &'a [(std::ffi::OsString, std::ffi::OsString)],
     pub mcp: Option<&'a dyn crate::mcp::Mcp>,
+    /// The permissions ``!`cmd` `` of a project's command go through (see [`interpolate`]).
+    pub gate: Option<&'a crate::tool::ToolContext>,
 }
 
 /// The prompt text a command produces from the user's arguments.
@@ -347,6 +385,7 @@ pub async fn render(command: &Command, input: &str, at: &RenderEnv<'_>) -> Resul
         cwd,
         env,
         mcp,
+        gate,
     } = *at;
     match &command.template {
         Template::Builtin(template) => Ok(append(
@@ -354,7 +393,7 @@ pub async fn render(command: &Command, input: &str, at: &RenderEnv<'_>) -> Resul
             input,
         )),
         Template::User(template) => {
-            interpolate(&substitute(template, input), shell, cwd, env).await
+            interpolate(&substitute(template, input), shell, cwd, env, gate).await
         }
         Template::Goal => Ok(input.to_string()),
         Template::Mcp(prompt) => match mcp {
@@ -401,9 +440,15 @@ mod tests {
     async fn shell_interpolation() {
         let dir = tempfile::tempdir().unwrap();
         let env: Vec<_> = std::env::vars_os().collect();
-        let text = interpolate("a !`echo hi` b !`pwd`", Some("/bin/sh"), dir.path(), &env)
-            .await
-            .unwrap();
+        let text = interpolate(
+            "a !`echo hi` b !`pwd`",
+            Some("/bin/sh"),
+            dir.path(),
+            &env,
+            None,
+        )
+        .await
+        .unwrap();
         let cwd = std::fs::canonicalize(dir.path()).unwrap();
         assert_eq!(text, format!("a hi\n b {}\n", cwd.display()));
     }

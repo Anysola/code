@@ -240,9 +240,14 @@ async fn worktree_create(
             &input,
         )));
     }
+    let base = worktree_base(ctx);
+    crate::worktree::place(&ctx.paths, &base, name).map_err(|reason| {
+        ToolError::execution(format!("Unable to create worktree {name}. {reason}"))
+    })?;
     let created = crate::worktree::create(
         ctx.host.db(),
-        &worktree_base(ctx),
+        &ctx.paths,
+        &base,
         &ctx.project_id,
         &ctx.worktree,
         name,
@@ -280,7 +285,7 @@ async fn worktree_remove(input: Value, ctx: &ToolContext) -> Result<Called, Tool
     // Removing a worktree deletes files, so it needs the same approval as editing them.
     ctx.ask(PermissionRequest {
         action: "edit".into(),
-        resources: vec![target.resource.clone()],
+        resources: target.resources(),
         save: vec!["*".into()],
         metadata: Value::Null,
     })

@@ -619,6 +619,18 @@ pub(crate) fn unattended(
     shared: &Arc<Shared>,
     session: &SessionRow,
 ) -> Result<ToolContext, String> {
+    // Checks run unattended: nobody is there to answer a floor's asks.
+    context(shared, session, crate::session::gate::Floor::None, None)
+}
+
+/// A tool context for `session` outside a turn, its gate under `floor`. With `child`, the gate
+/// is that of a child session of `session` running that agent (a subtask about to start).
+pub(crate) fn context(
+    shared: &Arc<Shared>,
+    session: &SessionRow,
+    floor: crate::session::gate::Floor,
+    child: Option<&str>,
+) -> Result<ToolContext, String> {
     let selection = crate::session::select(shared, session).map_err(|e| e.message)?;
     let mut configured = selection.agent.permissions.clone();
     configured.extend(
@@ -627,19 +639,27 @@ pub(crate) fn unattended(
             .session_permissions(&session.id)
             .unwrap_or_default(),
     );
+    let mut ancestors =
+        crate::session::gate::ancestors(&shared.db, &selection.sources.agents, &session.id);
+    if let Some(child) = child {
+        ancestors.insert(0, configured);
+        configured = match selection.sources.agents.get(child) {
+            Some(agent) => agent.permissions.clone(),
+            None => vec![crate::permission::Rule::new(
+                "*",
+                "*",
+                crate::permission::Effect::Deny,
+            )],
+        };
+    }
     let gate = Arc::new(RuleGate {
         session_id: session.id.clone(),
         scope: Arc::new(Scope {
             configured,
-            ancestors: crate::session::gate::ancestors(
-                &shared.db,
-                &selection.sources.agents,
-                &session.id,
-            ),
+            ancestors,
             project_id: shared.project.id.clone(),
             policies: Arc::new(selection.sources.config.policies()),
-            // Checks run unattended: nobody is there to answer a floor's asks.
-            floor: crate::session::gate::Floor::None,
+            floor,
         }),
         asks: shared.asks.clone(),
     });

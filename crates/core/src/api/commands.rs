@@ -38,28 +38,7 @@ impl Core {
             .session(session_id)?
             .ok_or(CoreError::SessionNotFound)?;
         let mcp = self.shared.mcp.get();
-        let at = crate::command::RenderEnv {
-            project: &self.shared.project.worktree,
-            shell: loaded.config.shell(),
-            cwd: std::path::Path::new(&session.directory),
-            env: &self.shared.env,
-            mcp: mcp.map(|m| m.as_ref()),
-        };
-        let text = match crate::command::render(&command, arguments, &at).await {
-            Ok(text) => text,
-            Err(message) => {
-                return Ok(Outcome::Failed(SessionError::new("unknown", message)));
-            }
-        };
-        if command.template == Template::Goal {
-            return self.goal_command(session_id, &text, options).await;
-        }
         let agent = command.agent.as_deref().and_then(|a| loaded.agents.get(a));
-        let model = command
-            .model
-            .as_deref()
-            .or_else(|| agent.and_then(|a| a.model.as_deref()))
-            .and_then(ModelRef::parse);
         // A project's command never moves the user's session to another agent: it runs in a
         // child session, which its parent's rules bound.
         let current = session
@@ -70,10 +49,45 @@ impl Core {
             .agent
             .as_deref()
             .is_some_and(|a| current.as_deref() != Some(a));
-        if command.subagent
+        let subtask = command.subagent
             || agent.is_some_and(|a| a.mode == crate::agent::Mode::Subagent)
-            || (command.project && switches)
-        {
+            || (command.project && switches);
+        // A project's ``!`cmd` `` runs only as the session it runs in may run shell commands.
+        let gate = if command.project && matches!(command.template, Template::User(_)) {
+            let child = subtask
+                .then(|| command.agent.clone().or_else(|| current.clone()))
+                .flatten();
+            let floor = crate::session::gate::Floor::of(&self.shared.db, &session.id);
+            match crate::schedule::check::context(&self.shared, &session, floor, child.as_deref()) {
+                Ok(ctx) => Some(ctx),
+                Err(message) => return Ok(Outcome::Failed(SessionError::new("unknown", message))),
+            }
+        } else {
+            None
+        };
+        let at = crate::command::RenderEnv {
+            project: &self.shared.project.worktree,
+            shell: loaded.config.shell(),
+            cwd: std::path::Path::new(&session.directory),
+            env: &self.shared.env,
+            mcp: mcp.map(|m| m.as_ref()),
+            gate: gate.as_ref(),
+        };
+        let text = match crate::command::render(&command, arguments, &at).await {
+            Ok(text) => text,
+            Err(message) => {
+                return Ok(Outcome::Failed(SessionError::new("unknown", message)));
+            }
+        };
+        if command.template == Template::Goal {
+            return self.goal_command(session_id, &text, options).await;
+        }
+        let model = command
+            .model
+            .as_deref()
+            .or_else(|| agent.and_then(|a| a.model.as_deref()))
+            .and_then(ModelRef::parse);
+        if subtask {
             return self
                 .subagent_command(&session, &command, model, text, options)
                 .await;

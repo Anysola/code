@@ -52,6 +52,52 @@ pub fn base(
     }
 }
 
+/// Folders Anysola Code loads the user's own definitions or config from: a worktree there would
+/// make the repository's files load as the user's.
+fn loaded_folders(paths: &crate::paths::Paths) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = crate::agent::FOLDERS
+        .iter()
+        .chain(crate::command::FOLDERS.iter())
+        .chain(["skill", "skills"].iter())
+        .map(|folder| paths.data.join(folder))
+        .collect();
+    out.push(paths.data.join("config.json"));
+    out.push(paths.data.join("AGENTS.md"));
+    out.push(paths.legacy_config_dir());
+    out.push(crate::config::system_dir());
+    out.push(paths.home.join(".claude"));
+    out.push(paths.home.join(".agents"));
+    out
+}
+
+/// Whether a worktree named `name` may be created under `base`: the name is one plain folder
+/// name, and the worktree is neither inside nor around a folder the app loads definitions from.
+pub fn place(paths: &crate::paths::Paths, base: &Path, name: &str) -> Result<PathBuf, String> {
+    let plain = !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains(['/', '\\', ':', '\0'])
+        && Path::new(name).components().count() == 1;
+    if !plain {
+        return Err(format!(
+            "\"{name}\" is not a worktree name: use a plain folder name."
+        ));
+    }
+    let target = crate::paths::normalize(&base.join(name));
+    let near = |folder: &Path| {
+        let folder = crate::paths::normalize(folder);
+        target.starts_with(&folder) || folder.starts_with(&target)
+    };
+    if let Some(folder) = loaded_folders(paths).iter().find(|f| near(f)) {
+        return Err(format!(
+            "A worktree can't go in {}: Anysola Code loads your own agents, commands, skills or config from {}. Set \"worktree.directory\" in your config to another folder.",
+            target.display(),
+            folder.display()
+        ));
+    }
+    Ok(target)
+}
+
 pub fn list(db: &Db, project_id: &str) -> Vec<Worktree> {
     db.worktrees(project_id)
         .unwrap_or_default()
@@ -106,11 +152,13 @@ async fn toplevel(directory: &Path) -> Option<PathBuf> {
 /// suffixes avoid existing directories.
 pub async fn create(
     db: &Db,
+    paths: &crate::paths::Paths,
     base: &Path,
     project_id: &str,
     root: &Path,
     name: &str,
 ) -> Result<PathBuf, String> {
+    place(paths, base, name)?;
     let source = canonical(root).ok_or("project directory unavailable")?;
     let known = list(db, project_id)
         .iter()
@@ -128,6 +176,11 @@ pub async fn create(
         }
         target = base.join(format!("{name}-{suffix}"));
     }
+    place(
+        paths,
+        base,
+        &target.file_name().unwrap_or_default().to_string_lossy(),
+    )?;
     let repository = toplevel(&source)
         .await
         .ok_or("project is not a git repository")?;
@@ -225,6 +278,37 @@ mod tests {
         }
     }
 
+    #[test]
+    fn worktrees_stay_out_of_the_folders_definitions_load_from() {
+        let paths = crate::paths::Paths::isolated("/home/u".into());
+        let data = paths.data.clone();
+        let default = data.join("worktree").join("abc");
+        assert_eq!(place(&paths, &default, "wt").unwrap(), default.join("wt"));
+        for name in ["", ".", "..", "a/b", "a\\b", "/abs", "c:x"] {
+            assert!(place(&paths, &default, name).is_err(), "{name:?}");
+        }
+        for (base, name) in [
+            (data.join("agent"), "x"),
+            (data.join("skills").join("deep"), "x"),
+            (data.clone(), "agent"),
+            (data.clone(), "commands"),
+            (paths.home.clone(), ".claude"),
+            (paths.home.clone(), ".anysola"),
+            (paths.home.join(".config"), "opencode"),
+            (paths.legacy_config_dir(), "x"),
+            (paths.home.join(".agents").join("skills"), "x"),
+        ] {
+            let refused = place(&paths, &base, name).unwrap_err();
+            assert!(
+                refused.contains("loads your own"),
+                "{base:?} {name}: {refused}"
+            );
+        }
+        // Next to the definition folders is fine.
+        assert!(place(&paths, &data, "trees").is_ok());
+        assert!(place(&paths, &paths.home, "code").is_ok());
+    }
+
     #[tokio::test]
     async fn create_list_remove() {
         let tmp = tempfile::tempdir().unwrap();
@@ -238,8 +322,13 @@ mod tests {
             .unwrap();
         let id = crate::project::identify(&project).id;
 
-        let first = create(&db, &base, &id, &project, "wt").await.unwrap();
-        let second = create(&db, &base, &id, &project, "wt").await.unwrap();
+        let paths = crate::paths::Paths::isolated(root.join("home"));
+        let first = create(&db, &paths, &base, &id, &project, "wt")
+            .await
+            .unwrap();
+        let second = create(&db, &paths, &base, &id, &project, "wt")
+            .await
+            .unwrap();
         assert!(first.ends_with("wt"));
         assert!(second.ends_with("wt-2"));
         let listed = list(&db, &id);

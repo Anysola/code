@@ -31,6 +31,45 @@ pub struct Target {
     /// Directory-relative for internal paths, absolute for external ones (always `/`-separated).
     pub resource: String,
     pub external: Option<External>,
+    /// The path's other names a rule may use: relative to the project's root and to the root of
+    /// the checkout the session works in, where those contain it and differ from `resource`.
+    pub also: Vec<String>,
+}
+
+impl Target {
+    /// Every name of the path, for a permission request: a rule on any of them decides (the
+    /// gate takes the strictest), so moving the session never stops a rule from matching.
+    pub fn resources(&self) -> Vec<String> {
+        std::iter::once(self.resource.clone())
+            .chain(self.also.iter().cloned())
+            .collect()
+    }
+}
+
+/// The path relative to each checkout root that holds it: the project's root and the root of
+/// the session directory's checkout (a worktree, or the project itself for a subfolder).
+fn other_names(ctx: &ToolContext, absolute: &Path, resource: &str) -> Vec<String> {
+    let mut roots = vec![ctx.worktree.clone()];
+    if let Some(root) = project::vcs_root(&ctx.directory) {
+        roots.push(root);
+    }
+    let mut out: Vec<String> = Vec::new();
+    for root in roots {
+        if root.parent().is_none() {
+            continue;
+        }
+        let Ok(relative) = absolute.strip_prefix(&root) else {
+            continue;
+        };
+        let name = match slash(relative) {
+            empty if empty.is_empty() => ".".to_string(),
+            name => name,
+        };
+        if name != resource && !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out
 }
 
 /// Rewrites MSYS/Cygwin/WSL drive paths (`/c/x`, `/cygdrive/c/x`, `/mnt/c/x`) to `C:/x` on Windows.
@@ -109,6 +148,7 @@ pub fn resolve_at(ctx: &ToolContext, base: &Path, input: &str, kind: Option<Kind
             None => relative_path(&ctx.directory, &absolute),
         };
         return Target {
+            also: other_names(ctx, &absolute, &resource),
             absolute,
             resource,
             external: None,
@@ -128,8 +168,10 @@ pub fn resolve_at(ctx: &ToolContext, base: &Path, input: &str, kind: Option<Kind
             .unwrap_or_else(|| absolute.clone())
     };
     let root = project::vcs_root(&directory).unwrap_or_else(|| directory.clone());
+    let resource = slash(&absolute);
     Target {
-        resource: slash(&absolute),
+        also: other_names(ctx, &absolute, &resource),
+        resource,
         external: Some(External {
             resource: slash(&directory.join("*")),
             save: slash(&root.join("*")),
@@ -182,7 +224,7 @@ pub async fn authorize_read(ctx: &ToolContext, input: &str) -> Result<Target, To
     authorize_external(ctx, &[&target]).await?;
     ctx.ask(PermissionRequest {
         action: "read".into(),
-        resources: vec![target.resource.clone()],
+        resources: target.resources(),
         save: vec!["*".into()],
         ..Default::default()
     })
@@ -229,8 +271,14 @@ mod tests {
         // Inside the worktree but outside the session directory: still internal, relative.
         let sibling = resolve(&ctx, "../other/x.txt", None);
         assert_eq!(
-            (sibling.resource.as_str(), sibling.external),
+            (sibling.resource.as_str(), sibling.external.clone()),
             ("../other/x.txt", None)
+        );
+        // Its name from the project's root too, so a root-relative rule still names it.
+        assert_eq!(sibling.resources(), ["../other/x.txt", "other/x.txt"]);
+        assert_eq!(
+            resolve(&ctx, "y.txt", None).resources(),
+            ["y.txt", "sub/y.txt"]
         );
 
         let outside = dir.path().join("elsewhere");

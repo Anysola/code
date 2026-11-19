@@ -90,7 +90,7 @@ async fn write(input: &Input, ctx: &ToolContext) -> ToolResult {
     );
     ctx.ask(PermissionRequest {
         action: "edit".into(),
-        resources: vec![target.resource.clone()],
+        resources: target.resources(),
         save: vec!["*".into()],
         metadata: json!({ "files": [preview.to_value()] }),
     })

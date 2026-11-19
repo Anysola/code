@@ -104,6 +104,7 @@ impl Core {
         );
         crate::worktree::create(
             &shared.db,
+            &shared.paths,
             &base,
             &shared.project.id,
             &shared.project.worktree,

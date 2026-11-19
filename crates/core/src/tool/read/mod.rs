@@ -126,7 +126,7 @@ async fn recover(
     let target = access::resolve(ctx, &alternate.to_string_lossy(), Some(Kind::File));
     ctx.ask(PermissionRequest {
         action: "read".into(),
-        resources: vec![target.resource.clone()],
+        resources: target.resources(),
         save: vec!["*".into()],
         ..Default::default()
     })
