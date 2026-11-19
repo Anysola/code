@@ -26,7 +26,7 @@ import { createContext, memo, useContext, useEffect, useMemo, useRef, useState, 
 import Markdown, { type Components, type ExtraProps } from "react-markdown"
 import remarkGfm from "remark-gfm"
 
-import type { FileDiff, FormRequest, HookRun, Item } from "./bridge"
+import type { FileDiff, FormRequest, HookRun, Item, ToolInput } from "./bridge"
 import { duration, Elapsed } from "./conversation"
 import { FormCard } from "./form-card"
 import { TrustCards } from "./hooks-card"
@@ -922,6 +922,51 @@ function HookLine({ run }: { run: HookRun }) {
   )
 }
 
+/** What a write, an edit or a script says while it is being written and while it runs. */
+const going: Record<string, string> = {
+  write: "Writing",
+  edit: "Editing",
+  execute: "Running a script",
+}
+
+/** The input a `streaming` row has so far, while its turn runs; null once the call is whole. */
+function useInput(tool: Tool): ToolInput | null {
+  const { live } = useContext(WhereContext)
+  const input = useStore((s) => (tool.status === "streaming" ? (s.inputs[tool.id] ?? null) : null))
+  return live ? input : null
+}
+
+/** "12 lines" as a written text grows. */
+function LineCount({ input }: { input: ToolInput | null }) {
+  if (!input?.lines) return null
+  return (
+    <span className="tabular-nums">
+      {input.lines.toLocaleString()} {input.lines === 1 ? "line" : "lines"}
+    </span>
+  )
+}
+
+/** The last lines of a text being written: grows to its few lines, then holds its height while
+ * they move up; long lines are cut, never wrapped. */
+function LiveTail({ text }: { text: string }) {
+  const lines = text.split("\n")
+  const most = useRef(0)
+  most.current = Math.max(most.current, lines.length)
+  return (
+    <div
+      aria-hidden
+      style={{ height: `calc(${most.current} * 1.25rem + 1.25rem)` }}
+      className="mx-2 mt-1 mb-1 flex flex-col justify-end overflow-hidden rounded-lg bg-background/60 px-3 py-2.5 font-mono text-xs leading-5 text-foreground/70"
+    >
+      {lines.map((line, i) => (
+        <div key={i} className="truncate whitespace-pre">
+          {line || "\u00a0"}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function ToolState({ state }: { state: ReturnType<typeof useToolState> }) {
   if (state === "running") return <Spinner className="size-3" />
   if (state === "waiting") return <span>Waiting for you</span>
@@ -935,18 +980,23 @@ function ToolState({ state }: { state: ReturnType<typeof useToolState> }) {
 function ToolRow({ tool, verb, icon }: { tool: Tool; verb?: string; icon?: typeof FileText }) {
   const Icon = icon ?? icons[tool.name] ?? Wrench
   const state = useToolState(tool)
+  const input = useInput(tool)
   const { directory } = useContext(WhereContext)
   const error = cutShort(tool) ? null : tool.error
   const output = OPENS.has(tool.name) ? (error ?? tool.output) : error
   const [open, setOpen] = useState(false)
-  const file = FILE_TOOLS.has(tool.name) && tool.target && directory ? tool.target : null
+  const target = input?.target || tool.target
+  const file = FILE_TOOLS.has(tool.name) && target && directory && !input ? target : null
+  // The model is still writing a script: it runs once written.
+  const named =
+    state === "running" && tool.status === "streaming" && tool.name === "execute" ? "Writing a script" : state === "running" ? going[tool.name] : undefined
   const head = (
     <>
       <Icon className="size-3.5 shrink-0 text-muted" strokeWidth={1.75} />
       <span className="shrink-0 text-foreground/80">
-        {verb ?? (state === "blocked" ? intents[tool.name] : verbs[tool.name]) ?? tool.name}
+        {verb ?? named ?? (state === "blocked" || state === "stopped" ? (intents[tool.name] ?? verbs[tool.name]) : verbs[tool.name]) ?? tool.name}
       </span>
-      <span className="min-w-0 truncate font-mono text-xs text-muted">{tool.target}</span>
+      <span className="min-w-0 truncate font-mono text-xs text-muted">{target}</span>
     </>
   )
   return (
@@ -972,12 +1022,14 @@ function ToolRow({ tool, verb, icon }: { tool: Tool; verb?: string; icon?: typeo
           <span className="flex min-w-0 flex-1 items-center gap-2.5">{head}</span>
         )}
         <span className="ml-auto flex shrink-0 items-center gap-2 text-2xs text-muted">
+          <LineCount input={input} />
           <ToolState state={state} />
           {file && <PathMenu directory={directory} path={file} />}
           {output && (open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />)}
         </span>
       </div>
       <HookLines runs={tool.hooks} className="pl-8" />
+      {input?.tail && <LiveTail text={input.tail} />}
       {open && output && (
         <pre
           className={cn(
@@ -1021,6 +1073,7 @@ function PathMenu({ directory, path }: { directory: string; path: string }) {
 
 function Subagent({ tool, directory }: { tool: Tool; directory: string }) {
   const state = useToolState(tool)
+  const target = useInput(tool)?.target || tool.target
   const child = tool.child
   return (
     <div className="-mx-2">
@@ -1031,7 +1084,7 @@ function Subagent({ tool, directory }: { tool: Tool; directory: string }) {
       >
         <Bot className="size-3.5 shrink-0 text-muted" strokeWidth={1.75} />
         <span className="shrink-0 text-foreground/80">Subagent</span>
-        <span className="min-w-0 truncate text-muted">{tool.target}</span>
+        <span className="min-w-0 truncate text-muted">{target}</span>
         <span className="ml-auto flex shrink-0 items-center gap-2 text-2xs text-muted">
           {state === "running" ? <Spinner className="size-3" /> : <ToolState state={state} />}
           {state === "done" && <span>Done</span>}
@@ -1057,6 +1110,8 @@ function OtherTool({ tool }: { tool: Tool }) {
 
 function Command({ tool }: { tool: Tool }) {
   const state = useToolState(tool)
+  // A command shows as it is typed, in its place on the row.
+  const target = useInput(tool)?.target || tool.target
   // A failed command shows why at once; the user's own click wins after that.
   const [chosen, setChosen] = useState<boolean | null>(null)
   const open = chosen ?? (state === "error" || getPrefs().conversation.commands === "open")
@@ -1072,7 +1127,7 @@ function Command({ tool }: { tool: Tool }) {
         <span className="shrink-0 text-foreground/80">
           {state === "running" ? "Running" : state === "waiting" || state === "declined" || state === "blocked" ? "Run" : "Ran"}
         </span>
-        <span className="min-w-0 truncate font-mono text-xs text-muted">{tool.target}</span>
+        <span className="min-w-0 truncate font-mono text-xs text-muted">{target}</span>
         <span className="ml-auto flex shrink-0 items-center gap-2 text-2xs text-muted">
           <ToolState state={state} />
           {output && (open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />)}
@@ -1409,7 +1464,7 @@ function StatusLine({ open, waiting, streaming }: { open: Open; waiting: boolean
       return (
         <div className="text-dense flex min-w-0 items-center gap-2 text-muted">
           <Spinner className="shrink-0" />
-          <span className="min-w-0 truncate">{now ?? "Working"}</span>
+          <span className="min-w-0 truncate">{now ?? (open.live.some((l) => l.kind === "reasoning") ? "Thinking" : "Working")}</span>
           {open.started && (
             <span className="text-2xs shrink-0 text-muted/80">
               · <Elapsed since={open.started} />

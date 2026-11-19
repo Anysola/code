@@ -135,6 +135,7 @@ function Conversation({ open }: { open: Open }) {
   /** Away from the bottom; `fresh` once output arrived since. */
   const [away, setAway] = useState<{ fresh: boolean } | null>(null)
   const size = useRef(0)
+  const top = useRef(0)
   // A chat opens at its latest turn and follows new output while the reader is at the bottom.
   useLayoutEffect(() => {
     const el = ref.current
@@ -147,14 +148,18 @@ function Conversation({ open }: { open: Open }) {
     stick.current = true
     setAway(null)
   }, [open.sessionId])
-  // The composer grows (lines, images) and the area shrinks: stay at the bottom if there.
+  // The composer grows (lines, images) and the area shrinks, or a row grows on its own (a tool's
+  // input being written): stay at the bottom if there.
   useEffect(() => {
     const el = ref.current
     if (!el) return
     const watch = new ResizeObserver(() => {
       if (stick.current) el.scrollTop = el.scrollHeight
+      else if (el.scrollHeight > size.current + 4) setAway((a) => (a && !a.fresh ? { fresh: true } : a))
+      size.current = el.scrollHeight
     })
     watch.observe(el)
+    if (el.firstElementChild) watch.observe(el.firstElementChild)
     return () => watch.disconnect()
   }, [])
   const jump = () => {
@@ -170,7 +175,12 @@ function Conversation({ open }: { open: Open }) {
         ref={ref}
         onScroll={(e) => {
           const el = e.currentTarget
-          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+          // Only the reader scrolling up lets go of the bottom: a row that grew between the
+          // follow and this event is output, not the reader moving away.
+          const up = el.scrollTop < top.current - 1
+          top.current = el.scrollTop
+          if (el.scrollHeight - el.scrollTop - el.clientHeight < 48) stick.current = true
+          else if (up) stick.current = false
           setAway((a) => (stick.current ? null : (a ?? { fresh: false })))
         }}
         className="min-h-0 flex-1 overflow-y-auto"

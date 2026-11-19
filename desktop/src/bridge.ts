@@ -535,10 +535,29 @@ export type CommandRequest = {
   agent: string | null
 }
 
+/**
+ * A tool call's input while the model writes it, for its `streaming` row (same `callId` as the
+ * row's id): each one replaces the last. `target` is the row's one line so far (a file once its
+ * path is whole, a command as typed); `lines` counts the text a write, an edit or a script is
+ * writing, and `tail` holds its last few lines (write and edit only). All empty again when the
+ * app lost pieces of it.
+ */
+export type ToolInput = {
+  type: "toolInput"
+  sessionId: string
+  messageId: string
+  callId: string
+  name: string
+  target: string
+  lines: number | null
+  tail: string | null
+}
+
 export type CoreEvent =
   | { type: "started"; sessionId: string }
   | { type: "text" | "reasoning"; sessionId: string; messageId: string; ordinal: number; text: string }
   | { type: "changed"; sessionId: string; error?: string }
+  | ToolInput
   | { type: "retrying"; sessionId: string; attempt: number; delayMs: number; error: string }
   | PermissionRequest
   | { type: "permissionReplied"; sessionId: string; requestId: string }

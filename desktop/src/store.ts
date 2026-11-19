@@ -32,6 +32,7 @@ import {
   type Revert,
   type SessionRow,
   type Todo,
+  type ToolInput,
   type UpdateCheck,
   type View,
 } from "./bridge"
@@ -222,6 +223,8 @@ export type State = {
   comments: Comment[]
   /** The app's folder for sessions without a project, once known. */
   scratch: string | null
+  /** Tool inputs the model is writing, by call id, for their `streaming` rows (any session). */
+  inputs: Record<string, ToolInput>
 }
 
 function readMode(): Mode {
@@ -285,6 +288,7 @@ let state: State = {
   trustChanged: 0,
   trust: {},
   scratch: null,
+  inputs: {},
   pinned: readSet("anysola.pinned"),
   // Folded projects by folder key; older entries were stored as spelled.
   collapsed: new Set([...readSet("anysola.collapsed")].map(folderKey)),
@@ -960,12 +964,26 @@ function latest(n: number) {
   return true
 }
 
+/** Drops the inputs of calls matching `gone`: their rows show what is stored from here. */
+function dropInputs(gone: (i: ToolInput) => boolean) {
+  const kept = Object.values(state.inputs).filter((i) => !gone(i))
+  if (kept.length !== Object.keys(state.inputs).length) set({ inputs: Object.fromEntries(kept.map((i) => [i.callId, i])) })
+}
+
+/** A call read back as anything but `streaming` has its input whole. */
+function settleInputs(items: Item[]) {
+  if (Object.keys(state.inputs).length === 0) return
+  const done = new Set(items.filter((i) => i.kind === "tool" && i.status !== "streaming").map((i) => i.id))
+  dropInputs((i) => done.has(i.callId))
+}
+
 async function refresh(sessionId: string, again = false) {
   const open = state.open
   if (!open || open.sessionId !== sessionId) return
   const n = ++reads
   try {
     const view = await bridge.transcript(open.directory, sessionId)
+    settleInputs(view.items)
     if (latest(n)) setOpen((o) => viewPatch(view, o), sessionId)
   } catch (e) {
     // Once more after a moment; then the user hears that what shows may be behind.
@@ -1592,6 +1610,7 @@ async function refreshPeek() {
   if (!peek) return
   try {
     const { items } = await bridge.transcript(peek.directory, peek.sessionId)
+    settleInputs(items)
     set((s) => (s.peek?.sessionId === peek.sessionId ? { peek: { ...s.peek, items, loading: false } } : {}))
   } catch (e) {
     set({ peek: null, notice: message(e) })
@@ -2130,9 +2149,20 @@ function onEvent(e: CoreEvent) {
       }, id)
       break
     case "changed":
-      if (here) void refresh(id)
+      if (here) {
+        // Reasoning isn't shown; its live entry only says "Thinking" while it streams, and its
+        // block's end is a `changed`.
+        if (state.open?.live.some((l) => l.kind === "reasoning"))
+          setOpen((o) => ({ live: o.live.filter((l) => l.kind !== "reasoning") }), id)
+        void refresh(id)
+      }
+      break
+    case "toolInput":
+      set((s) => ({ inputs: { ...s.inputs, [e.callId]: e } }))
       break
     case "retrying":
+      // The step starts over: what it was writing won't finish.
+      dropInputs((i) => i.sessionId === id)
       if (here)
         setOpen(
           { status: { kind: "retrying", attempt: e.attempt, until: Date.now() + e.delayMs, error: e.error } },
@@ -2178,6 +2208,7 @@ function onEvent(e: CoreEvent) {
     case "done":
     case "failed":
     case "interrupted": {
+      dropInputs((i) => i.sessionId === id)
       const unsentFail = e.type === "failed" && !!e.unsent
       // Messages a running turn took into its queue: one of them may be what the core refused.
       const queuedSent = unsentFail && !!sentQueued.get(id)?.length
@@ -2229,6 +2260,7 @@ function onEvent(e: CoreEvent) {
       break
     }
     case "refused":
+      dropInputs((i) => i.sessionId === id)
       starting.delete(id)
       set((s) => ({ busy: toggle(s.busy, id, false) }))
       // Kept in that session's draft, open or not; the notice says so when it isn't.
@@ -2240,6 +2272,7 @@ function onEvent(e: CoreEvent) {
       turnEnded()
       break
     case "settled":
+      dropInputs((i) => i.sessionId === id)
       settleUnsent(id)
       starting.delete(id)
       set((s) => ({ busy: toggle(s.busy, id, false) }))

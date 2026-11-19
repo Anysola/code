@@ -94,19 +94,27 @@ function WindowControls() {
     { icon: Square, label: "Maximize", run: act("toggleMaximize") },
     { icon: X, label: "Close", run: act("close") },
   ]
+  // Each control takes the bar's full height to be easy to hit, but paints like the header's icon
+  // buttons: a full-bleed block would be cut by the panel's rounded corner. The inset keeps
+  // Close's circle clear of that corner's curve.
   return (
-    <div className="flex h-full">
+    <div className="flex h-full pr-2">
       {buttons.map(({ icon: Icon, label, run }, i) => (
         <Tooltip key={label} label={label}>
-          <button
-            onClick={run}
-            aria-label={label}
-            className={cn(
-              "flex h-full w-11 items-center justify-center text-muted transition-colors hover:bg-default-hover hover:text-foreground focus-visible:status-focused-field focus-visible:ring-inset",
-              i === 2 && "hover:bg-danger hover:text-danger-foreground"
-            )}
-          >
-            <Icon className={i === 1 ? "size-3" : "size-3.5"} strokeWidth={1.75} />
+          <button onClick={run} aria-label={label} className="group/wc flex h-full w-11 items-center justify-center outline-none">
+            <span
+              className={btn(
+                "ghost",
+                "sm",
+                cn(
+                  "pointer-events-none text-muted group-hover/wc:bg-(--button-bg-hover) group-hover/wc:text-foreground group-active/wc:scale-[0.98] group-active/wc:bg-(--button-bg-pressed) group-focus-visible/wc:status-focused",
+                  i === 2 && "group-hover/wc:bg-danger group-hover/wc:text-danger-foreground group-active/wc:bg-danger-hover"
+                ),
+                true
+              )}
+            >
+              <Icon className={i === 1 ? "size-3" : "size-3.5"} strokeWidth={1.75} />
+            </span>
           </button>
         </Tooltip>
       ))}

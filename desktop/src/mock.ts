@@ -1198,6 +1198,82 @@ export function mockBridge(): Bridge {
     emit({ type: "done", sessionId: id })
   }
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  /**
+   * `?state=live`: a turn whose tool calls stream their input, in the app's order: the row is
+   * stored as the call starts (`changed`), snapshots of its input follow, and `changed` again
+   * once the call is whole and runs.
+   */
+  const liveTurn = async (id: string) => {
+    const add = (item: Item) => {
+      transcripts.set(id, [...(transcripts.get(id) ?? []), item])
+      emit({ type: "changed", sessionId: id })
+    }
+    const update = (callId: string, patch: Partial<Extract<Item, { kind: "tool" }>>) => {
+      transcripts.set(
+        id,
+        (transcripts.get(id) ?? []).map((i) => (i.id === callId && i.kind === "tool" ? { ...i, ...patch } : i))
+      )
+      emit({ type: "changed", sessionId: id })
+    }
+    const tool = (callId: string, name: string): Item => ({
+      kind: "tool", id: callId, name, status: "streaming", target: "", files: null, output: "", error: null,
+    })
+    const input = (callId: string, name: string, target: string, body?: string) =>
+      emit({
+        type: "toolInput", sessionId: id, messageId: "live", callId, name, target,
+        lines: body === undefined ? null : body.split("\n").length - (body.endsWith("\n") ? 1 : 0),
+        tail: body === undefined ? null : body.split("\n").slice(-6).join("\n"),
+      })
+    await wait(400)
+    add({ kind: "text", id: `lt${Date.now()}`, text: "I’ll add the yearly toggle, then run its test." })
+    const file = "apps/web/src/components/cycle-toggle.tsx"
+    const lines = [
+      `import { cn } from "@/lib/utils"`, ``, `type Cycle = "monthly" | "yearly"`, ``,
+      `type Props = { value: Cycle; onChange: (cycle: Cycle) => void }`, ``,
+      `export function CycleToggle({ value, onChange }: Props) {`, `  return (`,
+      `    <div role="radiogroup" aria-label="Billing cycle" className="inline-flex rounded-lg bg-muted p-0.5">`,
+      `      {(["monthly", "yearly"] as const).map((cycle) => (`, `        <button`, `          key={cycle}`,
+      `          role="radio"`, `          aria-checked={value === cycle}`, `          onClick={() => onChange(cycle)}`,
+      `          className={cn("rounded-md px-3 py-1 text-sm", value === cycle && "bg-background shadow-sm")}`,
+      `        >`, `          {cycle === "monthly" ? "Monthly" : "Yearly · 2 months free"}`, `        </button>`,
+      `      ))}`, `    </div>`, `  )`, `}`,
+    ]
+    const w = "call_live_write"
+    add(tool(w, "write"))
+    const path = `/home/alex/work/anysola-web/${file}`
+    for (let n = 1; n <= path.length; n += 9) {
+      input(w, "write", "")
+      await wait(50)
+    }
+    let body = ""
+    for (const [n, line] of lines.entries()) {
+      for (let at = 0; at < line.length + 1; at += 14) {
+        body = lines.slice(0, n).map((l) => l + "\n").join("") + (line + "\n").slice(0, at + 14)
+        input(w, "write", file, body)
+        await wait(50)
+        if (!running.has(id)) return
+      }
+    }
+    const patch = lines.map((l) => `+${l}`).join("\n")
+    update(w, {
+      status: "completed",
+      target: file,
+      files: [{ file, status: "added", additions: lines.length, deletions: 0, patch: `Index: ${file}\n===\n--- /dev/null\n+++ ${file}\n@@ -0,0 +1,${lines.length} @@\n${patch}\n` }],
+    })
+    await wait(300)
+    const sh = "call_live_shell"
+    add(tool(sh, "shell"))
+    const command = "pnpm --filter @anysola/web test cycle-toggle"
+    for (let n = 2; n <= command.length; n += 2) {
+      input(sh, "shell", command.slice(0, n))
+      await wait(50)
+      if (!running.has(id)) return
+    }
+    update(sh, { status: "running", target: command })
+    await wait(1200)
+    update(sh, { status: "completed", output: "✓ cycle-toggle.test.tsx (3 tests) 41ms" })
+    void reply(id, "The toggle is in and its test passes.")
+  }
   let cancelLogin = () => {}
 
   return {
@@ -1545,7 +1621,8 @@ export function mockBridge(): Bridge {
       running.add(id)
       emit({ type: "changed", sessionId: id })
       emit({ type: "started", sessionId: id })
-      void reply(id, "I’ll start by reading the files this touches, then make the change.")
+      if (state === "live") void liveTurn(id)
+      else void reply(id, "I’ll start by reading the files this touches, then make the change.")
       return { sessionId: id, queued: false }
     },
     async setMode() {

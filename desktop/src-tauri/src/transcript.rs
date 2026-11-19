@@ -402,7 +402,14 @@ fn hook_note(description: Option<&str>, text: &str) -> Option<String> {
 
 fn tool(call: &str, name: &str, state: ToolState, directory: &str) -> Value {
     let (status, input, content, metadata, error) = match state {
-        ToolState::Streaming { .. } => ("streaming", Value::Null, Vec::new(), Map::new(), None),
+        // What has arrived of the input names the call already (a file once its path is whole).
+        ToolState::Streaming { input } => (
+            "streaming",
+            crate::live::partial(&input),
+            Vec::new(),
+            Map::new(),
+            None,
+        ),
         ToolState::Running { input, metadata } => ("running", input, Vec::new(), metadata, None),
         ToolState::Completed {
             input,

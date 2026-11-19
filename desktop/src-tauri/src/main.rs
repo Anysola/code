@@ -13,6 +13,7 @@ mod editor;
 mod events;
 mod git;
 mod hooks;
+mod live;
 mod path_repair;
 mod prefs;
 mod servers;
@@ -251,8 +252,45 @@ fn forward(
     tauri::async_runtime::spawn(async move {
         // The last failure each MCP server was announced with: one notice per change into it.
         let mut announced: HashMap<String, &'static str> = HashMap::new();
+        // Tool inputs being written: the window gets a snapshot of each at most once a tick.
+        let mut live = live::Live::default();
+        let mut tick = tokio::time::interval(std::time::Duration::from_millis(50));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
-            match events.recv().await {
+            let received = tokio::select! {
+                received = events.recv() => received,
+                _ = tick.tick(), if live.pending() => {
+                    for payload in live.flush(&directory) {
+                        let _ = handle.emit("core", payload);
+                    }
+                    continue;
+                }
+            };
+            match &received {
+                Ok(Event::ToolInputDelta {
+                    session_id,
+                    message_id,
+                    call_id,
+                    name,
+                    at,
+                    text,
+                }) => {
+                    live.piece(session_id, message_id, call_id, name, *at, text);
+                    continue;
+                }
+                Ok(Event::ToolCalled { call_id, .. }) => live.end_call(call_id),
+                Ok(
+                    Event::StepEnded { session_id, .. }
+                    | Event::StepFailed { session_id, .. }
+                    | Event::RetryScheduled { session_id, .. }
+                    | Event::Interrupted { session_id, .. }
+                    | Event::Failed { session_id, .. }
+                    | Event::Succeeded { session_id },
+                ) => live.end_session(session_id),
+                Err(RecvError::Lagged(_)) => live.lagged(),
+                _ => {}
+            }
+            match received {
                 Ok(Event::McpStatusChanged { server }) => {
                     if let Some(message) = mcp_notice(&mut announced, &server) {
                         let _ = handle.emit("core", json!({"type": "notice", "message": message}));
