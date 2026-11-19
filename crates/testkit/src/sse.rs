@@ -102,6 +102,27 @@ impl Stream {
         self
     }
 
+    /// A tool call whose input arrives in the given pieces, one `input_json_delta` each.
+    pub fn tool_pieces(mut self, id: &str, name: &str, pieces: &[&str]) -> Self {
+        let i = self.index;
+        self.events.push(event(
+            "content_block_start",
+            json!({"index": i, "content_block": {"type": "tool_use", "id": id, "name": name, "input": {}}}),
+        ));
+        for piece in pieces {
+            self.events.push(event(
+                "content_block_delta",
+                json!({"index": i, "delta": {"type": "input_json_delta", "partial_json": piece}}),
+            ));
+        }
+        self.events
+            .push(event("content_block_stop", json!({"index": i})));
+        self.index += 1;
+        self.stop_reason = Some("tool_use");
+        self.output_tokens = 5;
+        self
+    }
+
     /// Any content block (server tool calls and results, malformed tool input), with an optional
     /// `input_json_delta` carrying `partial_json` verbatim.
     pub fn block(mut self, content_block: Value, partial_json: Option<&str>) -> Self {

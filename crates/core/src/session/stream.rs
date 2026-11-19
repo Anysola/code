@@ -39,6 +39,13 @@ pub enum Action {
         call_id: String,
         name: String,
     },
+    /// A piece of a tool call's input JSON as it streams; `at` is the input's length before it.
+    ToolInputDelta {
+        call_id: String,
+        name: String,
+        at: usize,
+        text: String,
+    },
     /// A complete `tool_use` block: execution can start.
     ToolReady {
         call_id: String,
@@ -258,8 +265,20 @@ impl Assembly {
                         ..PartTime::default()
                     },
                 });
+                let mut actions = vec![Action::ToolStarted {
+                    call_id: call_id.clone(),
+                    name: name.clone(),
+                }];
+                if !raw.is_empty() {
+                    actions.push(Action::ToolInputDelta {
+                        call_id,
+                        name,
+                        at: 0,
+                        text: raw.clone(),
+                    });
+                }
                 self.blocks.insert(index, Block::Tool { part, raw });
-                vec![Action::ToolStarted { call_id, name }]
+                actions
             }
             Some(kind) if HOSTED_RESULTS.contains(&kind) => {
                 self.hosted_result(kind, block);
@@ -297,9 +316,27 @@ impl Assembly {
                 signature.push_str(text("signature"))
             }
             (Some(Block::Tool { part, raw }), Some("input_json_delta")) => {
-                raw.push_str(text("partial_json"));
-                if let Some(Part::Tool { state, .. }) = self.parts.get_mut(*part) {
-                    *state = ToolState::Streaming { input: raw.clone() };
+                let piece = text("partial_json");
+                if piece.is_empty() {
+                    return Vec::new();
+                }
+                let at = raw.len();
+                raw.push_str(piece);
+                // Appended in place: a large input arrives in thousands of pieces.
+                if let Some(Part::Tool {
+                    id,
+                    name,
+                    state: ToolState::Streaming { input },
+                    ..
+                }) = self.parts.get_mut(*part)
+                {
+                    input.push_str(piece);
+                    return vec![Action::ToolInputDelta {
+                        call_id: id.clone(),
+                        name: name.clone(),
+                        at,
+                        text: piece.to_string(),
+                    }];
                 }
             }
             _ => {}
@@ -572,5 +609,99 @@ mod tests {
                 .contains("\n\nInput excerpt (first 2048 of 3013 characters):\n{\"content\": \"é")
         );
         assert!(error.message.ends_with("é\n[truncated]"));
+    }
+    fn start_tool(assembly: &mut Assembly, index: u64, block: Value) -> Vec<Action> {
+        assembly
+            .on_event(&SseEvent {
+                event: Some("content_block_start".into()),
+                data: serde_json::json!({"type": "content_block_start", "index": index, "content_block": block}).to_string(),
+            })
+            .unwrap()
+    }
+
+    fn piece(assembly: &mut Assembly, index: u64, text: &str) -> Vec<Action> {
+        assembly
+            .on_event(&SseEvent {
+                event: Some("content_block_delta".into()),
+                data: serde_json::json!({"type": "content_block_delta", "index": index, "delta": {"type": "input_json_delta", "partial_json": text}}).to_string(),
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn tool_input_streams_piece_by_piece() {
+        let mut assembly = Assembly::default();
+        let started = start_tool(
+            &mut assembly,
+            0,
+            serde_json::json!({"type": "tool_use", "id": "t1", "name": "write", "input": {}}),
+        );
+        assert_eq!(
+            started,
+            vec![Action::ToolStarted {
+                call_id: "t1".into(),
+                name: "write".into()
+            }]
+        );
+        let raw = r#"{"path": "a.txt", "content": "é\n\ud83c\udf89"}"#;
+        let mut at = 0;
+        let mut joined = String::new();
+        for chunk in [&raw[..9], "", &raw[9..20], &raw[20..]] {
+            let actions = piece(&mut assembly, 0, chunk);
+            if chunk.is_empty() {
+                assert!(actions.is_empty(), "an empty piece says nothing");
+                continue;
+            }
+            assert_eq!(
+                actions,
+                vec![Action::ToolInputDelta {
+                    call_id: "t1".into(),
+                    name: "write".into(),
+                    at,
+                    text: chunk.into(),
+                }]
+            );
+            at += chunk.len();
+            joined.push_str(chunk);
+        }
+        assert_eq!(joined, raw);
+        // The stored part holds the input so far, as before.
+        assert!(matches!(
+            &assembly.parts[0],
+            Part::Tool { state: ToolState::Streaming { input }, .. } if input == raw
+        ));
+        let ended = assembly.on_event(&SseEvent {
+            event: Some("content_block_stop".into()),
+            data: r#"{"type": "content_block_stop", "index": 0}"#.into(),
+        });
+        assert!(matches!(
+            ended.unwrap().as_slice(),
+            [Action::ToolReady { raw: r, .. }] if r == raw
+        ));
+    }
+
+    #[test]
+    fn input_on_the_start_block_is_the_first_piece() {
+        let mut assembly = Assembly::default();
+        let actions = start_tool(
+            &mut assembly,
+            0,
+            serde_json::json!({"type": "server_tool_use", "id": "s1", "name": "web_search", "input": {"query": "rust"}}),
+        );
+        assert_eq!(
+            actions,
+            vec![
+                Action::ToolStarted {
+                    call_id: "s1".into(),
+                    name: "web_search".into()
+                },
+                Action::ToolInputDelta {
+                    call_id: "s1".into(),
+                    name: "web_search".into(),
+                    at: 0,
+                    text: r#"{"query":"rust"}"#.into(),
+                },
+            ]
+        );
     }
 }

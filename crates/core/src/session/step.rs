@@ -1000,13 +1000,17 @@ async fn run_stream(
                 break;
             }
         };
-        running.data.content = assembly.parts.clone();
         // A call about to run is stored first: a front end that reads the transcript on
-        // `ToolCalled` then finds the step's text and the call, running, while it works.
-        if actions
-            .iter()
-            .any(|action| matches!(action, Action::ToolReady { .. }))
-        {
+        // `ToolCalled` then finds the step's text and the call, running, while it works. A call
+        // that starts streaming is stored too, so its row shows while its input is written.
+        // Only then are the parts copied: a large input arrives in thousands of pieces.
+        if actions.iter().any(|action| {
+            matches!(
+                action,
+                Action::ToolReady { .. } | Action::ToolStarted { .. }
+            )
+        }) {
+            running.data.content = assembly.parts.clone();
             running.save(shared);
         }
         for action in actions {
@@ -1357,6 +1361,22 @@ fn handle(
                 event_id: crate::ids::event(),
                 call_id,
                 name,
+            },
+        ),
+        Action::ToolInputDelta {
+            call_id,
+            name,
+            at,
+            text,
+        } => send(
+            shared,
+            Event::ToolInputDelta {
+                session_id,
+                message_id,
+                call_id,
+                name,
+                at,
+                text,
             },
         ),
         Action::ToolReady {

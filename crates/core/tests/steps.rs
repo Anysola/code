@@ -609,3 +609,102 @@ fn background_compaction_is_swapped_in_when_due() {
         "{opening:?}"
     );
 }
+
+/// A tool call's input reaches front ends piece by piece while the model writes it, in a
+/// subagent's session too (with its own id), and its row is stored as soon as it starts.
+#[test]
+fn tool_input_streams_to_front_ends() {
+    const PARENT: &[&str] = &[
+        r#"{"agent": "gene"#,
+        r#"ral", "description": "Look ar"#,
+        r#"ound", "prompt": "Find the files"}"#,
+    ];
+    const CHILD: &[&str] = &[r#"{"pat"#, r#"tern": "*.m"#, r#"d"}"#];
+    let gateway = FakeGateway::start(|request, _| {
+        if request.is_title() {
+            return text(request, "title");
+        }
+        let last = request.json()["messages"]
+            .as_array()
+            .and_then(|m| m.last().cloned())
+            .unwrap_or_default()
+            .to_string();
+        if last.contains("tool_result") {
+            return text(request, "done");
+        }
+        if request.header("x-opencode-parent-session-id").is_some() {
+            return sse(request, Stream::new().tool_pieces("toolu_c", "glob", CHILD));
+        }
+        sse(
+            request,
+            Stream::new().tool_pieces("toolu_p", "subagent", PARENT),
+        )
+    });
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    // (session, call, at, text) of each piece.
+    type Pieces = Vec<(String, String, usize, String)>;
+    let seen: Arc<std::sync::Mutex<Pieces>> = Arc::default();
+    let stored_at_start: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+    {
+        let mut events = core.subscribe();
+        let (seen, stored, db) = (seen.clone(), stored_at_start.clone(), core.db().clone());
+        runtime.spawn(async move {
+            while let Ok(event) = events.recv().await {
+                match event {
+                    Event::ToolInputDelta {
+                        session_id,
+                        call_id,
+                        at,
+                        text,
+                        ..
+                    } => seen.lock().unwrap().push((session_id, call_id, at, text)),
+                    Event::ToolInputStarted {
+                        session_id,
+                        call_id,
+                        ..
+                    } => {
+                        let rows = db.messages(&session_id).unwrap();
+                        if rows.iter().any(|r| r.data.to_string().contains(&call_id)) {
+                            stored.lock().unwrap().push(call_id);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
+    runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let seen = seen.lock().unwrap().clone();
+    let of = |call: &str| -> Vec<(String, usize, String)> {
+        seen.iter()
+            .filter(|(_, c, _, _)| c == call)
+            .map(|(s, _, at, t)| (s.clone(), *at, t.clone()))
+            .collect()
+    };
+    let check = |call: &str, pieces: &[&str]| {
+        let got = of(call);
+        assert_eq!(got.len(), pieces.len(), "{call}: {got:?}");
+        let mut at = 0;
+        for ((_, offset, text), piece) in got.iter().zip(pieces) {
+            assert_eq!((*offset, text.as_str()), (at, *piece));
+            at += piece.len();
+        }
+        got[0].0.clone()
+    };
+    assert_eq!(check("toolu_p", PARENT), session.id);
+    let child = check("toolu_c", CHILD);
+    assert_ne!(
+        child, session.id,
+        "a subagent's pieces carry its own session"
+    );
+    assert_eq!(core.children(&session.id).unwrap()[0].0, child);
+    let mut stored = stored_at_start.lock().unwrap().clone();
+    stored.sort();
+    assert_eq!(stored, ["toolu_c", "toolu_p"]);
+}

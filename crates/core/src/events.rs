@@ -89,6 +89,16 @@ pub enum Event {
         call_id: String,
         name: String,
     },
+    /// A piece of a tool call's input JSON while the model writes it (`text`, which starts at
+    /// byte `at` of the input), for display only: the call runs on [`Event::ToolCalled`].
+    ToolInputDelta {
+        session_id: String,
+        message_id: String,
+        call_id: String,
+        name: String,
+        at: usize,
+        text: String,
+    },
     ToolCalled {
         session_id: String,
         message_id: String,
@@ -264,6 +274,7 @@ impl Event {
             | Event::ReasoningStarted { session_id, .. }
             | Event::ReasoningEnded { session_id, .. }
             | Event::ToolInputStarted { session_id, .. }
+            | Event::ToolInputDelta { session_id, .. }
             | Event::ToolCalled { session_id, .. }
             | Event::ToolSucceeded { session_id, .. }
             | Event::ToolFailed { session_id, .. }
