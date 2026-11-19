@@ -601,6 +601,8 @@ fn a_project_cannot_plant_a_worktree_among_the_users_agents() {
 
 /// A project command's ``!`cmd` `` the session may run, runs; one it may not, leaves a note; one
 /// that asks, asks the user. The user's own command renders as before.
+// POSIX commands (`touch`, `rm -f`) in the templates; Windows runs them in PowerShell.
+#[cfg(unix)]
 #[test]
 fn a_project_commands_shell_placeholders_go_through_the_session() {
     use anysola_core::events::Event;
@@ -953,6 +955,7 @@ fn run_paths(
     (out, asked, env)
 }
 
+#[cfg(unix)]
 const DENY_SECRETS: &str =
     r#"{"permissions": [{"action": "read", "resource": "secrets/*", "effect": "deny"}]}"#;
 
@@ -1409,4 +1412,74 @@ fn stop_kills_a_running_placeholder() {
     std::thread::sleep(std::time::Duration::from_millis(1500));
     assert!(!env.home.project().join("late").exists());
     assert!(gateway.messages().iter().all(|r| r.is_title()));
+}
+
+/// No platform gate: on Windows the session folder is the temp path as the OS hands it out (an
+/// 8.3 short name on the CI runner), so its written and real spellings differ. Ordinary project
+/// files must stay inside, by relative and by absolute path; only a really outside file meets
+/// the user's `external_directory` deny; a question names the file by its forward-slash
+/// project-relative name.
+#[test]
+fn ordinary_project_files_stay_inside_whatever_the_folder_spelling() {
+    let outside = tempfile::tempdir().unwrap();
+    let elsewhere = outside.path().join("x.txt");
+    std::fs::write(&elsewhere, "OUTSIDE-TEXT").unwrap();
+    let elsewhere_text = elsewhere.display().to_string();
+    let (out, asked, env) = run_paths(vec![("read", json!({"path": "notes/b.md"}))], |env| {
+        env.home.write(
+            ".anysola/config.json",
+            r#"{"permissions": [{"action": "external_directory", "resource": "*", "effect": "deny"},
+                                {"action": "edit", "resource": "notes/*", "effect": "ask"}]}"#,
+        );
+        env.home.write("proj/notes/b.md", "NOTE-B");
+        env.home.write("proj/notes/a.md", "keep me");
+        let absolute = |name: &str| env.home.project().join(name).display().to_string();
+        vec![
+            ("read".into(), json!({"path": absolute("notes/b.md")})),
+            (
+                "write".into(),
+                json!({"path": "plain.txt", "content": "one"}),
+            ),
+            (
+                "write".into(),
+                json!({"path": absolute("plain2.txt"), "content": "two"}),
+            ),
+            (
+                "edit".into(),
+                json!({"path": "notes/a.md", "oldString": "keep", "newString": "lose"}),
+            ),
+            ("read".into(), json!({"path": elsewhere_text})),
+        ]
+    });
+    assert!(out[0].contains("NOTE-B"), "{out:?}");
+    assert!(out[1].contains("NOTE-B"), "{out:?}");
+    assert!(env.home.project().join("plain.txt").exists(), "{out:?}");
+    assert!(env.home.project().join("plain2.txt").exists(), "{out:?}");
+    assert_eq!(
+        std::fs::read_to_string(env.home.project().join("notes/a.md")).unwrap(),
+        "keep me"
+    );
+    assert!(
+        out[5].contains("Permission denied: external_directory"),
+        "{out:?}"
+    );
+    assert!(!out[5].contains("OUTSIDE-TEXT"), "{out:?}");
+    // Exactly one question, the edit's, by its plain project-relative name.
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    let (action, resources) = &asked[0];
+    assert_eq!(action, "edit");
+    assert!(
+        resources.contains(&"notes/a.md".to_string()),
+        "{resources:?}"
+    );
+    for name in resources {
+        assert!(
+            !name.starts_with('/')
+                && !name.starts_with("..")
+                && !name.starts_with(r"\\?\")
+                && !name.contains(':')
+                && !name.contains('\\'),
+            "{resources:?}"
+        );
+    }
 }
