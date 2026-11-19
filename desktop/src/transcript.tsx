@@ -304,6 +304,10 @@ function UserMessage({ item, actions }: { item: UserItem; actions: boolean }) {
           <div className="flex items-center gap-2">
             <SquareSlash className="size-3.5 shrink-0 text-muted" />
             <span className="font-mono text-sm">{item.command}</span>
+            {/* The core's words for a ``!`cmd` `` in the template the user declined (`command::NOT_RUN`). */}
+            {item.text.includes(NOT_RUN) && (
+              <span className="text-2xs text-muted">· a command in it didn’t run</span>
+            )}
             <button
               onClick={() => setFull(!full)}
               className="text-2xs ml-auto text-muted hover:text-foreground focus-visible:status-focused-field"
@@ -1157,8 +1161,14 @@ export function EditCard({
 // Asks and status
 // ---------------------------------------------------------------------------
 
+/** What the core puts in a command's prompt for a shell placeholder the user declined. */
+const NOT_RUN = "(not run: the session's permissions did not allow this shell command)"
+
+const FILE_ASKS = new Set(["read", "edit", "write"])
+
 const asks: Record<string, string> = {
   shell: "Run a command?",
+  read: "Read this file?",
   edit: "Edit this file?",
   write: "Write this file?",
   webfetch: "Fetch this page?",
@@ -1175,6 +1185,8 @@ function PermissionCard({ permission: p, keys }: { permission: Permission; keys:
       <div className="flex items-center gap-2 text-sm">
         <span className="size-1.5 rounded-full bg-warning" />
         {asks[p.action] ?? `Allow ${p.action}?`}
+        {/* A helper the agent started is asking: its own conversation is not the one shown. */}
+        {p.sessionId !== p.rootId && <span className="text-2xs text-muted">· asked by a subagent</span>}
       </div>
       {shell ? (
         // Capped, so Allow and Deny stay on screen however long the ask is.
@@ -1204,7 +1216,18 @@ function PermissionCard({ permission: p, keys }: { permission: Permission; keys:
         // "*" is the rule's own wildcard (an MCP tool has no narrower target): nothing to read.
         p.resources.some((r) => r !== "*") && (
           <div className="mt-2 max-h-40 overflow-y-auto font-mono text-xs break-all text-muted">
-            {p.resources.filter((r) => r !== "*").join(", ")}
+            {FILE_ASKS.has(p.action) ? (
+              // One file can come under two names (from the session's folder, then from the
+              // project's root): the first, and the other said as the same file.
+              <>
+                {p.resources[0]}
+                {p.resources.length > 1 && (
+                  <span className="text-2xs block font-sans">Same file as {p.resources.slice(1).join(", ")} in the project</span>
+                )}
+              </>
+            ) : (
+              p.resources.filter((r) => r !== "*").join(", ")
+            )}
           </div>
         )
       )}

@@ -317,6 +317,15 @@ pub fn items(entries: Vec<Entry>, directory: &str) -> Vec<Value> {
             }
             // Other synthetic rows (background notices, a skill's text) are for the model only.
             Message::Synthetic(data) => {
+                // A project command run as another agent: its child's result arrives here with
+                // no tool call of its own. A background subagent's result names a child the
+                // conversation already shows.
+                if let Some(item) = subtask(&id, &data.text)
+                    && !out.iter().any(|i| i["child"] == item["child"])
+                {
+                    out.push(item);
+                    continue;
+                }
                 if let Some(text) = hook_note(data.description.as_deref(), &data.text) {
                     // A hook with several contexts, or several hooks, wrote one row each.
                     let repeated = out
@@ -345,6 +354,34 @@ pub fn items(entries: Vec<Entry>, directory: &str) -> Vec<Value> {
         }
     }
     out
+}
+
+/// A `<subagent sessionID=".." state=".." description="..">` result (`tool::subagent::
+/// completion_notice`) as the subagent item a tool call would have made.
+fn subtask(id: &str, text: &str) -> Option<Value> {
+    let head = text.strip_prefix("<subagent ")?;
+    let (attributes, rest) = head.split_once(">\n")?;
+    let output = rest.strip_suffix("\n</subagent>").unwrap_or(rest);
+    let attribute = |name: &str| {
+        let start = attributes.find(&format!("{name}=\""))? + name.len() + 2;
+        let end = attributes[start..].find('"')? + start;
+        Some(attributes[start..end].to_string())
+    };
+    let child = attribute("sessionID")?;
+    let state = attribute("state").unwrap_or_default();
+    let failed = state != "completed";
+    Some(json!({
+        "kind": "tool",
+        "id": id,
+        "name": "subagent",
+        "status": if failed { "error" } else { "completed" },
+        "target": attribute("description").unwrap_or_default(),
+        "files": null,
+        "child": child,
+        "output": clip(output),
+        "error": failed.then(|| output.to_string()),
+        "elapsed": null,
+    }))
 }
 
 /// The descriptions the core gives the synthetic rows hooks write (`hooks::fire`, private there).
@@ -759,5 +796,47 @@ mod tests {
         let long = "x".repeat(OUTPUT_CHARS + 10);
         assert_eq!(clip(&long).chars().count(), OUTPUT_CHARS + 2);
         assert_eq!(clip("short"), "short");
+    }
+
+    #[test]
+    fn a_commands_subtask_shows_as_its_subagent() {
+        let notice = |id: &str, child: &str, state: &str| {
+            entry(
+                id,
+                "synthetic",
+                json!({"time": {"created": 1}, "description": "Say hello",
+                       "text": format!("<subagent sessionID=\"{child}\" state=\"{state}\" description=\"Say hello\">\nHello\n</subagent>")}),
+            )
+        };
+        let items = items(
+            vec![
+                notice("s1", "ses_c", "completed"),
+                notice("s2", "ses_d", "error"),
+                notice("s3", "ses_c", "completed"),
+            ],
+            "/p",
+        );
+        assert_eq!(items.len(), 2, "a child already shown is not shown again");
+        assert_eq!(
+            (
+                items[0]["name"].clone(),
+                items[0]["status"].clone(),
+                items[0]["target"].clone(),
+                items[0]["child"].clone(),
+                items[0]["output"].clone()
+            ),
+            (
+                json!("subagent"),
+                json!("completed"),
+                json!("Say hello"),
+                json!("ses_c"),
+                json!("Hello")
+            )
+        );
+        assert_eq!(
+            (items[1]["status"].clone(), items[1]["error"].clone()),
+            (json!("error"), json!("Hello"))
+        );
+        assert!(subtask("x", "<shell> done").is_none());
     }
 }
