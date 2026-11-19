@@ -4,6 +4,59 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.1.1 (2026-11-19)
+
+What a project's files can change about your own rules, closed further, and the approval pages finished.
+
+- Your "deny" always wins. A project's rule can no longer turn a refusal of yours into a question (1.1.0's known
+  limit), and a project's allow rule cannot lift it even after you allowed that project's rules. The same holds for
+  policies: a project's policy never lifts one of yours that refuses. A project's rules that ask or deny apply at
+  once, as before.
+- Subagents can no longer do more than the session that started them. Each request of a subagent is decided by
+  the strictest of its own rules and those of every session above it, so a General subagent started in Plan mode
+  cannot change files outside the plan folder, and your rules for Build or for an agent of your own also hold for
+  the subagents it starts. A question raised that way says it was asked by a subagent. The mode you are in now
+  governs the whole tree: switching Plan to Build also lets subagents still running make changes.
+- A project cannot change which agent your sessions run on: its `default_agent` is ignored when you set one
+  yourself, and it cannot turn off, hide or change the kind of a built-in agent or one of yours. A project's
+  command that names another agent runs as a separate task under your session, bound by it, instead of switching
+  your session (for example out of Plan mode); your own commands switch as before. A project cannot replace one
+  of your own commands by defining one with the same name. A command that runs as a separate task shows what
+  you typed and then the task as a subagent you can open.
+- Shell commands inside a project's command template (``!`…` ``) follow your permissions: a refused one does not
+  run, and one your rules ask about asks you first. They used to run without a question. Stop while that
+  question waits cancels the whole command, and a command with a step you declined says so in its message.
+- Rules that name files from the project's root, such as `read secrets/*`, also hold in a worktree of the project
+  and when you open a subfolder of it. A permission question can list a file under more than one name because of
+  this. Search results leave out files your `read` rules refuse or ask about and say how many were left out.
+- Rules apply to the file a path really leads to. A symlink in a repository, or another spelling of the same
+  path, no longer gets around a rule that refuses or asks, and a symlink that leads out of the project counts as
+  outside it: reading or writing through it asks like any other outside path.
+- The agent can only rename or move its own session, and only move it to the project's root or one of the
+  project's worktrees. A project cannot choose where worktrees are created, and no worktree is created inside or
+  around the folders your own agents, commands, skills and settings load from.
+- You can take back what you allowed a project. Settings → Permissions, Instructions, MCP servers and Advanced
+  have Stop allowing, as Hooks has; it applies at once in open sessions, from the agent's next step: the rules
+  stop allowing, the MCP servers stop, the downloads are no longer used. You can allow it again from the same row.
+- Allowing something in Settings shows it as in effect right away; it used to disappear until Settings was
+  reopened. Settings → Permissions also lists rules written for a single agent (`agents.<id>.permissions` and
+  agent files) and names the agent, while they wait and once in effect.
+- An instruction URL, a skill URL or a repository that cannot be downloaded stays listed with the reason
+  ("404 Not Found", "timed out") and Try again; it used to vanish. A failed instruction URL is also tried again
+  the next time the config loads. Instruction URLs larger than 1 MiB or that are not text are skipped with a
+  reason.
+- The approval question says when a project's downloads happen: when you open the project and when its config
+  changes; repositories are updated at most once a day. It used to say "each time".
+- The header's change count in a git project is the net difference, the same numbers as Review: editing one line
+  three times counts once. Outside git it still adds up every edit.
+- Discord status uses Anysola Code's own Discord application, so turning it on in Settings → Discord is enough;
+  the application ID there is an optional override. It stays off until you turn it on.
+- In Plan mode the agent tells you how to leave it the way the app names it (Build this plan, or another mode).
+- Not changed, so you know: a project's config can still choose the model, replace an agent's prompt, and turn
+  snapshots off; a child session follows its parent's current mode, not the mode it was started in; and a
+  shell command is judged by your `shell` rules only, so `cat` reaches a file a `read` rule refuses unless a
+  `shell` rule stops it.
+
 ## 1.1.0 (2026-11-18)
 
 The terminal app is retired. Anysola Code is the desktop app for Windows and Linux.
