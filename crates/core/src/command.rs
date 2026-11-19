@@ -43,6 +43,9 @@ pub struct Command {
     /// Where it is defined: its markdown file or config document; `None` for the built-ins and
     /// MCP prompts.
     pub source: Option<String>,
+    /// Defined by a project (a project document or command file): its `agent` never switches the
+    /// user's session (see [`crate::api::Core::command`]).
+    pub project: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -65,6 +68,7 @@ fn from_value(name: &str, value: &Value, source: Option<String>) -> Option<Comma
             .unwrap_or(false),
         template: Template::User(text("template")?),
         source,
+        project: false,
     })
 }
 
@@ -116,6 +120,7 @@ impl Commands {
                 subagent: false,
                 template: Template::Builtin(INITIALIZE),
                 source: None,
+                project: false,
             },
             Command {
                 name: "review".into(),
@@ -127,6 +132,7 @@ impl Commands {
                 subagent: false,
                 template: Template::Builtin(REVIEW),
                 source: None,
+                project: false,
             },
             Command {
                 name: "goal".into(),
@@ -138,6 +144,7 @@ impl Commands {
                 subagent: false,
                 template: Template::Goal,
                 source: None,
+                project: false,
             },
         ];
         if crate::schedule::enabled(config) {
@@ -152,15 +159,29 @@ impl Commands {
                 subagent: false,
                 template: Template::Builtin(SCHEDULE),
                 source: None,
+                project: false,
             });
         }
         let defined = config.entries.iter().flat_map(|entry| match entry {
-            Entry::Directory(dir) => markdown_commands(dir),
+            Entry::Directory(dir) => {
+                let project = config.is_project_directory(dir);
+                markdown_commands(dir)
+                    .into_iter()
+                    .map(|command| Command { project, ..command })
+                    .collect::<Vec<_>>()
+            }
             Entry::Document {
-                commands, source, ..
+                commands,
+                source,
+                project,
+                ..
             } => commands
                 .iter()
                 .filter_map(|(name, value)| from_value(name, value, source.clone()))
+                .map(|command| Command {
+                    project: *project,
+                    ..command
+                })
                 .collect(),
         });
         for command in defined {
@@ -182,6 +203,7 @@ impl Commands {
                     subagent: false,
                     template: Template::Mcp(prompt),
                     source: None,
+                    project: false,
                 });
             }
         }

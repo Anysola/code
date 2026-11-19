@@ -131,9 +131,10 @@ pub struct Scope {
 }
 
 /// The rules of each session above `session_id` along `parent_id`, nearest first: its agent's
-/// rules (as `agents` has them now) followed by its own. A missing parent or a cycle ends the
-/// walk. An ancestor whose agent no longer exists denies everything: nothing can say what it
-/// allowed.
+/// rules (as `agents` has them now) followed by its own. Each ancestor counts with the agent it
+/// runs on now, not the one it had when the child started: the user's current mode governs the
+/// whole tree, both ways. A missing parent or a cycle ends the walk. An ancestor whose agent no
+/// longer exists denies everything: nothing can say what it allowed.
 pub(crate) fn ancestors(
     db: &Db,
     agents: &crate::agent::Agents,

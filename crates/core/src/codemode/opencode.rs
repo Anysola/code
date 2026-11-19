@@ -143,12 +143,36 @@ fn text<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
     input.get(key).and_then(Value::as_str)
 }
 
-fn session_id(input: &Value, ctx: &ToolContext) -> String {
-    text(input, "sessionID").map_or_else(|| ctx.session_id.clone(), str::to_string)
+/// The session a tool acts on: only the calling one (`sessionID` may name it, nothing else).
+fn session_id(input: &Value, ctx: &ToolContext, verb: &str) -> Result<String, ToolError> {
+    match text(input, "sessionID") {
+        Some(id) if id != ctx.session_id => Err(ToolError::execution(format!(
+            "Only the current session can be {verb}; {id} is another session."
+        ))),
+        _ => Ok(ctx.session_id.clone()),
+    }
+}
+
+/// Where a session may move: the project's root, or the root of one of its worktrees (relative
+/// permission rules then name the same files in that checkout).
+fn allowed_destination(ctx: &ToolContext, destination: &Path) -> bool {
+    let canonical = |p: &Path| crate::paths::canonicalize(p).ok();
+    let Some(target) = canonical(destination) else {
+        return false;
+    };
+    if canonical(&ctx.worktree).as_ref() == Some(&target) {
+        return true;
+    }
+    // A project without an identity ("global") could list other repositories' worktrees.
+    ctx.project_id != "global"
+        && crate::worktree::list(ctx.host.db(), &ctx.project_id)
+            .iter()
+            .any(|w| canonical(Path::new(&w.directory)).as_ref() == Some(&target))
+        && crate::project::identify(&target).id == ctx.project_id
 }
 
 fn rename(input: Value, ctx: &ToolContext) -> Result<Called, ToolError> {
-    let id = session_id(&input, ctx);
+    let id = session_id(&input, ctx, "renamed")?;
     let title = text(&input, "title").unwrap_or_default().trim().to_string();
     if title.is_empty() {
         return Err(ToolError::execution("Session title must not be empty"));
@@ -166,7 +190,7 @@ fn rename(input: Value, ctx: &ToolContext) -> Result<Called, ToolError> {
 
 /// Moves the session's working directory; a running turn picks it up at its next step.
 fn move_session(input: Value, ctx: &ToolContext) -> Result<Called, ToolError> {
-    let id = session_id(&input, ctx);
+    let id = session_id(&input, ctx, "moved")?;
     let requested = text(&input, "directory").unwrap_or_default().to_string();
     let failure = || ToolError::execution(format!("Unable to move session to {requested}"));
     let db = ctx.host.db();
@@ -180,6 +204,11 @@ fn move_session(input: Value, ctx: &ToolContext) -> Result<Called, ToolError> {
     let destination = crate::paths::normalize(&Path::new(&session.directory).join(expanded));
     if !destination.is_dir() {
         return Err(failure());
+    }
+    if !allowed_destination(ctx, &destination) {
+        return Err(ToolError::execution(format!(
+            "Unable to move session to {requested}: a session can only move to the project's root or to one of its worktrees (see worktree_list)."
+        )));
     }
     let directory = destination.display().to_string();
     db.set_directory(&id, &directory).map_err(|_| failure())?;

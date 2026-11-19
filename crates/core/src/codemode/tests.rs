@@ -108,6 +108,7 @@ async fn sessions_are_renamed_and_moved() {
         text(&output),
         "{\n  \"sessionID\": \"ses_test\",\n  \"title\": \"New\"\n}"
     );
+    // Only to the project's root or one of its worktrees: a folder inside is refused.
     let output = run(
         &t,
         "return await tools.opencode.session_move({directory: 'dest'})",
@@ -115,16 +116,37 @@ async fn sessions_are_renamed_and_moved() {
     .await;
     assert_eq!(
         text(&output),
-        "{\n  \"sessionID\": \"ses_test\",\n  \"directory\": \"dest\"\n}"
+        "Unable to move session to dest: a session can only move to the project's root or to one of its worktrees (see worktree_list)."
+    );
+    let output = run(
+        &t,
+        "return await tools.opencode.session_move({directory: '.'})",
+    )
+    .await;
+    assert_eq!(
+        text(&output),
+        "{\n  \"sessionID\": \"ses_test\",\n  \"directory\": \".\"\n}"
     );
     let session = t.ctx.host.db().session("ses_test").unwrap().unwrap();
     assert_eq!(session.title, "New");
-    let moved = dir.path().join("dest").display().to_string();
+    let moved = dir.path().display().to_string();
     assert_eq!(session.directory, moved);
     assert_eq!(
         t.notifier.messages.lock().unwrap()[0].1,
         format!("The working directory has been changed to {moved}.")
     );
+    // Another session is out of reach.
+    for code in [
+        "return await tools.opencode.session_rename({sessionID: 'ses_other', title: 'x'})",
+        "return await tools.opencode.session_move({sessionID: 'ses_other', directory: '.'})",
+    ] {
+        let output = run(&t, code).await;
+        assert!(
+            text(&output).starts_with("Only the current session can be"),
+            "{}",
+            text(&output)
+        );
+    }
     let output = run(
         &t,
         "return await tools.opencode.session_move({directory: 'nowhere'})",

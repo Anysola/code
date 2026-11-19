@@ -121,9 +121,6 @@ pub struct Config {
     mcp: mcp::Merged,
     /// Policy statements of ordinary documents, earliest-loaded last.
     policies: Vec<Policy>,
-    /// Policy statements of project documents, earliest-loaded last: every other document's
-    /// outrank them (`ANYSOLA_CONFIG_CONTENT` loads after the project but is the user's).
-    project_policies: Vec<Policy>,
     /// Policy statements of managed documents, earliest-loaded last.
     managed_policies: Vec<Policy>,
     /// `hooks` of every local document, each with its source and scope (never in `values`).
@@ -147,6 +144,8 @@ pub struct Config {
     pub(crate) withheld_agent_rules: Vec<(String, String, Vec<Value>)>,
     /// The documents the upward project walk found, by path.
     pub project_documents: Vec<String>,
+    /// The last project document's `default_agent` (see [`Config::default_agent`]).
+    project_default_agent: Option<Value>,
 }
 
 impl Config {
@@ -158,8 +157,11 @@ impl Config {
         self.get("model").and_then(Value::as_str)
     }
 
+    /// The user's `default_agent`; a project's only when no other document sets one.
     pub fn default_agent(&self) -> Option<&str> {
-        self.get("default_agent").and_then(Value::as_str)
+        self.get("default_agent")
+            .or(self.project_default_agent.as_ref())
+            .and_then(Value::as_str)
     }
 
     pub fn shell(&self) -> Option<&str> {
@@ -191,6 +193,11 @@ impl Config {
             max_lines: field("max_lines").map_or(defaults.max_lines, |v| v as usize),
             max_bytes: field("max_bytes").map_or(defaults.max_bytes, |v| v as usize),
         }
+    }
+
+    /// A config directory the upward project walk found (its definitions are a project's).
+    pub fn is_project_directory(&self, dir: &Path) -> bool {
+        self.project_agents.iter().any(|(d, _)| d == dir)
     }
 
     /// Directories that hold markdown definitions (`agent/`, `command/`, …), lowest precedence first.
@@ -239,9 +246,8 @@ impl Config {
     /// Every policy statement; the last one matching decides.
     pub fn policies(&self) -> Policies {
         Policies(
-            self.project_policies
+            self.policies
                 .iter()
-                .chain(&self.policies)
                 .chain(&self.managed_policies)
                 .cloned()
                 .collect(),
@@ -312,6 +318,11 @@ impl Config {
                 }
             }
         }
+        if document.project
+            && let Some(agent) = data.remove("default_agent")
+        {
+            self.project_default_agent = Some(agent);
+        }
         if document.withheld.remote {
             for key in ["instructions", "skills"] {
                 if let Some(Value::Array(items)) = data.get_mut(key) {
@@ -322,10 +333,13 @@ impl Config {
                 references.retain(|_, r| crate::trust::remote_reference(r).is_none());
             }
         }
+        if document.project {
+            for statement in &mut statements {
+                statement.project = true;
+            }
+        }
         let list = if document.managed {
             &mut self.managed_policies
-        } else if document.project {
-            &mut self.project_policies
         } else {
             &mut self.policies
         };
@@ -1069,6 +1083,15 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
         let dir = plist.parent().unwrap_or(Path::new("/")).to_path_buf();
         loader.text(&text, &dir, &plist.display().to_string());
     }
+    let config = &mut loader.config;
+    if let (Some(own), Some(project)) = (config.get("default_agent"), &config.project_default_agent)
+        && own != project
+    {
+        config.warnings.push(format!(
+            "Ignoring the project's \"default_agent\" ({}): your own config chooses the agent.",
+            crate::json::compact(project)
+        ));
+    }
     loader.config
 }
 
@@ -1110,8 +1133,7 @@ mod tests {
     }
 
     #[test]
-    fn a_project_policy_never_outranks_the_users_even_one_loaded_later() {
-        let mut config = Config::default();
+    fn a_project_policy_never_lifts_the_users_denial_and_keeps_its_rank() {
         let doc = |value: Value, project: bool| Document {
             data: value.as_object().unwrap().clone(),
             managed: false,
@@ -1121,7 +1143,24 @@ mod tests {
             withheld: Withheld::default(),
         };
         let statement = |resource: &str, effect: &str| json!({"action": "tool.use", "resource": resource, "effect": effect});
-        // An approved project allow, then the user's `ANYSOLA_CONFIG_CONTENT` deny.
+        // The user's deny, then an approved project allow: still denied.
+        let mut config = Config::default();
+        config.apply(doc(
+            json!({"policies": [statement("shell:*", "deny")]}),
+            false,
+        ));
+        config.apply(doc(
+            json!({"policies": [statement("shell:*", "allow")]}),
+            true,
+        ));
+        assert!(
+            config
+                .policies()
+                .tool_denial("shell", &["ls".into()])
+                .is_some()
+        );
+        // An approved project allow, then `ANYSOLA_CONFIG_CONTENT`'s deny: denied.
+        let mut config = Config::default();
         config.apply(doc(
             json!({"policies": [statement("shell:*", "allow")]}),
             true,
@@ -1136,15 +1175,40 @@ mod tests {
                 .tool_denial("shell", &["ls".into()])
                 .is_some()
         );
-        // A project's own denial still applies.
+        // As in 1.1.0, a project's deny outranks a later user allow (it loaded earlier).
+        let mut config = Config::default();
         config.apply(doc(
             json!({"policies": [statement("read:*", "deny")]}),
             true,
+        ));
+        config.apply(doc(
+            json!({"policies": [statement("read:*", "allow")]}),
+            false,
         ));
         assert!(
             config
                 .policies()
                 .tool_denial("read", &["a".into()])
+                .is_some()
+        );
+        // A project allow lifts nothing of a user's, even an earlier-ranked one.
+        let mut config = Config::default();
+        config.apply(doc(
+            json!({"policies": [statement("mcp_x:*", "allow")]}),
+            false,
+        ));
+        config.apply(doc(
+            json!({"policies": [statement("edit:*", "deny")]}),
+            false,
+        ));
+        config.apply(doc(
+            json!({"policies": [statement("edit:*", "allow")]}),
+            true,
+        ));
+        assert!(
+            config
+                .policies()
+                .tool_denial("edit", &["a".into()])
                 .is_some()
         );
     }

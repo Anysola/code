@@ -212,26 +212,41 @@ impl Agents {
                 .map(|(id, item)| ((id.clone(), item.clone(), source.clone()), *project))
                 .collect(),
         });
-        // Agents a project disabled, with their rules: a later definition of the same id starts
-        // from those, so disabling and redefining cannot drop a built-in or user rule.
-        let mut disabled: Vec<(String, Vec<Rule>)> = Vec::new();
-        for ((id, item, source), project) in defined {
-            if item.get("disabled").and_then(Value::as_bool) == Some(true) {
-                if project && let Some(agent) = list.iter().find(|a| a.id == id) {
-                    disabled.retain(|(d, _)| *d != id);
-                    disabled.push((id.clone(), agent.permissions.clone()));
+        // Agents a project introduced; on every other agent a project may not change whether it
+        // exists, shows or which kind it is (which agent a session runs on is the user's).
+        let mut ours: Vec<String> = Vec::new();
+        for ((id, mut item, source), project) in defined {
+            let exists = list.iter().any(|a| a.id == id);
+            if !project {
+                ours.retain(|o| *o != id);
+            } else if !exists {
+                ours.push(id.clone());
+            } else if !ours.contains(&id)
+                && let Value::Object(fields) = &mut item
+            {
+                for key in ["disabled", "hidden", "mode"] {
+                    if fields.remove(key).is_some() {
+                        crate::log::warn(
+                            "ignoring a project's agent setting: only your own config can change it",
+                            &[
+                                ("agent", &id),
+                                ("setting", key),
+                                ("file", source.as_deref().unwrap_or_default()),
+                            ],
+                        );
+                    }
                 }
+            }
+            if item.get("disabled").and_then(Value::as_bool) == Some(true) {
                 list.retain(|a| a.id != id);
+                ours.retain(|o| *o != id);
                 continue;
             }
             let index = match list.iter().position(|a| a.id == id) {
                 Some(index) => index,
                 None => {
                     let mut agent = Agent::new(&id);
-                    match disabled.iter().find(|(d, _)| *d == id) {
-                        Some((_, rules)) => agent.permissions = rules.clone(),
-                        None => agent.permissions.extend(global.iter().cloned()),
-                    }
+                    agent.permissions.extend(global.iter().cloned());
                     list.push(agent);
                     list.len() - 1
                 }

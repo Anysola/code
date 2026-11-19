@@ -60,7 +60,20 @@ impl Core {
             .as_deref()
             .or_else(|| agent.and_then(|a| a.model.as_deref()))
             .and_then(ModelRef::parse);
-        if command.subagent || agent.is_some_and(|a| a.mode == crate::agent::Mode::Subagent) {
+        // A project's command never moves the user's session to another agent: it runs in a
+        // child session, which its parent's rules bound.
+        let current = session
+            .agent
+            .clone()
+            .or_else(|| loaded.agents.default_agent().map(|a| a.id.clone()));
+        let switches = command
+            .agent
+            .as_deref()
+            .is_some_and(|a| current.as_deref() != Some(a));
+        if command.subagent
+            || agent.is_some_and(|a| a.mode == crate::agent::Mode::Subagent)
+            || (command.project && switches)
+        {
             return self
                 .subagent_command(&session, &command, model, text, options)
                 .await;

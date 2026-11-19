@@ -27,6 +27,8 @@ pub struct Policy {
     pub allow: bool,
     /// Shown when this statement denies.
     pub message: String,
+    /// From a project document: its allow never lifts a denial of the other documents'.
+    pub project: bool,
 }
 
 impl Policy {
@@ -61,6 +63,7 @@ impl Policy {
             resource: resource.into(),
             allow,
             message: BLOCKED.into(),
+            project: false,
         })
     }
 }
@@ -69,11 +72,18 @@ impl Policy {
 pub struct Policies(pub Vec<Policy>);
 
 impl Policies {
+    /// The statement deciding: the last match; but when that is a project's allow and the
+    /// statements of the other documents alone deny, their denial.
     fn find(&self, action: &str, resource: &str) -> Option<&Policy> {
-        self.0
-            .iter()
-            .rev()
-            .find(|p| p.action == action && matches(resource, &p.resource))
+        let matching = |p: &&Policy| p.action == action && matches(resource, &p.resource);
+        let last = self.0.iter().rev().find(matching)?;
+        if last.project && last.allow {
+            let own = self.0.iter().rev().filter(|p| !p.project).find(matching);
+            if let Some(own) = own.filter(|p| !p.allow) {
+                return Some(own);
+            }
+        }
+        Some(last)
     }
 
     /// Whether `action` (`mcp.use`, `skill.use`, …) is allowed on `resource`; allowed by default.
