@@ -4,6 +4,14 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.1.3 (2026-11-20)
+
+Review shows long changes whole.
+
+- With several long diffs open, Review squeezed every file to fit the panel and cut its diff off, and the list
+  didn't scroll. Each file keeps its full height now and the list scrolls to the last line of the last file.
+- The same for the list of background commands when more than six run, and for the button under a long notice.
+
 ## 1.1.2 (2026-11-19)
 
 Tool calls show while the model writes them.
