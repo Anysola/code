@@ -334,25 +334,35 @@ pub async fn interpolate(
                 }
             }
             let (program, args) = crate::tool::shell::invocation(shell, &source);
-            let output = crate::console::tokio_command(&program)
+            let failed = |e: std::io::Error| {
+                format!(
+                    "Shell interpolation failed for {}: {e}",
+                    Value::String(source.clone())
+                )
+            };
+            let mut command = crate::console::tokio_command(&program);
+            command
                 .args(&args)
                 .current_dir(cwd)
                 .env_clear()
                 .envs(env.iter().cloned())
                 .stdin(std::process::Stdio::null())
-                .output()
-                .await
-                .map_err(|e| {
-                    format!(
-                        "Shell interpolation failed for {}: {e}",
-                        Value::String(source.clone())
-                    )
-                })?;
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            #[cfg(unix)]
+            command.process_group(0);
+            let child = command.spawn().map_err(failed)?;
+            // A command cancelled while this runs (Stop) takes the process and its children down.
+            let guard = KillOnDrop(child.id());
+            let output = child.wait_with_output().await.map_err(failed)?;
+            std::mem::forget(guard);
             let mut combined = output.stdout;
             combined.extend(output.stderr);
             Ok(String::from_utf8_lossy(&combined).into_owned())
         })
-        .buffered(2)
+        // A project's placeholders run one at a time in template order, so none starts while an
+        // earlier one's question is open.
+        .buffered(if gate.is_some() { 1 } else { 2 })
         .collect()
         .await;
     let mut outputs = outputs
@@ -364,6 +374,17 @@ pub async fn interpolate(
             outputs.next().unwrap_or_default()
         })
         .into_owned())
+}
+
+/// Kills a placeholder's process group (its tree, on Windows) when dropped.
+struct KillOnDrop(Option<u32>);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        if let Some(pid) = self.0 {
+            crate::tool::shell::exec::force_kill(pid);
+        }
+    }
 }
 
 /// Where a command renders: the project, the shell for ``!`cmd` ``, and the MCP runtime.

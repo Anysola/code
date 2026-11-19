@@ -201,7 +201,9 @@ pub fn resolve_at(ctx: &ToolContext, base: &Path, input: &str, kind: Option<Kind
             also.push(name);
         }
     }
-    if real_places.inside(&real) {
+    let real_inside = real_places.inside(&real);
+    let written_inside = is_internal(ctx, &absolute);
+    if real_inside && written_inside {
         return Target {
             absolute,
             resource,
@@ -227,9 +229,10 @@ pub fn resolve_at(ctx: &ToolContext, base: &Path, input: &str, kind: Option<Kind
     };
     let (real_directory, real_save) = folder(&real);
     let real_resource = slash(&real_directory.join("*"));
-    // A path written outside keeps its folder's name as before (so the user's rules and saved
-    // answers still match); the folder it really reaches is asked about too when it differs.
-    let external = if is_internal(ctx, &absolute) {
+    // A path written outside is asked about with its folder's name as in 1.1.0, even when it
+    // really leads into the project (so the user's rules and saved answers still match); the
+    // folder it really reaches is asked about too when that is outside and differs.
+    let external = if written_inside {
         External {
             directory: real_directory,
             resource: real_resource,
@@ -239,7 +242,8 @@ pub fn resolve_at(ctx: &ToolContext, base: &Path, input: &str, kind: Option<Kind
     } else {
         let (directory, save) = folder(&absolute);
         let resource = slash(&directory.join("*"));
-        let real = (resource != real_resource).then_some((real_resource, real_save));
+        let real =
+            (!real_inside && resource != real_resource).then_some((real_resource, real_save));
         External {
             directory,
             resource,

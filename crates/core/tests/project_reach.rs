@@ -1305,3 +1305,108 @@ fn a_subtask_command_leaves_what_the_user_typed() {
         .collect();
     assert!(parent_bodies.iter().all(|b| !b.contains("Build the thing")));
 }
+
+/// The user denies every outside folder; `~/outside` links into the project. As in 1.1.0, the
+/// path as written is outside, so `external_directory` is asked for `~/outside/*` (denied).
+#[cfg(unix)]
+#[test]
+fn a_path_written_outside_still_asks_for_its_outside_folder() {
+    let (out, _, _) = run_paths(vec![], |env| {
+        env.home.write(
+            ".anysola/config.json",
+            r#"{"permissions": [{"action": "external_directory", "resource": "*", "effect": "deny"}]}"#,
+        );
+        env.home.write("proj/README.md", "PROJECT-README");
+        std::os::unix::fs::symlink(env.home.project(), env.home.home().join("outside")).unwrap();
+        vec![("read".to_string(), json!({"path": "~/outside/README.md"}))]
+    });
+    let read = out.iter().any(|r| r.contains("PROJECT-README"));
+    println!("read through ~/outside link with external_directory * deny: {read}");
+    assert!(
+        !read,
+        "CHANGED: denied in 1.1.0 (outside path), allowed now"
+    );
+}
+
+/// Stop while one placeholder asks: a later, allowed placeholder never starts (they run in
+/// template order) and nothing of the command finishes after Stop.
+#[cfg(unix)]
+#[test]
+fn stop_leaves_no_placeholder_running() {
+    use anysola_core::events::Event;
+    let gateway = scripted(vec![]);
+    let env = env(&gateway.url);
+    env.home.write(
+        ".anysola/config.json",
+        r#"{"permissions": [{"action": "shell", "resource": "touch asked*", "effect": "ask"}]}"#,
+    );
+    env.home.write(
+        "proj/anysola.json",
+        r#"{"commands": {"two": {"template": "A !`touch asked-a` B !`sleep 1 && touch after-stop`"}}}"#,
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    let mut events = core.subscribe();
+    let running = {
+        let core = core.clone();
+        let id = session.id.clone();
+        runtime.spawn(async move { core.command(&id, "two", "", TurnOptions::default()).await })
+    };
+    runtime.block_on(async {
+        loop {
+            if let Ok(Event::PermissionAsked { .. }) = events.recv().await {
+                return;
+            }
+        }
+    });
+    core.interrupt(&session.id);
+    let outcome = runtime.block_on(running).unwrap();
+    println!("outcome after Stop: {outcome:?}");
+    std::thread::sleep(std::time::Duration::from_millis(2500));
+    let after = env.home.project().join("after-stop").exists();
+    println!(
+        "asked-a ran: {}",
+        env.home.project().join("asked-a").exists()
+    );
+    println!("allowed placeholder ran to completion after Stop: {after}");
+    println!(
+        "busy: {}, pending: {}",
+        core.is_busy(&session.id),
+        core.pending_requests().len()
+    );
+    assert!(
+        !after,
+        "a cancelled command's placeholder still finished after Stop"
+    );
+}
+
+/// Stop while an allowed placeholder runs: its process is killed with the command.
+#[cfg(unix)]
+#[test]
+fn stop_kills_a_running_placeholder() {
+    let gateway = scripted(vec![]);
+    let env = env(&gateway.url);
+    env.home.write(
+        "proj/anysola.json",
+        r#"{"commands": {"slow": {"template": "A !`sleep 1 && touch late`"}}}"#,
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    let running = {
+        let core = core.clone();
+        let id = session.id.clone();
+        runtime.spawn(async move { core.command(&id, "slow", "", TurnOptions::default()).await })
+    };
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    core.interrupt(&session.id);
+    let outcome = runtime.block_on(running).unwrap();
+    assert!(
+        matches!(outcome, Ok(anysola_core::session::Outcome::Interrupted(_))),
+        "{outcome:?}"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    assert!(!env.home.project().join("late").exists());
+    assert!(gateway.messages().iter().all(|r| r.is_title()));
+}
