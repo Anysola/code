@@ -23,6 +23,9 @@ pub struct External {
     pub directory: PathBuf,
     pub resource: String,
     pub save: String,
+    /// The same for the folder the path really is in, when a symlink makes that another one:
+    /// `(resource, save)`.
+    pub real: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,32 +47,6 @@ impl Target {
             .chain(self.also.iter().cloned())
             .collect()
     }
-}
-
-/// The path relative to each checkout root that holds it: the project's root and the root of
-/// the session directory's checkout (a worktree, or the project itself for a subfolder).
-fn other_names(ctx: &ToolContext, absolute: &Path, resource: &str) -> Vec<String> {
-    let mut roots = vec![ctx.worktree.clone()];
-    if let Some(root) = project::vcs_root(&ctx.directory) {
-        roots.push(root);
-    }
-    let mut out: Vec<String> = Vec::new();
-    for root in roots {
-        if root.parent().is_none() {
-            continue;
-        }
-        let Ok(relative) = absolute.strip_prefix(&root) else {
-            continue;
-        };
-        let name = match slash(relative) {
-            empty if empty.is_empty() => ".".to_string(),
-            name => name,
-        };
-        if name != resource && !out.contains(&name) {
-            out.push(name);
-        }
-    }
-    out
 }
 
 /// Rewrites MSYS/Cygwin/WSL drive paths (`/c/x`, `/cygdrive/c/x`, `/mnt/c/x`) to `C:/x` on Windows.
@@ -123,10 +100,75 @@ fn contains(parent: &Path, child: &Path) -> bool {
     child.starts_with(parent)
 }
 
+/// The places a path's permission names are taken from: the session directory, the project's
+/// root, and the root of the checkout the session directory is in (a worktree, or the project
+/// itself for a subfolder).
+struct Places {
+    directory: PathBuf,
+    worktree: PathBuf,
+    checkout: Option<PathBuf>,
+}
+
+impl Places {
+    /// As written (lexically).
+    fn written(ctx: &ToolContext) -> Places {
+        Places {
+            directory: ctx.directory.clone(),
+            worktree: ctx.worktree.clone(),
+            checkout: project::vcs_root(&ctx.directory),
+        }
+    }
+
+    /// Where they really are, symlinks resolved.
+    fn real(ctx: &ToolContext) -> Places {
+        let real = crate::config::real_path;
+        let written = Places::written(ctx);
+        Places {
+            directory: real(&written.directory),
+            worktree: real(&written.worktree),
+            checkout: written.checkout.as_deref().map(real),
+        }
+    }
+
+    fn inside(&self, path: &Path) -> bool {
+        contains(&self.directory, path)
+            || (self.worktree.parent().is_some() && contains(&self.worktree, path))
+    }
+
+    /// The path's names: directory-relative inside, absolute outside, then relative to each
+    /// checkout root that holds it.
+    fn names(&self, path: &Path) -> Vec<String> {
+        let first = if self.inside(path) {
+            match path.strip_prefix(&self.directory).ok().map(slash) {
+                Some(relative) if !relative.is_empty() => relative,
+                _ if path == self.directory => ".".to_string(),
+                _ => relative_path(&self.directory, path),
+            }
+        } else {
+            slash(path)
+        };
+        let mut out = vec![first];
+        for root in std::iter::once(&self.worktree).chain(self.checkout.as_ref()) {
+            if root.parent().is_none() {
+                continue;
+            }
+            let Ok(relative) = path.strip_prefix(root) else {
+                continue;
+            };
+            let name = match slash(relative) {
+                empty if empty.is_empty() => ".".to_string(),
+                name => name,
+            };
+            if !out.contains(&name) {
+                out.push(name);
+            }
+        }
+        out
+    }
+}
+
 pub fn is_internal(ctx: &ToolContext, absolute: &Path) -> bool {
-    let worktree = &ctx.worktree;
-    contains(&ctx.directory, absolute)
-        || (worktree.parent().is_some() && contains(worktree, absolute))
+    Places::written(ctx).inside(absolute)
 }
 
 pub fn resolve(ctx: &ToolContext, input: &str, kind: Option<Kind>) -> Target {
@@ -134,49 +176,81 @@ pub fn resolve(ctx: &ToolContext, input: &str, kind: Option<Kind>) -> Target {
 }
 
 /// [`resolve`] with relative paths taken from `base` instead of the session directory.
+///
+/// Decisions are made on the file the path really reaches (symlinks resolved, also of a file
+/// not created yet or a dangling link, so `/proc/self/root/…` and in-repository links name what
+/// they point at): it is inside or outside the project as that file is, and the target carries
+/// that file's names besides those of the path as written, so a rule on either decides.
 pub fn resolve_at(ctx: &ToolContext, base: &Path, input: &str, kind: Option<Kind>) -> Target {
     let absolute = resolve_path_at(ctx, base, input);
-    if is_internal(ctx, &absolute) {
-        let relative = absolute
-            .strip_prefix(&ctx.directory)
-            .ok()
-            .map(slash)
-            .filter(|r| !r.is_empty());
-        let resource = match relative {
-            Some(relative) => relative,
-            None if absolute == ctx.directory => ".".to_string(),
-            None => relative_path(&ctx.directory, &absolute),
-        };
+    let real = crate::config::real_path(&absolute);
+    let real_places = Places::real(ctx);
+    let mut names = Places::written(ctx).names(&absolute);
+    let resource = names.remove(0);
+    let mut also = names;
+    let mut real_names = real_places.names(&real);
+    if !real_places.inside(&real) {
+        // Rules written with `~` are expanded against the home folder as configured.
+        let home = crate::config::real_path(&ctx.paths.home);
+        if let Ok(rest) = real.strip_prefix(&home) {
+            real_names.push(slash(&ctx.paths.home.join(rest)));
+        }
+    }
+    for name in real_names {
+        if name != resource && !also.contains(&name) {
+            also.push(name);
+        }
+    }
+    if real_places.inside(&real) {
         return Target {
-            also: other_names(ctx, &absolute, &resource),
             absolute,
             resource,
             external: None,
+            also,
         };
     }
-    let kind = kind.or_else(|| match std::fs::metadata(&absolute) {
+    let kind = kind.or_else(|| match std::fs::metadata(&real) {
         Ok(meta) if meta.is_dir() => Some(Kind::Directory),
         Ok(_) => Some(Kind::File),
         Err(_) => None,
     });
-    let directory = if kind == Some(Kind::Directory) {
-        absolute.clone()
-    } else {
-        absolute
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| absolute.clone())
+    let folder = |path: &Path| {
+        let directory = if kind == Some(Kind::Directory) {
+            path.to_path_buf()
+        } else {
+            path.parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| path.to_path_buf())
+        };
+        let root = project::vcs_root(&directory).unwrap_or_else(|| directory.clone());
+        (directory, slash(&root.join("*")))
     };
-    let root = project::vcs_root(&directory).unwrap_or_else(|| directory.clone());
-    let resource = slash(&absolute);
-    Target {
-        also: other_names(ctx, &absolute, &resource),
-        resource,
-        external: Some(External {
-            resource: slash(&directory.join("*")),
-            save: slash(&root.join("*")),
+    let (real_directory, real_save) = folder(&real);
+    let real_resource = slash(&real_directory.join("*"));
+    // A path written outside keeps its folder's name as before (so the user's rules and saved
+    // answers still match); the folder it really reaches is asked about too when it differs.
+    let external = if is_internal(ctx, &absolute) {
+        External {
+            directory: real_directory,
+            resource: real_resource,
+            save: real_save,
+            real: None,
+        }
+    } else {
+        let (directory, save) = folder(&absolute);
+        let resource = slash(&directory.join("*"));
+        let real = (resource != real_resource).then_some((real_resource, real_save));
+        External {
             directory,
-        }),
+            resource,
+            save,
+            real,
+        }
+    };
+    Target {
+        also,
+        resource,
+        external: Some(external),
         absolute,
     }
 }
@@ -201,9 +275,13 @@ pub async fn authorize_external(ctx: &ToolContext, targets: &[&Target]) -> Resul
     let mut resources: Vec<String> = Vec::new();
     let mut save = Vec::new();
     for external in targets.iter().filter_map(|t| t.external.as_ref()) {
-        if !resources.contains(&external.resource) {
-            resources.push(external.resource.clone());
-            save.push(external.save.clone());
+        let pairs = std::iter::once((&external.resource, &external.save))
+            .chain(external.real.as_ref().map(|(r, s)| (r, s)));
+        for (resource, saved) in pairs {
+            if !resources.contains(resource) {
+                resources.push(resource.clone());
+                save.push(saved.clone());
+            }
         }
     }
     if resources.is_empty() {

@@ -41,6 +41,18 @@ impl Core {
 
     /// Deletes a session and its children; false when it did not exist.
     pub fn delete_session(&self, session_id: &str) -> Result<bool, CoreError> {
+        // A command waiting on a question for it goes with it.
+        if let Some(token) = self
+            .shared
+            .preparing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(session_id)
+        {
+            for (_, token) in token {
+                token.cancel();
+            }
+        }
         Ok(self.shared.db.delete_session(session_id)?)
     }
 

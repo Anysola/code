@@ -734,15 +734,31 @@ pub fn real_path(path: &Path) -> PathBuf {
     resolve(path)
 }
 
-/// A path with symlinks resolved as far as it exists, so a symlinked global root is recognized.
+/// Symlinks followed before giving up on a chain (a loop, or a very long one).
+const MAX_LINKS: usize = 40;
+
+/// A path with symlinks resolved as far as it exists, so a symlinked global root is recognized:
+/// the deepest existing ancestor is resolved and the rest joined on, and a dangling symlink is
+/// followed to where it points (writing through it would land there).
 fn resolve(path: &Path) -> PathBuf {
+    resolve_within(path, MAX_LINKS)
+}
+
+fn resolve_within(path: &Path, links: usize) -> PathBuf {
     if let Ok(real) = crate::paths::canonicalize(path) {
-        return real;
+        return crate::paths::plain(&real);
     }
-    match (path.parent(), path.file_name()) {
-        (Some(parent), Some(name)) => resolve(parent).join(name),
-        _ => path.to_path_buf(),
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return path.to_path_buf();
+    };
+    let parent = resolve_within(parent, links);
+    let joined = parent.join(name);
+    if links > 0
+        && let Ok(target) = std::fs::read_link(&joined)
+    {
+        return resolve_within(&crate::paths::normalize(&parent.join(target)), links - 1);
     }
+    joined
 }
 
 /// macOS MDM managed preferences (`ai.opencode.managed`), converted to JSON by `plutil`.

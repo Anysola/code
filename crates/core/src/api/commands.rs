@@ -73,12 +73,35 @@ impl Core {
             mcp: mcp.map(|m| m.as_ref()),
             gate: gate.as_ref(),
         };
-        let text = match crate::command::render(&command, arguments, &at).await {
-            Ok(text) => text,
-            Err(message) => {
+        // While a question it raised waits, Stop (or closing, or deleting the session) cancels
+        // the whole command: the question is taken down and nothing of it runs.
+        let preparing = gate
+            .is_some()
+            .then(|| Preparing::start(&self.shared, session_id));
+        let rendered = match &preparing {
+            Some(preparing) => {
+                let cancelled = preparing.token.clone();
+                let text = tokio::select! {
+                    biased;
+                    _ = cancelled.cancelled() => None,
+                    text = crate::command::render(&command, arguments, &at) => Some(text),
+                };
+                // Closing rejects the question as it cancels: never run on that answer.
+                text.filter(|_| !cancelled.is_cancelled())
+            }
+            None => Some(crate::command::render(&command, arguments, &at).await),
+        };
+        drop(preparing);
+        let text = match rendered {
+            None => return Ok(Outcome::Interrupted(crate::events::InterruptReason::User)),
+            Some(Ok(text)) => text,
+            Some(Err(message)) => {
                 return Ok(Outcome::Failed(SessionError::new("unknown", message)));
             }
         };
+        if gate.is_some() && self.session(session_id)?.is_none() {
+            return Err(CoreError::SessionNotFound);
+        }
         if command.template == Template::Goal {
             return self.goal_command(session_id, &text, options).await;
         }
@@ -87,9 +110,13 @@ impl Core {
             .as_deref()
             .or_else(|| agent.and_then(|a| a.model.as_deref()))
             .and_then(ModelRef::parse);
+        let line = match arguments.trim() {
+            "" => format!("/{name}"),
+            arguments => format!("/{name} {arguments}"),
+        };
         if subtask {
             return self
-                .subagent_command(&session, &command, model, text, options)
+                .subagent_command(&session, &command, &line, model, text, options)
                 .await;
         }
         if let Some(agent) = &command.agent
@@ -104,10 +131,7 @@ impl Core {
             text,
             files: Vec::new(),
             skills: Vec::new(),
-            command: Some(match arguments.trim() {
-                "" => format!("/{name}"),
-                arguments => format!("/{name} {arguments}"),
-            }),
+            command: Some(line),
         };
         self.prompt(session_id, prompt, options).await
     }
@@ -151,10 +175,26 @@ impl Core {
         &self,
         parent: &crate::storage::SessionRow,
         command: &Command,
+        line: &str,
         model: Option<ModelRef>,
         text: String,
         options: TurnOptions,
     ) -> Result<Outcome, CoreError> {
+        // The parent shows what the user typed, as a command run in it would: a user message
+        // holding only the command line (the template goes to the child), ahead of the result.
+        super::revert::commit(&self.shared, &parent.id)?;
+        let typed = Prompt {
+            text: line.to_string(),
+            files: Vec::new(),
+            skills: Vec::new(),
+            command: Some(line.to_string()),
+        };
+        self.shared.db.append_message(
+            &parent.id,
+            &crate::ids::message(),
+            "user",
+            &crate::session::inbox::user_data(&typed),
+        )?;
         let description = command
             .description
             .clone()
@@ -206,5 +246,50 @@ impl Core {
             Delivery::Steer,
         )?;
         self.drain(&parent.id, options).await
+    }
+}
+
+/// A command of `session` waiting before its turn, registered for [`Core::interrupt`] until
+/// dropped.
+struct Preparing<'a> {
+    shared: &'a super::Shared,
+    session_id: String,
+    nonce: String,
+    token: tokio_util::sync::CancellationToken,
+}
+
+impl<'a> Preparing<'a> {
+    fn start(shared: &'a super::Shared, session_id: &str) -> Self {
+        let token = tokio_util::sync::CancellationToken::new();
+        let nonce = crate::ids::part();
+        shared
+            .preparing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(session_id.to_string())
+            .or_default()
+            .push((nonce.clone(), token.clone()));
+        Preparing {
+            shared,
+            session_id: session_id.to_string(),
+            nonce,
+            token,
+        }
+    }
+}
+
+impl Drop for Preparing<'_> {
+    fn drop(&mut self) {
+        let mut preparing = self
+            .shared
+            .preparing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(waiting) = preparing.get_mut(&self.session_id) {
+            waiting.retain(|(nonce, _)| *nonce != self.nonce);
+            if waiting.is_empty() {
+                preparing.remove(&self.session_id);
+            }
+        }
     }
 }

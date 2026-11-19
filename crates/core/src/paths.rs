@@ -145,6 +145,22 @@ pub fn canonicalize(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
     Ok(real)
 }
 
+/// A path without Windows' verbatim prefix (`\\?\C:\x` → `C:\x`, `\\?\UNC\h\s` → `\\h\s`),
+/// whatever its length, so it compares with and reads like the paths users write.
+pub fn plain(path: &Path) -> PathBuf {
+    PathBuf::from(plain_text(&path.to_string_lossy()))
+}
+
+pub(crate) fn plain_text(text: &str) -> String {
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.to_string(),
+        _ => text.to_string(),
+    }
+}
+
 /// The most read from a markdown or instruction file (agents, commands, skills, `AGENTS.md`).
 pub const TEXT_CAP: u64 = 4 << 20;
 /// The most read from a project's config document.
@@ -258,4 +274,19 @@ pub fn node_join(base: &str, rest: &str) -> String {
         out.push('/');
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verbatim_prefixes_go_whatever_the_length() {
+        let long = format!(r"\\?\C:\{}\x", "d".repeat(300));
+        assert_eq!(plain_text(&long), &long[4..]);
+        assert_eq!(plain_text(r"\\?\C:\Users\u"), r"C:\Users\u");
+        assert_eq!(plain_text(r"\\?\UNC\host\share\x"), r"\\host\share\x");
+        assert_eq!(plain_text(r"\\?\Volume{abc}\x"), r"\\?\Volume{abc}\x");
+        assert_eq!(plain_text("/home/u/x"), "/home/u/x");
+    }
 }

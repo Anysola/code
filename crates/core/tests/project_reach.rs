@@ -885,3 +885,423 @@ fn grep_hides_nothing_without_a_restricting_rule() {
     );
     assert!(!out.contains("not shown"), "{out}");
 }
+
+/// Calls filled in after the test home exists (paths are only known then).
+fn scripted_later(calls: std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>>) -> FakeGateway {
+    FakeGateway::start(move |request, _| {
+        if request.is_title() {
+            return text(request, "title");
+        }
+        let done = results(request).len();
+        let next = calls.lock().unwrap().get(done).cloned();
+        match next {
+            Some((name, input)) => call(request, &format!("t{done}"), &name, input),
+            None => text(request, "done"),
+        }
+    })
+}
+
+/// A permission question: its action and resources.
+type Asked = (String, Vec<String>);
+
+/// Runs the calls (those `setup` adds last) in one turn; the tool results as JSON text, and the
+/// permission asks raised (answered "reject").
+fn run_paths(
+    calls: Vec<(&str, Value)>,
+    setup: impl FnOnce(&Env) -> Vec<(String, Value)>,
+) -> (Vec<String>, Vec<Asked>, Env) {
+    use anysola_core::events::Event;
+    use anysola_core::session::gate::Reply as Answer;
+    let shared = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let gateway = scripted_later(shared.clone());
+    let env = env(&gateway.url);
+    let mut list: Vec<(String, Value)> =
+        calls.into_iter().map(|(n, v)| (n.to_string(), v)).collect();
+    list.extend(setup(&env));
+    *shared.lock().unwrap() = list;
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let mut events = core.subscribe();
+    let answering = core.clone();
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = asked.clone();
+    let listener = runtime.spawn(async move {
+        while let Ok(event) = events.recv().await {
+            if let Event::PermissionAsked {
+                request_id,
+                action,
+                resources,
+                ..
+            } = event
+            {
+                recorded.lock().unwrap().push((action, resources));
+                answering.reply_permission(&request_id, Answer::Reject(Some("no".into())));
+            }
+        }
+    });
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    listener.abort();
+    let out = last_results(&gateway)
+        .iter()
+        .map(|r| r["content"].to_string())
+        .collect();
+    let asked = asked.lock().unwrap().clone();
+    drop(core);
+    (out, asked, env)
+}
+
+const DENY_SECRETS: &str =
+    r#"{"permissions": [{"action": "read", "resource": "secrets/*", "effect": "deny"}]}"#;
+
+/// A repository ships `alias -> secrets/key`; the user denies `read secrets/*`.
+#[cfg(unix)]
+#[test]
+fn a_symlink_in_the_repository_names_the_file_it_reaches() {
+    let (out, _, _) = run_paths(
+        vec![
+            ("read", json!({"path": "secrets/key"})),
+            ("read", json!({"path": "alias"})),
+        ],
+        |env| {
+            env.home.write(".anysola/config.json", DENY_SECRETS);
+            env.home.write("proj/secrets/key", "TOP-SECRET-VALUE");
+            std::os::unix::fs::symlink("secrets/key", env.home.project().join("alias")).unwrap();
+            vec![]
+        },
+    );
+    let leaked = out.iter().any(|r| r.contains("TOP-SECRET-VALUE"));
+    println!("secret read through an in-repo symlink: {leaked}");
+    assert!(
+        !leaked,
+        "BREAK: a symlink in the repository sidesteps the read denial"
+    );
+}
+
+/// A repository ships `notes -> ~/.ssh`; the user denies `read ~/.ssh/*`.
+#[cfg(unix)]
+#[test]
+fn a_symlink_in_the_repository_to_a_denied_home_folder_is_denied() {
+    let (out, _, _) = run_paths(
+        vec![
+            ("read", json!({"path": "~/.ssh/id_rsa"})),
+            ("read", json!({"path": "notes/id_rsa"})),
+        ],
+        |env| {
+            env.home.write(
+                ".anysola/config.json",
+                r#"{"permissions": [{"action": "read", "resource": "~/.ssh/*", "effect": "deny"}]}"#,
+            );
+            env.home.write(".ssh/id_rsa", "PRIVATE-KEY-VALUE");
+            std::os::unix::fs::symlink(
+                env.home.home().join(".ssh"),
+                env.home.project().join("notes"),
+            )
+            .unwrap();
+            vec![]
+        },
+    );
+    let leaked = out.iter().any(|r| r.contains("PRIVATE-KEY-VALUE"));
+    println!("~/.ssh key read through a repository symlink: {leaked}");
+    assert!(
+        !leaked,
+        "BREAK: a repository symlink sidesteps the user's ~/.ssh denial"
+    );
+}
+
+/// `/proc/self/root` + the absolute path names the same file under another name.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_proc_self_root_alias_names_the_file_it_reaches() {
+    let (out, _, _) = run_paths(vec![("read", json!({"path": "secrets/key"}))], |env| {
+        env.home.write(".anysola/config.json", DENY_SECRETS);
+        env.home.write("proj/secrets/key", "TOP-SECRET-VALUE");
+        let alias = format!(
+            "/proc/self/root{}/secrets/key",
+            env.home.project().display()
+        );
+        vec![("read".to_string(), json!({ "path": alias }))]
+    });
+    let leaked = out.iter().any(|r| r.contains("TOP-SECRET-VALUE"));
+    println!("secret read through /proc/self/root: {leaked}");
+    assert!(!leaked, "BREAK: /proc/self/root sidesteps the read denial");
+}
+
+/// grep's filter, searching through the in-repo symlinked path and /proc/self/root.
+#[cfg(target_os = "linux")]
+#[test]
+fn grep_by_an_alias_still_hides_a_denied_file() {
+    let (out, _, _) = run_paths(vec![("grep", json!({"pattern": "TOP-SECRET"}))], |env| {
+        env.home.write(".anysola/config.json", DENY_SECRETS);
+        env.home.write("proj/secrets/key", "TOP-SECRET-VALUE");
+        std::os::unix::fs::symlink("secrets/key", env.home.project().join("alias")).unwrap();
+        let alias = format!("/proc/self/root{}/secrets", env.home.project().display());
+        vec![
+            (
+                "grep".to_string(),
+                json!({"pattern": "TOP-SECRET", "path": "alias"}),
+            ),
+            (
+                "grep".to_string(),
+                json!({"pattern": "TOP-SECRET", "path": alias}),
+            ),
+        ]
+    });
+    let leaked: Vec<_> = out.iter().map(|r| r.contains("TOP-SECRET-VALUE")).collect();
+    println!("grep leaked (plain, symlink file, /proc/self/root dir): {leaked:?}");
+    assert!(
+        !leaked.iter().any(|l| *l),
+        "BREAK: grep shows a denied file's contents"
+    );
+}
+
+/// A repository symlink leading out of the project: writing through it is an outside write
+/// (the `external_directory` question, and the user's rules on the real folder).
+#[cfg(unix)]
+#[test]
+fn a_write_through_a_symlink_leading_out_is_an_outside_write() {
+    // The user's rule on the real folder denies.
+    let (out, _, env) = run_paths(
+        vec![
+            ("write", json!({"path": "out/new.txt", "content": "x"})),
+            (
+                "edit",
+                json!({"path": "out/kept.txt", "oldString": "keep", "newString": "gone"}),
+            ),
+        ],
+        |env| {
+            env.home.write(
+                ".anysola/config.json",
+                r#"{"permissions": [{"action": "edit", "resource": "~/elsewhere/*", "effect": "deny"}]}"#,
+            );
+            env.home.write("elsewhere/kept.txt", "keep");
+            std::os::unix::fs::symlink(
+                env.home.home().join("elsewhere"),
+                env.home.project().join("out"),
+            )
+            .unwrap();
+            vec![]
+        },
+    );
+    assert!(
+        out.iter().all(|r| r.contains("Permission denied: edit")),
+        "{out:?}"
+    );
+    assert!(!env.home.home().join("elsewhere/new.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(env.home.home().join("elsewhere/kept.txt")).unwrap(),
+        "keep"
+    );
+    drop(env);
+    // With no rule on it, the outside folder is asked about like any other.
+    let (out, asked, env) = run_paths(
+        vec![("write", json!({"path": "out/new.txt", "content": "x"}))],
+        |env| {
+            env.home.write(
+                ".anysola/config.json",
+                r#"{"permissions": [{"action": "external_directory", "resource": "*", "effect": "ask"}]}"#,
+            );
+            std::fs::create_dir_all(env.home.home().join("elsewhere")).unwrap();
+            std::os::unix::fs::symlink(
+                env.home.home().join("elsewhere"),
+                env.home.project().join("out"),
+            )
+            .unwrap();
+            vec![]
+        },
+    );
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert_eq!(asked[0].0, "external_directory");
+    assert_eq!(
+        asked[0].1,
+        [format!("{}/elsewhere/*", env.home.home().display())]
+    );
+    assert!(
+        !env.home.home().join("elsewhere/new.txt").exists(),
+        "{out:?}"
+    );
+}
+
+/// A symlink inside the project to another place inside it, with no rule on either name, works
+/// as before: no question; and a file not created yet under it lands where the link points.
+#[cfg(unix)]
+#[test]
+fn a_symlink_inside_the_project_asks_nothing_new() {
+    let (out, asked, env) = run_paths(
+        vec![
+            ("read", json!({"path": "link/a.md"})),
+            ("write", json!({"path": "link/new.md", "content": "fresh"})),
+        ],
+        |env| {
+            env.home.write(
+                ".anysola/config.json",
+                r#"{"permissions": [{"action": "external_directory", "resource": "*", "effect": "ask"}]}"#,
+            );
+            env.home.write("proj/docs/a.md", "DOC-TEXT");
+            std::os::unix::fs::symlink("docs", env.home.project().join("link")).unwrap();
+            vec![]
+        },
+    );
+    assert!(asked.is_empty(), "{asked:?}");
+    assert!(out[0].contains("DOC-TEXT"), "{out:?}");
+    assert_eq!(
+        std::fs::read_to_string(env.home.home().join("proj/docs/new.md")).unwrap(),
+        "fresh"
+    );
+}
+
+/// A dangling repository symlink is judged by where it points: writing through it to a denied
+/// folder is denied, and nothing is created there.
+#[cfg(unix)]
+#[test]
+fn a_dangling_symlink_is_judged_by_where_it_points() {
+    let (out, _, env) = run_paths(
+        vec![("write", json!({"path": "dangling", "content": "x"}))],
+        |env| {
+            env.home.write(
+                ".anysola/config.json",
+                r#"{"permissions": [{"action": "edit", "resource": "~/.ssh/*", "effect": "deny"}]}"#,
+            );
+            std::fs::create_dir_all(env.home.home().join(".ssh")).unwrap();
+            std::fs::create_dir_all(env.home.project()).unwrap();
+            std::os::unix::fs::symlink(
+                env.home.home().join(".ssh/authorized_keys"),
+                env.home.project().join("dangling"),
+            )
+            .unwrap();
+            vec![]
+        },
+    );
+    assert!(out[0].contains("Permission denied: edit"), "{out:?}");
+    assert!(!env.home.home().join(".ssh/authorized_keys").exists());
+}
+
+/// Stop while a project command's placeholder question waits: the question is taken down and
+/// nothing of the command runs, no turn starts. Shutting down does the same.
+#[test]
+fn stop_cancels_a_project_command_waiting_on_its_question() {
+    use anysola_core::events::Event;
+    for how in ["interrupt", "shutdown", "delete"] {
+        let gateway = scripted(vec![]);
+        let env = env(&gateway.url);
+        env.home.write(
+            ".anysola/config.json",
+            r#"{"permissions": [{"action": "shell", "resource": "touch asked*", "effect": "ask"}]}"#,
+        );
+        env.home.write(
+            "proj/anysola.json",
+            r#"{"commands": {"asks": {"template": "Go !`touch asked-once`"}}}"#,
+        );
+        let runtime = runtime();
+        let core = runtime.block_on(common::core(&env));
+        let (session, _) = core.open(&Target::New, false).unwrap();
+        let mut events = core.subscribe();
+        let running = {
+            let core = core.clone();
+            let id = session.id.clone();
+            runtime
+                .spawn(async move { core.command(&id, "asks", "", TurnOptions::default()).await })
+        };
+        let request = runtime.block_on(async {
+            loop {
+                if let Ok(Event::PermissionAsked { request_id, .. }) = events.recv().await {
+                    return request_id;
+                }
+            }
+        });
+        match how {
+            "interrupt" => core.interrupt(&session.id),
+            "shutdown" => core.shutdown(),
+            _ => {
+                core.delete_session(&session.id).unwrap();
+            }
+        }
+        let outcome = runtime.block_on(running).unwrap();
+        assert!(
+            matches!(outcome, Ok(anysola_core::session::Outcome::Interrupted(_))),
+            "{how}: {outcome:?}"
+        );
+        let taken_down = runtime.block_on(async {
+            loop {
+                if let Ok(Event::PermissionReplied { request_id, .. }) = events.recv().await
+                    && request_id == request
+                {
+                    return true;
+                }
+            }
+        });
+        assert!(taken_down, "{how}");
+        assert!(core.pending_requests().is_empty(), "{how}");
+        assert!(!env.home.project().join("asked-once").exists(), "{how}");
+        assert!(
+            gateway.messages().iter().all(|r| r.is_title()),
+            "{how}: no turn started"
+        );
+        assert!(!core.is_busy(&session.id), "{how}");
+    }
+}
+
+/// A project command run as a subtask leaves the line the user typed in the parent, then the
+/// subtask's result.
+#[test]
+fn a_subtask_command_leaves_what_the_user_typed() {
+    use anysola_core::session::message::Message;
+    let gateway = scripted(vec![]);
+    let env = env(&gateway.url);
+    env.home.write(
+        "proj/anysola.json",
+        r#"{"commands": {"build-it": {"template": "Build the thing", "agent": "build"}}}"#,
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    core.select_agent(&session.id, "plan").unwrap();
+    runtime
+        .block_on(core.command(&session.id, "build-it", "now", TurnOptions::default()))
+        .unwrap();
+    let rows: Vec<(String, Message)> = core
+        .db()
+        .messages(&session.id)
+        .unwrap()
+        .into_iter()
+        .map(|row| (row.kind.clone(), Message::decode(&row.kind, &row.data)))
+        .collect();
+    let kinds: Vec<&str> = rows.iter().map(|(k, _)| k.as_str()).collect();
+    let user = rows
+        .iter()
+        .position(|(k, _)| k == "user")
+        .expect("a user row");
+    let Message::User(data) = &rows[user].1 else {
+        panic!()
+    };
+    assert_eq!(data.text, "/build-it now");
+    assert_eq!(data.extra["command"], "/build-it now");
+    // Then (after Plan's reminder, in Plan) the subtask's result, then the parent's reply.
+    let result = rows[user + 1..]
+        .iter()
+        .position(|(_, m)| {
+            matches!(m, Message::Synthetic(s) if s.text.starts_with("<subagent sessionID=\""))
+        })
+        .expect("the subtask's result after the user row");
+    assert!(
+        rows[user + 1 + result..]
+            .iter()
+            .any(|(k, _)| k == "assistant"),
+        "{kinds:?}"
+    );
+    assert_eq!(
+        rows.iter().filter(|(k, _)| k == "user").count(),
+        1,
+        "{kinds:?}"
+    );
+    // The template went to the child, not the parent.
+    let parent_bodies: Vec<String> = gateway
+        .messages()
+        .into_iter()
+        .filter(|r| !r.is_title() && r.header("x-opencode-parent-session-id").is_none())
+        .map(|r| r.body)
+        .collect();
+    assert!(parent_bodies.iter().all(|b| !b.contains("Build the thing")));
+}

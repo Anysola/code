@@ -149,6 +149,10 @@ pub(crate) struct Shared {
     /// `<pid>:<nonce>` for busy markers.
     pub owner: String,
     pub turns: Mutex<std::collections::HashMap<String, CancellationToken>>,
+    /// Sessions whose command waits on a question before its turn starts (a project command's
+    /// ``!`cmd` ``): [`Core::interrupt`] cancels the question and the command.
+    /// Each with a nonce telling apart the command that registered it.
+    pub preparing: Mutex<std::collections::HashMap<String, Vec<(String, CancellationToken)>>>,
     /// The inbox row of the prompt each held session was taken for: the one input a turn that
     /// cannot start may drop as unsent (the desktop app).
     pub admitted: Mutex<std::collections::HashMap<String, String>>,
@@ -312,6 +316,7 @@ impl Core {
             snapshots,
             owner: format!("{}:{}", std::process::id(), crate::ids::part()),
             turns: Mutex::default(),
+            preparing: Mutex::default(),
             admitted: Mutex::default(),
             warming: Default::default(),
             goals: Default::default(),
@@ -1025,9 +1030,20 @@ impl Core {
         {
             token.cancel();
         }
+        for token in self
+            .shared
+            .preparing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .flatten()
+        {
+            token.1.cancel();
+        }
     }
 
-    /// Interrupts the session's running turn, if any.
+    /// Interrupts the session's running turn, if any, and a command still waiting on a question
+    /// before its turn (nothing of it runs).
     pub fn interrupt(&self, session_id: &str) {
         if let Some(token) = self
             .shared
@@ -1037,6 +1053,17 @@ impl Core {
             .get(session_id)
         {
             token.cancel();
+        }
+        if let Some(token) = self
+            .shared
+            .preparing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(session_id)
+        {
+            for (_, token) in token {
+                token.cancel();
+            }
         }
     }
 
@@ -1109,6 +1136,17 @@ impl Core {
         self.shared
             .closing
             .store(true, std::sync::atomic::Ordering::Relaxed);
+        // A command waiting on a question before its turn does not start one now.
+        for (_, token) in self
+            .shared
+            .preparing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .flatten()
+        {
+            token.cancel();
+        }
         self.shared.asks.close();
         crate::tool::shell::kill_background_shells();
         // The firing loop sees `closing` and releases its lease now rather than after a sleep.
