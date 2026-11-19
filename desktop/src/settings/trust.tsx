@@ -1,46 +1,55 @@
 /**
- * A project file's rules or downloads that aren't allowed, in the Settings section they belong to:
- * the file, what allowing would change, and the answer, as the project groups of Hooks and MCP
- * servers do. The conversation's card asks about the same items.
+ * The user's answer on what a project file may change, in the Settings section it belongs to: the
+ * state (waiting, allowed, not allowed), what that means, and the buttons that change it, as the
+ * project groups of Hooks do. The conversation's card asks about the same items.
  */
 import { useState, type ReactNode } from "react"
 
 import type { TrustItem } from "../bridge"
-import { answerTrust, remoteLabel, remoteText, ruleText, scopeLabel, useTrust } from "../hooks-card"
+import { answerTrust, remoteLabel, remoteText, WHEN_DOWNLOADED } from "../hooks-card"
 import { btn, cn, Spinner } from "../ui"
 import { OpenPath } from "./agent"
 import { Group, message, Row } from "./controls"
 import { shortPath } from "./hooks"
 
-const HINT: Record<"permissions" | "remote", { waiting: string; denied: string }> = {
-  permissions: {
-    waiting: "These change what the agent may do without asking you. Until you allow them, your own rules decide.",
-    denied: "Not applied: your own rules decide. Allow if you trust this project.",
-  },
-  remote: {
-    waiting: "The app fetches these each time it opens this project, once you allow it.",
-    denied: "Not fetched. Allow if you trust this project.",
-  },
-}
+export const TRUST_STATE = {
+  waiting: { word: "Waiting for you", mark: "bg-warning" },
+  allowed: { word: "Allowed", mark: "bg-success" },
+  denied: { word: "Not allowed", mark: "bg-muted/60" },
+} as const
 
-/** One group per project file whose `kind` waits or was refused; nothing when all are allowed. */
-export function ProjectTrust({ directory, kind }: { directory: string; kind: "permissions" | "remote" }) {
-  const trust = useTrust(directory)
-  const items = (trust.data ?? []).filter((i) => i.kind === kind && i.decision !== "allowed")
+export const stateOf = (item: TrustItem) => TRUST_STATE[item.decision ?? "waiting"]
+
+/** A state's dot and word, as a row's label. */
+export function StateLabel({ item, children }: { item: TrustItem; children?: ReactNode }) {
+  const state = stateOf(item)
   return (
-    <>
-      {items.map((i) => (
-        <ProjectItem key={`${i.path}:${i.kind}`} item={i} directory={directory} />
-      ))}
-    </>
+    <span className="flex min-w-0 items-center gap-2">
+      <span className={cn("size-1.5 shrink-0 rounded-full", state.mark)} aria-hidden />
+      {children ?? state.word}
+    </span>
   )
 }
 
-function ProjectItem({ item, directory }: { item: TrustItem; directory: string }) {
+/**
+ * One project file's kind: its state, `hint` for what that means now, and Allow / Don't allow
+ * while it waits, Allow again once refused, Stop allowing once allowed. The answer reaches every
+ * view that shows the item before the buttons come back.
+ */
+export function TrustRow({
+  item,
+  directory,
+  hint,
+  label,
+}: {
+  item: TrustItem
+  directory: string
+  hint: ReactNode
+  /** In place of the state's word (the state's dot stays). */
+  label?: ReactNode
+}) {
   const [busy, setBusy] = useState<boolean | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const refused = item.decision === "denied"
-  const kind = item.kind as "permissions" | "remote"
   const answer = (allow: boolean) => {
     setBusy(allow)
     setError(null)
@@ -49,46 +58,63 @@ function ProjectItem({ item, directory }: { item: TrustItem; directory: string }
       .finally(() => setBusy(null))
   }
   return (
-    <Group
-      label={
-        <>
-          This project <span className="ml-2 font-mono font-normal">{shortPath(item.path, directory)}</span>
-        </>
-      }
-      aside={<OpenPath path={item.path} small />}
-    >
-      <Row
-        label={
-          <span className="flex items-center gap-2">
-            <span className={cn("size-1.5 shrink-0 rounded-full", refused ? "bg-muted/60" : "bg-warning")} aria-hidden />
-            {refused ? "Not allowed" : "Waiting for you"}
-          </span>
-        }
-        hint={HINT[kind][refused ? "denied" : "waiting"]}
-      >
+    <>
+      <Row label={<StateLabel item={item}>{label}</StateLabel>} hint={hint}>
         {busy !== null && <Spinner />}
-        <button disabled={busy !== null} onClick={() => answer(true)} className={btn(refused ? "secondary" : "primary", "sm")}>
-          Allow
-        </button>
-        {!refused && (
+        {item.decision !== "allowed" && (
+          <button
+            disabled={busy !== null}
+            onClick={() => answer(true)}
+            className={btn(item.decision === null ? "primary" : "secondary", "sm")}
+          >
+            Allow
+          </button>
+        )}
+        {item.decision !== "denied" && (
           <button disabled={busy !== null} onClick={() => answer(false)} className={btn("ghost", "sm", "text-muted")}>
-            Don’t allow
+            {item.decision === null ? "Don’t allow" : "Stop allowing"}
           </button>
         )}
       </Row>
-      {item.entries.map((e, i) => (
-        <EntryRow
-          key={i}
-          scope={kind === "permissions" ? scopeLabel(e.label) : remoteLabel(e.label)}
-          text={kind === "permissions" ? ruleText(e.command, e.label) : remoteText(e)}
-        />
-      ))}
       {error && <p className="text-dense px-4 py-2.5 text-danger select-text">{error}</p>}
-    </Group>
+    </>
   )
 }
 
-function EntryRow({ scope, text }: { scope: ReactNode; text: ReactNode }) {
+// Built when shown: this module and the card's import each other, so the card's sentence isn't
+// there yet when this one loads.
+const remoteHint = (decision: TrustItem["decision"]) =>
+  decision === "denied"
+    ? "Not downloaded. Allow if you trust this project."
+    : decision === "allowed"
+      ? WHEN_DOWNLOADED
+      : `Nothing is downloaded until you allow it. ${WHEN_DOWNLOADED}`
+
+/** One group per project file that makes the app download something, in every state. */
+export function ProjectDownloads({ directory, items }: { directory: string; items: TrustItem[] }) {
+  return (
+    <>
+      {items.map((item) => (
+        <Group
+          key={item.path}
+          label={
+            <>
+              This project <span className="ml-2 font-mono font-normal">{shortPath(item.path, directory)}</span>
+            </>
+          }
+          aside={<OpenPath path={item.path} small />}
+        >
+          <TrustRow item={item} directory={directory} hint={remoteHint(item.decision)} />
+          {item.entries.map((e, i) => (
+            <EntryRow key={i} scope={remoteLabel(e.label)} text={remoteText(e)} />
+          ))}
+        </Group>
+      ))}
+    </>
+  )
+}
+
+export function EntryRow({ scope, text }: { scope: ReactNode; text: ReactNode }) {
   return (
     <div className="text-dense flex min-h-11 flex-wrap items-baseline gap-x-4 gap-y-0.5 px-4 py-2.5">
       <span className="w-32 shrink-0 text-muted">{scope}</span>
@@ -96,4 +122,3 @@ function EntryRow({ scope, text }: { scope: ReactNode; text: ReactNode }) {
     </div>
   )
 }
-

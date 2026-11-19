@@ -248,10 +248,27 @@ export type Sources = {
   /** `source`: a file, an MCP server's name, or null for the built-ins. */
   commands: { name: string; description: string | null; origin: Origin; source: string | null }[]
   agents: { id: string; name: string; description: string | null; origin: Origin; source: string | null }[]
-  /** Instruction files in the order the agent reads them. */
-  instructions: { path: string; bytes: number; origin: Origin }[]
+  /** Instruction files in the order the agent reads them; a URL that couldn't be downloaded keeps its place, with `error`. */
+  instructions: { path: string; bytes: number; origin: Origin; error?: string | null }[]
   /** Every place that is looked in, found or not: the answer to "where from". */
   places: { path: string; holds: "skills" | "commands" | "agents" | "instructions" | "config"; origin: Origin; exists: boolean }[]
+  /** Each configured `skills` URL and why its index couldn't be downloaded (null: it was). */
+  skillUrls: { url: string; error: string | null }[]
+  /** The git repositories the agent may read, and how each download stands. */
+  repositories: Repository[]
+}
+
+/**
+ * A git repository from config `references`. `cloned`: a copy is on this computer; `attemptedAt`
+ * (ms): the last download or update; `error`: why that one failed.
+ */
+export type Repository = {
+  name: string
+  repository: string | null
+  branch: string | null
+  cloned: boolean
+  attemptedAt: number | null
+  error: string | null
 }
 
 /** The moments a hook can run at. */
@@ -343,7 +360,20 @@ export type Hooks = {
 /** A saved "always allow" answer; they are kept per project. */
 export type SavedPermission = { projectId: string; folder: string | null; action: string; resource: string }
 
-export type PermissionRule = { action: string; resource: string; effect: "allow" | "ask" | "deny"; source: string }
+/**
+ * A rule a config file or an agent file sets. `agent`: the one agent it applies to (null: every
+ * agent). `project`: it comes from the folder's project. `applied` false: a project's allow rule
+ * waiting for that file's `permissions` to be allowed.
+ */
+export type PermissionRule = {
+  action: string
+  resource: string
+  effect: "allow" | "ask" | "deny"
+  agent: string | null
+  source: string
+  project: boolean
+  applied: boolean
+}
 
 export type DataInfo = {
   /** `~/.anysola` */
@@ -676,6 +706,8 @@ export type Bridge = {
   mcpSignOut(directory: string, name: string): Promise<McpServer[]>
 
   sources(directory: string): Promise<Sources>
+  /** Tries the failed downloads again (instruction and skill URLs, a repository never downloaded), then lists the sources. */
+  sourcesRetry(directory: string): Promise<Sources>
   /** `~/.anysola/AGENTS.md`: what the agent is told in every folder. */
   personalInstructions(): Promise<{ path: string; text: string }>
   savePersonalInstructions(text: string): Promise<void>
@@ -810,6 +842,7 @@ function tauriBridge(): Bridge {
     trust: (directory) => invoke("trust", { directory }),
     trustAnswer: (directory, items, allow) => invoke("trust_answer", { directory, items, allow }),
     sources: (directory) => invoke("sources", { directory }),
+    sourcesRetry: (directory) => invoke("sources_retry", { directory }),
     personalInstructions: () => invoke("personal_instructions"),
     savePersonalInstructions: (text) => invoke("save_personal_instructions", { text }),
     permissions: (directory) => invoke("permissions", { directory }),

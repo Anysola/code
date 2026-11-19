@@ -1196,6 +1196,7 @@ fn main() {
             trust::trust,
             trust::trust_answer,
             sources::sources,
+            sources::sources_retry,
             sources::personal_instructions,
             sources::save_personal_instructions,
             sources::reveal_path,

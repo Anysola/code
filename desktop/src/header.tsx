@@ -32,7 +32,7 @@ import {
   useChrome,
 } from "./chrome"
 import { usePrefs } from "./prefs"
-import { changedFiles, GitMenu } from "./review"
+import { GitMenu, useChangeCounts } from "./review"
 import { KEYS } from "./shortcuts"
 import { PlaceLabel } from "./sidebar"
 import {
@@ -107,9 +107,7 @@ const ROOMY = 1200
 
 export function SessionHeader({ open }: { open: Open }) {
   const hidden = useChrome((c) => c.sidebarHidden)
-  const files = changedFiles(open)
-  const add = files.reduce((n, f) => n + f.add, 0)
-  const del = files.reduce((n, f) => n + f.del, 0)
+  const { files, add, del } = useChangeCounts(open)
   const bar = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(1280)
   const narrow = width < NARROW
@@ -164,7 +162,7 @@ export function SessionHeader({ open }: { open: Open }) {
         <div className="mr-2 ml-3 flex shrink-0 items-center gap-1">
           <EditorButton directory={open.directory} compact={width < ROOMY} />
           <GitMenu open={open} compact={narrow} />
-          {files.length > 0 &&
+          {files > 0 &&
             (narrow ? (
               <Tooltip label="Review changes" keys={KEYS.review}>
                 <button

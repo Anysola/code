@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use anysola_core::api::Core;
 use anysola_core::command::Template;
 use anysola_core::config::{self, NAMES};
-use anysola_core::instructions::Observed;
+use anysola_core::instructions::{InstructionFile, Observed, RemoteStatus};
 use anysola_core::paths::Paths;
+use anysola_core::reference::{self, Remote, Source};
 use serde_json::{Value, json};
 use tauri::{AppHandle, State};
 
@@ -127,12 +128,23 @@ fn places(core: &Core, paths: &Paths) -> Vec<Value> {
 
 fn instructions(core: &Core, paths: &Paths) -> Vec<Value> {
     let loaded = core.loaded();
+    // A URL that failed stays in its place in the list, with why: it stands in empty here.
+    let failed: Vec<&RemoteStatus> = loaded
+        .remote_instruction_status
+        .iter()
+        .filter(|s| s.error.is_some())
+        .collect();
+    let mut remote = loaded.remote_instructions.clone();
+    remote.extend(failed.iter().map(|s| InstructionFile {
+        path: s.url.clone(),
+        content: String::new(),
+    }));
     let found = anysola_core::instructions::discover(
         paths,
         core.directory(),
         core.worktree(),
         &loaded.config.instructions,
-        &loaded.remote_instructions,
+        &remote,
     );
     let Observed::Value(Value::Array(files)) = found else {
         return Vec::new();
@@ -141,16 +153,67 @@ fn instructions(core: &Core, paths: &Paths) -> Vec<Value> {
         .iter()
         .filter_map(|file| {
             let path = file["path"].as_str()?;
-            let origin = if path.starts_with("http://") || path.starts_with("https://") {
+            let url = path.starts_with("http://") || path.starts_with("https://");
+            let origin = if url {
                 "url"
             } else {
                 origin(Path::new(path), paths)
             };
+            let error = failed
+                .iter()
+                .find(|s| s.url == path)
+                .and_then(|s| s.error.clone());
             Some(json!({
                 "path": path,
                 "bytes": file["content"].as_str().map_or(0, str::len),
                 "origin": origin,
+                "error": error,
             }))
+        })
+        .collect()
+}
+
+/// How each configured `skills` URL's index download went, in config order.
+fn skill_urls(status: &[RemoteStatus]) -> Vec<Value> {
+    status
+        .iter()
+        .map(|s| json!({"url": s.url, "error": s.error}))
+        .collect()
+}
+
+/// The core keeps git's first line, which for a clone is its progress line, not why it failed.
+fn git_reason(error: &str) -> String {
+    if error.starts_with("Cloning into ") {
+        "git couldn’t clone it".to_string()
+    } else {
+        error.to_string()
+    }
+}
+
+/// The git references and how each checkout stands, in config order.
+fn repositories(core: &Core) -> Vec<Value> {
+    let references = core.references();
+    core.reference_status()
+        .into_iter()
+        .map(|s| {
+            let (repository, branch) = references
+                .iter()
+                .find(|r| r.name == s.name)
+                .and_then(|r| match &r.source {
+                    Source::Git { repository, branch } => {
+                        Some((repository.clone(), branch.clone()))
+                    }
+                    Source::Local(_) => None,
+                })
+                .unzip();
+            json!({
+                "name": s.name,
+                "repository": repository,
+                "branch": branch.flatten(),
+                "cloned": s.cloned,
+                "attemptedAt": s.attempted_at,
+                "error": s.error.as_deref().map(git_reason),
+            })
         })
         .collect()
 }
@@ -214,7 +277,39 @@ pub async fn sources(handle: AppHandle, app: State<'_, App>, directory: String) 
         "agents": agents,
         "instructions": instructions,
         "places": places,
+        "skillUrls": skill_urls(&loaded.skill_status),
+        "repositories": repositories(&core),
     }))
+}
+
+/// Tries the downloads that failed again: instruction URLs and skill indexes at a reload of the
+/// folder's config, a repository that never cloned by cloning it now. Then lists the sources.
+#[tauri::command]
+pub async fn sources_retry(handle: AppHandle, app: State<'_, App>, directory: String) -> Answer {
+    let core = core_for(&handle, &app, &directory).await?;
+    core.reload().await;
+    let failed: Vec<(Remote, Option<String>)> = core
+        .reference_status()
+        .iter()
+        .filter(|s| !s.cloned && s.error.is_some())
+        .filter_map(|s| core.references().into_iter().find(|r| r.name == s.name))
+        .filter_map(|r| match r.source {
+            Source::Git { repository, branch } => Some((reference::parse(&repository)?, branch)),
+            Source::Local(_) => None,
+        })
+        .collect();
+    if !failed.is_empty() {
+        let (db, root) = (core.db().clone(), core.paths().repos_dir());
+        tauri::async_runtime::spawn_blocking(move || {
+            for (remote, branch) in failed {
+                // Its reason is kept with the attempt, for the status read below.
+                let _ = reference::ensure(&db, &root, &remote, branch.as_deref());
+            }
+        })
+        .await
+        .map_err(text)?;
+    }
+    sources(handle, app, directory).await
 }
 
 #[tauri::command]
@@ -291,6 +386,18 @@ mod tests {
         assert_eq!(o("/work/shop/AGENTS.md"), "project");
         assert_eq!(o("/work/shop/docs/rules.md"), "config");
         assert_eq!(document_origin("ANYSOLA_CONFIG_CONTENT", &paths), "config");
+    }
+
+    #[test]
+    fn git_reasons() {
+        assert_eq!(
+            git_reason("Cloning into '/home/u/.anysola/repos/github.com/acme/x'..."),
+            "git couldn’t clone it"
+        );
+        assert_eq!(
+            git_reason("repository 'x' does not exist"),
+            "repository 'x' does not exist"
+        );
     }
 
     #[test]

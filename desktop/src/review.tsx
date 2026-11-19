@@ -506,6 +506,46 @@ export function changedFiles(open: Open): { file: string; diffs: FileDiff[]; add
   }))
 }
 
+/**
+ * What the header counts: in git, the session's net changes as the Review panel reads them (the
+ * same line edited three times is one line), read again when an edit completes or the folder's
+ * git state is read again (a file put back, a commit); outside git, or while the read fails, the
+ * edits' own counts summed: their diffs carry only a few lines around each change, not the
+ * file's text before and after, so they can't be netted.
+ */
+export function useChangeCounts(open: Open): { files: number; add: number; del: number } {
+  const edits = changedFiles(open)
+  const done = edits.reduce((n, f) => n + f.diffs.length, 0)
+  const git = useStore((s) => s.git)
+  const [net, setNet] = useState<{ sessionId: string; files: FileDiff[] | null | "failed" } | null>(null)
+  const sessionId = open.sessionId
+  useEffect(() => {
+    if (!sessionId) return
+    let live = true
+    void readChanges().then((r) => {
+      if (!live || openNow()?.sessionId !== sessionId) return
+      setNet({ sessionId, files: r && "error" in r ? "failed" : r })
+    })
+    return () => {
+      live = false
+    }
+  }, [sessionId, done, git])
+  const read = net && net.sessionId === sessionId ? net.files : undefined
+  // Not read yet for this session: nothing rather than a sum that is about to change.
+  if (read === undefined) return { files: 0, add: 0, del: 0 }
+  if (Array.isArray(read))
+    return {
+      files: read.length,
+      add: read.reduce((n, f) => n + f.additions, 0),
+      del: read.reduce((n, f) => n + f.deletions, 0),
+    }
+  return {
+    files: edits.length,
+    add: edits.reduce((n, f) => n + f.add, 0),
+    del: edits.reduce((n, f) => n + f.del, 0),
+  }
+}
+
 export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
   // `undefined` while reading; `null` outside git; `error` when the read failed.
   const [read, setNet] = useState<FileDiff[] | null | undefined | { error: string }>(undefined)

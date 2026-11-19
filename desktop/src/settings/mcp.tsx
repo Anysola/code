@@ -6,12 +6,13 @@ import { Plus, X } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
 import type { McpDraft, McpServer, TrustItem } from "../bridge"
-import { answerTrust, useTrust } from "../hooks-card"
+import { useTrust } from "../hooks-card"
 import { currentBridge, openExternal, settingsFolder, useStore } from "../store"
 import { btn, cn, folderKey, sameFolder, Spinner, Tooltip } from "../ui"
 import { OpenPath } from "./agent"
 import { shortPath } from "./hooks"
 import { Confirm, Failed, FolderLine, Group, Loaded, message, Row, Section, Segmented, tilde, Toggle, useLoad } from "./controls"
+import { TrustRow } from "./trust"
 
 const STATUS: Record<McpServer["status"], { word: string; mark: string }> = {
   connected: { word: "Connected", mark: "bg-success" },
@@ -63,21 +64,32 @@ function Servers({ directory }: { directory: string }) {
   return (
     <Loaded load={load} rows={4}>
       {(all) => {
-        // A project's servers that wait are asked about by file, above the rest: one answer each.
-        const servers = all.filter((s) => s.status !== "waiting")
-        const files = new Map<string, McpServer[]>()
-        for (const s of all) if (s.status === "waiting") files.set(s.source, [...(files.get(s.source) ?? []), s])
+        // A project's servers go by file, each under its one answer. A waiting server whose
+        // answer isn't read yet still goes with its file.
+        const mcpItems = (trust.data ?? []).filter((i) => i.kind === "mcp")
+        const files = new Map<string, { source: string; servers: McpServer[]; item?: TrustItem }>()
+        for (const i of mcpItems) files.set(folderKey(i.path), { source: i.path, servers: [], item: i })
+        for (const s of all) {
+          const file = files.get(folderKey(s.source))
+          if (file) file.servers.push(s)
+          else if (s.status === "waiting") files.set(folderKey(s.source), { source: s.source, servers: [s] })
+        }
+        const grouped = [...files.values()]
+        const servers = all.filter((s) => !files.has(folderKey(s.source)))
+        const project = (f: (typeof grouped)[number]) => (
+          <ProjectServers
+            key={f.source}
+            source={f.source}
+            servers={f.servers}
+            directory={directory}
+            item={f.item}
+            onList={load.set}
+          />
+        )
         return (
         <>
-          {[...files.entries()].map(([source, list]) => (
-            <ProjectServers
-              key={source}
-              source={source}
-              servers={list}
-              directory={directory}
-              item={trust.data?.find((i) => i.kind === "mcp" && folderKey(i.path) === folderKey(source))}
-            />
-          ))}
+          {/* Above the rest in every state: answering never moves a file's group away. */}
+          {grouped.map(project)}
           {adding && (
             <AddForm
               directory={directory}
@@ -135,9 +147,12 @@ function Server({
   server: s,
   directory,
   onList,
+  grouped = false,
 }: {
   server: McpServer
   directory: string
+  /** Under its file's group, which names and opens the file. */
+  grouped?: boolean
   /** Absent for a server that waits: nothing about it can change here until it is allowed. */
   onList?: (l: McpServer[]) => void
 }) {
@@ -183,8 +198,9 @@ function Server({
       .mcpSignInCancel(directory, s.name)
       .catch(() => {})
   }
+  // One that waits never started: it has no tools to count yet.
   const counts = [
-    s.tools !== null && `${s.tools} tool${s.tools === 1 ? "" : "s"}`,
+    s.tools !== null && !waits && `${s.tools} tool${s.tools === 1 ? "" : "s"}`,
     s.prompts > 0 && `${s.prompts} prompt${s.prompts === 1 ? "" : "s"}`,
   ].filter(Boolean)
   return (
@@ -209,7 +225,7 @@ function Server({
           {waits && s.replaces && (
             <span className="text-2xs text-muted">Allowing it replaces your own server named {s.name}.</span>
           )}
-          {!s.editable && !waits && (
+          {!s.editable && !waits && !grouped && (
             <span className="text-2xs truncate text-muted" title={s.source}>
               Defined in <span className="font-mono">{tilde(s.source)}</span>
             </span>
@@ -251,7 +267,7 @@ function Server({
               }}
             />
           ) : (
-            !waits && <OpenPath path={s.source} />
+            !waits && !grouped && <OpenPath path={s.source} />
           )}
           {/* Off or on is the project's to say once its servers are allowed. */}
           {!waits && <span className="ml-2 flex">
@@ -300,27 +316,31 @@ function ProjectServers({
   servers,
   item,
   directory,
+  onList,
 }: {
   source: string
   servers: McpServer[]
   item?: TrustItem
   directory: string
+  onList: (l: McpServer[]) => void
 }) {
-  const [busy, setBusy] = useState<boolean | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const refused = item?.decision === "denied"
-  const answer = (allow: boolean) => {
-    if (!item) return
-    setBusy(allow)
-    setError(null)
-    answerTrust(directory, [item], allow)
-      .catch((e) => setError(message(e)))
-      .finally(() => setBusy(null))
-  }
+  const decision = item ? (item.decision ?? "waiting") : "waiting"
   // Every server the answer covers, as the file defines them (the list may not show them all yet).
   const n = Math.max(servers.length, item?.entries.filter((e) => e.label !== "MCP timeouts").length ?? 0)
   const timeouts = !!item?.entries.some((e) => e.label === "MCP timeouts")
   const replacing = servers.filter((s) => s.replaces).length
+  const them = n === 1 ? "it" : "them"
+  const hint =
+    decision === "allowed"
+      ? n === 0
+        ? "Allowed. This file defines no servers now."
+        : `${n === 1 ? "Its server runs" : `Its ${n} servers run`} while you work in this folder. Stop allowing to stop ${them}.`
+      : (decision === "denied"
+          ? `You didn’t allow ${n === 1 ? "its server" : `its ${n} servers`}, so ${n === 1 ? "it doesn’t" : "they don’t"} start.`
+          : `${n === 1 ? "Its server starts" : `Its ${n} servers start`} on this computer once you allow ${them}.`) +
+        (replacing ? ` ${replacing === 1 ? "One replaces" : `${replacing} replace`} a server of yours.` : "") +
+        (timeouts ? " Allowing also changes how long servers may take." : "") +
+        (decision === "denied" ? " Allow if you trust this project." : " Allow only if you trust this project.")
   return (
     <Group
       label={
@@ -330,38 +350,21 @@ function ProjectServers({
       }
       aside={<OpenPath path={source} small />}
     >
-      <Row
-        label={
-          <span className="flex items-center gap-2">
-            <span className={cn("size-1.5 shrink-0 rounded-full", refused ? "bg-muted/60" : "bg-warning")} aria-hidden />
-            {refused ? "Not allowed" : "Waiting for you"}
-          </span>
-        }
-        hint={
-          (refused
-            ? `You didn’t allow ${n === 1 ? "its server" : `its ${n} servers`}, so ${n === 1 ? "it doesn’t" : "they don’t"} start.`
-            : `${n === 1 ? "Its server starts" : `Its ${n} servers start`} on this computer once you allow ${n === 1 ? "it" : "them"}.`) +
-          (replacing ? ` ${replacing === 1 ? "One replaces" : `${replacing} replace`} a server of yours.` : "") +
-          (timeouts ? " Allowing also changes how long servers may take." : "") +
-          (refused ? " Allow if you trust this project." : " Allow only if you trust this project.")
-        }
-      >
-        {busy !== null && <Spinner />}
-        {item && (
-          <button disabled={busy !== null} onClick={() => answer(true)} className={btn(refused ? "secondary" : "primary", "sm")}>
-            Allow
-          </button>
-        )}
-        {item && !refused && (
-          <button disabled={busy !== null} onClick={() => answer(false)} className={btn("ghost", "sm", "text-muted")}>
-            Don’t allow
-          </button>
-        )}
-      </Row>
+      {item ? (
+        <TrustRow item={item} directory={directory} hint={hint} />
+      ) : (
+        <Row label={<span className="flex items-center gap-2"><span className="size-1.5 shrink-0 rounded-full bg-warning" aria-hidden />Waiting for you</span>} hint={hint} />
+      )}
       {servers.map((s) => (
-        <Server key={`${s.name}:${s.source}`} server={s} directory={directory} />
+        <Server
+          key={`${s.name}:${s.source}`}
+          server={s}
+          directory={directory}
+          grouped
+          // Once allowed, a project's server is turned off, retried or signed in to here like the rest.
+          onList={s.status === "waiting" ? undefined : onList}
+        />
       ))}
-      {error && <p className="text-dense px-4 py-2.5 text-danger select-text">{error}</p>}
     </Group>
   )
 }

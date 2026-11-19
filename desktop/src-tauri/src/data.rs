@@ -5,10 +5,11 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use anysola_core::api::ConfiguredRule;
 use anysola_core::paths::Paths;
+use anysola_core::permission::Effect;
 use anysola_core::storage::Db;
-use anysola_core::trust::TrustKind;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use tauri::{AppHandle, State};
 
 use crate::{Answer, App, core_for, text};
@@ -33,51 +34,38 @@ fn saved(db: &Db) -> Answer {
     Ok(Value::Array(list))
 }
 
-/// The rules the documents apply, with their files. A project file's allow rules are left out
-/// until its `permissions` are allowed: the core does not apply them, and the window shows them
-/// as waiting from `trust`.
-fn rules(
-    documents: &[(&str, &Map<String, Value>)],
-    sections: &[anysola_core::trust::Section],
-) -> Vec<Value> {
-    let withheld = |source: &str| {
-        sections.iter().any(|s| {
-            s.kind == TrustKind::Permissions && s.path == source && s.decision != Some(true)
-        })
+/// A configured rule as the window lists it: where it applies (`agent` null for every agent),
+/// its file, and whether it is in effect (`applied` false: a project allow rule waiting for that
+/// file's `permissions` approval).
+fn rule_json(rule: &ConfiguredRule) -> Value {
+    let effect = match rule.effect {
+        Effect::Allow => "allow",
+        Effect::Ask => "ask",
+        Effect::Deny => "deny",
     };
-    let mut rules = Vec::new();
-    for (source, data) in documents {
-        let withheld = withheld(source);
-        for rule in data
-            .get("permissions")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            let field = |key: &str| rule.get(key).and_then(Value::as_str);
-            let (Some(action), Some(resource), Some(effect)) =
-                (field("action"), field("resource"), field("effect"))
-            else {
-                continue;
-            };
-            if !matches!(effect, "allow" | "ask" | "deny") || (withheld && effect == "allow") {
-                continue;
-            }
-            rules.push(
-                json!({"action": action, "resource": resource, "effect": effect, "source": source}),
-            );
-        }
-    }
-    rules
+    json!({
+        "action": rule.action,
+        "resource": rule.resource,
+        "effect": effect,
+        "agent": rule.agent,
+        "source": rule.source,
+        "project": rule.project,
+        "applied": rule.applied,
+    })
 }
 
-/// Every project's saved answers, and the configured rules for `directory` with their files.
+/// Every project's saved answers, and every rule the folder's config documents and agent files
+/// set (for all agents or one, in effect or waiting), with their files.
 #[tauri::command]
 pub async fn permissions(handle: AppHandle, app: State<'_, App>, directory: String) -> Answer {
     let core = core_for(&handle, &app, &directory).await?;
-    let loaded = core.loaded();
-    let documents: Vec<_> = loaded.config.documents().collect();
-    let rules = rules(&documents, &loaded.config.trust);
+    let rules: Vec<Value> = core
+        .configured_rules()
+        .iter()
+        // A rule from no file (an agent defined without one) has nothing to open or approve.
+        .filter(|r| !r.source.is_empty())
+        .map(rule_json)
+        .collect();
     Ok(json!({"saved": saved(app.db()?)?, "rules": rules}))
 }
 
@@ -340,55 +328,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_projects_allow_rules_wait_for_approval() {
-        let section = |path: &str, decision| anysola_core::trust::Section {
-            path: path.into(),
-            kind: TrustKind::Permissions,
-            digest: "d".into(),
-            decision,
-            entries: Vec::new(),
+    fn rules_as_the_window_reads_them() {
+        let rule = |effect, agent: Option<&str>, project, applied| ConfiguredRule {
+            action: "shell".into(),
+            resource: "npm test*".into(),
+            effect,
+            agent: agent.map(str::to_string),
+            source: "/p/anysola.json".into(),
+            project,
+            applied,
         };
-        let doc = json!({"permissions": [
-            {"action": "shell", "resource": "npm test*", "effect": "allow"},
-            {"action": "shell", "resource": "rm *", "effect": "deny"},
-            {"action": "edit", "resource": "*", "effect": "ask"}]});
-        let doc = doc.as_object().unwrap();
-        let user = "/home/u/.anysola/config.json";
-        let project = "/p/anysola.json";
-        let effects = |sections: &[anysola_core::trust::Section]| -> Vec<(String, String)> {
-            rules(&[(user, doc), (project, doc)], sections)
-                .iter()
-                .map(|r| {
-                    let file = if r["source"] == user {
-                        "user"
-                    } else {
-                        "project"
-                    };
-                    (file.to_string(), r["effect"].as_str().unwrap().to_string())
-                })
-                .collect()
-        };
-        let pair = |f: &str, e: &str| (f.to_string(), e.to_string());
-        let all = vec![
-            pair("user", "allow"),
-            pair("user", "deny"),
-            pair("user", "ask"),
-            pair("project", "allow"),
-            pair("project", "deny"),
-            pair("project", "ask"),
-        ];
-        let tightening = vec![
-            pair("user", "allow"),
-            pair("user", "deny"),
-            pair("user", "ask"),
-            pair("project", "deny"),
-            pair("project", "ask"),
-        ];
-        assert_eq!(effects(&[section(project, None)]), tightening);
-        assert_eq!(effects(&[section(project, Some(false))]), tightening);
-        assert_eq!(effects(&[section(project, Some(true))]), all);
-        // No section: the file has no allow rule of its own to approve.
-        assert_eq!(effects(&[]), all);
+        assert_eq!(
+            rule_json(&rule(Effect::Allow, Some("build"), true, false)),
+            json!({"action": "shell", "resource": "npm test*", "effect": "allow", "agent": "build",
+                   "source": "/p/anysola.json", "project": true, "applied": false})
+        );
+        let all = rule_json(&rule(Effect::Deny, None, false, true));
+        assert_eq!(
+            (all["effect"].clone(), all["agent"].clone()),
+            (json!("deny"), Value::Null)
+        );
+        assert_eq!(
+            rule_json(&rule(Effect::Ask, None, true, true))["effect"],
+            "ask"
+        );
     }
 
     fn temp(name: &str) -> PathBuf {

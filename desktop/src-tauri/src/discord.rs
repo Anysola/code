@@ -19,9 +19,9 @@ use tauri::State;
 use crate::prefs;
 use crate::{Answer, App};
 
-/// The app's own Discord application, when it has one. There is none yet: the user brings their
-/// own in Settings until one is registered.
-const DEFAULT_APPLICATION_ID: Option<&str> = None;
+/// The app's own Discord application, "Anysola Code" (no art assets: the card's image is `LOGO`).
+/// An ID in Settings overrides it.
+const DEFAULT_APPLICATION_ID: &str = "1572981447139000361";
 
 const LOGO: &str = "https://www.anysola.com/anysola-logo.png";
 const SITE: &str = "https://www.anysola.com/code";
@@ -32,10 +32,10 @@ const RETRY: Duration = Duration::from_secs(15);
 /// A Discord that stops answering must not hold the thread.
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
 
-const NO_ID: &str = "Add a Discord application ID to turn this on.";
 const NOT_RUNNING: &str = "Discord isn’t running, or this app can’t reach it.";
 const REFUSED: &str =
     "Discord refused this application ID. Check it in the Discord Developer Portal.";
+const REFUSED_OWN: &str = "Discord refused the connection. Try again after restarting Discord.";
 
 /// What the window is showing.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
@@ -88,11 +88,11 @@ fn now_secs() -> u64 {
     anysola_core::time::now_ms() / 1000
 }
 
-fn client_id(prefs: &prefs::Discord) -> Option<String> {
+fn client_id(prefs: &prefs::Discord) -> String {
     prefs
         .application_id
         .clone()
-        .or(DEFAULT_APPLICATION_ID.map(str::to_string))
+        .unwrap_or_else(|| DEFAULT_APPLICATION_ID.to_string())
 }
 
 fn folder_name(directory: &str) -> String {
@@ -208,12 +208,12 @@ impl Handle {
         let wanted = {
             let shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
             let id = client_id(&shared.prefs);
-            let activity = (shared.prefs.enabled && id.is_some()).then(|| {
+            let activity = shared.prefs.enabled.then(|| {
                 let started = shared.since.as_ref().map_or_else(now_secs, |s| s.2);
                 activity(&shared.prefs, &shared.presence, started)
             });
             Wanted {
-                client_id: id.filter(|_| shared.prefs.enabled),
+                client_id: shared.prefs.enabled.then_some(id),
                 activity,
             }
         };
@@ -230,12 +230,6 @@ impl Handle {
             return Status {
                 state: "off",
                 detail: None,
-            };
-        }
-        if client_id(&shared.prefs).is_none() {
-            return Status {
-                state: "off",
-                detail: Some(NO_ID),
             };
         }
         drop(shared);
@@ -445,7 +439,11 @@ impl Connection {
                             "discord refused the handshake",
                             &[("reply", &body.to_string())],
                         );
-                        return Err(REFUSED);
+                        return Err(if client_id == DEFAULT_APPLICATION_ID {
+                            REFUSED_OWN
+                        } else {
+                            REFUSED
+                        });
                     }
                     Err(_) => continue,
                 }
@@ -616,6 +614,19 @@ pub async fn presence(app: State<'_, App>, presence: Presence) -> Answer {
         discord.set_presence(presence);
     }
     Ok(Value::Null)
+}
+
+#[cfg(test)]
+mod id_tests {
+    use super::*;
+
+    #[test]
+    fn the_apps_own_application_unless_overridden() {
+        let mut prefs = prefs::Discord::default();
+        assert_eq!(client_id(&prefs), DEFAULT_APPLICATION_ID);
+        prefs.application_id = Some("42".into());
+        assert_eq!(client_id(&prefs), "42");
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -845,19 +856,22 @@ mod tests {
     }
 
     #[test]
-    fn without_an_application_id_it_is_off() {
-        let prefs = prefs::Discord {
-            enabled: true,
-            ..prefs::Discord::default()
-        };
-        let handle = Handle::with(prefs, Vec::new(), Duration::ZERO, Duration::ZERO);
-        assert_eq!(
-            handle.status(),
-            Status {
-                state: "off",
-                detail: Some(NO_ID)
-            }
+    fn without_an_application_id_it_uses_the_apps_own() {
+        let dir = temp();
+        let frames = fake(&dir);
+        let handle = Handle::with(
+            prefs::Discord {
+                enabled: true,
+                ..prefs::Discord::default()
+            },
+            vec![dir.clone()],
+            Duration::ZERO,
+            Duration::from_millis(50),
         );
-        handle.stop(Duration::from_secs(1));
+        let (op, hello) = next(&frames);
+        assert_eq!(op, OP_HANDSHAKE);
+        assert_eq!(hello["client_id"], DEFAULT_APPLICATION_ID);
+        handle.stop(Duration::from_secs(2));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -127,9 +127,9 @@ function ApplicationId({ value, onChange }: { value: string | null; onChange: (v
     if ((v || null) !== value) onChange(v || null)
   }
   return (
-    <Group note="An application from the Discord developer portal. The card’s title is that application’s name.">
+    <Group note="Optional. Leave it empty to show Anysola Code’s own card. An application of yours from the Discord developer portal shows its name as the card’s title instead.">
       <Row
-        label="Application ID"
+        label="Your own application ID"
         hint={bad ? <span className="text-danger">Only digits: it’s the number the developer portal shows.</span> : undefined}
       >
         <input
@@ -141,7 +141,7 @@ function ApplicationId({ value, onChange }: { value: string | null; onChange: (v
             if (e.key === "Escape") setText(value ?? "")
           }}
           inputMode="numeric"
-          placeholder="From the developer portal"
+          placeholder="Anysola Code’s own"
           aria-label="Discord application ID"
           aria-invalid={bad}
           spellCheck={false}

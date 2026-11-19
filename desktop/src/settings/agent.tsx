@@ -6,15 +6,16 @@
 import { FolderOpen } from "lucide-react"
 import { Fragment, useEffect, useState, type ReactNode } from "react"
 
-import type { AgentConfig, AgentConfigPatch, Origin, PermissionRule, SavedPermission, Sources } from "../bridge"
+import type { AgentConfig, AgentConfigPatch, Origin, PermissionRule, Repository, SavedPermission, Sources, TrustItem } from "../bridge"
 import { APP_COMMANDS } from "../composer"
 import { setPref, usePrefs } from "../prefs"
-import { answerTrust, useTrust } from "../hooks-card"
+import { ruleText, scopeLabel, useTrust } from "../hooks-card"
 import { currentBridge, settingsFolder, useStore } from "../store"
-import { btn, cn, folderName, sameFolder, Spinner } from "../ui"
+import { btn, cn, folderKey, folderName, sameFolder, Spinner } from "../ui"
 import {
   bytes,
   Confirm,
+  day,
   FolderLine,
   Group,
   Loaded,
@@ -29,7 +30,7 @@ import {
   Value,
 } from "./controls"
 import { shortPath } from "./hooks"
-import { ProjectTrust } from "./trust"
+import { EntryRow, ProjectDownloads, TrustRow } from "./trust"
 
 /** The folder the agent sections read, and whether it is the app's own; or why it can't be read. */
 function useFolder(): { directory: string; own: boolean } | { error: string; retry: () => void } | null {
@@ -113,7 +114,11 @@ export function PermissionsSection() {
 }
 
 function Permissions({ directory }: { directory: string }) {
-  const load = useLoad(() => currentBridge().permissions(directory), [directory])
+  // An answer on a project's rules changes what is in effect: read again.
+  const changed = useStore((s) => s.trustChanged)
+  const load = useLoad(() => currentBridge().permissions(directory), [directory, changed])
+  const trust = useTrust(directory)
+  const items = (trust.data ?? []).filter((i) => i.kind === "permissions")
   return (
     <>
       <section className="flex flex-col gap-2 px-1">
@@ -131,22 +136,44 @@ function Permissions({ directory }: { directory: string }) {
         </dl>
         <p className="text-2xs text-muted">The rules below apply in every mode: a rule can still ask, or refuse.</p>
       </section>
-      {/* A project's own allow rules wait for an answer: above what is in effect. */}
-      <ProjectTrust directory={directory} kind="permissions" />
       <Loaded load={load} rows={3}>
-        {({ saved, rules }) => (
-          <>
-            <Saved
-              saved={saved}
-              directory={directory}
-              onChange={(next) => load.set({ saved: next, rules })}
-            />
-            <Rules rules={rules} />
-          </>
-        )}
+        {({ saved, rules }) => {
+          const files = ruleFiles(rules, items)
+          // A project file with allow rules to answer for stays at the top whatever the answer,
+          // so answering never moves it away from under the pointer.
+          const approvable = files.filter((f) => f.item)
+          return (
+            <>
+              {approvable.map((f) => (
+                <RuleFile key={f.source} file={f} directory={directory} />
+              ))}
+              <Saved saved={saved} directory={directory} onChange={(next) => load.set({ saved: next, rules })} />
+              <Rules files={files.filter((f) => !f.item)} directory={directory} />
+            </>
+          )
+        }}
       </Loaded>
     </>
   )
+}
+
+/** A file's rules, and its project's answer on them when it has allow rules to approve. */
+type RuleFileData = { source: string; rules: PermissionRule[]; item?: TrustItem }
+
+/** The rules by file, in load order; a file whose approval covers no listed rule (a policy only) after them. */
+function ruleFiles(rules: PermissionRule[], items: TrustItem[]): RuleFileData[] {
+  const files = new Map<string, RuleFileData>()
+  for (const r of rules) {
+    const key = folderKey(r.source)
+    const file = files.get(key) ?? { source: r.source, rules: [] }
+    file.rules.push(r)
+    files.set(key, file)
+  }
+  for (const i of items) {
+    const key = folderKey(i.path)
+    files.set(key, { ...(files.get(key) ?? { source: i.path, rules: [] }), item: i })
+  }
+  return [...files.values()]
 }
 
 function Saved({
@@ -226,10 +253,8 @@ function Saved({
   )
 }
 
-function Rules({ rules }: { rules: PermissionRule[] }) {
-  const files = new Map<string, PermissionRule[]>()
-  for (const r of rules) files.set(r.source, [...(files.get(r.source) ?? []), r])
-  if (rules.length === 0)
+function Rules({ files, directory }: { files: RuleFileData[]; directory: string }) {
+  if (files.length === 0)
     return (
       <Group label="Rules in effect">
         <Row label="No rules" hint="Rules live under “permissions” in the agent’s config file" />
@@ -237,36 +262,76 @@ function Rules({ rules }: { rules: PermissionRule[] }) {
     )
   return (
     <>
-      {[...files.entries()].map(([file, list]) => (
-        <Group
-          key={file}
-          label={
-            <>
-              Rules in <span className="font-mono">{tilde(file)}</span>
-            </>
-          }
-          aside={<OpenPath path={file} small />}
-        >
-          {list.map((r, i) => (
-            <Row
-              key={i}
-              label={<span className="font-mono text-xs break-all">{r.resource}</span>}
-              hint={ACTIONS[r.action] ?? r.action}
-              className="min-h-11 py-2"
-            >
-              <span
-                className={cn(
-                  "text-dense",
-                  r.effect === "deny" ? "text-danger" : r.effect === "ask" ? "text-foreground" : "text-muted"
-                )}
-              >
-                {EFFECT[r.effect]}
-              </span>
-            </Row>
-          ))}
-        </Group>
+      {files.map((f) => (
+        <RuleFile key={f.source} file={f} directory={directory} />
       ))}
     </>
+  )
+}
+
+const PERMISSIONS_HINT = {
+  waiting: "Its allow rules let the agent do more without asking you. Until you allow them, your own rules decide.",
+  allowed: "Its allow rules are in effect. They never undo a rule of yours that refuses.",
+  denied: "Its allow rules aren’t applied: your own rules decide. Allow if you trust this project.",
+}
+
+/** "The Build agent" for `build`. */
+const agentName = (id: string) => `the ${id.charAt(0).toUpperCase()}${id.slice(1)} agent`
+
+function RuleFile({ file: f, directory }: { file: RuleFileData; directory: string }) {
+  const project = !!f.item || f.rules.some((r) => r.project)
+  const isFile = /[\\/]/.test(f.source)
+  // What the approval covers that is no permission rule: policy statements, the agent new sessions start with.
+  const extra = (f.item?.entries ?? []).filter((e) => e.label === "policy" || e.label === "sessions")
+  return (
+    <Group
+      label={
+        project ? (
+          <>
+            This project <span className="ml-2 font-mono font-normal">{shortPath(f.source, directory)}</span>
+          </>
+        ) : (
+          <>
+            Rules in <span className="font-mono">{tilde(f.source)}</span>
+          </>
+        )
+      }
+      aside={isFile ? <OpenPath path={f.source} small /> : undefined}
+    >
+      {f.item && <TrustRow item={f.item} directory={directory} hint={PERMISSIONS_HINT[f.item.decision ?? "waiting"]} />}
+      {f.rules.map((r, i) => (
+        <Row
+          key={i}
+          label={<span className="font-mono text-xs break-all">{r.resource}</span>}
+          hint={
+            <>
+              {ACTIONS[r.action] ?? r.action}
+              {r.agent && <> · Only {agentName(r.agent)}</>}
+            </>
+          }
+          className="min-h-11 py-2"
+        >
+          {r.applied ? (
+            <span
+              className={cn(
+                "text-dense",
+                r.effect === "deny" ? "text-danger" : r.effect === "ask" ? "text-foreground" : "text-muted"
+              )}
+            >
+              {EFFECT[r.effect]}
+            </span>
+          ) : (
+            <span className="text-dense text-muted/70" title="Not in effect until you allow this file’s rules">
+              {EFFECT[r.effect]} · {f.item?.decision === "denied" ? "not applied" : "waiting"}
+            </span>
+          )}
+        </Row>
+      ))}
+      {extra.map((e, i) => (
+        <EntryRow key={`x${i}`} scope={scopeLabel(e.label)} text={ruleText(e.command, e.label)} />
+      ))}
+      {f.rules.length === 0 && extra.length === 0 && <Row label="No rules" />}
+    </Group>
   )
 }
 
@@ -296,8 +361,34 @@ export function SkillsSection() {
   return <FolderSection title="Skills">{(directory) => <Skills directory={directory} />}</FolderSection>
 }
 
+/** What the folder reads, read again when an answer on a project file changes it. */
 function useSources(directory: string) {
-  return useLoad(() => currentBridge().sources(directory), [directory])
+  const changed = useStore((s) => s.trustChanged)
+  return useLoad(() => currentBridge().sources(directory), [directory, changed])
+}
+
+/** Tries the failed downloads again; the list it answers with replaces the one shown. */
+function useRetry(directory: string, set: (s: Sources) => void) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const retry = () => {
+    setBusy(true)
+    setError(null)
+    currentBridge()
+      .sourcesRetry(directory)
+      .then(set, (e) => setError(message(e)))
+      .finally(() => setBusy(false))
+  }
+  return { busy, error, retry }
+}
+
+function RetryButton({ busy, onClick }: { busy: boolean; onClick: () => void }) {
+  return (
+    <button disabled={busy} onClick={onClick} className={btn("secondary", "sm", "gap-1.5 shrink-0")}>
+      {busy && <Spinner className="size-3.5" />}
+      Try again
+    </button>
+  )
 }
 
 function Skills({ directory }: { directory: string }) {
@@ -316,13 +407,13 @@ function Skills({ directory }: { directory: string }) {
         </Row>
       </Group>
       <Loaded load={load} rows={4}>
-        {(s) => <SkillList sources={s} />}
+        {(s) => <SkillList sources={s} directory={directory} onList={load.set} />}
       </Loaded>
     </>
   )
 }
 
-function SkillList({ sources }: { sources: Sources }) {
+function SkillList({ sources, directory, onList }: { sources: Sources; directory: string; onList: (s: Sources) => void }) {
   const groups = SKILL_ORDER.map((o) => [o, sources.skills.filter((s) => s.origin === o)] as const).filter(
     ([, list]) => list.length > 0
   )
@@ -354,8 +445,32 @@ function SkillList({ sources }: { sources: Sources }) {
           </Group>
         )
       })}
+      <SkillUrls sources={sources} directory={directory} onList={onList} />
       <Places label="Where skills are looked for" places={places} />
     </>
+  )
+}
+
+/** Each `skills` URL and whether its list of skills could be downloaded. */
+function SkillUrls({ sources, directory, onList }: { sources: Sources; directory: string; onList: (s: Sources) => void }) {
+  const { busy, error, retry } = useRetry(directory, onList)
+  if (sources.skillUrls.length === 0) return null
+  return (
+    <Group
+      label="Downloaded from"
+      note={error ? <span className="text-danger">{error}</span> : "Checked when you open this folder and again when its config changes."}
+    >
+      {sources.skillUrls.map((u) => (
+        <Row
+          key={u.url}
+          label={<span className="font-mono text-xs break-all">{u.url}</span>}
+          hint={u.error ? <span className="text-danger">Couldn’t download: {u.error}. Its skills aren’t offered.</span> : undefined}
+          className="min-h-11 py-2"
+        >
+          {u.error ? <RetryButton busy={busy} onClick={retry} /> : <Value>Downloaded</Value>}
+        </Row>
+      ))}
+    </Group>
   )
 }
 
@@ -455,7 +570,7 @@ export function InstructionsSection() {
       {(directory) => (
         <>
           <Personal />
-          <ProjectTrust directory={directory} kind="remote" />
+          <Downloads directory={directory} />
           <InEffect directory={directory} />
         </>
       )}
@@ -532,34 +647,113 @@ function Personal() {
   )
 }
 
+/** A project's downloads, waiting, allowed or not. */
+function Downloads({ directory }: { directory: string }) {
+  const trust = useTrust(directory)
+  return <ProjectDownloads directory={directory} items={(trust.data ?? []).filter((i) => i.kind === "remote")} />
+}
+
 function InEffect({ directory }: { directory: string }) {
   const load = useSources(directory)
+  const { busy, error, retry } = useRetry(directory, load.set)
+  // A repository downloads in the background and nothing says when it is done: look again meanwhile.
+  const downloading = !!load.data?.repositories.some((r) => !r.cloned && !r.error)
+  const { reload } = load
+  useEffect(() => {
+    if (!downloading) return
+    const t = setInterval(reload, 3000)
+    return () => clearInterval(t)
+  }, [downloading, reload])
   return (
     <Loaded load={load} rows={3}>
-      {(s) => (
-        <>
-          <Group label="Read for this folder, in this order">
-            {s.instructions.length === 0 && <Row label="No instruction files" hint="An AGENTS.md in the folder is read first" />}
-            {s.instructions.map((f, i) => (
-              <Row
-                key={f.path}
-                label={
-                  <span className="flex min-w-0 items-baseline gap-2.5">
-                    <span className="text-2xs w-3 shrink-0 text-muted tabular-nums">{i + 1}</span>
-                    <span className="font-mono text-xs break-all">{tilde(f.path)}</span>
-                  </span>
-                }
-                className="min-h-11 py-2"
-              >
-                <Value>{bytes(f.bytes)}</Value>
-                <OpenPath path={f.path} />
-              </Row>
-            ))}
-          </Group>
-          <Places label="Looked in" places={s.places.filter((p) => p.holds === "instructions")} />
-        </>
-      )}
+      {(s) => {
+        let n = 0
+        return (
+          <>
+            <Group
+              label="Read for this folder, in this order"
+              note={error ? <span className="text-danger">{error}</span> : undefined}
+            >
+              {s.instructions.length === 0 && <Row label="No instruction files" hint="An AGENTS.md in the folder is read first" />}
+              {s.instructions.map((f) => (
+                <Row
+                  key={f.path}
+                  label={
+                    <span className="flex min-w-0 items-baseline gap-2.5">
+                      {/* One that couldn't be downloaded isn't read: no place in the order. */}
+                      <span className="text-2xs w-3 shrink-0 text-muted tabular-nums">{f.error ? "" : ++n}</span>
+                      <span className={cn("font-mono text-xs break-all", f.error && "text-muted")}>{tilde(f.path)}</span>
+                    </span>
+                  }
+                  hint={
+                    f.error ? (
+                      <span className="block pl-5.5 text-danger">Couldn’t download: {f.error}. It isn’t read.</span>
+                    ) : undefined
+                  }
+                  className="min-h-11 py-2"
+                >
+                  {f.error ? (
+                    <RetryButton busy={busy} onClick={retry} />
+                  ) : (
+                    <>
+                      <Value>{bytes(f.bytes)}</Value>
+                      {f.origin !== "url" && <OpenPath path={f.path} />}
+                    </>
+                  )}
+                </Row>
+              ))}
+            </Group>
+            <Repositories list={s.repositories} busy={busy} retry={retry} />
+            <Places label="Looked in" places={s.places.filter((p) => p.holds === "instructions")} />
+          </>
+        )
+      }}
     </Loaded>
+  )
+}
+
+/** The git repositories the agent may read (config `references`), and how each download stands. */
+function Repositories({ list, busy, retry }: { list: Repository[]; busy: boolean; retry: () => void }) {
+  if (list.length === 0) return null
+  return (
+    <Group
+      label="Repositories the agent can read"
+      note="Downloaded when you open this folder; each copy is updated at most once a day."
+    >
+      {list.map((r) => (
+        <Row
+          key={r.name}
+          label={<span className="font-mono text-xs break-all">@{r.name}</span>}
+          hint={
+            <>
+              {r.repository && (
+                <span className="block font-mono text-xs break-all">
+                  {r.repository}
+                  {r.branch && ` · ${r.branch}`}
+                </span>
+              )}
+              {r.error && (
+                <span className="block text-danger">
+                  {r.cloned ? `Couldn’t update: ${r.error}. The copy from before is used.` : `Couldn’t download: ${r.error}.`}
+                </span>
+              )}
+            </>
+          }
+          className="min-h-11 py-2"
+        >
+          {r.error && !r.cloned ? (
+            <RetryButton busy={busy} onClick={retry} />
+          ) : r.cloned ? (
+            <Value>{r.attemptedAt ? `Updated ${day(r.attemptedAt)}` : "Downloaded"}</Value>
+          ) : (
+            <span className="text-dense flex items-center gap-2 text-muted">
+              <Spinner />
+              Downloading
+            </span>
+          )}
+        </Row>
+      ))}
+    </Group>
   )
 }
 
@@ -666,40 +860,42 @@ function Advanced({ directory }: { directory: string }) {
   )
 }
 
-/** A project's formatters that aren't allowed: they run on edits only once they are. */
+const FORMATTER_HINT = {
+  waiting: "Waiting for your answer. Until then, edits aren’t formatted the way this file says.",
+  allowed: "Allowed. Edits are formatted the way this file says.",
+  denied: "Not allowed. Edits aren’t formatted the way this file says.",
+}
+
+/** A project's formatters: they run on edits only once allowed. */
 function ProjectFormatters({ directory }: { directory: string }) {
   const trust = useTrust(directory)
-  const items = (trust.data ?? []).filter((i) => i.kind === "formatter" && i.decision !== "allowed")
-  const [busy, setBusy] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const items = (trust.data ?? []).filter((i) => i.kind === "formatter")
   if (items.length === 0) return null
   return (
-    <Group label="This project’s formatters" note={error ? <span className="text-danger">{error}</span> : undefined}>
+    <Group label="This project’s formatters">
       {items.map((i) => (
-        <Row
-          key={i.path}
-          label={<span className="font-mono text-xs break-all">{shortPath(i.path, directory)}</span>}
-          hint={
-            i.decision === null
-              ? "Waiting for your answer. Until then, edits aren’t formatted the way this file says."
-              : "Not allowed. Edits aren’t formatted the way this file says."
-          }
-        >
-          {busy === i.path && <Spinner />}
-          <button
-            disabled={busy !== null}
-            onClick={() => {
-              setBusy(i.path)
-              setError(null)
-              answerTrust(directory, [i], true)
-                .catch((e) => setError(message(e)))
-                .finally(() => setBusy(null))
-            }}
-            className={btn("secondary", "sm")}
-          >
-            Allow
-          </button>
-        </Row>
+        <Fragment key={i.path}>
+          <TrustRow
+            item={i}
+            directory={directory}
+            label={<span className="font-mono text-xs break-all">{shortPath(i.path, directory)}</span>}
+            hint={FORMATTER_HINT[i.decision ?? "waiting"]}
+          />
+          {/* What the answer covers: each formatter and what it runs. */}
+          {i.entries.map((e, n) => (
+            <EntryRow
+              key={n}
+              scope={e.label === "formatter" ? "Formatters" : e.label}
+              text={
+                /^the built-in /.test(e.command) ? (
+                  <span className="text-muted">{e.command.charAt(0).toUpperCase() + e.command.slice(1)}</span>
+                ) : (
+                  <span className="font-mono text-xs break-all">{e.command}</span>
+                )
+              }
+            />
+          ))}
+        </Fragment>
       ))}
     </Group>
   )

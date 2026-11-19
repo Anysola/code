@@ -92,6 +92,14 @@ const HEADING: Record<TrustKind, string> = {
   remote: "What it downloads",
 }
 
+/**
+ * When a project's downloads happen, as the core does them: instruction URLs when the folder
+ * opens and when its list changes, skill indexes at every config load, repositories when the
+ * folder opens and hourly, updated at most daily. Never per message.
+ */
+export const WHEN_DOWNLOADED =
+  "The app downloads these when you open this project and again when its config changes. Repositories are updated at most once a day."
+
 /** What allowing does, by what it is about: the card's question names each that waits. */
 const DOES = { run: "run commands", rules: "change your rules", fetch: "download files" } as const
 const doesOf = (kind: TrustKind): keyof typeof DOES =>
@@ -109,7 +117,7 @@ function consequence(items: TrustItem[]) {
   const does = new Set(items.map((i) => doesOf(i.kind)))
   if (does.size > 1) return "None of this applies until you allow it. Allow only if you trust this project."
   if (does.has("rules")) return "These change what the agent may do without asking you. Allow only if you trust this project."
-  if (does.has("fetch")) return "The app fetches these each time it opens this project. Allow only if you trust this project."
+  if (does.has("fetch")) return `${WHEN_DOWNLOADED} Allow only if you trust this project.`
   return "Its config starts these on this computer once you allow them. Allow only if you trust this project."
 }
 
@@ -166,6 +174,8 @@ function TrustCard({ path, items, directory }: { path: string; items: TrustItem[
                     : "Changed. The ones you allowed before keep running until you allow these."}
                 </p>
               )}
+              {/* With other kinds the question above says nothing of when: said here. */}
+              {item.kind === "remote" && items.length > 1 && <p className="text-2xs text-muted">{WHEN_DOWNLOADED}</p>}
               {item.entries.length > 0 && <Entries kind={item.kind} entries={item.entries} />}
             </div>
           )
@@ -286,7 +296,7 @@ export function ruleText(rule: string, label?: string): ReactNode {
 
 /** An address a project makes the app fetch, said as what happens. */
 export function remoteText(e: TrustEntry): ReactNode {
-  if (e.label === "instructions") return <>Reads instructions from <Code>{e.command}</Code> each time</>
+  if (e.label === "instructions") return <>Reads instructions from <Code>{e.command}</Code></>
   if (e.label === "skills") return <>Downloads skills from <Code>{e.command}</Code></>
   const repo = /^(.*) \(branch (.+)\)$/s.exec(e.command)
   return repo ? (

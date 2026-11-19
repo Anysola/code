@@ -582,6 +582,8 @@ function sourcesFor(directory: string): Sources {
       { path: CONFIG, holds: "config", origin: "personal", exists: true },
       { path: `${project}/anysola.json`, holds: "config", origin: "project", exists: true },
     ],
+    skillUrls: [],
+    repositories: [],
   }
 }
 
@@ -593,11 +595,22 @@ const saved0: SavedPermission[] = [
   { projectId: "prj_code", folder: CODE, action: "external_directory", resource: `${HOME}/.cargo/registry/*` },
 ]
 
+const rule = (action: string, resource: string, effect: PermissionRule["effect"], source: string, agent: string | null = null): PermissionRule => ({
+  action,
+  resource,
+  effect,
+  agent,
+  source,
+  project: source !== CONFIG,
+  applied: true,
+})
+
 const rules: PermissionRule[] = [
-  { action: "read", resource: "*.env", effect: "ask", source: CONFIG },
-  { action: "shell", resource: "rm -rf *", effect: "deny", source: CONFIG },
-  { action: "shell", resource: "git push *", effect: "ask", source: `${WEB}/anysola.json` },
-  { action: "webfetch", resource: "*", effect: "allow", source: CONFIG },
+  rule("read", "*.env", "ask", CONFIG),
+  rule("shell", "rm -rf *", "deny", CONFIG),
+  rule("webfetch", "*", "allow", CONFIG),
+  rule("shell", "git push *", "ask", CONFIG, "build"),
+  rule("shell", "git push *", "ask", `${WEB}/anysola.json`),
 ]
 
 function config0(): AgentConfig {
@@ -1078,6 +1091,55 @@ export function mockBridge(): Bridge {
   ]
   const trustCalls: unknown[] = []
   ;(window as unknown as { __trustCalls: unknown[] }).__trustCalls = trustCalls
+  /** The rules as the core lists them: a project's allow rules apply once its file's rules are allowed. */
+  const rulesNow = (): PermissionRule[] => {
+    const project: PermissionRule[] = []
+    for (const item of trustNow())
+      if (item.kind === "permissions")
+        for (const e of item.entries) {
+          const m = /^(allow|ask|deny) ([^:]+): (.*)$/s.exec(e.command)
+          const agent = /^agent (.+)$/.exec(e.label)?.[1] ?? null
+          if (!m || (e.label !== "all agents" && !agent)) continue
+          const effect = m[1] as PermissionRule["effect"]
+          project.push({
+            ...rule(m[2], m[3], effect, item.path, agent),
+            applied: effect !== "allow" || item.decision === "allowed",
+          })
+        }
+    return [...rules, ...project]
+  }
+  /** Downloads read on open: a project's once its file's downloads are allowed (`?trust=remote`). */
+  let retried = false
+  let repoReads = 0
+  const downloadsNow = (all: Sources): Sources => {
+    const remote = sections.find((x) => x.kind === "remote" && x.decision === "allowed")
+    if (!remote) return all
+    // The repository is still downloading for the first reads after the answer.
+    const cloned = ++repoReads > 2
+    return {
+      ...all,
+      instructions: [
+        ...all.instructions,
+        {
+          path: "https://raw.githubusercontent.com/anysola/handbook/main/agents/web-team-rules.md",
+          bytes: retried ? 3_120 : 0,
+          origin: "url",
+          error: retried ? null : "404 Not Found",
+        },
+      ],
+      skillUrls: [{ url: "https://skills.anysola.example/teams/web/skills.zip", error: "index.json: 404 Not Found" }],
+      repositories: [
+        {
+          name: "design-tokens",
+          repository: "https://github.com/anysola/design-tokens",
+          branch: "main",
+          cloned,
+          attemptedAt: cloned ? Date.now() : null,
+          error: null,
+        },
+      ],
+    }
+  }
   const hookOf = (draft: HookDraft, id: string): MockHook => ({
     id,
     event: draft.event,
@@ -1704,9 +1766,16 @@ export function mockBridge(): Bridge {
       }),
     sources: (directory) =>
       settle("sources", () => {
-        const all = sourcesFor(directory)
+        const all = downloadsNow(sourcesFor(directory))
         if (empty) return { ...all, skills: [], commands: all.commands.filter((c) => c.origin === "builtin"), instructions: [] }
         // Off, Claude Code's folders aren't read.
+        return prefs.sources.claudeSkills ? all : { ...all, skills: all.skills.filter((x) => x.origin !== "claude") }
+      }),
+    sourcesRetry: (directory) =>
+      settle("sourcesRetry", () => {
+        // The project's instructions come through on the second try; its skill index still fails.
+        retried = true
+        const all = downloadsNow(sourcesFor(directory))
         return prefs.sources.claudeSkills ? all : { ...all, skills: all.skills.filter((x) => x.origin !== "claude") }
       }),
     personalInstructions: () => settle("personalInstructions", () => ({ path: `${HOME}/.anysola/AGENTS.md`, text: personal })),
@@ -1714,7 +1783,7 @@ export function mockBridge(): Bridge {
       settle("savePersonalInstructions", () => {
         personal = text
       }),
-    permissions: () => settle("permissions", () => ({ saved, rules: empty ? [] : rules })),
+    permissions: () => settle("permissions", () => ({ saved, rules: empty ? [] : rulesNow() })),
     permissionForget: (projectId, action, resource) =>
       settle("permissionForget", () => {
         saved = saved.filter((p) => !(p.projectId === projectId && p.action === action && p.resource === resource))
