@@ -772,3 +772,116 @@ fn a_worktree_base_among_the_users_agents_is_refused() {
     assert!(!env.home.home().join(".anysola/agent/side").exists());
     assert!(runtime.block_on(core.create_worktree("side")).is_err());
 }
+
+fn content(results: &[Value], index: usize) -> String {
+    results[index]["content"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// grep leaves out files the user's `read` rules deny, says so, and keeps the rest.
+#[test]
+fn grep_hides_what_a_read_denial_keeps() {
+    let gateway = scripted(vec![("grep", json!({"pattern": "NEEDLE"}))]);
+    let env = env(&gateway.url);
+    env.home.write(
+        ".anysola/config.json",
+        r#"{"permissions": [{"action": "read", "resource": "secrets/*", "effect": "deny"}]}"#,
+    );
+    env.home.write("proj/secrets/key", "NEEDLE-SECRET-VALUE");
+    env.home.write("proj/src/a.txt", "NEEDLE-PUBLIC");
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    let out = content(&last_results(&gateway), 0);
+    assert!(out.contains("NEEDLE-PUBLIC"), "{out}");
+    assert!(!out.contains("NEEDLE-SECRET-VALUE"), "{out}");
+    assert!(out.starts_with("Found 1 matches"), "{out}");
+    assert!(
+        out.ends_with("(1 file with matches not shown: the read rules keep their contents from search. Use the read tool for a file you need; it asks the user where a rule asks.)"),
+        "{out}"
+    );
+}
+
+/// The built-in `read *.env` ask hides a `.env` match, and the search raises no question.
+#[test]
+fn grep_hides_an_env_file_without_asking() {
+    use anysola_core::events::Event;
+    let gateway = scripted(vec![("grep", json!({"pattern": "NEEDLE"}))]);
+    let env = env(&gateway.url);
+    env.home.write("proj/.env", "NEEDLE_TOKEN=secret-value");
+    env.home.write("proj/src/a.txt", "NEEDLE-PUBLIC");
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let mut events = core.subscribe();
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    while let Ok(event) = events.try_recv() {
+        assert!(
+            !matches!(event, Event::PermissionAsked { .. }),
+            "a search never asks"
+        );
+    }
+    let out = content(&last_results(&gateway), 0);
+    assert!(out.contains("NEEDLE-PUBLIC"), "{out}");
+    assert!(!out.contains("secret-value"), "{out}");
+    assert!(out.contains("1 file with matches not shown"), "{out}");
+}
+
+/// From a worktree, the root-relative denial still hides the main checkout's file.
+#[test]
+fn grep_from_a_worktree_still_hides_the_main_checkouts_denied_file() {
+    let gateway = scripted(vec![
+        (
+            "execute",
+            json!({"code": "const w = await tools.opencode.worktree_create({name: 'side'}); return await tools.opencode.session_move({directory: w.directory})"}),
+        ),
+        ("grep", json!({"pattern": "NEEDLE", "path": "~/proj"})),
+    ]);
+    let env = env(&gateway.url);
+    env.home.write(
+        ".anysola/config.json",
+        r#"{"permissions": [{"action": "read", "resource": "secrets/*", "effect": "deny"}]}"#,
+    );
+    git_project(&env);
+    env.home.write("proj/secrets/key", "NEEDLE-SECRET-VALUE");
+    env.home.write("proj/notes.txt", "NEEDLE-PUBLIC");
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    let out = content(&last_results(&gateway), 1);
+    assert!(out.contains("NEEDLE-PUBLIC"), "{out}");
+    assert!(!out.contains("NEEDLE-SECRET-VALUE"), "{out}");
+    assert!(out.contains("1 file with matches not shown"), "{out}");
+}
+
+/// With no rule restricting reads, nothing is hidden and no note is added.
+#[test]
+fn grep_hides_nothing_without_a_restricting_rule() {
+    let gateway = scripted(vec![("grep", json!({"pattern": "NEEDLE"}))]);
+    let env = env(&gateway.url);
+    env.home.write("proj/secrets/key", "NEEDLE-ONE");
+    env.home.write("proj/src/a.txt", "NEEDLE-TWO");
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    let out = content(&last_results(&gateway), 0);
+    assert!(out.starts_with("Found 2 matches"), "{out}");
+    assert!(
+        out.contains("NEEDLE-ONE") && out.contains("NEEDLE-TWO"),
+        "{out}"
+    );
+    assert!(!out.contains("not shown"), "{out}");
+}

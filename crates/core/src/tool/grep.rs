@@ -126,7 +126,24 @@ fn search_file(
     let _ = searcher.search_path(matcher, path, sink);
 }
 
-/// Up to `max` matches under `root` (a directory, or a single file searched as given).
+/// What a search found: the matches shown, and how many files with matches were left out
+/// because the session's `read` rules do not let it read them without asking.
+#[derive(Default)]
+struct Found {
+    matches: Vec<Match>,
+    withheld: usize,
+}
+
+/// The line the model reads when files were left out.
+fn withheld_note(count: usize) -> String {
+    let files = if count == 1 { "file" } else { "files" };
+    format!(
+        "({count} {files} with matches not shown: the read rules keep their contents from search. Use the read tool for a file you need; it asks the user where a rule asks.)"
+    )
+}
+
+/// Up to `max` matches under `root` (a directory, or a single file searched as given), only
+/// from files `readable` allows.
 fn find(
     matcher: &RegexMatcher,
     root: &Path,
@@ -134,11 +151,26 @@ fn find(
     include: Option<&str>,
     max: usize,
     stop: &AtomicBool,
-) -> Vec<Match> {
-    let mut found = Vec::new();
+    readable: &dyn Fn(&Path) -> bool,
+) -> Found {
+    let mut found = Found::default();
     let globs: Vec<&str> = include.into_iter().chain([EXCLUDE_GIT]).collect();
     let Some(overrides) = search::overrides(root, &globs) else {
         return found;
+    };
+    // A file's matches count only once its rules allow reading it.
+    let add = |searcher: &mut Searcher, file: &Path, found: &mut Found| {
+        let mut here = Vec::new();
+        let room = max - found.matches.len();
+        search_file(searcher, matcher, file, &mut here, room, stop);
+        if here.is_empty() {
+            return;
+        }
+        if readable(file) {
+            found.matches.extend(here);
+        } else {
+            found.withheld += 1;
+        }
     };
     // rg converts NUL bytes in a file it was given explicitly and skips binary files it walks to.
     let binary = if is_file {
@@ -151,19 +183,19 @@ fn find(
         .binary_detection(binary)
         .build();
     if is_file {
-        search_file(&mut searcher, matcher, root, &mut found, max, stop);
+        add(&mut searcher, root, &mut found);
         return found;
     }
     for file in search::files(root, overrides, true, stop) {
-        search_file(&mut searcher, matcher, &file, &mut found, max, stop);
-        if found.len() >= max {
+        add(&mut searcher, &file, &mut found);
+        if found.matches.len() >= max {
             break;
         }
     }
     found
 }
 
-fn format_matches(matches: &[Match], truncated: bool) -> String {
+fn format_matches(matches: &[Match], truncated: bool, withheld: usize) -> String {
     let mut lines = vec![if matches.is_empty() {
         "No matches found".to_string()
     } else {
@@ -183,6 +215,10 @@ fn format_matches(matches: &[Match], truncated: bool) -> String {
     if truncated {
         lines.push(String::new());
         lines.push(search::truncation_notice(matches.len()));
+    }
+    if withheld > 0 {
+        lines.push(String::new());
+        lines.push(withheld_note(withheld));
     }
     lines.join("\n")
 }
@@ -227,11 +263,23 @@ impl Tool for GrepTool {
                         "Invalid regex pattern: {message}"
                     )));
                 }
-                Pattern::Rejected => return Ok(output(&[], false)),
+                Pattern::Rejected => return Ok(output(&[], false, 0)),
             };
             let root = target.absolute;
             let include = input.include;
-            let mut matches = search::run(move |stop| {
+            // A file whose `read` the rules deny or ask about stays out of the results (by every
+            // name the read tool uses); a search never asks.
+            let session = ctx.clone();
+            let readable = move |file: &Path| {
+                let names =
+                    access::resolve(&session, &file.to_string_lossy(), Some(access::Kind::File))
+                        .resources();
+                session.permissions.allows("read", &names)
+            };
+            let Found {
+                mut matches,
+                withheld,
+            } = search::run(move |stop| {
                 find(
                     &matcher,
                     &root,
@@ -239,21 +287,27 @@ impl Tool for GrepTool {
                     include.as_deref(),
                     limit + 1,
                     stop,
+                    &readable,
                 )
             })
             .await?;
             let truncated = matches.len() > limit;
             matches.truncate(limit);
-            Ok(output(&matches, truncated))
+            Ok(output(&matches, truncated, withheld))
         }
         .boxed()
     }
 }
 
-fn output(matches: &[Match], truncated: bool) -> ToolOutput {
-    ToolOutput::text(format_matches(matches, truncated))
+fn output(matches: &[Match], truncated: bool, withheld: usize) -> ToolOutput {
+    let output = ToolOutput::text(format_matches(matches, truncated, withheld))
         .with_metadata("matches", matches.len())
-        .with_metadata("truncated", truncated)
+        .with_metadata("truncated", truncated);
+    if withheld > 0 {
+        output.with_metadata("withheld", withheld)
+    } else {
+        output
+    }
 }
 
 #[cfg(test)]
