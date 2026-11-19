@@ -4,6 +4,22 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.1.2 (2026-11-19)
+
+Tool calls show while the model writes them.
+
+- A file being written shows its name, a line count and its last lines as they arrive; an edit shows its new
+  text the same way; a command appears as it is typed, and other tools fill in their one-line summary. It used
+  to be a nameless spinner and then the whole call at once. When the call is ready the row becomes the usual one,
+  in place. A program the agent writes for itself shows as "Writing a script" with its length, not its text.
+- The status line says "Thinking" while the model reasons, and the conversation keeps following new output when
+  a row grows on its own.
+- A call that was stopped before it ran says what it would have done ("Write") instead of "Wrote", and a call cut
+  off when the app closed is shown as interrupted after reopening.
+- The window's minimize, maximize and close buttons light up as round buttons like the rest of the header: Close
+  was cut by the panel's rounded corner.
+- Known: a call that has finished keeps its spinner until the model's whole message has arrived.
+
 ## 1.1.1 (2026-11-19)
 
 What a project's files can change about your own rules, closed further, and the approval pages finished.
