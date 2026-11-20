@@ -33,6 +33,7 @@ import {
   type SessionRow,
   type Todo,
   type ToolInput,
+  type ToolOutput,
   type UpdateCheck,
   type View,
 } from "./bridge"
@@ -225,6 +226,8 @@ export type State = {
   scratch: string | null
   /** Tool inputs the model is writing, by call id, for their `streaming` rows (any session). */
   inputs: Record<string, ToolInput>
+  /** Running commands' output so far, by call id (any session). */
+  outputs: Record<string, ToolOutput>
 }
 
 function readMode(): Mode {
@@ -289,6 +292,7 @@ let state: State = {
   trust: {},
   scratch: null,
   inputs: {},
+  outputs: {},
   pinned: readSet("anysola.pinned"),
   // Folded projects by folder key; older entries were stored as spelled.
   collapsed: new Set([...readSet("anysola.collapsed")].map(folderKey)),
@@ -965,16 +969,27 @@ function latest(n: number) {
 }
 
 /** Drops the inputs of calls matching `gone`: their rows show what is stored from here. */
-function dropInputs(gone: (i: ToolInput) => boolean) {
+function dropInputs(gone: (i: { sessionId: string; callId: string }) => boolean) {
   const kept = Object.values(state.inputs).filter((i) => !gone(i))
   if (kept.length !== Object.keys(state.inputs).length) set({ inputs: Object.fromEntries(kept.map((i) => [i.callId, i])) })
+  dropOutputs(gone)
 }
 
-/** A call read back as anything but `streaming` has its input whole. */
+function dropOutputs(gone: (o: ToolOutput) => boolean) {
+  const kept = Object.values(state.outputs).filter((o) => !gone(o))
+  if (kept.length !== Object.keys(state.outputs).length) set({ outputs: Object.fromEntries(kept.map((o) => [o.callId, o])) })
+}
+
+/** A call read back as anything but `streaming` has its input whole; one that isn't running
+ * any more shows its stored output. */
 function settleInputs(items: Item[]) {
-  if (Object.keys(state.inputs).length === 0) return
-  const done = new Set(items.filter((i) => i.kind === "tool" && i.status !== "streaming").map((i) => i.id))
-  dropInputs((i) => done.has(i.callId))
+  if (Object.keys(state.inputs).length === 0 && Object.keys(state.outputs).length === 0) return
+  const tools = items.filter((i): i is Extract<Item, { kind: "tool" }> => i.kind === "tool")
+  const whole = new Set(tools.filter((i) => i.status !== "streaming").map((i) => i.id))
+  const ended = new Set(tools.filter((i) => i.status !== "streaming" && i.status !== "running").map((i) => i.id))
+  const inputs = Object.values(state.inputs).filter((i) => !whole.has(i.callId))
+  if (inputs.length !== Object.keys(state.inputs).length) set({ inputs: Object.fromEntries(inputs.map((i) => [i.callId, i])) })
+  dropOutputs((o) => ended.has(o.callId))
 }
 
 async function refresh(sessionId: string, again = false) {
@@ -2159,6 +2174,9 @@ function onEvent(e: CoreEvent) {
       break
     case "toolInput":
       set((s) => ({ inputs: { ...s.inputs, [e.callId]: e } }))
+      break
+    case "toolOutput":
+      set((s) => ({ outputs: { ...s.outputs, [e.callId]: e } }))
       break
     case "retrying":
       // The step starts over: what it was writing won't finish.

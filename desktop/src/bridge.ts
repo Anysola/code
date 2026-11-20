@@ -553,11 +553,25 @@ export type ToolInput = {
   tail: string | null
 }
 
+/**
+ * A foreground command's output while it runs (the shell polls its output file a few times a
+ * second): `lines` counted so far, `tail` its last few lines as a terminal shows them. Only sent
+ * when it grew; the call's stored output replaces it once the call settles.
+ */
+export type ToolOutput = {
+  type: "toolOutput"
+  sessionId: string
+  callId: string
+  lines: number
+  tail: string
+}
+
 export type CoreEvent =
   | { type: "started"; sessionId: string }
   | { type: "text" | "reasoning"; sessionId: string; messageId: string; ordinal: number; text: string }
   | { type: "changed"; sessionId: string; error?: string }
   | ToolInput
+  | ToolOutput
   | { type: "retrying"; sessionId: string; attempt: number; delayMs: number; error: string }
   | PermissionRequest
   | { type: "permissionReplied"; sessionId: string; requestId: string }

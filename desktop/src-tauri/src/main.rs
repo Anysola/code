@@ -14,6 +14,7 @@ mod events;
 mod git;
 mod hooks;
 mod live;
+mod output;
 mod path_repair;
 mod prefs;
 mod servers;
@@ -256,9 +257,19 @@ fn forward(
         let mut live = live::Live::default();
         let mut tick = tokio::time::interval(std::time::Duration::from_millis(50));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // Commands running in the foreground: what their output gained, a few times a second.
+        let mut tails = output::Tails::default();
+        let mut poll = tokio::time::interval(std::time::Duration::from_millis(250));
+        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             let received = tokio::select! {
                 received = events.recv() => received,
+                _ = poll.tick(), if tails.active() => {
+                    for payload in tails.poll() {
+                        let _ = handle.emit("core", payload);
+                    }
+                    continue;
+                }
                 _ = tick.tick(), if live.pending() => {
                     for payload in live.flush(&directory) {
                         let _ = handle.emit("core", payload);
@@ -278,7 +289,18 @@ fn forward(
                     live.piece(session_id, message_id, call_id, name, *at, text);
                     continue;
                 }
+                Ok(Event::ToolOutputFile {
+                    session_id,
+                    call_id,
+                    file,
+                }) => {
+                    tails.start(session_id, call_id, file.clone());
+                    continue;
+                }
                 Ok(Event::ToolCalled { call_id, .. }) => live.end_call(call_id),
+                Ok(Event::ToolSucceeded { call_id, .. } | Event::ToolFailed { call_id, .. }) => {
+                    tails.end_call(call_id)
+                }
                 Ok(
                     Event::StepEnded { session_id, .. }
                     | Event::StepFailed { session_id, .. }
@@ -286,7 +308,16 @@ fn forward(
                     | Event::Interrupted { session_id, .. }
                     | Event::Failed { session_id, .. }
                     | Event::Succeeded { session_id },
-                ) => live.end_session(session_id),
+                ) => {
+                    live.end_session(session_id);
+                    // A step ends only once its calls settled; a turn's end leaves none running.
+                    if !matches!(
+                        received,
+                        Ok(Event::StepEnded { .. } | Event::RetryScheduled { .. })
+                    ) {
+                        tails.end_session(session_id);
+                    }
+                }
                 Err(RecvError::Lagged(_)) => live.lagged(),
                 _ => {}
             }

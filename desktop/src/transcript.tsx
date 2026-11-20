@@ -26,7 +26,7 @@ import { createContext, memo, useContext, useEffect, useMemo, useRef, useState, 
 import Markdown, { type Components, type ExtraProps } from "react-markdown"
 import remarkGfm from "remark-gfm"
 
-import type { FileDiff, FormRequest, HookRun, Item, ToolInput } from "./bridge"
+import type { FileDiff, FormRequest, HookRun, Item, ToolInput, ToolOutput } from "./bridge"
 import { duration, Elapsed } from "./conversation"
 import { FormCard } from "./form-card"
 import { TrustCards } from "./hooks-card"
@@ -143,7 +143,7 @@ export function Transcript({
         {open.revert && !readOnly && <Rewound revert={open.revert} />}
         {/* Reasoning isn't shown: the gateway sends it summarized or empty, so a "Thought" row
             opened onto nothing. The status line says the model is at work meanwhile. */}
-        {open.live.map((l) => l.kind === "text" && <Prose key={l.key} text={l.text} />)}
+        {open.live.map((l) => l.kind === "text" && <Prose key={l.key} text={l.text} live={l.key} />)}
         {!readOnly && <TrustCards directory={open.directory} className="flex flex-col gap-5" />}
         {permissions.map((p, i) => (
           // Enter and Escape answer the first ask; the keys show on that one only.
@@ -633,16 +633,78 @@ const PLUGINS = [remarkGfm]
 /** Links keep their address as written: clicks are handled above, nothing navigates. */
 const keepUrl = (url: string) => url
 
-/** Markdown, parsed again only when its text changes (a streaming reply, not its neighbours). */
-export const Prose = memo(function Prose({ text }: { text: string }) {
+/** Markdown, parsed again only when its text changes (a streaming reply, not its neighbours).
+ * A reply being written (`live`, its stream key) shows at an even pace instead of in the clumps
+ * the text arrives in; the stored reply that takes its place goes on from where it was. */
+export const Prose = memo(function Prose({ text, live }: { text: string; live?: string }) {
+  const shown = useReveal(text, live)
   return (
     <div className="prose-anysola text-md leading-relaxed text-foreground/90">
       <Markdown remarkPlugins={PLUGINS} components={MARKDOWN} urlTransform={keepUrl}>
-        {text}
+        {shown < text.length ? text.slice(0, shown) : text}
       </Markdown>
     </div>
   )
 })
+
+/** How far behind the text received the shown text runs (ms): enough to cover the gaps between
+ * the clumps a reply arrives in, little enough not to feel late. */
+const PACE_MS = 180
+/** Characters shown per frame at least, so the end of a reply never crawls. */
+const PACE_MIN = 2
+
+/** Replies being written: how much of each text is shown. Its stored row starts from there. */
+const revealing = new Map<string, { text: string; shown: number }>()
+
+function calm() {
+  return document.documentElement.hasAttribute("data-reduce-motion")
+}
+
+function useReveal(text: string, live?: string): number {
+  const [shown, setShown] = useState(() => {
+    if (calm()) return text.length
+    // A reply's first piece is short; coming back to a conversation mid-reply shows it as it is.
+    if (live) return revealing.get(live)?.shown ?? (text.length > 120 ? text.length : 0)
+    // The stored row of a reply still being revealed takes over its place.
+    for (const [key, r] of revealing) {
+      if (r.text === text) {
+        revealing.delete(key)
+        return r.shown
+      }
+    }
+    return text.length
+  })
+  const at = Math.min(shown, text.length)
+  if (live) {
+    if (at < text.length) revealing.set(live, { text, shown: at })
+    else revealing.delete(live)
+  }
+  const done = at >= text.length
+  useEffect(() => {
+    if (done) return
+    if (calm()) {
+      setShown(text.length)
+      return
+    }
+    let last = 0
+    let frame = requestAnimationFrame(function step(now) {
+      const dt = last ? Math.min(now - last, 100) : 16
+      last = now
+      setShown((s) => {
+        const behind = text.length - s
+        if (behind <= 0) return s
+        let next = s + Math.min(behind, Math.max(PACE_MIN, Math.ceil((behind * dt) / PACE_MS)))
+        // Never between the two halves of a character.
+        const code = text.charCodeAt(next - 1)
+        if (code >= 0xd800 && code < 0xdc00 && next < text.length) next++
+        return next
+      })
+      frame = requestAnimationFrame(step)
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [text, done])
+  return at
+}
 
 type Hast = { type: string; value?: string; tagName?: string; properties?: Record<string, unknown>; children?: Hast[] }
 
@@ -936,8 +998,15 @@ function useInput(tool: Tool): ToolInput | null {
   return live ? input : null
 }
 
+/** A running command's output so far, while its turn runs; null once the call settles. */
+function useOutput(tool: Tool): ToolOutput | null {
+  const { live } = useContext(WhereContext)
+  const output = useStore((s) => (tool.status === "running" ? (s.outputs[tool.id] ?? null) : null))
+  return live ? output : null
+}
+
 /** "12 lines" as a written text grows. */
-function LineCount({ input }: { input: ToolInput | null }) {
+function LineCount({ input }: { input: { lines: number | null } | null }) {
   if (!input?.lines) return null
   return (
     <span className="tabular-nums">
@@ -1110,8 +1179,9 @@ function OtherTool({ tool }: { tool: Tool }) {
 
 function Command({ tool }: { tool: Tool }) {
   const state = useToolState(tool)
-  // A command shows as it is typed, in its place on the row.
+  // A command shows as it is typed, in its place on the row, and its output as it runs.
   const target = useInput(tool)?.target || tool.target
+  const running = useOutput(tool)
   // A failed command shows why at once; the user's own click wins after that.
   const [chosen, setChosen] = useState<boolean | null>(null)
   const open = chosen ?? (state === "error" || getPrefs().conversation.commands === "open")
@@ -1129,10 +1199,12 @@ function Command({ tool }: { tool: Tool }) {
         </span>
         <span className="min-w-0 truncate font-mono text-xs text-muted">{target}</span>
         <span className="ml-auto flex shrink-0 items-center gap-2 text-2xs text-muted">
+          {running && state === "running" && <LineCount input={running} />}
           <ToolState state={state} />
           {output && (open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />)}
         </span>
       </button>
+      {running?.tail && state === "running" && <LiveTail text={running.tail} />}
       <HookLines runs={tool.hooks} className="pl-8" />
       {open && output && (
         <pre className="mx-2 mt-1 max-h-80 overflow-auto rounded-lg bg-background/60 px-3 py-2.5 font-mono text-xs leading-relaxed whitespace-pre-wrap text-foreground/75">

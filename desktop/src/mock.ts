@@ -1288,8 +1288,26 @@ export function mockBridge(): Bridge {
       if (!running.has(id)) return
     }
     update(sh, { status: "running", target: command })
-    await wait(1200)
-    update(sh, { status: "completed", output: "✓ cycle-toggle.test.tsx (3 tests) 41ms" })
+    // Its output as the shell reads it from the command's file, a few times a second.
+    const out = [
+      "> @anysola/web@0.0.0 test /home/alex/work/anysola-web/apps/web",
+      "> vitest run cycle-toggle",
+      "",
+      " RUN  v3.2.4 /home/alex/work/anysola-web/apps/web",
+      "",
+      " ✓ cycle-toggle.test.tsx > renders both cycles",
+      " ✓ cycle-toggle.test.tsx > marks the chosen cycle",
+      " ✓ cycle-toggle.test.tsx > calls onChange",
+      "",
+      " Test Files  1 passed (1)",
+      "      Tests  3 passed (3)",
+    ]
+    for (let n = 1; n <= out.length; n++) {
+      emit({ type: "toolOutput", sessionId: id, callId: sh, lines: n, tail: out.slice(0, n).slice(-6).join("\n") })
+      await wait(250)
+      if (!running.has(id)) return
+    }
+    update(sh, { status: "completed", output: out.join("\n") })
     void reply(id, "The toggle is in and its test passes.")
   }
   let cancelLogin = () => {}
