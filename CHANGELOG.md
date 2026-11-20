@@ -4,6 +4,25 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.1.4 (2026-11-20)
+
+The conversation streams the way the model writes.
+
+- A file being written fills in as the model writes it. 1.1.2 drew the lines as they arrived, but the API held a
+  tool's input back until each field was whole, so a large file showed only its name for as long as the model
+  took to write it (24 seconds for an 8 KB page) and then landed at once. Tool inputs now stream as they are
+  generated.
+- A command's output shows under its row while it runs: its last lines and a line count, with progress bars and
+  colours as a terminal shows them. It used to be a spinner until the command ended.
+- A call that finishes while the model is still writing the next one settles at once, instead of spinning until
+  the whole message has arrived (1.1.2's known issue).
+- A reply's text appears at an even pace instead of in the clumps it arrives in. With "Reduce motion" on it shows
+  as it arrives.
+- A call stopped or cut off while the model was writing it keeps what was written: its row still names the file or
+  the command.
+- A conversation started before this version goes on normally: its earlier hidden reasoning is dropped once, since
+  the tool definitions changed.
+
 ## 1.1.3 (2026-11-20)
 
 Review shows long changes whole.
