@@ -402,7 +402,16 @@ pub fn normalize_body(body: &Value, places: &Places, capture: bool) -> Value {
         }
         s
     };
-    map_strings(body, &f)
+    let mut body = map_strings(body, &f);
+    // 1.1.4 streams tool inputs as they are written (`eager_input_streaming` on every tool).
+    if !capture && let Some(Value::Array(tools)) = body.get_mut("tools") {
+        for tool in tools {
+            if let Some(tool) = tool.as_object_mut() {
+                tool.remove("eager_input_streaming");
+            }
+        }
+    }
+    body
 }
 
 const COMPARED_HEADERS: &[&str] = &[

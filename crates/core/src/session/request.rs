@@ -222,7 +222,10 @@ pub fn build(request: Request) -> (String, Vec<(String, String)>) {
             .into_iter()
             .enumerate()
             .map(|(index, tool)| {
-                let mut entry = json!({"name": tool.name, "description": tool.description, "input_schema": tool.input_schema});
+                // Every tool here is the client's (the gateway refuses server tools). Without
+                // `eager_input_streaming` the API holds each input field back until it is whole, so a
+                // file's content would land all at once after a long silence.
+                let mut entry = json!({"name": tool.name, "description": tool.description, "input_schema": tool.input_schema, "eager_input_streaming": true});
                 if index == last {
                     entry["cache_control"] = ephemeral();
                 }
@@ -298,7 +301,7 @@ mod tests {
         });
         assert_eq!(
             body,
-            r#"{"model":"claude-sonnet-5-5","system":[{"type":"text","text":"a","cache_control":{"type":"ephemeral"}},{"type":"text","text":"b"},{"type":"text","text":"d","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}]}],"tools":[{"name":"t","description":"d","input_schema":{},"cache_control":{"type":"ephemeral"}}],"stream":true,"max_tokens":32000,"thinking":{"type":"adaptive","block_binding":{"prefix_mismatch_behavior":"drop_block"}}}"#
+            r#"{"model":"claude-sonnet-5-5","system":[{"type":"text","text":"a","cache_control":{"type":"ephemeral"}},{"type":"text","text":"b"},{"type":"text","text":"d","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}]}],"tools":[{"name":"t","description":"d","input_schema":{},"eager_input_streaming":true,"cache_control":{"type":"ephemeral"}}],"stream":true,"max_tokens":32000,"thinking":{"type":"adaptive","block_binding":{"prefix_mismatch_behavior":"drop_block"}}}"#
         );
         assert_eq!(
             headers[0].1,

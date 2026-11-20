@@ -393,6 +393,8 @@ impl Tool for ShellTool {
                 return Ok(result);
             }
             let mut started = started;
+            ctx.notifier
+                .output_file(&ctx.session_id, &ctx.call_id, &started.file);
             let (blocking, moved) = Blocking::register(&ctx.session_id, &input.command);
             let ended = tokio::select! {
                 ended = started.running.wait() => Some(ended),

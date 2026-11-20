@@ -884,7 +884,12 @@ fn with_hooks(metadata: &mut Map<String, Value>, entries: Vec<Value>) {
 fn settled_input(state: &ToolState) -> Option<Value> {
     match state {
         ToolState::Running { input, .. } => Some(input.clone()),
-        ToolState::Streaming { input } => Some(serde_json::from_str(input).unwrap_or(json!({}))),
+        // Cut off while the model wrote it: what was written still names the file or command.
+        ToolState::Streaming { input } => Some(
+            crate::json::partial_object(input)
+                .map(Value::Object)
+                .unwrap_or_else(|| json!({})),
+        ),
         _ => None,
     }
 }
@@ -979,6 +984,12 @@ async fn run_stream(
     loop {
         let item = tokio::select! {
             item = stream.next() => item,
+            // A call that finishes while the model is still writing settles now: its row stops
+            // spinning instead of waiting for the end of the response.
+            Some(joined) = tasks.join_next(), if !tasks.is_empty() => {
+                settle_joined(shared, &mut running, joined);
+                continue;
+            }
             _ = cancel.cancelled() => break,
         };
         let Some(item) = item else { break };
@@ -1010,7 +1021,7 @@ async fn run_stream(
                 Action::ToolReady { .. } | Action::ToolStarted { .. }
             )
         }) {
-            running.data.content = assembly.parts.clone();
+            sync_parts(&mut running, &assembly);
             running.save(shared);
         }
         for action in actions {
@@ -1032,7 +1043,7 @@ async fn run_stream(
             ended_ok = true;
         }
     }
-    running.data.content = assembly.parts.clone();
+    sync_parts(&mut running, &assembly);
     running.data.tokens = Some(assembly.tokens);
 
     if cancel.is_cancelled() {
@@ -1236,6 +1247,49 @@ fn resend<'a>(
     .boxed()
 }
 
+/// The stored parts become the stream's, except calls that already settled: the stream's copy of
+/// those still says running.
+fn sync_parts(running: &mut Running, assembly: &Assembly) {
+    running.data.content = with_settled(&running.data.content, &assembly.parts);
+}
+
+/// `stream`'s parts, with the calls `stored` has settled (same index: the stream only appends).
+fn with_settled(stored: &[Part], stream: &[Part]) -> Vec<Part> {
+    let mut parts = stream.to_vec();
+    for (index, part) in stored.iter().enumerate() {
+        let settled = matches!(
+            part,
+            Part::Tool {
+                state: ToolState::Completed { .. } | ToolState::Error { .. },
+                ..
+            }
+        );
+        if settled && let Some(slot) = parts.get_mut(index) {
+            *slot = part.clone();
+        }
+    }
+    parts
+}
+
+fn settle_joined(
+    shared: &Shared,
+    running: &mut Running,
+    joined: Result<ToolTask, tokio::task::JoinError>,
+) {
+    match joined {
+        Ok((index, result, hooks)) => {
+            settle(shared, running, index, result, hooks, &interrupted_error());
+            running.save(shared);
+        }
+        // A tool task that panicked: its part would stay running and the next request
+        // would carry a tool_use without a result. The error is logged by the panic hook.
+        Err(error) if error.is_panic() => {
+            crate::log::error("tool task panicked", &[("error", &error.to_string())]);
+        }
+        Err(_) => {}
+    }
+}
+
 /// Waits for every tool task, recording each result as it lands. Returns the tool parts that
 /// never settled.
 async fn collect(
@@ -1244,18 +1298,7 @@ async fn collect(
     tasks: &mut JoinSet<ToolTask>,
 ) -> Vec<usize> {
     while let Some(joined) = tasks.join_next().await {
-        match joined {
-            Ok((index, result, hooks)) => {
-                settle(shared, running, index, result, hooks, &interrupted_error());
-                running.save(shared);
-            }
-            // A tool task that panicked: its part would stay running and the next request
-            // would carry a tool_use without a result. The error is logged by the panic hook.
-            Err(error) if error.is_panic() => {
-                crate::log::error("tool task panicked", &[("error", &error.to_string())]);
-            }
-            Err(_) => {}
-        }
+        settle_joined(shared, running, joined);
     }
     running
         .data
@@ -1652,6 +1695,40 @@ fn not_available(name: &str) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn part(v: Value) -> Part {
+        serde_json::from_value(v).unwrap()
+    }
+
+    fn call(id: &str, state: Value) -> Part {
+        part(
+            json!({"type": "tool", "id": id, "name": "write", "state": state, "time": {"created": 1}}),
+        )
+    }
+
+    /// A call settled while the model went on writing stays settled when the stored parts follow
+    /// the stream again; everything else is the stream's.
+    #[test]
+    fn settled_calls_survive_the_stream_copy() {
+        let running = json!({"status": "running", "input": {"path": "a"}});
+        let done = json!({"status": "completed", "input": {"path": "a"}, "content": [{"type": "text", "text": "Wrote a"}]});
+        let stored = vec![
+            part(json!({"type": "text", "text": "Writing two files."})),
+            call("a", done.clone()),
+            call("b", json!({"status": "streaming", "input": "{\"pa"})),
+        ];
+        let stream = vec![
+            part(json!({"type": "text", "text": "Writing two files."})),
+            call("a", running),
+            call("b", json!({"status": "running", "input": {"path": "b"}})),
+            part(json!({"type": "text", "text": "Then"})),
+        ];
+        let got = with_settled(&stored, &stream);
+        assert_eq!(got.len(), 4);
+        assert_eq!(got[1], call("a", done));
+        assert_eq!(got[2], stream[2]);
+        assert_eq!(got[3], stream[3]);
+    }
 
     fn turn(role: &str, block: Value) -> Entry {
         Entry::Turn(json!({"role": role, "content": [block]}))

@@ -105,13 +105,18 @@ fn todo_list_follows_the_latest_call() {
         .find(|t| t["name"] == "todowrite")
         .cloned()
         .unwrap();
-    let ours = main[0].json()["tools"]
+    let mut ours = main[0].json()["tools"]
         .as_array()
         .unwrap()
         .iter()
         .find(|t| t["name"] == "todowrite")
         .cloned()
         .unwrap();
+    // Every tool's input streams as it is written (1.1.4); the capture predates it.
+    assert_eq!(ours["eager_input_streaming"], true);
+    ours.as_object_mut()
+        .unwrap()
+        .remove("eager_input_streaming");
     assert_eq!(ours.to_string(), expected.to_string());
     assert_eq!(
         tool_names(&main[0])[8..],

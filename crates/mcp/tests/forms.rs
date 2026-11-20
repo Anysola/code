@@ -132,7 +132,7 @@ fn elicitation_is_cancelled_and_direct_tools_are_advertised() {
         .clone();
     assert_eq!(
         direct,
-        json!({"name": "direct_ask", "description": "", "input_schema": {"type": "object", "properties": {}}})
+        json!({"name": "direct_ask", "description": "", "input_schema": {"type": "object", "properties": {}}, "eager_input_streaming": true})
     );
     assert!(!last.body.contains("tools.direct.ask"));
 }

@@ -106,6 +106,13 @@ pub enum Event {
         input: Value,
         raw: String,
     },
+    /// A foreground command started writing its output to `file` (stdout and stderr in arrival
+    /// order), for display only while it runs; the call's result is still [`Event::ToolSucceeded`].
+    ToolOutputFile {
+        session_id: String,
+        call_id: String,
+        file: std::path::PathBuf,
+    },
     ToolSucceeded {
         session_id: String,
         message_id: String,
@@ -275,6 +282,7 @@ impl Event {
             | Event::ReasoningEnded { session_id, .. }
             | Event::ToolInputStarted { session_id, .. }
             | Event::ToolInputDelta { session_id, .. }
+            | Event::ToolOutputFile { session_id, .. }
             | Event::ToolCalled { session_id, .. }
             | Event::ToolSucceeded { session_id, .. }
             | Event::ToolFailed { session_id, .. }

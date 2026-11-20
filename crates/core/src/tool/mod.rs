@@ -219,6 +219,9 @@ pub trait SessionNotifier: Send + Sync {
 
     /// One of the session's background commands started or ended.
     fn background_changed(&self, _session_id: &str) {}
+
+    /// A foreground command of call `call_id` writes its output to `file` while it runs.
+    fn output_file(&self, _session_id: &str, _call_id: &str, _file: &std::path::Path) {}
 }
 
 /// Session services behind the agent-facing tools: asking the user, skills, child sessions.

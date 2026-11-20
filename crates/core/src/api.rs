@@ -232,6 +232,16 @@ impl SessionNotifier for StoreNotifier {
             });
         }
     }
+
+    fn output_file(&self, session_id: &str, call_id: &str, file: &std::path::Path) {
+        if let Some(shared) = self.shared.upgrade() {
+            let _ = shared.events.send(Event::ToolOutputFile {
+                session_id: session_id.to_string(),
+                call_id: call_id.to_string(),
+                file: file.to_path_buf(),
+            });
+        }
+    }
 }
 
 /// Starts a turn for input already in the session's inbox unless one runs in this process; a
