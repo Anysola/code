@@ -4,6 +4,19 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.1.5 (2026-11-20)
+
+Fixes from a second look at 1.1.4's streaming.
+
+- A call cut off while it was being written is kept with its file or command, but a long text in it is shortened
+  to its start: a file cut off by the length limit no longer rides along, whole, in every later request.
+- A tool call whose input the model wrote with a raw tab or line break inside a string is read as it meant, instead
+  of failing and being written again (tool inputs are no longer checked by the API while they stream).
+- A call that finishes while the model is still writing is stored before the window hears of it, so its row can't
+  stay spinning.
+- A long reply grows in fewer, larger steps, which keeps typing and scrolling smooth while it arrives; stopping a
+  reply shows what was written at once.
+
 ## 1.1.4 (2026-11-20)
 
 The conversation streams the way the model writes.
