@@ -387,7 +387,7 @@ impl Assembly {
                 let input = if raw.trim().is_empty() {
                     Ok(Value::Object(Map::new()))
                 } else {
-                    serde_json::from_str(&raw)
+                    crate::json::tool_input(&raw)
                 };
                 match self.parts.get_mut(part) {
                     Some(Part::Tool {

@@ -190,9 +190,7 @@ fn assistant(data: &AssistantData, target: &Target) -> (Option<Value>, Vec<Value
                     continue;
                 }
                 let input = match state {
-                    ToolState::Streaming { input } => {
-                        serde_json::from_str(input).unwrap_or(json!({}))
-                    }
+                    ToolState::Streaming { input } => crate::json::cut_off_input(input),
                     ToolState::Running { input, .. }
                     | ToolState::Completed { input, .. }
                     | ToolState::Error { input, .. } => input.clone(),

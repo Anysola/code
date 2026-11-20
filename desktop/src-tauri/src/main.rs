@@ -318,7 +318,12 @@ fn forward(
                         tails.end_session(session_id);
                     }
                 }
-                Err(RecvError::Lagged(_)) => live.lagged(),
+                Err(RecvError::Lagged(_)) => {
+                    live.lagged();
+                    // A call's end may be among the lost events; its tail would be read until
+                    // the turn ended. The window re-reads the transcript, stored output included.
+                    tails = output::Tails::default();
+                }
                 _ => {}
             }
             match received {

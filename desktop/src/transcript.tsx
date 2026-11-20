@@ -32,6 +32,7 @@ import { FormCard } from "./form-card"
 import { TrustCards } from "./hooks-card"
 import { copyPath } from "./header"
 import { getPrefs, isSendKey, sendKeyLabel, usePrefs } from "./prefs"
+import { revealing } from "./reveal"
 import {
   answer,
   buildPlan,
@@ -650,11 +651,14 @@ export const Prose = memo(function Prose({ text, live }: { text: string; live?: 
 /** How far behind the text received the shown text runs (ms): enough to cover the gaps between
  * the clumps a reply arrives in, little enough not to feel late. */
 const PACE_MS = 180
-/** Characters shown per frame at least, so the end of a reply never crawls. */
-const PACE_MIN = 2
+/** Characters shown per step at least, so the end of a reply never crawls. */
+const PACE_MIN = 3
 
-/** Replies being written: how much of each text is shown. Its stored row starts from there. */
-const revealing = new Map<string, { text: string; shown: number }>()
+/** How often the shown text grows (ms). Each step parses the reply's Markdown again, so a long
+ * reply steps less often: the pace stays even, the work stays near what arriving pieces cost. */
+function stepEvery(length: number) {
+  return length < 4000 ? 33 : length < 12000 ? 66 : 120
+}
 
 function calm() {
   return document.documentElement.hasAttribute("data-reduce-motion")
@@ -679,6 +683,12 @@ function useReveal(text: string, live?: string): number {
     if (at < text.length) revealing.set(live, { text, shown: at })
     else revealing.delete(live)
   }
+  // A live reply that went away without its stored row taking over (another conversation was
+  // opened, the turn was stopped) is forgotten, so nothing types it out again later.
+  useEffect(() => {
+    if (!live) return
+    return () => void setTimeout(() => revealing.delete(live), 1500)
+  }, [live])
   const done = at >= text.length
   useEffect(() => {
     if (done) return
@@ -686,19 +696,23 @@ function useReveal(text: string, live?: string): number {
       setShown(text.length)
       return
     }
+    const every = stepEvery(text.length)
     let last = 0
     let frame = requestAnimationFrame(function step(now) {
-      const dt = last ? Math.min(now - last, 100) : 16
-      last = now
-      setShown((s) => {
-        const behind = text.length - s
-        if (behind <= 0) return s
-        let next = s + Math.min(behind, Math.max(PACE_MIN, Math.ceil((behind * dt) / PACE_MS)))
-        // Never between the two halves of a character.
-        const code = text.charCodeAt(next - 1)
-        if (code >= 0xd800 && code < 0xdc00 && next < text.length) next++
-        return next
-      })
+      if (!last) last = now - every
+      const dt = Math.min(now - last, 200)
+      if (dt >= every) {
+        last = now
+        setShown((s) => {
+          const behind = text.length - s
+          if (behind <= 0) return s
+          let next = s + Math.min(behind, Math.max(PACE_MIN, Math.ceil((behind * dt) / PACE_MS)))
+          // Never between the two halves of a character.
+          const code = text.charCodeAt(next - 1)
+          if (code >= 0xd800 && code < 0xdc00 && next < text.length) next++
+          return next
+        })
+      }
       frame = requestAnimationFrame(step)
     })
     return () => cancelAnimationFrame(frame)

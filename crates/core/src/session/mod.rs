@@ -247,10 +247,9 @@ fn settle_stale(shared: &Shared, session_id: &str) {
                         continue;
                     };
                     let (input, metadata) = match state {
-                        message::ToolState::Streaming { input } => (
-                            serde_json::from_str(input).unwrap_or(json!({})),
-                            Default::default(),
-                        ),
+                        message::ToolState::Streaming { input } => {
+                            (crate::json::cut_off_input(input), Default::default())
+                        }
                         message::ToolState::Running { input, metadata } => {
                             (input.clone(), metadata.clone())
                         }

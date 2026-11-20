@@ -854,6 +854,9 @@ fn settle(
         metadata: output.metadata.clone(),
     };
     let call_id = id.clone();
+    // Stored before it is announced: a front end that reads the transcript on the event finds
+    // the call settled, also while the model is still writing (no later event would correct it).
+    running.save(shared);
     send(
         shared,
         Event::ToolSucceeded {
@@ -885,11 +888,7 @@ fn settled_input(state: &ToolState) -> Option<Value> {
     match state {
         ToolState::Running { input, .. } => Some(input.clone()),
         // Cut off while the model wrote it: what was written still names the file or command.
-        ToolState::Streaming { input } => Some(
-            crate::json::partial_object(input)
-                .map(Value::Object)
-                .unwrap_or_else(|| json!({})),
-        ),
+        ToolState::Streaming { input } => Some(crate::json::cut_off_input(input)),
         _ => None,
     }
 }
@@ -919,6 +918,7 @@ fn fail_part(
         metadata: metadata.clone(),
     };
     let call_id = id.clone();
+    running.save(shared);
     send(
         shared,
         Event::ToolFailed {
@@ -1277,9 +1277,9 @@ fn settle_joined(
     joined: Result<ToolTask, tokio::task::JoinError>,
 ) {
     match joined {
+        // `settle` stores the result before announcing it.
         Ok((index, result, hooks)) => {
-            settle(shared, running, index, result, hooks, &interrupted_error());
-            running.save(shared);
+            settle(shared, running, index, result, hooks, &interrupted_error())
         }
         // A tool task that panicked: its part would stay running and the next request
         // would carry a tool_use without a result. The error is logged by the panic hook.

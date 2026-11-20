@@ -26,6 +26,75 @@ pub fn partial_object(raw: &str) -> Option<serde_json::Map<String, Value>> {
     }
 }
 
+/// Longest a string field of a cut-off call keeps (characters): enough to name a file or show a
+/// command, little enough that a file cut off at `max_tokens` doesn't ride along in every later
+/// request (the error already quotes the start of it).
+const CUT_OFF_FIELD: usize = 1000;
+
+/// What a call cut off while its input was written is stored with (and sent back with): the
+/// fields written so far, long strings shortened. `{}` when nothing was.
+pub fn cut_off_input(raw: &str) -> Value {
+    let Some(map) = partial_object(raw) else {
+        return Value::Object(serde_json::Map::new());
+    };
+    Value::Object(map.into_iter().map(|(k, v)| (k, clip(v))).collect())
+}
+
+fn clip(value: Value) -> Value {
+    match value {
+        Value::String(s) if s.chars().count() > CUT_OFF_FIELD => {
+            let kept: String = s.chars().take(CUT_OFF_FIELD).collect();
+            let more = s.chars().count() - CUT_OFF_FIELD;
+            Value::String(format!(
+                "{kept}\n[cut off: {more} more characters were written]"
+            ))
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(clip).collect()),
+        Value::Object(map) => Value::Object(map.into_iter().map(|(k, v)| (k, clip(v))).collect()),
+        other => other,
+    }
+}
+
+/// A tool call's whole input. Streamed eagerly, the API no longer checks it is valid JSON; a model
+/// that put a raw tab or newline inside a string (the one slip seen in practice) gets it read as
+/// the escape it meant instead of the whole call failing.
+pub fn tool_input(raw: &str) -> Result<Value, serde_json::Error> {
+    match serde_json::from_str(raw) {
+        Ok(value) => Ok(value),
+        Err(error) => serde_json::from_str(&escape_controls(raw)).map_err(|_| error),
+    }
+}
+
+/// Control characters inside strings written as escapes; everything else untouched.
+fn escape_controls(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 16);
+    let mut in_string = false;
+    let mut escape = false;
+    for c in raw.chars() {
+        if in_string {
+            if escape {
+                escape = false;
+            } else if c == '\\' {
+                escape = true;
+            } else if c == '"' {
+                in_string = false;
+            } else if (c as u32) < 0x20 {
+                match c {
+                    '\n' => out.push_str("\\n"),
+                    '\t' => out.push_str("\\t"),
+                    '\r' => out.push_str("\\r"),
+                    other => out.push_str(&format!("\\u{:04x}", other as u32)),
+                }
+                continue;
+            }
+        } else if c == '"' {
+            in_string = true;
+        }
+        out.push(c);
+    }
+    out
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Expect {
     Key,
@@ -214,6 +283,31 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn raw_control_characters_in_strings_are_read_as_escapes() {
+        let raw = "{\"path\": \"a.txt\", \"content\": \"one\n\ttwo\u{1}\"}";
+        assert!(serde_json::from_str::<Value>(raw).is_err());
+        assert_eq!(
+            tool_input(raw).unwrap(),
+            json!({"path": "a.txt", "content": "one\n\ttwo\u{1}"})
+        );
+        // Whitespace between tokens is not inside a string and stays as it is.
+        assert_eq!(tool_input("{\n\t\"a\": 1}").unwrap(), json!({"a": 1}));
+        assert!(tool_input("{\"a\": ").is_err());
+    }
+
+    #[test]
+    fn cut_off_input_keeps_names_and_shortens_long_text() {
+        let long = "x".repeat(5000);
+        let raw = format!(r#"{{"path": "big.html", "content": "{long}"#);
+        let got = cut_off_input(&raw);
+        assert_eq!(got["path"], "big.html");
+        let content = got["content"].as_str().unwrap();
+        assert!(content.starts_with(&"x".repeat(1000)));
+        assert!(content.ends_with("[cut off: 4000 more characters were written]"));
+        assert_eq!(cut_off_input(""), json!({}));
     }
 
     #[test]

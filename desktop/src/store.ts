@@ -38,6 +38,7 @@ import {
   type View,
 } from "./bridge"
 import { getPrefs, loadPrefs, onPrefsFailure, setPref } from "./prefs"
+import { revealing } from "./reveal"
 import { folderKey, onBeforeClose, runBeforeClose, sameFolder } from "./ui"
 
 export type { Mode }
@@ -2227,6 +2228,8 @@ function onEvent(e: CoreEvent) {
     case "failed":
     case "interrupted": {
       dropInputs((i) => i.sessionId === id)
+      // A stopped reply shows what was written at once instead of typing on after the stop.
+      if (e.type === "interrupted") revealing.clear()
       const unsentFail = e.type === "failed" && !!e.unsent
       // Messages a running turn took into its queue: one of them may be what the core refused.
       const queuedSent = unsentFail && !!sentQueued.get(id)?.length
