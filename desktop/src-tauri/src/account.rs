@@ -417,7 +417,10 @@ mod tests {
             for_window("Could not start login: busy".into()),
             "Couldn’t start signing in: busy"
         );
-        assert_eq!(for_window("Sign-in was denied.".into()), "Sign-in was denied.");
+        assert_eq!(
+            for_window("Sign-in was denied.".into()),
+            "Sign-in was denied."
+        );
     }
 
     #[test]
