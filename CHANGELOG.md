@@ -8,6 +8,9 @@ branch.
 
 - Settings > Usage names limits plainly: "5-hour limit" and "Weekly limit", "Resets in …", and each saved reset
   says what it resets ("Resets 5-hour and weekly limits") instead of "Starts both windows over".
+- A pass over the app's wording: one word for each thing (Git, sign-in, subagents, the task list), and notices
+  cut to what you need. The commit button no longer reads "to this commit" when no branch is checked out, the
+  hooks notice names the button that stops them, and a session busy elsewhere says "another copy of Anysola Code".
 
 ## 1.1.5 (2026-11-20)
 
