@@ -4,6 +4,11 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.1.6 (2026-11-21)
+
+- Settings > Usage names limits plainly: "5-hour limit" and "Weekly limit", "Resets in …", and each saved reset
+  says what it resets ("Resets 5-hour and weekly limits") instead of "Starts both windows over".
+
 ## 1.1.5 (2026-11-20)
 
 Fixes from a second look at 1.1.4's streaming.

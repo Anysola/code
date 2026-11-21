@@ -792,7 +792,7 @@ function WindowMeter({ label, window: w }: { label: string; window: AccountWindo
   if (!w) return null
   const resets = resetsIn(w.resetsAt)
   return (
-    <span className="flex flex-col gap-1" title={resets ? `Starts over ${resets}` : undefined}>
+    <span className="flex flex-col gap-1" title={resets ? `Resets ${resets}` : undefined}>
       <span className="text-2xs flex justify-between text-muted">
         <span>{label}</span>
         <span className="tabular-nums">

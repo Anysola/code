@@ -154,10 +154,10 @@ function Limits({ account }: { account: Live | null }) {
   return (
     <Group
       label="Limits"
-      note="One limit shared by Chat and Code: a 5-hour window and a weekly window."
+      note="Chat and Code share a 5-hour and a weekly limit."
     >
-      <Meter label="5-hour window" window={account?.fiveHour ?? null} blocking={account?.blockedBy === "five_hour"} />
-      <Meter label="Weekly window" window={account?.weekly ?? null} blocking={account?.blockedBy === "weekly"} />
+      <Meter label="5-hour limit" window={account?.fiveHour ?? null} blocking={account?.blockedBy === "five_hour"} />
+      <Meter label="Weekly limit" window={account?.weekly ?? null} blocking={account?.blockedBy === "weekly"} />
     </Group>
   )
 }
@@ -171,9 +171,9 @@ function Meter({ label, window: w, blocking }: { label: string; window: AccountW
         !w ? (
           "Not reported for this plan"
         ) : blocking ? (
-          <span className="text-warning">Full. Requests wait until it starts over{resets ? ` ${resets}` : ""}.</span>
+          <span className="text-warning">Full. Requests wait until it resets{resets ? ` ${resets}` : ""}.</span>
         ) : resets ? (
-          `Starts over ${resets}`
+          `Resets ${resets}`
         ) : undefined
       }
     >
@@ -218,11 +218,11 @@ function Bank({ account }: { account: Live }) {
   const soonest = bank[0]
   return (
     <Group label="Saved resets" aside={bank.length > 0 ? `${bank.length} saved` : undefined}>
-      {bank.length === 0 && <Row label="No saved resets" hint="A reset starts a window over when you use it" />}
+      {bank.length === 0 && <Row label="No saved resets" hint="Using one clears your limit at once" />}
       {bank.map((r) => (
         <Row
           key={r.id}
-          label={r.scope === "both" ? "Starts both windows over" : "Starts the 5-hour window over"}
+          label={r.scope === "both" ? "Resets 5-hour and weekly limits" : "Resets the 5-hour limit"}
           hint={r.expiresAt ? `Expires ${day(Date.parse(r.expiresAt))}` : "Doesn’t expire"}
         />
       ))}
@@ -232,7 +232,7 @@ function Bank({ account }: { account: Live }) {
             label="Use a reset"
             variant="secondary"
             danger={false}
-            question={soonest.scope === "both" ? "Start both windows over now?" : "Start the 5-hour window over now?"}
+            question={soonest.scope === "both" ? "Reset your 5-hour and weekly limits now?" : "Reset your 5-hour limit now?"}
             action="Use it"
             run={async () => {
               try {
@@ -371,7 +371,7 @@ export function BillingSection() {
       ) : (
         <>
           <Group note="Payments happen on account.anysola.com. The app never asks for card details.">
-            <Row label="Plan" hint="One limit shared by Chat and Code: a 5-hour window and a weekly window">
+            <Row label="Plan" hint="Chat and Code share a 5-hour and a weekly limit">
               <Value>{account ? plan(account) : "…"}</Value>
             </Row>
           </Group>
