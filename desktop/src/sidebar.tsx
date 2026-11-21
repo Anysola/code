@@ -659,7 +659,6 @@ function UpdateRow() {
       </div>
       {update.waiting && !update.installing && (
         <p className="text-2xs flex items-center gap-1 px-2 pt-1.5 text-muted">
-          The restart waits so the turn isn’t cut off.
           <button onClick={() => void installUpdate(true)} className="text-foreground/80 underline-offset-2 hover:underline">
             Restart now
           </button>

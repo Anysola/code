@@ -489,7 +489,7 @@ function ProjectFile({
         hint={
           emptied
             ? f.decision === null
-              ? "This file no longer defines hooks. The ones you allowed before keep running until you accept that."
+              ? "This file no longer defines hooks. The ones you allowed before keep running until you stop them."
               : f.standing
                 ? "This file no longer defines hooks. The ones you allowed before keep running until the app restarts."
                 : "This file defines no hooks."

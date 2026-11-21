@@ -810,14 +810,14 @@ function Advanced({ directory }: { directory: string }) {
               <ConfigToggle id="websearch" label="Web search" hint={over("websearch")} checked={c.websearch} onChange={(websearch) => change({ websearch })} />
               <ConfigToggle id="todo" label="Task list" hint={over("todo") ?? "The agent keeps a list of steps for longer work"} checked={c.todo} onChange={(todo) => change({ todo })} />
               <Row
-                label="Helper agent levels"
+                label="Subagent levels"
                 hint={
                   over("subagentDepth") ??
-                  "The agent can hand parts of a task to helper agents. More levels let helpers start their own."
+                  "The agent can hand parts of a task to subagents. More levels let subagents start their own."
                 }
               >
                 <Segmented
-                  label="Helper agent levels"
+                  label="Subagent levels"
                   value={String(c.subagentDepth) as "1" | "2" | "3"}
                   onChange={(d) => change({ subagentDepth: Number(d) })}
                   options={[
@@ -830,14 +830,14 @@ function Advanced({ directory }: { directory: string }) {
               <ConfigToggle
                 id="compact"
                 label="Summarize when the context fills"
-                hint={over("autoCompact") ?? "Off, a full session stops and asks you to /compact"}
+                hint={over("autoCompact") ?? "Off: a full session stops and asks you to /compact"}
                 checked={c.autoCompact}
                 onChange={(autoCompact) => change({ autoCompact })}
               />
               <ConfigToggle
                 id="snapshots"
                 label="Keep snapshots for rewinding"
-                hint={over("snapshots") ?? "Off, a rewind can’t put files back"}
+                hint={over("snapshots") ?? "Off: a rewind can’t put files back"}
                 checked={c.snapshots}
                 onChange={(snapshots) => change({ snapshots })}
               />

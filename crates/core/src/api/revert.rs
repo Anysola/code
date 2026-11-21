@@ -189,7 +189,7 @@ impl Core {
     /// Puts one file back as it was before the session first changed it.
     pub fn restore_file(&self, session_id: &str, file: &str) -> Result<(), CoreError> {
         let store = self.shared.snapshots.as_deref().ok_or(CoreError::Snapshot(
-            "This folder isn’t a git repository, so there’s no earlier copy to restore".into(),
+            "This folder isn’t a Git repository, so there’s no earlier copy to restore".into(),
         ))?;
         let (path, tree) = first_trees(&self.shared.db, session_id)?
             .into_iter()

@@ -562,7 +562,7 @@ function ReplyLink({ href, children }: { href?: string; children?: ReactNode }) 
     if (/^(https?:|mailto:)/i.test(href)) return openExternal(href)
     const file = localFile(href)
     if (file && directory) void openInEditor(directory, file.path, file.line)
-    else if (/^file:/i.test(href)) notify("That file is on another computer, so it isn’t opened from here.")
+    else if (/^file:/i.test(href)) notify("That file is on another computer, so it can’t be opened here.")
   }
   return (
     <a
@@ -823,7 +823,7 @@ const verbs: Record<string, string> = {
   glob: "Found files",
   webfetch: "Fetched",
   websearch: "Searched the web",
-  todowrite: "Updated the plan",
+  todowrite: "Updated the task list",
   task: "Ran a subagent",
   subagent: "Ran a subagent",
   question: "Asked",
@@ -1519,7 +1519,7 @@ function doing(items: Item[]): string | null {
     case "subagent":
       return t.target ? `Subagent: ${t.target}` : "Running a subagent"
     case "todowrite":
-      return "Updating the plan"
+      return "Updating the task list"
     default:
       return `Using ${t.name}`
   }

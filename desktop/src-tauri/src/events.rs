@@ -256,8 +256,8 @@ pub fn plain(kind: &str, message: &str) -> String {
     match kind {
         "auth" => "Your Anysola sign-in has expired or was revoked. Sign in again.".into(),
         "offline" => "Can’t reach Anysola. Check your connection.".into(),
-        "elsewhere" => "This session is running in another Anysola Code app. \
-                        Let it finish there, or stop it there, then try again."
+        "elsewhere" => "This session is running in another copy of Anysola Code. \
+                        Let it finish or stop it there, then try again."
             .into(),
         "model"
             if [

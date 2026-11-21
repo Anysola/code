@@ -85,7 +85,7 @@ function Devices() {
   return (
     <Loaded load={devices} rows={3}>
       {(list) => (
-        <Group label="Signed in" aside={`${list.length} device${list.length === 1 ? "" : "s"} and tokens`}>
+        <Group label="Signed in" aside={`${list.length}`}>
           {list.length === 0 && <Row label="Nothing is signed in" />}
           {[...list]
             .sort((a, b) => Number(b.current) - Number(a.current))

@@ -105,7 +105,7 @@ impl Gateway {
             .account_call(reqwest::Method::POST, "/device/code", Some(&body))
             .await?;
         if reply.status == 429 {
-            return Err("Too many login attempts. Try again later.".into());
+            return Err("Too many sign-in attempts. Try again later.".into());
         }
         if !reply.ok() {
             return Err(format!("Could not start login: {}", reply.error().1));
@@ -144,7 +144,7 @@ impl Gateway {
         loop {
             tokio::time::sleep(Duration::from_secs_f64(wait)).await;
             if Instant::now() >= login.deadline {
-                return Err(expired("The login code expired."));
+                return Err(expired("The code expired."));
             }
             let body = json!({"device_code": login.device_code});
             let reply = self
@@ -162,8 +162,8 @@ impl Gateway {
                         Some("expired_token") => {
                             return Err(expired("The code expired before it was approved."));
                         }
-                        Some("access_denied") => return Err("Login was denied.".into()),
-                        _ => return Err(format!("Login failed: {message}")),
+                        Some("access_denied") => return Err("Sign-in was denied.".into()),
+                        _ => return Err(format!("Couldn’t sign in: {message}")),
                     }
                 }
                 reply => {
@@ -171,7 +171,7 @@ impl Gateway {
                     failures += 1;
                     if failures >= 3 {
                         return Err(match reply {
-                            Some(reply) => format!("Login failed: {}", reply.error().1),
+                            Some(reply) => format!("Couldn’t sign in: {}", reply.error().1),
                             None => "Login failed: network error".into(),
                         });
                     }
@@ -187,7 +187,7 @@ fn credential(body: &Value, api_url: &str) -> Result<Value, String> {
         .get("access_token")
         .and_then(Value::as_str)
         .filter(|t| usable(t))
-        .ok_or("Login failed: the server returned no usable token.")?;
+        .ok_or("Couldn’t sign in: the server returned no usable token.")?;
     let expires = body
         .get("expires_at")
         .and_then(Value::as_str)

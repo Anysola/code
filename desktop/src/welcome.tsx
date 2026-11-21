@@ -103,7 +103,7 @@ export function SignIn() {
               disabled={starting}
               className={btn("primary", "md", "min-w-60")}
             >
-              {starting ? "Starting…" : "Sign in with Anysola"}
+              {starting ? "Signing in…" : "Sign in with Anysola"}
             </button>
             <button onClick={() => openExternal(SIGN_UP)} className={btn("ghost", "sm", "gap-1 text-muted")}>
               Create an account
@@ -258,7 +258,7 @@ export function NewSessionStart({ open }: { open: Open }) {
 const MODE_WORDS: Record<string, string> = {
   ask: "every edit and command asks you first.",
   edits: "files change without asking; commands ask you first.",
-  auto: "only what your rules name asks; the rest runs.",
+  auto: "everything runs without asking, unless a rule says to ask.",
 }
 
 /** The mode in words, with a one-click switch to the other usual one. */

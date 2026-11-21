@@ -660,7 +660,7 @@ export async function signOut() {
     if (signedIn) {
       set({
         notice:
-          "This computer signs in with a token set outside the app, so signing out here can’t end it. To sign out, remove the ANYSOLA_TOKEN environment variable, then open the app again.",
+          "This computer signs in with the ANYSOLA_TOKEN environment variable. To sign out, remove it, then open the app again.",
       })
       return
     }
@@ -1386,7 +1386,7 @@ function elsewhere(path: string, directory?: string) {
     const root = folderKey(directory)
     if (key === root || key.startsWith(`${root}\\`)) return false
   }
-  set({ notice: "That file is on another computer, so it isn’t opened from here." })
+  set({ notice: "That file is on another computer, so it can’t be opened here." })
   return true
 }
 
@@ -1440,7 +1440,7 @@ export async function rewind(messageId: string) {
     rewound.set(sessionId, text)
     if (text) restoreDraft(sessionId, { text })
     if (filesKept)
-      set({ notice: "This folder isn’t a git repository, so the files those turns changed stay as they are." })
+      set({ notice: "This folder isn’t a Git repository, so the files those turns changed stay as they are." })
   } catch (e) {
     set({ notice: message(e) })
   }
@@ -1506,7 +1506,7 @@ export async function retry() {
     (open.status.kind === "failed" && open.status.retry === false) ||
     (open.status.kind !== "failed" && tail?.kind === "error" && tail.retry === false)
   if (refused) {
-    set({ notice: "There’s nothing to try again: sending again won’t help with this one." })
+    set({ notice: "Sending again won’t help with this one." })
     return
   }
   if (last) await resend(last.id, null)

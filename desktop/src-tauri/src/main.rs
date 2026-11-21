@@ -176,8 +176,7 @@ impl App {
         let database = self.paths.database();
         let folder = database.parent().unwrap_or(&database);
         Some(json!({
-            "message": "Anysola Code can’t open its saved data. Close any other copy of the app \
-                        and open it again. If this keeps happening, the data folder may be damaged.",
+            "message": "Close any other copy of Anysola Code, then try again. If this keeps happening, the data folder may be damaged.",
             "folder": folder.display().to_string(),
         }))
     }

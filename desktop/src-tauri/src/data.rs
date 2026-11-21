@@ -202,7 +202,7 @@ pub async fn data_clear(app: State<'_, App>, id: String) -> Answer {
     // A background command outlives its turn and is still writing its output there.
     if id == "shell" && cores.iter().any(|(_, c)| c.any_background_shell()) {
         return Err(
-            "A background command is still running. Stop it in its session first, or wait for it to finish, then clear this."
+            "A background command is still running. Stop it or let it finish first."
                 .into(),
         );
     }

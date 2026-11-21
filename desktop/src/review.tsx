@@ -350,7 +350,7 @@ function GitPanel({ open, onDone }: { open: Open; onDone: () => void }) {
             >
               {working === "commit" ? <Spinner className="size-3.5 text-accent-foreground" /> : <GitCommitHorizontal className="size-3.5 shrink-0" />}
               <span className="truncate">
-                Commit {picked.length} file{picked.length === 1 ? "" : "s"} to {git.branch || "this commit"}
+                Commit {picked.length} file{picked.length === 1 ? "" : "s"}{git.branch ? ` to ${git.branch}` : ""}
               </span>
             </button>
           </div>
@@ -604,7 +604,7 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
           {net === null && (
             <>
               <p className="text-dense px-1 text-muted">
-                This folder isn’t a git repository, so these are the edits as they were made and files can’t be reverted from here.
+                This folder isn’t a Git repository, so these are the edits as they were made, and files can’t be reverted.
               </p>
               {edits.map((f) => (
                 <div key={f.file} className="flex shrink-0 flex-col gap-2">

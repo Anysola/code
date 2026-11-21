@@ -127,10 +127,10 @@ function ApplicationId({ value, onChange }: { value: string | null; onChange: (v
     if ((v || null) !== value) onChange(v || null)
   }
   return (
-    <Group note="Optional. Leave it empty to show Anysola Code’s own card. An application of yours from the Discord developer portal shows its name as the card’s title instead.">
+    <Group note="Optional. Leave it empty to show Anysola Code’s own card. An application of yours from the Discord Developer Portal shows its name instead.">
       <Row
         label="Your own application ID"
-        hint={bad ? <span className="text-danger">Only digits: it’s the number the developer portal shows.</span> : undefined}
+        hint={bad ? <span className="text-danger">Only digits: it’s the number the Developer Portal shows.</span> : undefined}
       >
         <input
           value={text}

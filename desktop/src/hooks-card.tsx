@@ -149,7 +149,7 @@ function TrustCard({ path, items, directory }: { path: string; items: TrustItem[
       </div>
       <p className="text-dense mt-1 pl-3.5 text-muted">
         {onlyHooks && removed
-          ? "The file below no longer defines hooks. The ones you allowed before keep running until you accept that."
+          ? "The file below no longer defines hooks. The ones you allowed before keep running until you stop them."
           : onlyHooks && changed
             ? `The ones you allowed before keep running until you allow ${hooks.entries.length === 1 ? "this one" : "these"}. Allow only if you trust the change.`
             : consequence(items)}

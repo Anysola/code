@@ -54,7 +54,7 @@ import { anyLayer, btn, cn, Popover, Spinner, Tooltip } from "./ui"
 export const modes: { id: Mode | "plan"; label: string; hint: string }[] = [
   { id: "ask", label: "Ask", hint: "Ask before every edit and command" },
   { id: "edits", label: "Edits", hint: "Edit files without asking; ask before commands" },
-  { id: "auto", label: "Auto", hint: "Runs without asking, except where a rule says to ask or refuse" },
+  { id: "auto", label: "Auto", hint: "Run without asking, except where a rule says to ask or refuse" },
   { id: "plan", label: "Plan", hint: "Read and plan; change nothing until you approve" },
 ]
 

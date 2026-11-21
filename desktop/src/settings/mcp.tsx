@@ -19,7 +19,7 @@ const STATUS: Record<McpServer["status"], { word: string; mark: string }> = {
   pending: { word: "Connecting", mark: "bg-muted" },
   disabled: { word: "Off", mark: "bg-muted/40" },
   failed: { word: "Failed", mark: "bg-danger" },
-  needs_auth: { word: "Sign in needed", mark: "bg-warning" },
+  needs_auth: { word: "Sign-in needed", mark: "bg-warning" },
   // Under its file's question, which says why.
   waiting: { word: "Not started", mark: "bg-muted/40" },
 }

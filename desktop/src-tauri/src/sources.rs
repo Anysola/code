@@ -184,7 +184,7 @@ fn skill_urls(status: &[RemoteStatus]) -> Vec<Value> {
 /// The core keeps git's first line, which for a clone is its progress line, not why it failed.
 fn git_reason(error: &str) -> String {
     if error.starts_with("Cloning into ") {
-        "git couldn’t clone it".to_string()
+        "Git couldn’t clone it".to_string()
     } else {
         error.to_string()
     }
@@ -392,7 +392,7 @@ mod tests {
     fn git_reasons() {
         assert_eq!(
             git_reason("Cloning into '/home/u/.anysola/repos/github.com/acme/x'..."),
-            "git couldn’t clone it"
+            "Git couldn’t clone it"
         );
         assert_eq!(
             git_reason("repository 'x' does not exist"),
