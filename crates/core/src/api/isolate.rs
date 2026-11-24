@@ -962,8 +962,9 @@ impl Core {
                 /// Then each file back as its tree has it (the "edits" path).
                 undo: Vec<(String, String)>,
             },
-            /// Only the commit (the session changed nothing).
-            Commit(String),
+            /// Only the commit: the session changed nothing (no fallback), or nothing of its
+            /// files is left to put back (`Now`).
+            Commit(String, Option<Fallback>),
         }
         let scope_of = || {
             let top = shared.top();
@@ -1031,7 +1032,9 @@ impl Core {
                         undo: Vec::new(),
                     }
                 }
-                _ => Plan::Commit(source_head()),
+                // Nothing recorded: the session changed nothing.
+                (None, _) => Plan::Commit(source_head(), None),
+                _ => Plan::Commit(source_head(), Some(Fallback::Now)),
             }
         };
         let now_or_last = |fallback: Option<Fallback>| {
@@ -1040,6 +1043,9 @@ impl Core {
 
         let plan = if before.is_none() {
             now_or_last(None)
+        } else if store.is_none() {
+            // Nothing recorded the fork point (`snapshots: false`).
+            now_or_last(Some(Fallback::Now))
         } else {
             // The first step at or after the fork point (its start: the user's own edits between
             // turns included), else the last one before it (its end).
@@ -1054,10 +1060,13 @@ impl Core {
                         .map(|(_, s)| (s.end.clone().or(s.start.clone()), s.head.clone()))
                 });
             match point {
-                None => Plan::Commit(match &source_row {
-                    Some(row) => row.base_commit.clone(),
-                    None => source_head(),
-                }),
+                None => Plan::Commit(
+                    match &source_row {
+                        Some(row) => row.base_commit.clone(),
+                        None => source_head(),
+                    },
+                    None,
+                ),
                 Some((tree, head)) => {
                     let readable = |spec: String| store.as_ref().is_some_and(|s| s.has(&spec));
                     match (tree, head) {
@@ -1098,7 +1107,7 @@ impl Core {
 
         let fork = self.fork_before(&source, before)?;
         let commit = match &plan {
-            Plan::Tree { commit, .. } | Plan::Commit(commit) => commit.clone(),
+            Plan::Tree { commit, .. } | Plan::Commit(commit, _) => commit.clone(),
         };
         let (_, made) = self
             .make_checkout(&fork, &commit, base_branch, None)
@@ -1113,10 +1122,10 @@ impl Core {
             worktree_error(message)
         };
         let restore = match plan {
-            Plan::Commit(_) => ForkRestore {
-                exact: true,
+            Plan::Commit(_, fallback) => ForkRestore {
+                exact: fallback.is_none(),
                 kept: Vec::new(),
-                fallback: None,
+                fallback,
             },
             Plan::Tree {
                 git_dir,

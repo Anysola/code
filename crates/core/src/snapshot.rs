@@ -90,7 +90,12 @@ impl Store {
             .arg("--work-tree")
             .arg(&self.work_tree)
             .args(args)
-            .current_dir(&self.work_tree)
+            // A removed worktree's store still reads its objects.
+            .current_dir(if self.work_tree.is_dir() {
+                &self.work_tree
+            } else {
+                &self.git_dir
+            })
             .env("GIT_LITERAL_PATHSPECS", "1")
             .stdin(Stdio::null());
         command
@@ -356,7 +361,7 @@ pub fn overlay(
         let mut command = crate::console::command("git");
         command
             .arg("--git-dir")
-            .arg(&git_dir)
+            .arg(git_dir)
             .arg("--work-tree")
             .arg(target)
             .args(args)
