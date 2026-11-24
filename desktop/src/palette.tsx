@@ -10,7 +10,7 @@ import { editBudget, setReviewing, showPalette, showShortcuts, useChrome } from 
 import { modes } from "./composer"
 import { KEYS } from "./shortcuts"
 import { closeSettings, forkSession, isRunning, newSession, openSession, openSettings, pickMode, useStore } from "./store"
-import { ago, cn, folderName, Kbd, useEscape } from "./ui"
+import { ago, cn, folderName, Kbd, sameFolder, useEscape } from "./ui"
 
 type Row = { key: string; section: string; run: () => void; node: ReactNode }
 
@@ -210,11 +210,13 @@ function Panel() {
 }
 
 function SessionLine({ s, current }: { s: SessionRow; current: boolean }) {
+  // The app's own folder reads as the sidebar names it.
+  const scratch = useStore((x) => x.scratch)
   return (
     <>
       {s.forkOf && <GitBranch className="size-3.5 shrink-0 text-muted" strokeWidth={1.75} aria-label="Branched" />}
       <span className="min-w-0 truncate">{s.title}</span>
-      <span className="text-2xs min-w-0 flex-1 truncate text-muted">{folderName(s.directory)}</span>
+      <span className="text-2xs min-w-0 flex-1 truncate text-muted">{sameFolder(s.directory, scratch) ? "No project" : folderName(s.directory)}</span>
       <span className="text-2xs shrink-0 text-muted tabular-nums">{current ? "Open" : ago(s.updated)}</span>
     </>
   )
