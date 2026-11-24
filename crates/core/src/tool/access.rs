@@ -100,13 +100,20 @@ fn contains(parent: &Path, child: &Path) -> bool {
     child.starts_with(parent)
 }
 
-/// The places a path's permission names are taken from: the session directory, the project's
-/// root, and the root of the checkout the session directory is in (a worktree, or the project
-/// itself for a subfolder).
+/// The places a path's permission names are taken from: the session directory, the root of the
+/// checkout the session works in (the project's root, or its own worktree), the root of the
+/// checkout the session directory is in (a worktree, or the project itself for a subfolder),
+/// and the project's main root. Only the first two hold what is *inside*: for a session pinned
+/// to its own worktree the main folder is outside, but a rule written relative to the project
+/// still names its files.
 struct Places {
     directory: PathBuf,
     worktree: PathBuf,
     checkout: Option<PathBuf>,
+    main: PathBuf,
+    /// Where sessions' own worktrees live (`<data>/worktrees`): a path in one is also named
+    /// relative to that worktree's top, so a root-relative rule names its files too.
+    sessions: PathBuf,
 }
 
 impl Places {
@@ -116,6 +123,8 @@ impl Places {
             directory: ctx.directory.clone(),
             worktree: ctx.worktree.clone(),
             checkout: project::vcs_root(&ctx.directory),
+            main: ctx.main.clone(),
+            sessions: ctx.paths.data.join("worktrees"),
         }
     }
 
@@ -127,7 +136,17 @@ impl Places {
             directory: real(&written.directory),
             worktree: real(&written.worktree),
             checkout: written.checkout.as_deref().map(real),
+            main: real(&written.main),
+            sessions: real(&written.sessions),
         }
+    }
+
+    /// The top of the session worktree holding `path` (`<sessions>/<project>/<session>`).
+    fn session_top(&self, path: &Path) -> Option<PathBuf> {
+        let rest = path.strip_prefix(&self.sessions).ok()?;
+        let mut parts = rest.components();
+        let (project, session) = (parts.next()?, parts.next()?);
+        Some(self.sessions.join(project).join(session))
     }
 
     fn inside(&self, path: &Path) -> bool {
@@ -148,7 +167,12 @@ impl Places {
             slash(path)
         };
         let mut out = vec![first];
-        for root in std::iter::once(&self.worktree).chain(self.checkout.as_ref()) {
+        let session_top = self.session_top(path);
+        let roots = std::iter::once(&self.worktree)
+            .chain(self.checkout.as_ref())
+            .chain(std::iter::once(&self.main))
+            .chain(session_top.as_ref());
+        for root in roots {
             if root.parent().is_none() {
                 continue;
             }
@@ -344,6 +368,7 @@ mod tests {
         let test = context(&sub);
         let mut ctx = test.ctx.clone();
         ctx.worktree = project.clone();
+        ctx.main = project.clone();
 
         let home = resolve(&ctx, "~/notes.txt", None);
         assert_eq!(home.absolute, sub.join(".home/notes.txt"));

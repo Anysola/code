@@ -24,6 +24,8 @@ pub enum RemoveError {
     NotWorktree,
     #[error("it has modified or untracked files")]
     Dirty,
+    #[error("it is a session's own worktree; apply or discard that session's changes instead")]
+    Bound,
     #[error("{0}")]
     Failed(String),
 }
@@ -105,6 +107,40 @@ pub fn place(paths: &crate::paths::Paths, base: &Path, name: &str) -> Result<Pat
     Ok(target)
 }
 
+/// Strategy of the rows sessions' own worktrees have in table `worktree`.
+pub const SESSION_STRATEGY: &str = "session";
+
+/// Where sessions' own worktrees of the main folder `folder` go:
+/// `<data>/worktrees/<folder name>-<first 6 of the project id>`. A fixed place (config
+/// `worktree.directory` is for the agent's `worktree_create`), still checked by [`place`].
+pub fn session_base(
+    paths: &crate::paths::Paths,
+    folder: &Path,
+    project_id: &str,
+) -> Result<PathBuf, String> {
+    let name: String = folder
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let name = name.trim_matches('.');
+    let name = if name.is_empty() { "project" } else { name };
+    let id: String = project_id.chars().take(6).collect();
+    place(
+        paths,
+        &paths.data.join("worktrees"),
+        &format!("{name}-{id}"),
+    )
+}
+
 pub fn list(db: &Db, project_id: &str) -> Vec<Worktree> {
     db.worktrees(project_id)
         .unwrap_or_default()
@@ -116,6 +152,20 @@ pub fn list(db: &Db, project_id: &str) -> Vec<Worktree> {
         .collect()
 }
 
+/// Whether `directory` is (in) a session's own worktree that session still works in.
+pub fn bound(db: &Db, directory: &Path) -> bool {
+    let target = crate::paths::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf());
+    db.session_worktrees()
+        .unwrap_or_default()
+        .iter()
+        .filter(|row| !row.state.released())
+        .any(|row| {
+            let top = Path::new(&row.directory);
+            let top = crate::paths::canonicalize(top).unwrap_or_else(|_| top.to_path_buf());
+            target.starts_with(&top)
+        })
+}
+
 /// The directory resolved and canonical, when it is an existing directory.
 fn canonical(directory: &Path) -> Option<PathBuf> {
     crate::paths::canonicalize(directory)
@@ -123,7 +173,7 @@ fn canonical(directory: &Path) -> Option<PathBuf> {
         .filter(|p| p.is_dir())
 }
 
-async fn git(cwd: &Path, args: &[&std::ffi::OsStr]) -> Result<String, String> {
+pub(crate) async fn git(cwd: &Path, args: &[&std::ffi::OsStr]) -> Result<String, String> {
     let output = crate::console::tokio_command("git")
         .args(args)
         .current_dir(cwd)
@@ -153,6 +203,42 @@ async fn toplevel(directory: &Path) -> Option<PathBuf> {
     .await
     .ok()?;
     Some(PathBuf::from(out.trim()))
+}
+
+/// `git` run synchronously in `cwd`, with extra environment; stdout on success, else git's words.
+pub(crate) fn git_sync(cwd: &Path, args: &[&str], env: &[(&str, &Path)]) -> Result<String, String> {
+    let mut command = crate::console::command("git");
+    command
+        .args(args)
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::null());
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let output = command.output().map_err(|e| e.to_string())?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    Err(if stderr.is_empty() {
+        "Git failed".into()
+    } else {
+        stderr
+    })
+}
+
+/// The checkout's current files (tracked and untracked, not ignored) as a tree, written with a
+/// copy of its index so the checkout's own index is untouched. With the checkout's git dir.
+pub(crate) fn current_tree(checkout: &Path) -> Option<(PathBuf, String)> {
+    let git_dir =
+        PathBuf::from(git_sync(checkout, &["rev-parse", "--absolute-git-dir"], &[]).ok()?);
+    let index = git_dir.join(format!("anysola-{}.index", crate::ids::part()));
+    let _ = std::fs::copy(git_dir.join("index"), &index);
+    let env = [("GIT_INDEX_FILE", index.as_path())];
+    let tree = git_sync(checkout, &["add", "-A", "--", "."], &env)
+        .and_then(|_| git_sync(checkout, &["write-tree"], &env));
+    let _ = std::fs::remove_file(&index);
+    Some((git_dir, tree.ok()?))
 }
 
 /// Creates a detached worktree of the project checkout at `HEAD` under `base`; `-2`…`-10`
@@ -225,6 +311,9 @@ pub async fn remove(
         .any(|w| w.directory == text && w.strategy.is_some());
     if !owned {
         return Err(RemoveError::NotWorktree);
+    }
+    if bound(db, &directory) {
+        return Err(RemoveError::Bound);
     }
     let common = git(
         &directory,

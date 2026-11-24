@@ -9,9 +9,16 @@ use crate::session::message::Message;
 use crate::tool::edit::diff::{FileDiff, Status};
 
 impl Core {
-    /// Whether a rewind puts files back here: only where snapshots are kept (a git folder).
-    pub fn restores_files(&self) -> bool {
-        self.shared.snapshots.is_some()
+    /// Whether a rewind of the session puts files back: only where snapshots are kept (a git
+    /// checkout: the main folder or the session's own worktree).
+    pub fn restores_files(&self, session_id: &str) -> bool {
+        self.store(session_id).is_some()
+    }
+
+    /// The snapshot store of the checkout the session works in.
+    fn store(&self, session_id: &str) -> Option<std::sync::Arc<crate::snapshot::Store>> {
+        let session = self.shared.db.session(session_id).ok()??;
+        self.shared.store_for(&session)
     }
 
     /// Reverts the session to before `message_id`. Repeating it with another message keeps the
@@ -22,7 +29,8 @@ impl Core {
             .message_seq(session_id, message_id)?
             .ok_or_else(|| CoreError::MessageNotFound(message_id.to_string()))?;
         let staged = db.revert(session_id)?;
-        let store = self.shared.snapshots.as_deref();
+        let store = self.store(session_id);
+        let store = store.as_deref();
         let original = staged
             .as_ref()
             .and_then(|r| r["snapshot"].as_str().map(str::to_string))
@@ -85,10 +93,8 @@ impl Core {
         let Some(staged) = db.revert(session_id)? else {
             return Ok(());
         };
-        if let (Some(original), Some(store)) = (
-            staged["snapshot"].as_str(),
-            self.shared.snapshots.as_deref(),
-        ) {
+        if let (Some(original), Some(store)) = (staged["snapshot"].as_str(), self.store(session_id))
+        {
             let files: Vec<(String, String)> = staged_files(Some(&staged))
                 .into_iter()
                 .map(|f| (f, original.to_string()))
@@ -130,10 +136,9 @@ impl Core {
     /// What the latest turn changed: from the tree before its first step to the files now.
     pub fn last_turn_patch(&self, session_id: &str) -> Result<String, CoreError> {
         let store = self
-            .shared
-            .snapshots
-            .as_deref()
+            .store(session_id)
             .ok_or(CoreError::Snapshot("Snapshots are disabled".into()))?;
+        let store = store.as_ref();
         let rows = self.shared.db.messages(session_id)?;
         let turn = rows
             .iter()
@@ -162,9 +167,10 @@ impl Core {
     /// Each file the session changed, from before its first change to now (commands' changes
     /// included), skipping files that are back as they were. `None` without snapshots.
     pub fn session_changes(&self, session_id: &str) -> Result<Option<Vec<Value>>, CoreError> {
-        let Some(store) = self.shared.snapshots.as_deref() else {
+        let Some(store) = self.store(session_id) else {
             return Ok(None);
         };
+        let store = store.as_ref();
         let first = first_trees(&self.shared.db, session_id)?;
         if first.is_empty() {
             return Ok(Some(Vec::new()));
@@ -188,9 +194,10 @@ impl Core {
 
     /// Puts one file back as it was before the session first changed it.
     pub fn restore_file(&self, session_id: &str, file: &str) -> Result<(), CoreError> {
-        let store = self.shared.snapshots.as_deref().ok_or(CoreError::Snapshot(
+        let store = self.store(session_id).ok_or(CoreError::Snapshot(
             "This folder isn’t a Git repository, so there’s no earlier copy to restore".into(),
         ))?;
+        let store = store.as_ref();
         let (path, tree) = first_trees(&self.shared.db, session_id)?
             .into_iter()
             .find(|(path, _)| path == file || path.ends_with(&format!("/{file}")))

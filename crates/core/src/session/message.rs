@@ -117,6 +117,10 @@ pub struct StepSnapshot {
     pub end: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<String>>,
+    /// The checkout's `HEAD` commit when `start` was captured, so a fork can put the files back
+    /// on the commit they were captured on (absent in steps recorded before 1.1.9).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

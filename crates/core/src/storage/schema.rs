@@ -176,4 +176,28 @@ CREATE INDEX schedule_session_idx ON schedule(session_id);
 CREATE INDEX schedule_due_idx ON schedule(next_due_at)
     WHERE status = 'active' AND next_due_at IS NOT NULL;
 "#,
+    // 1.1.9: a session working in its own git worktree. No foreign key: the row outlives a
+    // deleted session until cleanup removes the folder and the branch.
+    r#"
+CREATE TABLE session_worktree (
+    session_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    folder TEXT NOT NULL,
+    directory TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    base_branch TEXT,
+    base_commit TEXT NOT NULL,
+    snapshot_dir TEXT,
+    state TEXT NOT NULL,
+    error TEXT,
+    applied_commit TEXT,
+    apply_from TEXT,
+    apply_tree TEXT,
+    restored TEXT,
+    leftover INTEGER NOT NULL DEFAULT 0,
+    time_created INTEGER NOT NULL,
+    time_updated INTEGER NOT NULL
+);
+CREATE INDEX session_worktree_folder_idx ON session_worktree(folder);
+"#,
 ];

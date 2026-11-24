@@ -663,13 +663,15 @@ pub(crate) fn context(
         }),
         asks: shared.asks.clone(),
     });
+    let checkout = shared.checkout_of(session);
     Ok(ToolContext {
         session_id: session.id.clone(),
         message_id: String::new(),
         call_id: String::new(),
         agent: selection.agent.id.clone(),
         directory: session.directory.clone().into(),
-        worktree: shared.project.worktree.clone(),
+        worktree: checkout.root,
+        main: checkout.main,
         project_id: shared.project.id.clone(),
         paths: shared.paths.clone(),
         permissions: gate,

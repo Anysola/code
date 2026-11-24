@@ -167,6 +167,7 @@ pub fn context(dir: &Path) -> TestContext {
         agent: "build".into(),
         directory: dir.to_path_buf(),
         worktree: dir.to_path_buf(),
+        main: dir.to_path_buf(),
         project_id: "global".into(),
         paths: Arc::new(paths),
         permissions: gate.clone(),

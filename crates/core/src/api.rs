@@ -32,11 +32,16 @@ use crate::usage::Usage;
 
 mod commands;
 mod front;
+mod isolate;
 mod revert;
 mod state;
 
 pub use crate::hooks::{HookDocument, HookInfo, HookScope};
 pub use crate::trust::{ConfiguredRule, TrustEntry, TrustItem, TrustKind};
+pub use isolate::{
+    Checkout, Cleaned, Fallback, ForkRestore, Release, cleanup as cleanup_worktrees,
+};
+pub(crate) use isolate::{TurnGate, turn_gate};
 pub use state::Loaded;
 
 #[derive(Debug, thiserror::Error)]
@@ -66,6 +71,9 @@ pub enum CoreError {
     /// No models at all: not signed in, or the gateway refused the token or did not answer.
     #[error("{0}")]
     NoModels(String),
+    /// The session's own worktree is not in a state for this (a plain sentence).
+    #[error("{0}")]
+    Worktree(String),
 }
 
 /// Which session a front end works on.
@@ -146,6 +154,10 @@ pub(crate) struct Shared {
     pub project: Project,
     /// The shadow repository of the project's files; `None` outside git or with `snapshots: false`.
     pub snapshots: Option<Arc<crate::snapshot::Store>>,
+    /// Snapshots are kept at all (a git project without `snapshots: false`).
+    pub snapshots_on: bool,
+    /// The stores of other checkouts sessions work in (their worktrees), by session directory.
+    pub stores: Mutex<std::collections::HashMap<PathBuf, Arc<crate::snapshot::Store>>>,
     /// `<pid>:<nonce>` for busy markers.
     pub owner: String,
     pub turns: Mutex<std::collections::HashMap<String, CancellationToken>>,
@@ -281,11 +293,12 @@ impl Core {
         let trust = crate::trust::Decisions::read(&db);
         let loaded = Loaded::load(&paths, &gateway, directory, &remote, None, trust).await;
         let project = crate::project::identify(directory);
-        let snapshots = (project.vcs == Some("git")
-            && loaded.config.get("snapshots") != Some(&Value::Bool(false)))
-        .then(|| crate::snapshot::Store::open(&paths.data, &project.id, directory))
-        .flatten()
-        .map(Arc::new);
+        let snapshots_on = project.vcs == Some("git")
+            && loaded.config.get("snapshots") != Some(&Value::Bool(false));
+        let snapshots = snapshots_on
+            .then(|| crate::snapshot::Store::open(&paths.data, &project.id, directory))
+            .flatten()
+            .map(Arc::new);
         db.upsert_project(&project)?;
         let (events, _) = broadcast::channel(4096);
         let usage = Arc::new(Usage::new(db.clone(), events.clone()));
@@ -327,6 +340,8 @@ impl Core {
             directory: directory.to_path_buf(),
             project,
             snapshots,
+            snapshots_on,
+            stores: Mutex::default(),
             owner: format!("{}:{}", std::process::id(), crate::ids::part()),
             turns: Mutex::default(),
             preparing: Mutex::default(),
@@ -422,6 +437,11 @@ impl Core {
 
     /// Moves a session into this core's project and directory.
     pub fn adopt_session(&self, id: &str) -> Result<(), CoreError> {
+        if self.shared.db.session_worktree(id)?.is_some() {
+            return Err(CoreError::Worktree(
+                "This session works in its own worktree and can't move to another folder.".into(),
+            ));
+        }
         let directory = self.shared.directory.display().to_string();
         Ok(self
             .shared
@@ -980,6 +1000,9 @@ impl Core {
         {
             return Ok(Outcome::Succeeded);
         }
+        if isolate::turn_gate(shared, session_id)? == isolate::TurnGate::Wait {
+            return Ok(Outcome::Succeeded);
+        }
         let Some(held) = Held::acquire(shared, session_id, CancellationToken::new(), None)? else {
             return Ok(Outcome::Succeeded);
         };
@@ -1211,6 +1234,12 @@ pub(crate) async fn prompt_session(
         .session(session_id)?
         .ok_or(CoreError::SessionNotFound)?;
     let prompt = normalize(shared, prompt)?;
+    // A session whose own worktree is still being made keeps the prompt for when it is ready.
+    if isolate::turn_gate(shared, session_id)? == isolate::TurnGate::Wait {
+        crate::session::inbox::enqueue(&shared.db, session_id, &prompt, Delivery::Steer)?;
+        // Ready meanwhile: its wake may have found the inbox still empty.
+        return drain_session(shared, session_id, options, cancel).await;
+    }
     // The session is taken before the prompt is admitted: enqueued first, a prompt refused
     // with `Busy` would still go out later from the process that drives the session. When a
     // turn of this process already drives it, the prompt is queued for that turn instead, as
@@ -1363,6 +1392,10 @@ async fn drain_session(
     options: TurnOptions,
     cancel: CancellationToken,
 ) -> Result<Outcome, CoreError> {
+    // Input waits while the session's own worktree is being made; ready, it wakes the session.
+    if isolate::turn_gate(shared, session_id)? == isolate::TurnGate::Wait {
+        return Ok(Outcome::Succeeded);
+    }
     match Held::acquire(shared, session_id, cancel, None)? {
         Some(held) => Ok(held.drain(options).await),
         // The turn that holds the session takes its inbox.

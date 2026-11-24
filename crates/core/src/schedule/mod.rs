@@ -484,6 +484,12 @@ async fn step(shared: &Arc<Shared>, mut row: ScheduleRow, now: i64) -> Result<()
     if !std::path::Path::new(&session.directory).is_dir() {
         return Err(Failure::Gone);
     }
+    // A session whose own worktree is gone, failed or let go pauses; one being made waits.
+    match crate::api::turn_gate(shared, &session_id) {
+        Ok(crate::api::TurnGate::Run) => {}
+        Ok(crate::api::TurnGate::Wait) => return Err(Failure::Other),
+        Err(_) => return Err(Failure::Gone),
+    }
     if let Some(last) = &row.last_message_id
         && shared.db.inbox_has(last).unwrap_or(false)
     {

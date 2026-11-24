@@ -252,8 +252,12 @@ pub struct ToolContext {
     pub agent: String,
     /// The session's working directory.
     pub directory: PathBuf,
-    /// The project root (VCS root, else the directory).
+    /// The root of the checkout the session works in: the project root (VCS root, else the
+    /// directory), or the session's own worktree.
     pub worktree: PathBuf,
+    /// The project's (main folder's) root; differs from `worktree` only for a session pinned to
+    /// its own worktree, for which the main folder is outside.
+    pub main: PathBuf,
     pub project_id: String,
     pub paths: Arc<Paths>,
     pub permissions: Arc<dyn PermissionGate>,
@@ -273,6 +277,11 @@ pub struct ToolContext {
 }
 
 impl ToolContext {
+    /// The session works in its own worktree and cannot leave it.
+    pub fn pinned(&self) -> bool {
+        self.worktree != self.main
+    }
+
     pub async fn ask(&self, request: PermissionRequest) -> Result<(), ToolError> {
         self.permissions.ask(request).await.map_err(ToolError::from)
     }

@@ -160,8 +160,12 @@ fn allowed_destination(ctx: &ToolContext, destination: &Path) -> bool {
     let Some(target) = canonical(destination) else {
         return false;
     };
-    if canonical(&ctx.worktree).as_ref() == Some(&target) {
+    if canonical(&ctx.main).as_ref() == Some(&target) {
         return true;
+    }
+    // Another session's own worktree is that session's.
+    if crate::worktree::bound(ctx.host.db(), &target) {
+        return false;
     }
     // A project without an identity ("global") could list other repositories' worktrees.
     ctx.project_id != "global"
@@ -192,6 +196,11 @@ fn rename(input: Value, ctx: &ToolContext) -> Result<Called, ToolError> {
 fn move_session(input: Value, ctx: &ToolContext) -> Result<Called, ToolError> {
     let id = session_id(&input, ctx, "moved")?;
     let requested = text(&input, "directory").unwrap_or_default().to_string();
+    if ctx.pinned() {
+        return Err(ToolError::execution(format!(
+            "Unable to move session to {requested}: this session works in its own worktree."
+        )));
+    }
     let failure = || ToolError::execution(format!("Unable to move session to {requested}"));
     let db = ctx.host.db();
     let session = db.session(&id).ok().flatten().ok_or_else(failure)?;
@@ -249,7 +258,7 @@ async fn worktree_create(
         &ctx.paths,
         &base,
         &ctx.project_id,
-        &ctx.worktree,
+        &ctx.main,
         name,
     )
     .await
@@ -260,12 +269,7 @@ async fn worktree_create(
 }
 
 fn worktree_base(ctx: &ToolContext) -> PathBuf {
-    crate::worktree::base(
-        &ctx.host.config(),
-        &ctx.paths,
-        &ctx.worktree,
-        &ctx.project_id,
-    )
+    crate::worktree::base(&ctx.host.config(), &ctx.paths, &ctx.main, &ctx.project_id)
 }
 
 fn worktree_list(ctx: &ToolContext) -> Called {
@@ -297,7 +301,7 @@ async fn worktree_remove(input: Value, ctx: &ToolContext) -> Result<Called, Tool
         .map_err(|error| {
             use crate::worktree::RemoveError;
             ToolError::execution(match error {
-                RemoveError::Unavailable | RemoveError::Dirty => {
+                RemoveError::Unavailable | RemoveError::Dirty | RemoveError::Bound => {
                     format!("Unable to remove worktree {shown}: {error}.")
                 }
                 RemoveError::NotWorktree => format!(

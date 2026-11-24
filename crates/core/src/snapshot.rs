@@ -39,6 +39,15 @@ fn git_output(dir: &Path, args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// A scratch index file, removed when dropped.
+struct TempIndex(PathBuf);
+
+impl Drop for TempIndex {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 impl Store {
     /// The store for the git project whose worktree holds `directory`; `None` outside git.
     pub fn open(data: &Path, project_id: &str, directory: &Path) -> Option<Store> {
@@ -241,6 +250,87 @@ impl Store {
         Ok(())
     }
 
+    /// The `HEAD` commit of the checkout the store captures; `None` on an unborn branch.
+    pub fn head(&self) -> Option<String> {
+        git_output(
+            &self.work_tree,
+            &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+        )
+        .filter(|h| !h.is_empty())
+    }
+
+    /// The capture scope, relative to the worktree (`.` for all of it).
+    pub fn scope(&self) -> &str {
+        &self.scope
+    }
+
+    /// Whether `spec` (`<tree>^{tree}`, `<commit>^{commit}`) is readable from this store, the
+    /// project's objects included.
+    pub fn has(&self, spec: &str) -> bool {
+        self.run(&["cat-file", "-e", spec]).is_some()
+    }
+
+    /// Lets this store read another store's objects too (a fork's store reads the trees its
+    /// copied history names, which live in the source's store).
+    pub fn borrow_objects(&self, other_git_dir: &Path) {
+        let file = self.git_dir.join("objects/info/alternates");
+        let line = other_git_dir.join("objects").display().to_string();
+        let mut text = std::fs::read_to_string(&file).unwrap_or_default();
+        if other_git_dir == self.git_dir || text.lines().any(|l| l == line) {
+            return;
+        }
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(&line);
+        text.push('\n');
+        let _ = std::fs::write(&file, text);
+    }
+
+    /// Starts the store's index from the checkout's own (a fresh worktree's): the first capture
+    /// then only refreshes it instead of hashing every file. A store that has an index keeps it.
+    pub fn seed_index(&self, index: &Path) {
+        let own = self.git_dir.join("index");
+        if own.exists() || !index.is_file() {
+            return;
+        }
+        if std::fs::copy(index, &own).is_err() || self.run(&["ls-files", "-z"]).is_none() {
+            // An index this git cannot read is no head start.
+            let _ = std::fs::remove_file(&own);
+        }
+    }
+
+    /// Puts the scope's files in `target` (another checkout of the same repository) as `tree`
+    /// has them; see [`overlay`].
+    pub fn overlay(&self, tree: &str, target: &Path) -> Result<Vec<String>, String> {
+        overlay(&self.git_dir, &self.scope, tree, target)
+    }
+
+    /// Puts each path in `target` back as its tree has it (a path the tree lacks is removed),
+    /// like [`Store::restore`] does in the store's own checkout.
+    pub fn restore_into(&self, files: &[(String, String)], target: &Path) -> Result<(), String> {
+        for (path, tree) in files {
+            let file = target.join(path);
+            match self.read(tree, path) {
+                Some(content) => {
+                    if let Some(parent) = file.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| format!("Cannot restore {path}: {e}"))?;
+                    }
+                    std::fs::write(&file, content)
+                        .map_err(|e| format!("Cannot restore {path}: {e}"))?;
+                }
+                None => {
+                    if file.symlink_metadata().is_ok() {
+                        std::fs::remove_file(&file)
+                            .map_err(|e| format!("Cannot remove {path}: {e}"))?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// The worktree root paths are relative to.
     pub fn work_tree(&self) -> &Path {
         &self.work_tree
@@ -249,6 +339,97 @@ impl Store {
     pub fn git_dir(&self) -> &Path {
         &self.git_dir
     }
+}
+
+/// Puts the files under `scope` in `target` (a checkout of the repository `git_dir` reaches the
+/// objects of) as `tree` has them: files the tree has are written, files tracked in `target` that it lacks are
+/// removed, unless they are over 2 MiB (never captured), which are left as they are and
+/// returned. Nothing outside the scope is touched.
+pub fn overlay(
+    git_dir: &Path,
+    scope: &str,
+    tree: &str,
+    target: &Path,
+) -> Result<Vec<String>, String> {
+    let index = TempIndex(git_dir.join(format!("overlay-{}.index", crate::ids::part())));
+    let in_target = |args: &[&str]| {
+        let mut command = crate::console::command("git");
+        command
+            .arg("--git-dir")
+            .arg(&git_dir)
+            .arg("--work-tree")
+            .arg(target)
+            .args(args)
+            .current_dir(target)
+            .env("GIT_INDEX_FILE", &index.0)
+            .env("GIT_LITERAL_PATHSPECS", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    };
+    let run = |args: &[&str], input: Option<&[u8]>| -> Result<Vec<u8>, String> {
+        use std::io::Write;
+        let mut child = in_target(args).spawn().map_err(|e| e.to_string())?;
+        if let Some(input) = input {
+            child
+                .stdin
+                .take()
+                .ok_or("no stdin")?
+                .write_all(input)
+                .map_err(|e| e.to_string())?;
+        }
+        drop(child.stdin.take());
+        let output = child.wait_with_output().map_err(|e| e.to_string())?;
+        if output.status.success() {
+            Ok(output.stdout)
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
+    };
+    let split = |out: Vec<u8>| -> Vec<String> {
+        out.split(|b| *b == 0)
+            .filter(|p| !p.is_empty())
+            .map(|p| String::from_utf8_lossy(p).into_owned())
+            .collect()
+    };
+    run(&["read-tree", tree], None)?;
+    let wanted = split(run(&["ls-files", "-z", "--", scope], None)?);
+    if !wanted.is_empty() {
+        let input: Vec<u8> = wanted
+            .iter()
+            .flat_map(|p| [p.as_bytes(), b"\0"].concat())
+            .collect();
+        run(&["checkout-index", "-f", "-z", "--stdin"], Some(&input))?;
+    }
+    // What the target's own checkout tracks there and the tree lacks.
+    let tracked = split(
+        crate::console::command("git")
+            .args(["ls-files", "-z", "--", scope])
+            .current_dir(target)
+            .env("GIT_LITERAL_PATHSPECS", "1")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .map_err(|e| e.to_string())?
+            .stdout,
+    );
+    let wanted: std::collections::HashSet<String> = wanted.into_iter().collect();
+    let mut kept = Vec::new();
+    for path in tracked {
+        if wanted.contains(&path) {
+            continue;
+        }
+        let file = target.join(&path);
+        match std::fs::symlink_metadata(&file) {
+            Ok(meta) if meta.is_file() && meta.len() > MAX_UNTRACKED_BYTES => kept.push(path),
+            Ok(_) => {
+                std::fs::remove_file(&file).map_err(|e| format!("Cannot remove {path}: {e}"))?
+            }
+            Err(_) => {}
+        }
+    }
+    Ok(kept)
 }
 
 #[cfg(test)]

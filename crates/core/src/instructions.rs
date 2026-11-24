@@ -370,15 +370,21 @@ pub fn discover(
     configured: &[String],
     remote: &[InstructionFile],
 ) -> Observed {
-    discover_scoped(paths, directory, worktree, configured, remote, &[])
+    discover_scoped(paths, directory, worktree, None, configured, remote, &[])
 }
 
 /// [`discover`] where the `project` entries (named by project documents only) find only files
 /// inside the project root, symlinks and globs resolved.
+///
+/// `main` is the main folder's root for a session pinned to its own worktree (`worktree`): the
+/// `AGENTS.md` walk then stops at the worktree's root, and continues above the main folder
+/// (from its parent) as it would for a session there, so nothing in the folders that hold the
+/// worktrees is read as instructions.
 pub fn discover_scoped(
     paths: &Paths,
     directory: &Path,
     worktree: &Path,
+    main: Option<&Path>,
     configured: &[String],
     remote: &[InstructionFile],
     project: &[String],
@@ -387,8 +393,28 @@ pub fn discover_scoped(
     let mut out = Vec::new();
     let _ = push(&mut out, &paths.legacy_config_dir().join("AGENTS.md"));
     let _ = push(&mut out, &paths.data.join("AGENTS.md"));
-    if directory.starts_with(worktree) || directory.starts_with(&paths.home) {
-        for dir in crate::config::upward(directory, &paths.home) {
+    let walk: Vec<PathBuf> = match main {
+        Some(main) => {
+            let mut dirs: Vec<PathBuf> = directory
+                .ancestors()
+                .take_while(|d| d.starts_with(worktree))
+                .map(Path::to_path_buf)
+                .collect();
+            if main.starts_with(&paths.home)
+                && main != paths.home
+                && let Some(parent) = main.parent()
+            {
+                dirs.extend(crate::config::upward(parent, &paths.home));
+            }
+            dirs
+        }
+        None if directory.starts_with(worktree) || directory.starts_with(&paths.home) => {
+            crate::config::upward(directory, &paths.home)
+        }
+        None => Vec::new(),
+    };
+    {
+        for dir in walk {
             if push(&mut out, &dir.join("AGENTS.md")).is_err() {
                 return Observed::Unavailable;
             }

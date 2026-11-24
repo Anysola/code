@@ -65,7 +65,7 @@ impl Context {
             root_id,
             child: session.parent_id.is_some(),
             cwd: PathBuf::from(&session.directory),
-            project_dir: shared.project.worktree.clone(),
+            project_dir: shared.checkout_of(session).root,
             home: shared.paths.home.clone(),
             approved: shared.hooks.approved.clone(),
             agent: agent.to_string(),

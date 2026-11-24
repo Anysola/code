@@ -95,11 +95,13 @@ fn instructions(
     rules: &[crate::permission::Rule],
 ) -> Result<String, SessionError> {
     let directory = std::path::PathBuf::from(&session.directory);
-    let worktree = shared.project.worktree.clone();
+    let checkout = shared.checkout_of(session);
+    let worktree = checkout.root.clone();
     let files = instructions::discover_scoped(
         &shared.paths,
         &directory,
         &worktree,
+        checkout.pinned.then_some(checkout.main.as_path()),
         &sources.config.instructions,
         &sources.remote_instructions,
         &sources.config.project_instructions,
@@ -546,6 +548,8 @@ struct Running {
     session_id: String,
     message_id: String,
     data: AssistantData,
+    /// The snapshot store of the checkout the session works in.
+    store: Option<Arc<crate::snapshot::Store>>,
 }
 
 impl Running {
@@ -621,8 +625,13 @@ async fn step(
         super::warming::Request::Step,
     );
     let message_id = crate::ids::message();
-    let start = capture(shared);
+    let store = shared.store_for(session);
+    let start = store.as_ref().and_then(|s| s.capture());
+    let head = start
+        .as_ref()
+        .and_then(|_| store.as_ref().and_then(|s| s.head()));
     let running = Running {
+        store,
         session_id: session.id.clone(),
         message_id: message_id.clone(),
         data: AssistantData {
@@ -639,6 +648,7 @@ async fn step(
             content: Vec::new(),
             snapshot: start.clone().map(|start| StepSnapshot {
                 start: Some(start),
+                head,
                 ..StepSnapshot::default()
             }),
             finish: None,
@@ -738,14 +748,9 @@ pub(crate) fn session_headers(shared: &Shared, session: &SessionRow) -> Vec<(Str
     headers
 }
 
-/// The project's files as a snapshot tree, when snapshots are on.
-fn capture(shared: &Shared) -> Option<String> {
-    shared.snapshots.as_ref()?.capture()
-}
-
 /// Captures the tree after the step and records the files the step changed.
-fn end_snapshot(shared: &Shared, running: &mut Running) -> Option<String> {
-    let store = shared.snapshots.as_ref()?;
+fn end_snapshot(_shared: &Shared, running: &mut Running) -> Option<String> {
+    let store = running.store.clone()?;
     let snapshot = running.data.snapshot.as_mut()?;
     let end = store.capture()?;
     if let Some(start) = &snapshot.start {
@@ -1447,13 +1452,15 @@ fn handle(
                     raw,
                 },
             );
+            let checkout = shared.checkout_of(session);
             let tool_ctx = ToolContext {
                 session_id,
                 message_id,
                 call_id,
                 agent: selection.agent.id.clone(),
                 directory: session.directory.clone().into(),
-                worktree: shared.project.worktree.clone(),
+                worktree: checkout.root.clone(),
+                main: checkout.main.clone(),
                 project_id: shared.project.id.clone(),
                 paths: shared.paths.clone(),
                 permissions: gate.clone(),

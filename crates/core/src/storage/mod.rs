@@ -10,12 +10,14 @@ mod revert;
 mod schedule;
 mod schema;
 mod transfer;
+mod worktree;
 
 pub use inbox::InboxRow;
 pub use instruction::{InstructionState, Values};
 pub use permission::SavedPermission;
 pub use schedule::{Guard, ScheduleRow};
 pub use transfer::{ImportError, SessionSummary, sanitize};
+pub use worktree::{SessionWorktreeRow, WorktreeState};
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -292,13 +294,15 @@ impl Db {
         })
     }
 
-    /// The most recently updated root session whose directory is `directory`.
+    /// The most recently updated root session whose directory is `directory` (or that works in
+    /// its own worktree of that folder).
     pub fn latest_root_session(&self, directory: &str) -> Result<Option<SessionRow>> {
         self.with(|c| {
             c.query_row(
                 "SELECT id, project_id, parent_id, fork_session_id, fork_boundary, slug, directory, title, version,
                         agent, model, time_created, time_updated FROM session
-                 WHERE directory = ?1 AND parent_id IS NULL AND time_archived IS NULL
+                 WHERE (directory = ?1 OR id IN (SELECT session_id FROM session_worktree WHERE folder = ?1))
+                   AND parent_id IS NULL AND time_archived IS NULL
                  ORDER BY time_updated DESC, id ASC LIMIT 1",
                 [directory],
                 session_row,
@@ -320,7 +324,8 @@ impl Db {
             let mut statement = c.prepare(
                 "SELECT id, project_id, parent_id, fork_session_id, fork_boundary, slug, directory, title, version,
                         agent, model, time_created, time_updated FROM session
-                 WHERE parent_id IS NULL AND time_archived IS NULL AND (?1 IS NULL OR directory = ?1)
+                 WHERE parent_id IS NULL AND time_archived IS NULL AND (?1 IS NULL OR directory = ?1
+                        OR id IN (SELECT session_id FROM session_worktree WHERE folder = ?1))
                    AND (time_updated < ?2 OR (time_updated = ?2 AND id < ?3) OR ?3 = '')
                  ORDER BY time_updated DESC, id DESC LIMIT ?4",
             )?;

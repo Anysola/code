@@ -65,8 +65,9 @@ impl Core {
         } else {
             None
         };
+        let checkout = self.shared.checkout_of(&session);
         let at = crate::command::RenderEnv {
-            project: &self.shared.project.worktree,
+            project: &checkout.root,
             shell: loaded.config.shell(),
             cwd: std::path::Path::new(&session.directory),
             env: &self.shared.env,
