@@ -10,7 +10,7 @@ branch.
   files or the main folder. Review shows its changes; Apply makes them one commit on the main folder's branch and
   the session goes on from there; Discard deletes the worktree and branch. Choose "Main folder" to work as before.
 - Hooks in a worktree session run from the worktree. Local hook and config files under `.claude/` and
-  `.anysola/` (untracked or ignored) are copied in when the worktree is made; later changes to them in the main
+  `.anysola/` that Git ignores are copied in when the worktree is made; later changes to them in the main
   folder count after Recreate.
 - A new worktree gets the main folder's ignored `.env` files and runs the folder's setup command (Settings), with
   its output in the conversation; "Start now" doesn't wait for it.

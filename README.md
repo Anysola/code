@@ -76,8 +76,8 @@ session's worktree, in any mode and whatever you allowed for a parent folder: ap
 there asks as for any outside folder, and your rules still name those files as they would in the main folder. The project's
 config, hooks and MCP servers are the main folder's; an edit to the worktree's `anysola.json` counts once
 applied. Hooks in a worktree session run from the worktree, with it as their project folder
-(`$CLAUDE_PROJECT_DIR`). Local hook and config files under `.claude/` and `.anysola/` that Git doesn't track
-(ignored or untracked) are copied in from the main folder when the worktree is made; later changes to them in the
+(`$CLAUDE_PROJECT_DIR`). Local hook and config files under `.claude/` and `.anysola/` that Git ignores are
+copied in from the main folder when the worktree is made; later changes to them in the
 main folder aren't picked up until Recreate. The file tools also never write the worktree's own `.git`.
 
 A worktree is not a sandbox. Only the file tools are held to it: shell commands run as anywhere else and can
