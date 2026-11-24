@@ -1071,6 +1071,21 @@ fn diff_base(worktree: &Path, row: &SessionWorktreeRow) -> String {
     if let Some(merging) = read_git(worktree, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]) {
         return merging;
     }
+    // The base was brought in but its merge isn't on the branch (a worktree made again from the
+    // last step's files): the files are measured from the base's tip, which the row recorded.
+    if run_git(
+        worktree,
+        &["merge-base", "--is-ancestor", &row.base_commit, "HEAD"],
+    )
+    .is_err()
+        && read_git(
+            worktree,
+            &["cat-file", "-e", &format!("{}^{{commit}}", row.base_commit)],
+        )
+        .is_some()
+    {
+        return row.base_commit.clone();
+    }
     if let Some(base) = &row.base_branch
         && let Some(meet) = read_git(
             worktree,
