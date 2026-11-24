@@ -2,14 +2,14 @@
  * The palette (Ctrl K, or Search in the sidebar): recent sessions, then commands with their keys.
  * A layer like any panel: Escape closes it and is not a press toward stopping a turn.
  */
-import { GitBranch, Keyboard, MessageSquare, Plus, Search, Settings as SettingsIcon, SquarePen, Wallet } from "lucide-react"
+import { GitBranch, GitMerge, Keyboard, MessageSquare, Plus, Search, Settings as SettingsIcon, SquarePen, Trash2, Wallet } from "lucide-react"
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 
 import type { SessionRow } from "./bridge"
-import { editBudget, setReviewing, showPalette, showShortcuts, useChrome } from "./chrome"
+import { askDiscard, editBudget, setReviewing, showPalette, showShortcuts, useChrome } from "./chrome"
 import { modes } from "./composer"
 import { KEYS } from "./shortcuts"
-import { closeSettings, forkSession, isRunning, newSession, openSession, openSettings, pickMode, useStore } from "./store"
+import { closeSettings, forkSession, isRunning, newSession, openSession, openSettings, pickMode, useStore, useWorktree, useWorktreeInfo } from "./store"
 import { ago, cn, folderName, Kbd, sameFolder, useEscape } from "./ui"
 
 type Row = { key: string; section: string; run: () => void; node: ReactNode }
@@ -21,6 +21,9 @@ function useCommands(): Command[] {
   const mode = useStore((s) => s.mode)
   const busy = useStore((s) => !!s.open?.sessionId && s.busy.has(s.open.sessionId))
   const budget = useStore((s) => (s.open?.sessionId ? (s.usage[s.open.sessionId]?.budget ?? null) : null))
+  const worktree = useWorktree(open?.sessionId)
+  // In a git folder a fork gets its own worktree with the files as they were.
+  const isolates = useWorktreeInfo(open?.directory)?.available ?? false
   const i = "size-4 shrink-0 text-muted"
   const list: Command[] = [
     {
@@ -41,7 +44,7 @@ function useCommands(): Command[] {
       list.push({
         id: "fork",
         label: "Branch this session",
-        hint: "Whole conversation",
+        hint: isolates ? "Whole conversation, in its own worktree" : "Whole conversation",
         icon: <GitBranch className={i} strokeWidth={1.75} />,
         run: () => void forkSession(directory, sessionId, null),
       })
@@ -55,6 +58,23 @@ function useCommands(): Command[] {
       },
       { id: "review", label: "Review changes", icon: <SquarePen className={i} strokeWidth={1.75} />, keys: KEYS.review, run: () => setReviewing(true) }
     )
+    if (worktree?.state === "ready")
+      list.push({
+        id: "apply",
+        label: "Apply to main folder",
+        hint: `One commit on ${worktree.baseBranch ?? "the main folder’s branch"}`,
+        icon: <GitMerge className={i} strokeWidth={1.75} />,
+        run: () => setReviewing(true, "apply"),
+      })
+    if (worktree && worktree.state !== "discarded" && worktree.state !== "applying" && worktree.state !== "preparing")
+      list.push({
+        id: "discard",
+        label: "Discard worktree",
+        hint: worktree.branch,
+        icon: <Trash2 className={i} strokeWidth={1.75} />,
+        // After the palette has gone, so its Escape and focus don't reach the confirm.
+        run: () => setTimeout(() => askDiscard(true), 0),
+      })
   }
   if (open) {
     const shown = open.info?.agent === "plan" ? "plan" : mode

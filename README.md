@@ -67,7 +67,9 @@ current commit, under `~/.anysola/worktrees`. Uncommitted changes of the main fo
 the session's changes against that commit; Apply puts them on the main folder's branch as one commit (your Git
 hooks and identity apply; Git 2.40 or later), after which the session goes on from that commit. Discard deletes
 the worktree and the branch. A branch made from an earlier message gets its own worktree with the files as they
-were then.
+were then. A new worktree gets the main folder's ignored `.env*` files, and the folder's setup command (Settings,
+yours only, never the repository's) runs in it before the first message. If the main folder changed the same
+lines, "Bring main in" merges its branch into the session's, where the conflicts are resolved before applying.
 
 The session's file tools treat only its worktree as inside. They never write into the main folder or another
 session's worktree, in any mode and whatever you allowed for a parent folder: apply the changes instead. Reading

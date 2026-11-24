@@ -47,6 +47,8 @@ import {
   renameSession,
   reveal,
   useStore,
+  useWorkDir,
+  worktreeOf,
   type Open,
 } from "./store"
 import { btn, cn, Counts, MenuItem, MenuSeparator, Popover, sameFolder, TitleBar, Tooltip } from "./ui"
@@ -116,6 +118,13 @@ export function SessionHeader({ open }: { open: Open }) {
   const narrow = width < NARROW
   const wide = width >= WIDE
   const [renaming, setRenaming] = useState(false)
+  // A worktree session's files (the editor, the folder) are in its worktree.
+  const place = useWorkDir(open)
+  // Its files are gone: nothing to review there.
+  const gone = useStore((s) => {
+    const w = worktreeOf(s, open.sessionId)
+    return w?.state === "discarded" || w?.state === "missing"
+  })
   useLayoutEffect(() => {
     const el = bar.current
     if (!el) return
@@ -154,7 +163,7 @@ export function SessionHeader({ open }: { open: Open }) {
             </h1>
           )}
           {wide && (
-            <span className="text-2xs flex min-w-0 shrink-[2] items-center gap-1 text-muted" title={open.directory}>
+            <span className="text-2xs flex min-w-0 shrink-[2] items-center gap-1 text-muted" title={place}>
               <FolderClosed className="size-3 shrink-0" strokeWidth={1.75} />
               <span className="truncate">
                 <PlaceLabel directory={open.directory} />
@@ -163,10 +172,11 @@ export function SessionHeader({ open }: { open: Open }) {
           )}
         </div>
         <div className="mr-2 ml-3 flex shrink-0 items-center gap-1">
-          <EditorButton directory={open.directory} compact={width < ROOMY} />
+          <EditorButton directory={place} compact={width < ROOMY} />
           <GitMenu open={open} compact={narrow} />
           <HeaderBudget open={open} />
           {files > 0 &&
+            !gone &&
             (narrow ? (
               <Tooltip label="Review changes" keys={KEYS.review}>
                 <button
@@ -244,6 +254,7 @@ function EditorButton({ directory, compact }: { directory: string; compact: bool
 
 /** The session's own menu: the sidebar row's actions, here where the session is. */
 function SessionMenu({ open, onRename }: { open: Open; onRename: () => void }) {
+  const files = useWorkDir(open)
   const [show, setShow] = useState(false)
   const close = useCallback(() => setShow(false), [])
   const scratch = useStore((s) => s.scratch)
@@ -276,16 +287,16 @@ function SessionMenu({ open, onRename }: { open: Open; onRename: () => void }) {
           </MenuItem>
         )}
         {!own && editor && (
-          <MenuItem onSelect={go(() => void openInEditor(open.directory))}>
+          <MenuItem onSelect={go(() => void openInEditor(files))}>
             <Code2 className="size-3.5 text-muted" /> Open in {editor.name}
           </MenuItem>
         )}
         {!own && (
-          <MenuItem onSelect={go(() => void reveal(open.directory))}>
+          <MenuItem onSelect={go(() => void reveal(files))}>
             <FolderOpen className="size-3.5 text-muted" /> Open folder
           </MenuItem>
         )}
-        <MenuItem onSelect={go(() => copyPath(open.directory))}>
+        <MenuItem onSelect={go(() => copyPath(files))}>
           <Copy className="size-3.5 text-muted" /> Copy path
         </MenuItem>
         {open.sessionId && (

@@ -9,6 +9,12 @@ branch.
 - In a Git folder a new session works in its own worktree and branch, so sessions don't change each other's
   files or the main folder. Review shows its changes; Apply makes them one commit on the main folder's branch and
   the session goes on from there; Discard deletes the worktree and branch. Choose "Main folder" to work as before.
+- A new worktree gets the main folder's ignored `.env` files and runs the folder's setup command (Settings), with
+  its output in the conversation; "Start now" doesn't wait for it.
+- When the main folder moved on in the same lines, "Bring main in" merges it into the session's branch so the
+  conflicts can be resolved there. Edits in the main folder to files an apply touches can be set aside and put
+  back.
+- A session in its own worktree never writes into the main folder or another session's worktree, in any mode.
 - A branch from an earlier message gets its own worktree with the files as they were at that message.
 - A session moved into a worktree by the agent now rewinds and reviews that worktree's files, not the main
   folder's.

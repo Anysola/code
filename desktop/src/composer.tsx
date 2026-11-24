@@ -46,10 +46,13 @@ import {
   STOP_AGAIN,
   undo,
   useStore,
+  useWorktree,
+  workDir,
   type Mode,
   type Open,
 } from "./store"
 import { anyLayer, btn, cn, Popover, Spinner, Tooltip } from "./ui"
+import { PlaceChip } from "./worktree"
 
 export const modes: { id: Mode | "plan"; label: string; hint: string }[] = [
   { id: "ask", label: "Ask", hint: "Ask before every edit and command" },
@@ -336,6 +339,18 @@ export function Composer({ open }: { open: Open }) {
   // A stop that hasn't ended the turn after a few seconds may be pressed again.
   const stopStuck = usePast(open.stopping, STOP_AGAIN)
   const blocked = useBlocked(open)
+  const worktree = useWorktree(open.sessionId)
+  // Turns refuse until the worktree is back (or for good, once discarded).
+  const closed =
+    worktree?.state === "discarded"
+      ? "This session’s worktree was discarded"
+      : worktree?.state === "missing"
+        ? "Recreate the worktree to send"
+        : worktree?.state === "failed"
+          ? "Try again, or work in the main folder, to send"
+          : worktree?.state === "applying"
+            ? "Sending waits for the apply"
+            : null
   const model = open.info?.models.find((m) => m.id === open.info?.modelId)
   const comments = useStore((s) => s.comments)
   const empty = !text.trim() && files.length === 0 && comments.length === 0 && pasted.length === 0
@@ -401,10 +416,11 @@ export function Composer({ open }: { open: Open }) {
     if (typed.kind === "/" ) loadPalette()
     // Read on every open: the agent may have added files (the store keeps them 30 s).
     if (typed.kind === "@") {
-      const directory = open.directory
+      // A worktree session's files are its worktree's.
+      const directory = workDir(open)
       void projectFiles(directory)
-        .then((list) => folder.current === directory && setPaths(list))
-        .catch(() => folder.current === directory && setPaths([]))
+        .then((list) => folder.current === open.directory && setPaths(list))
+        .catch(() => folder.current === open.directory && setPaths([]))
     }
     // Only when a menu opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -517,6 +533,10 @@ export function Composer({ open }: { open: Open }) {
     if (empty) return
     if (blocked) {
       setProblem("Sending waits for your limit to reset.")
+      return
+    }
+    if (closed) {
+      setProblem(`${closed}.`)
       return
     }
     const command = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim())
@@ -701,8 +721,11 @@ export function Composer({ open }: { open: Open }) {
               void reply(asking, "reject")
             }
           }}
+          disabled={worktree?.state === "discarded"}
           placeholder={
-            sendKey === "enter"
+            worktree?.state === "discarded"
+              ? "Read-only"
+              : sendKey === "enter"
               ? asking
                 ? "Reply, or press Enter to allow"
                 : running
@@ -767,6 +790,7 @@ export function Composer({ open }: { open: Open }) {
               ))}
           </div>
           <div className="ml-auto flex min-w-0 items-center gap-2">
+            <PlaceChip open={open} />
             <ModelPicker open={open} />
             {running && empty ? (
               open.stopping && !stopStuck ? (
@@ -782,8 +806,8 @@ export function Composer({ open }: { open: Open }) {
                 </Tooltip>
               )
             ) : (
-              <Tooltip label={blocked ? "Sending waits for your limit to reset" : running ? "Queue for after this turn" : "Send"} side="top">
-                <button onClick={submit} disabled={empty || !!blocked} className={btn("primary", "sm", "", true)} aria-label="Send">
+              <Tooltip label={blocked ? "Sending waits for your limit to reset" : closed ?? (running ? "Queue for after this turn" : "Send")} side="top">
+                <button onClick={submit} disabled={empty || !!blocked || !!closed} className={btn("primary", "sm", "", true)} aria-label="Send">
                   <ArrowUp className="size-4" />
                 </button>
               </Tooltip>

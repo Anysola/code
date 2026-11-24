@@ -1,13 +1,13 @@
-import { ArrowDown, FolderClosed, X } from "lucide-react"
+import { ArrowDown, X } from "lucide-react"
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 
-import { checkUpdated, resumeDeletes, setReviewing, useChrome } from "./chrome"
+import { askDiscard, checkUpdated, resumeDeletes, setReviewing, useChrome } from "./chrome"
 import { Composer, Tasks } from "./composer"
-import { BackgroundRow, Banner, CloseConfirm, ContextMeter, FaultScreen, ForkNote, QueueChips } from "./conversation"
+import { BackgroundRow, Banner, CloseConfirm, ContextMeter, FaultScreen, ForkNote, QueueChips, WorktreeStrip } from "./conversation"
 import { FormCard } from "./form-card"
 import { TrustCards } from "./hooks-card"
 import { SessionHeader, SidebarToggle, Toasts } from "./header"
-import { Review } from "./review"
+import { DiscardConfirm, Review } from "./review"
 import { Settings, sectionLabel } from "./settings"
 import { ShortcutsSheet, useShortcuts } from "./shortcuts"
 import { Sidebar } from "./sidebar"
@@ -16,6 +16,7 @@ import { Palette } from "./palette"
 import { Transcript } from "./transcript"
 import { btn, cn, folderKey, sameFolder, Spinner, TitleBar, Tooltip, useEscape } from "./ui"
 import { Home, NewSessionStart, SignIn } from "./welcome"
+import { FooterPlace, WorktreeProgress } from "./worktree"
 
 export function App() {
   const auth = useStore((s) => s.auth)
@@ -73,7 +74,11 @@ function Main() {
   const open = useStore((s) => s.open)
   const reviewing = useChrome((c) => c.reviewing)
   const sidebarHidden = useChrome((c) => c.sidebarHidden)
-  useEffect(() => setReviewing(false), [open?.sessionId])
+  const discarding = useChrome((c) => c.discarding)
+  useEffect(() => {
+    setReviewing(false)
+    askDiscard(false)
+  }, [open?.sessionId])
   return (
     <main
       className={cn(
@@ -89,20 +94,17 @@ function Main() {
             <BackgroundRow open={open} />
             <Tasks todos={open.todos} />
             <Banner open={open} />
+            <WorktreeStrip open={open} />
             <ForkNote open={open} />
             <QueueChips open={open} />
             <Composer open={open} />
             <div className="mt-2 flex items-center gap-3 px-2">
-              <span className="text-2xs flex min-w-0 items-center gap-1 text-muted" title={open.directory}>
-                <FolderClosed className="size-3 shrink-0" strokeWidth={1.75} />
-                <span className="truncate">
-                  <FooterPlace directory={open.directory} />
-                </span>
-              </span>
+              <Place open={open} />
               <ContextMeter open={open} />
             </div>
           </div>
           {reviewing && <Review open={open} onClose={() => setReviewing(false)} />}
+          {discarding && <DiscardConfirm open={open} />}
           <PeekSheet />
         </>
       ) : (
@@ -117,9 +119,9 @@ function Main() {
   )
 }
 
-function FooterPlace({ directory }: { directory: string }) {
+function Place({ open }: { open: Open }) {
   const scratch = useStore((s) => s.scratch)
-  return <>{sameFolder(directory, scratch) ? "No project · runs in the app’s own folder" : directory}</>
+  return <FooterPlace open={open} label={sameFolder(open.directory, scratch) ? "No project · runs in the app’s own folder" : open.directory} />
 }
 
 function Conversation({ open }: { open: Open }) {
@@ -206,7 +208,10 @@ function Conversation({ open }: { open: Open }) {
               )}
             </>
           ) : (
-            <Transcript open={open} permissions={permissions} questions={questions} forms={forms} />
+            <>
+              <Transcript open={open} permissions={permissions} questions={questions} forms={forms} />
+              <WorktreeProgress open={open} />
+            </>
           )}
         </div>
       </div>

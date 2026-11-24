@@ -21,11 +21,13 @@ import { useEffect, useRef, useState, type ReactNode } from "react"
 
 import type { Account, Queued, SessionRow } from "./bridge"
 import { atBudget, raiseTo, useUsage } from "./budget"
-import { dismissForkNote, useChrome } from "./chrome"
+import { askDiscard, dismissForkNote, useChrome } from "./chrome"
 import {
   backgroundStop,
   compact,
   currentBridge,
+  forkSession,
+  hereOf,
   isRunning,
   keepWorking,
   openSession,
@@ -41,7 +43,10 @@ import {
   revealFault,
   setAccount,
   setBudget,
+  recreateWorktree,
   useStore,
+  useWorktree,
+  worktreeToFolder,
   type Open,
 } from "./store"
 import { btn, Mark, resetsIn, Spinner, TitleBar, Tooltip, useEscape } from "./ui"
@@ -87,7 +92,7 @@ export function useBlocked(open: Open): { scope: "five_hour" | "weekly"; resets:
   return { scope, resets: resetsIn(window?.resetsAt ?? null) }
 }
 
-function Strip({ icon, children, actions }: { icon: ReactNode; children: ReactNode; actions?: ReactNode }) {
+export function Strip({ icon, children, actions }: { icon: ReactNode; children: ReactNode; actions?: ReactNode }) {
   return (
     <div role="status" className="text-dense mb-2 flex min-h-10 items-center gap-2.5 rounded-xl bg-surface/70 py-1 pr-1.5 pl-3.5">
       <span className="shrink-0 text-muted">{icon}</span>
@@ -215,7 +220,18 @@ export function Banner({ open }: { open: Open }) {
   return null
 }
 
-/** A fork's note until put away: where it came from, and that files were not rewound. */
+/** What a fork's files are: put back in its own worktree (and how well), or, outside git, as they are now. */
+function forkFiles(worktree: SessionRow["worktree"]) {
+  if (!worktree) return "Same folder. Files stay as they are now; nothing is rewound."
+  const r = worktree.restored
+  if (!r || r.exact) return "Its own worktree, with the files as they were then."
+  if (r.fallback === "now") return "The files from that message are no longer kept, so this fork starts with the files as they are now."
+  if (r.fallback === "edits") return "This session’s later edits were undone; changes made outside it since (commits, pulls) are kept."
+  const n = r.kept.length
+  return `Files are as of that message, except ${n} large file${n === 1 ? "" : "s"}, which ${n === 1 ? "is" : "are"} as on the commit it started from.`
+}
+
+/** A fork's note until put away: where it came from, and how its files were put back. */
 export function ForkNote({ open }: { open: Open }) {
   const row = useStore((s) => s.sessions.find((r) => r.id === open.sessionId) ?? null)
   const forkOf = row?.forkOf ?? null
@@ -269,9 +285,89 @@ export function ForkNote({ open }: { open: Open }) {
           "Branched from a session that was deleted"
         )}
       </span>
-      <span className="text-2xs block text-muted">Same folder. Files stay as they are now; nothing is rewound.</span>
+      <span className="text-2xs block text-muted">{forkFiles(row.worktree)}</span>
     </Strip>
   )
+}
+
+/**
+ * A worktree that isn't there to work in: being applied, failed to be made, gone, or discarded.
+ * Over the composer, with the ways out.
+ */
+export function WorktreeStrip({ open }: { open: Open }) {
+  const worktree = useWorktree(open.sessionId)
+  const busy = useStore((s) => (open.sessionId ? s.busy.has(open.sessionId) : false))
+  const [working, setWorking] = useState<null | "again" | "folder">(null)
+  const here = hereOf(open)
+  if (!worktree || !here) return null
+  const act = (what: NonNullable<typeof working>, f: () => Promise<void>) => () => {
+    setWorking(what)
+    void f().finally(() => setWorking(null))
+  }
+  const fork = !busy && !isRunning(open) && (
+    <button onClick={() => void forkSession(here.directory, here.sessionId, null)} className={btn("ghost", "sm", "text-muted")}>
+      Branch
+    </button>
+  )
+  switch (worktree.state) {
+    case "applying":
+      return (
+        <Strip icon={<Spinner className="size-3.5" />}>
+          Applying to {worktree.baseBranch ?? "the main folder"}…
+        </Strip>
+      )
+    case "failed":
+      return (
+        <Strip
+          icon={<CircleAlert className="size-3.5 text-warning" />}
+          actions={
+            <>
+              <button disabled={working !== null} onClick={act("folder", () => worktreeToFolder(here))} className={btn("ghost", "sm", "gap-1.5 text-muted")}>
+                {working === "folder" && <Spinner className="size-3" />}
+                Work in the main folder instead
+              </button>
+              <button disabled={working !== null} onClick={act("again", () => recreateWorktree(here))} className={btn("secondary", "sm", "gap-1.5")}>
+                {working === "again" && <Spinner className="size-3" />}
+                Try again
+              </button>
+            </>
+          }
+        >
+          <span className="block">The worktree couldn’t be made.</span>
+          {worktree.error && <span className="text-2xs block text-muted select-text">{worktree.error}</span>}
+        </Strip>
+      )
+    case "missing":
+      return (
+        <Strip
+          icon={<CircleAlert className="size-3.5 text-warning" />}
+          actions={
+            <>
+              <button onClick={() => askDiscard(true)} className={btn("ghost", "sm", "text-muted")}>
+                Discard
+              </button>
+              {fork}
+              <button disabled={working !== null} onClick={act("again", () => recreateWorktree(here))} className={btn("secondary", "sm", "gap-1.5")}>
+                {working === "again" && <Spinner className="size-3" />}
+                Recreate
+              </button>
+            </>
+          }
+        >
+          <span className="block">This session’s folder is gone.</span>
+          <span className="text-2xs block text-muted">Recreate brings its work back as of its last step.</span>
+        </Strip>
+      )
+    case "discarded":
+      return (
+        <Strip icon={<GitBranch className="size-3.5" />} actions={fork}>
+          <span className="block">This session’s worktree was discarded.</span>
+          <span className="text-2xs block text-muted">You can still read it, or branch it to keep going.</span>
+        </Strip>
+      )
+    default:
+      return null
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -282,9 +378,12 @@ export function ForkNote({ open }: { open: Open }) {
  * failure they wait for the user: nothing fires on its own. */
 export function QueueChips({ open }: { open: Open }) {
   const busy = useStore((s) => (open.sessionId ? s.busy.has(open.sessionId) : false))
+  const worktree = useWorktree(open.sessionId)
   const queued = open.queued
   if (queued.length === 0) return null
-  const live = busy || isRunning(open)
+  // Waiting for its worktree: it runs once that is ready (or in the main folder, if moved there).
+  const waiting = !!worktree && (worktree.state === "preparing" || worktree.state === "failed" || worktree.state === "missing")
+  const live = busy || isRunning(open) || waiting
   return (
     <div className="mb-2 flex flex-col gap-1">
       {!live && (
@@ -300,14 +399,14 @@ export function QueueChips({ open }: { open: Open }) {
       {/* A short window keeps room for the conversation and the Send row. */}
       <ul className="flex max-h-[min(9rem,max(4.5rem,calc(100vh_-_30rem)))] flex-col gap-1 overflow-y-auto">
         {queued.map((q) => (
-          <Chip key={q.id} q={q} live={live} />
+          <Chip key={q.id} q={q} live={live} waiting={waiting} />
         ))}
       </ul>
     </div>
   )
 }
 
-function Chip({ q, live }: { q: Queued; live: boolean }) {
+function Chip({ q, live, waiting }: { q: Queued; live: boolean; waiting: boolean }) {
   const [busy, setBusy] = useState(false)
   const act = (run: () => Promise<void>) => async () => {
     setBusy(true)
@@ -320,7 +419,7 @@ function Chip({ q, live }: { q: Queued; live: boolean }) {
   const steering = q.delivery === "steer"
   return (
     <li className="text-dense flex h-9 shrink-0 items-center gap-2.5 rounded-xl bg-surface/70 pr-1 pl-3.5">
-      <span className="shrink-0 text-2xs text-muted">{steering ? "Next step" : live ? "Queued" : "Not sent"}</span>
+      <span className="shrink-0 text-2xs text-muted">{steering ? "Next step" : waiting ? "Waiting" : live ? "Queued" : "Not sent"}</span>
       <span className="min-w-0 flex-1 truncate" title={q.text}>
         {q.text || (q.images ? "" : "(empty)")}
       </span>
@@ -332,7 +431,7 @@ function Chip({ q, live }: { q: Queued; live: boolean }) {
       )}
       <span className="flex shrink-0 items-center">
         {/* A message held for a session still being made has no turn to hand it to yet. */}
-        {live && !steering && !q.id.startsWith("held:") && (
+        {live && !waiting && !steering && !q.id.startsWith("held:") && (
           <Tooltip label="Hand it to the running turn at its next step" side="top">
             <button onClick={act(() => queueSteer(q))} disabled={busy} className={btn("ghost", "sm", "h-7 text-muted")}>
               Send now

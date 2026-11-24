@@ -133,7 +133,7 @@ async fn cleaned() {
 
 /// `git --version` as (major, minor); None when git can't be run.
 fn git_version(directory: &Path) -> Option<(u32, u32)> {
-    let out = git::git(directory, &["--version"])
+    let out = wgit(directory, &["--version"])
         .timeout(Duration::from_secs(10))
         .ok()
         .ok()?;
@@ -152,8 +152,21 @@ fn can_apply(directory: &Path) -> bool {
     git_version(directory).is_some_and(|v| v >= APPLY_GIT)
 }
 
+/// A git call for the worktree work: on Windows with long paths on (worktrees sit deep under
+/// the home folder), as the core's `worktree add` has them.
+fn wgit<'a>(directory: &'a Path, args: &'a [&'a str]) -> Call<'a> {
+    let call = git::git(directory, args);
+    if cfg!(windows) {
+        call.env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "core.longpaths")
+            .env("GIT_CONFIG_VALUE_0", "true")
+    } else {
+        call
+    }
+}
+
 fn run_git(directory: &Path, args: &[&str]) -> Result<String, Failure> {
-    git::git(directory, args).ok()
+    wgit(directory, args).ok()
 }
 
 /// A git call's output, `None` on any failure.
@@ -170,7 +183,7 @@ fn unavailable(directory: &Path, paths: &anysola_core::paths::Paths) -> Option<&
     if !directory.is_dir() {
         return Some("not-git");
     }
-    match git::git(directory, &["rev-parse", "--is-inside-work-tree"]).ok() {
+    match wgit(directory, &["rev-parse", "--is-inside-work-tree"]).ok() {
         Err(Failure::Missing) => return Some("git-missing"),
         Ok(inside) if inside == "true" => {}
         _ => return Some("not-git"),
@@ -818,7 +831,7 @@ async fn prepare(handle: AppHandle, core: Core, db: Arc<Db>, id: String, made: M
 fn submodules(out: &Out, worktree: &Path) {
     out.info("Checking out submodules");
     let started = Instant::now();
-    match git::git(worktree, &["submodule", "update", "--init", "--recursive"])
+    match wgit(worktree, &["submodule", "update", "--init", "--recursive"])
         .timeout(git::NETWORK * 5)
         .ok()
     {
@@ -856,7 +869,7 @@ fn copy_env(top: &Path, worktree: &Path) -> Vec<String> {
     }
     // Only the ones git ignores: a tracked `.env.example` is in the worktree already.
     let input = found.join("\0").into_bytes();
-    let Ok(output) = git::git(top, &["check-ignore", "--stdin", "-z"])
+    let Ok(output) = wgit(top, &["check-ignore", "--stdin", "-z"])
         .input(input)
         .run()
     else {
@@ -946,12 +959,12 @@ fn session_tree(worktree: &Path) -> Result<String, String> {
     }
     let temp_name = temp.display().to_string();
     let result = (|| {
-        git::git(worktree, &["add", "-A", "--", "."])
+        wgit(worktree, &["add", "-A", "--", "."])
             .env("GIT_INDEX_FILE", temp_name.clone())
             .timeout(git::COMMIT)
             .ok()
             .map_err(|f| git::explain(Op::Status, f))?;
-        git::git(worktree, &["write-tree"])
+        wgit(worktree, &["write-tree"])
             .env("GIT_INDEX_FILE", temp_name.clone())
             .ok()
             .map_err(|f| git::explain(Op::Status, f))
@@ -1022,7 +1035,7 @@ fn blob_text(directory: &Path, oid: &str, mode: &str) -> String {
     if size > DIFF_SIZE {
         return format!("(A large file, {} KB: not shown.)\n", size / 1024);
     }
-    git::git(directory, &["cat-file", "blob", oid])
+    wgit(directory, &["cat-file", "blob", oid])
         .run()
         .map(|o| o.stdout)
         .unwrap_or_default()
@@ -1246,14 +1259,14 @@ fn plan(row: &SessionWorktreeRow) -> Result<Plan, Value> {
     if base_tree == tree {
         return Err(refused("empty", json!({})));
     }
-    let staged = git::git(&top, &["diff", "--cached", "--quiet"]).run();
+    let staged = wgit(&top, &["diff", "--cached", "--quiet"]).run();
     if staged.is_ok_and(|o| !o.status.success()) {
         return Err(refused("staged", json!({"onto": onto})));
     }
     // The session's files as a commit of their own, on nothing: only the merge reads it.
     let worktree_head = read_git(worktree, &["rev-parse", "HEAD"]).unwrap_or_else(|| base.clone());
     let session_commit = identity_env(
-        git::git(
+        wgit(
             worktree,
             &["commit-tree", &tree, "-p", &worktree_head, "-m", "session"],
         ),
@@ -1261,7 +1274,7 @@ fn plan(row: &SessionWorktreeRow) -> Result<Plan, Value> {
     )
     .ok()
     .map_err(|f| git_refusal(git::explain(Op::Commit, f)))?;
-    let merged = git::git(
+    let merged = wgit(
         &top,
         &[
             "merge-tree",
@@ -1455,7 +1468,7 @@ fn apply(
         }
         run_git(worktree, &["add", "-A", "--", "."]).map_err(|f| git::explain(Op::Commit, f))?;
         identity_env(
-            git::git(worktree, &["commit", "--no-edit", "--no-verify", "-q"]),
+            wgit(worktree, &["commit", "--no-edit", "--no-verify", "-q"]),
             worktree,
         )
         .timeout(git::COMMIT)
@@ -1543,7 +1556,7 @@ fn apply(
             }
         ));
     }
-    let committed = git::git(top, &["commit", "-q", "-F", "-"])
+    let committed = wgit(top, &["commit", "-q", "-F", "-"])
         .input(message.as_bytes().to_vec())
         .timeout(git::COMMIT)
         .holds_index()
@@ -1660,7 +1673,7 @@ fn bring_base(row: &SessionWorktreeRow) -> Result<(Vec<String>, String), String>
     if !pending.trim().is_empty() {
         run_git(worktree, &["add", "-A", "--", "."]).map_err(|f| git::explain(Op::Commit, f))?;
         identity_env(
-            git::git(
+            wgit(
                 worktree,
                 &[
                     "commit",
@@ -1679,7 +1692,7 @@ fn bring_base(row: &SessionWorktreeRow) -> Result<(Vec<String>, String), String>
     let tip = read_git(&top, &["rev-parse", &format!("refs/heads/{onto}")])
         .ok_or_else(|| format!("The branch {onto} is gone."))?;
     let merged = identity_env(
-        git::git(worktree, &["merge", "--no-edit", "--no-verify", &tip]),
+        wgit(worktree, &["merge", "--no-edit", "--no-verify", &tip]),
         worktree,
     )
     .env("GIT_MERGE_AUTOEDIT", "no")

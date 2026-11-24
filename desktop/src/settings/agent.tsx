@@ -10,7 +10,7 @@ import type { AgentConfig, AgentConfigPatch, Origin, PermissionRule, Repository,
 import { APP_COMMANDS } from "../composer"
 import { setPref, usePrefs } from "../prefs"
 import { ruleText, scopeLabel, useTrust } from "../hooks-card"
-import { currentBridge, settingsFolder, useStore } from "../store"
+import { currentBridge, loadWorktreeInfo, settingsFolder, useStore, useWorktreeInfo } from "../store"
 import { btn, cn, folderKey, folderName, sameFolder, Spinner } from "../ui"
 import {
   bytes,
@@ -843,6 +843,7 @@ function Advanced({ directory }: { directory: string }) {
               />
               <Shell config={c} hint={over("shell")} onChange={(shell) => change({ shell })} />
             </Group>
+            <WorktreeSetup directory={directory} />
             <ProjectFormatters directory={directory} />
             {c.warnings.length > 0 && (
               <Group label="The config loader says">
@@ -857,6 +858,52 @@ function Advanced({ directory }: { directory: string }) {
         )
       }}
     </Loaded>
+  )
+}
+
+/**
+ * The folder's setup command for new worktrees (install, build): the user's own, kept in the
+ * app's preferences by folder, never read from the repository. Only for git folders.
+ */
+function WorktreeSetup({ directory }: { directory: string }) {
+  const info = useWorktreeInfo(directory)
+  const key = folderKey(directory)
+  const saved = usePrefs((p) => p.worktreeSetup[key] ?? "")
+  const [text, setText] = useState(saved)
+  useEffect(() => setText(saved), [saved])
+  useEffect(() => {
+    if (!info) void loadWorktreeInfo(directory)
+  }, [directory, info])
+  if (!info?.available) return null
+  const commit = () => {
+    const next = text.trim()
+    // A blank one is no command (the file drops it).
+    if (next !== saved) void setPref("worktreeSetup", { [key]: next })
+  }
+  return (
+    <Group
+      label="Worktrees"
+      note="New sessions here work in their own worktree. Ignored .env files are copied in; anything else they need, this command makes. A failed run doesn’t stop the session."
+    >
+      <div className="flex flex-col gap-2 px-4 py-3">
+        <div className="flex flex-col gap-0.5">
+          <span id="worktree-setup" className="text-sm">
+            Setup command
+          </span>
+          <span className="text-dense text-muted">Runs in each new worktree before the first message</span>
+        </div>
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => e.key === "Enter" && commit()}
+          placeholder="pnpm install"
+          aria-labelledby="worktree-setup"
+          spellCheck={false}
+          className="text-dense h-8 min-w-0 rounded-lg bg-default px-2.5 font-mono outline-none placeholder:text-field-placeholder focus-visible:status-focused-field"
+        />
+      </div>
+    </Group>
   )
 }
 

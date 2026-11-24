@@ -27,16 +27,21 @@ import {
   type Palette,
   type PendingRequest,
   type PermissionReply,
+  type Place,
   type Queued,
   type Question,
   type Revert,
   type SessionRow,
   type SessionUsage,
+  type SessionWorktree,
+  type SetupRun,
   type Todo,
   type ToolInput,
   type ToolOutput,
   type UpdateCheck,
   type View,
+  type ApplyCheck,
+  type WorktreeInfo,
 } from "./bridge"
 import { getPrefs, loadPrefs, onPrefsFailure, setPref } from "./prefs"
 import { revealing } from "./reveal"
@@ -128,6 +133,8 @@ export type Open = {
   stopping: false | number
   /** When the running turn started (ms), for the elapsed time; null when unknown. */
   started: number | null
+  /** A new session in a git folder: its own worktree (the default) or the main folder. Not kept. */
+  place?: Place
 }
 
 /** A remark on a diff line, sent with the next message. */
@@ -232,6 +239,12 @@ export type State = {
   outputs: Record<string, ToolOutput>
   /** Each session's share of the 5-hour window and its budget, as last read or sent. */
   usage: Record<string, SessionUsage>
+  /** Sessions' worktrees as last read or sent (by session id), over what the list holds; null: the main folder. */
+  worktrees: Record<string, SessionWorktree | null>
+  /** Each session's worktree preparation and setup command, as last read or streamed. */
+  setups: Record<string, SetupRun>
+  /** Whether a folder's new sessions can get their own worktree (by `folderKey`), once read. */
+  worktreeInfo: Record<string, WorktreeInfo>
 }
 
 function readMode(): Mode {
@@ -298,6 +311,9 @@ let state: State = {
   inputs: {},
   outputs: {},
   usage: {},
+  worktrees: {},
+  setups: {},
+  worktreeInfo: {},
   pinned: readSet("anysola.pinned"),
   // Folded projects by folder key; older entries were stored as spelled.
   collapsed: new Set([...readSet("anysola.collapsed")].map(folderKey)),
@@ -698,6 +714,8 @@ let listFailed = false
 /** Reads the session list; a failure keeps the list as it was and says so once. */
 async function loadSessions(openFirst = false) {
   let sessions: SessionRow[]
+  // A worktree event during the read is newer than the list's copy of that row.
+  const stamps = new Map(worktreeStamps)
   try {
     sessions = await bridge.sessions()
     listFailed = false
@@ -706,7 +724,9 @@ async function loadSessions(openFirst = false) {
     listFailed = true
     return
   }
-  set({ sessions })
+  const fresh = sessions.filter((r) => worktreeStamps.get(r.id) === stamps.get(r.id))
+  set((s) => ({ sessions, worktrees: { ...s.worktrees, ...Object.fromEntries(fresh.map((r) => [r.id, r.worktree ?? null])) } }))
+  for (const r of sessions) worktreeNotice(r.id, r.worktree ?? null)
   pruneDrafts(sessions)
   if (openFirst && !state.open && sessions[0]) await openSession(sessions[0])
 }
@@ -751,13 +771,18 @@ function turnStart(items: Item[]): number | null {
 }
 
 export async function openSession(row: SessionRow) {
-  void refreshGit(row.directory)
+  // The row's worktree until the core's answer: the git menu reads where the session works.
+  if (!(row.id in state.worktrees)) set((s) => ({ worktrees: { ...s.worktrees, [row.id]: row.worktree ?? null } }))
   set({ open: blankView(row.directory, row.id, row.title) })
+  void refreshGit(row.directory)
+  void loadWorktreeInfo(row.directory)
+  if (worktreeOf(state, row.id)) void loadSetup(row.directory, row.id)
   void loadUsage(row.directory, row.id)
   const n = ++reads
   const since = asks
   try {
     const opened = await bridge.openSession(row.directory, row.id)
+    if (opened.session) setWorktree(row.id, opened.session.worktree ?? null)
     // The composer's mode is the window's, the floor the session's: a turn still running here
     // would otherwise go on under the mode it started with while the composer shows another.
     applyMode(row.directory, row.id, state.mode)
@@ -790,6 +815,7 @@ export async function newSession(directory?: string) {
   const startMode = getPrefs().general.startMode
   if (startMode !== "last" && startMode !== state.mode) set({ mode: startMode })
   void refreshGit(directory)
+  void loadWorktreeInfo(directory)
   const open = blankView(directory, null, "New session")
   const view = { key: open.key }
   set({ open })
@@ -1241,10 +1267,15 @@ async function deliver(open: Open, sent: Unsent, text: string, skills: string[])
       agent: first ? (open.info?.agent ?? null) : null,
       files: sent.files,
       skills,
+      ...(first ? placeOf(open) : {}),
     })
     // Before the adoption, which may replay the turn's end.
     if (!queued) sent.resolved = true
     if (first) target = adopt(target, sessionId, open.directory)
+    // A message waiting for its worktree (the first one, or one sent while it is made): nothing
+    // runs yet, so no Stop and no clock.
+    if (queued && !running)
+      setOpen((o) => (o.status.kind === "working" && !state.busy.has(sessionId) ? { status: { kind: "idle" }, started: null } : {}), sessionId)
     // A running turn took it: it is delivered, whatever that turn does next.
     if (queued && dropUnsent(sessionId, sent)) sentQueued.set(sessionId, [...(sentQueued.get(sessionId) ?? []), sent])
     else sent.resolved = true
@@ -1766,7 +1797,8 @@ export async function setBudget(directory: string, sessionId: string, budget: nu
 
 /**
  * Branches the session into a new one and opens it: the whole conversation, or what came
- * before the user message `before`. Files are shared, not rewound.
+ * before the user message `before`. In a git folder the fork gets its own worktree with the
+ * files as they were then; elsewhere files are shared, not rewound.
  */
 export async function forkSession(directory: string, sessionId: string, before: string | null) {
   try {
@@ -1910,15 +1942,25 @@ function commentsText(text: string, comments: Comment[]) {
   return `${head}Comments on the changes:\n${list}`
 }
 
+/**
+ * Reads the git state where the open view works: a worktree session's own worktree (read-only
+ * there), else the folder. `git.directory` is the place read: compare it with `workDir`.
+ */
 export async function refreshGit(directory = state.open?.directory) {
   if (!directory) return
+  const open = state.open
+  const worktree = open && sameFolder(open.directory, directory) ? worktreeOf(state, open.sessionId) : null
+  // Not there (being made, gone, discarded): nothing to read, and no error to show for it.
+  if (worktree && worktree.state !== "ready" && worktree.state !== "applying") return
+  const where = worktree?.path ?? directory
+  const current = () => !state.open || sameFolder(workDir(state.open), where)
   try {
-    const status = await bridge.gitStatus(directory)
-    if (state.open && !sameFolder(state.open.directory, directory)) return
-    set({ git: { ...status, directory }, gitError: null })
+    const status = await bridge.gitStatus(where)
+    if (!current()) return
+    set({ git: { ...status, directory: where }, gitError: null })
   } catch (e) {
-    if (state.open && !sameFolder(state.open.directory, directory)) return
-    set({ git: null, gitError: { directory, message: message(e) } })
+    if (!current()) return
+    set({ git: null, gitError: { directory: where, message: message(e) } })
   }
 }
 
@@ -1953,10 +1995,207 @@ export async function openInEditor(directory: string, path: string | null = null
   }
 }
 
+// ---------------------------------------------------------------------------
+// Worktrees
+// ---------------------------------------------------------------------------
+
+/** The setup output kept per session, as the shell keeps it. */
+const SETUP_LINES = 2000
+
+/** A session's worktree: as last sent, else as the list holds it; null for the main folder. */
+export function worktreeOf(s: State, sessionId: string | null | undefined): SessionWorktree | null {
+  if (!sessionId) return null
+  if (sessionId in s.worktrees) return s.worktrees[sessionId]
+  return s.sessions.find((r) => r.id === sessionId)?.worktree ?? null
+}
+
+export function useWorktree(sessionId: string | null | undefined) {
+  return useStore((s) => worktreeOf(s, sessionId))
+}
+
+/** Where a view's files are: its session's worktree, else its folder. Relative paths, the
+ * editor, `@` files and git read here; every session call still goes by `directory`. */
+export function workDir(open: { directory: string; sessionId: string | null }, s: State = state) {
+  return worktreeOf(s, open.sessionId)?.path ?? open.directory
+}
+
+export function useWorkDir(open: { directory: string; sessionId: string | null }) {
+  return useStore((s) => workDir(open, s))
+}
+
+/** Whether a folder's new sessions get their own worktree (and so do its forks); null until read. */
+export function useWorktreeInfo(directory: string | null | undefined) {
+  return useStore((s) => (directory ? (s.worktreeInfo[folderKey(directory)] ?? null) : null))
+}
+
+export async function loadWorktreeInfo(directory: string) {
+  try {
+    const info = await bridge.worktreeInfo(directory)
+    set((s) => ({ worktreeInfo: { ...s.worktreeInfo, [folderKey(directory)]: info } }))
+  } catch {
+    // Unknown: no choice is offered, and the shell's default stands.
+  }
+}
+
+async function loadSetup(directory: string, sessionId: string) {
+  try {
+    const run = await bridge.setupOutput(directory, sessionId)
+    if (run) set((s) => ({ setups: { ...s.setups, [sessionId]: run } }))
+  } catch {
+    // The output shows from the next line on.
+  }
+}
+
+/** Bumped on each change heard for a session's worktree, so an older list read doesn't undo it. */
+const worktreeStamps = new Map<string, number>()
+
+function setWorktree(sessionId: string, worktree: SessionWorktree | null) {
+  worktreeStamps.set(sessionId, (worktreeStamps.get(sessionId) ?? 0) + 1)
+  const before = worktreeOf(state, sessionId)
+  set((s) => ({
+    worktrees: { ...s.worktrees, [sessionId]: worktree },
+    sessions: s.sessions.map((r) => (r.id === sessionId ? { ...r, worktree } : r)),
+  }))
+  worktreeNotice(sessionId, worktree)
+  const moved =
+    before?.state !== worktree?.state || before?.path !== worktree?.path || before?.baseCommit !== worktree?.baseCommit
+  if (moved && state.open?.sessionId === sessionId) void refreshGit()
+}
+
+const WORKTREE_NOTICES_KEY = "anysola.worktreeNotices"
+
+/** `ready` with `error`: said once (an apply cut off by a crash), not again on the next read. */
+function worktreeNotice(sessionId: string, worktree: SessionWorktree | null) {
+  if (worktree?.state !== "ready" || !worktree.error) return
+  const key = `${sessionId}:${worktree.error}`
+  let seen: string[] = []
+  try {
+    const raw = JSON.parse(localStorage.getItem(WORKTREE_NOTICES_KEY) ?? "[]")
+    if (Array.isArray(raw)) seen = raw.filter((x) => typeof x === "string")
+  } catch {
+    // Read as none.
+  }
+  if (seen.includes(key)) return
+  try {
+    localStorage.setItem(WORKTREE_NOTICES_KEY, JSON.stringify([...seen, key].slice(-50)))
+  } catch {
+    // Said again next start at worst.
+  }
+  const title = state.sessions.find((r) => r.id === sessionId)?.title
+  set({ notice: title ? `“${title}”: ${worktree.error}` : worktree.error, noticeLink: null })
+}
+
+/** A new session's place, sent only where the folder offers the choice. */
+function placeOf(open: Open): { place?: Place } {
+  const info = state.worktreeInfo[folderKey(open.directory)]
+  return info?.available ? { place: open.place ?? "worktree" } : {}
+}
+
+/** The new session's place: its own worktree or the main folder. Only for this new session. */
+export function setPlace(place: Place) {
+  const open = state.open
+  if (open && !open.sessionId) setOpen({ place }, { key: open.key })
+}
+
+/** A worktree call for one session: the session it was asked in, whatever opens meanwhile. */
+export type Here = { directory: string; sessionId: string }
+
+export function hereOf(open: Open | null): Here | null {
+  return open?.sessionId ? { directory: open.directory, sessionId: open.sessionId } : null
+}
+
+export async function applyCheck(h: Here): Promise<ApplyCheck | { error: string }> {
+  try {
+    return await bridge.worktreeApplyCheck(h.directory, h.sessionId)
+  } catch (e) {
+    return { error: message(e) }
+  }
+}
+
+export async function applyWorktree(
+  h: Here,
+  text: string,
+  onto: string,
+  stash: boolean
+): Promise<{ commit: string; stashLeft: string | null } | { error: string }> {
+  try {
+    return await bridge.worktreeApply(h.directory, h.sessionId, text, onto, stash)
+  } catch (e) {
+    return { error: message(e) }
+  } finally {
+    if (state.open?.sessionId === h.sessionId) void refreshGit()
+  }
+}
+
+export async function bringBase(h: Here): Promise<{ conflicts: string[] } | { error: string }> {
+  try {
+    return await bridge.worktreeBringBase(h.directory, h.sessionId)
+  } catch (e) {
+    return { error: message(e) }
+  } finally {
+    if (state.open?.sessionId === h.sessionId) void refreshGit()
+  }
+}
+
+/** Irreversible: only after the user confirmed. */
+export async function discardWorktree(h: Here): Promise<string | true> {
+  try {
+    await bridge.worktreeDiscard(h.directory, h.sessionId)
+    return true
+  } catch (e) {
+    return message(e)
+  }
+}
+
+/** "Recreate" for a gone folder, "Try again" for a failed one. */
+export async function recreateWorktree(h: Here) {
+  try {
+    setWorktree(h.sessionId, await bridge.worktreeRecreate(h.directory, h.sessionId))
+  } catch (e) {
+    set({ notice: message(e) })
+  }
+}
+
+/** "Work in the main folder instead": the session leaves its worktree before anything ran there. */
+export async function worktreeToFolder(h: Here) {
+  try {
+    const row = await bridge.worktreeToFolder(h.directory, h.sessionId)
+    setWorktree(h.sessionId, row.worktree ?? null)
+    if (state.open?.sessionId === h.sessionId) void refreshGit()
+  } catch (e) {
+    set({ notice: message(e) })
+  }
+}
+
+/** "Start now": stopping the setup command lets the waiting message start. */
+export async function setupStop(h: Here) {
+  try {
+    await bridge.setupStop(h.directory, h.sessionId)
+  } catch (e) {
+    set({ notice: message(e) })
+  }
+}
+
+export async function setupRun(h: Here) {
+  try {
+    await bridge.setupRun(h.directory, h.sessionId)
+  } catch (e) {
+    set({ notice: message(e) })
+  }
+}
+
 /** Puts text in the open view's composer (a starter prompt); what the user typed is replaced. */
 export function fillComposer(text: string) {
   const open = state.open
   if (open) setDraft(draftKey(open), { text, pasted: [], stamp: ++stamps })
+}
+
+/** Adds text after what the open view's composer holds ("Ask the agent to resolve"). */
+export function addToComposer(text: string) {
+  const open = state.open
+  if (!open) return
+  const now = state.drafts[draftKey(open)]?.text.trim()
+  setDraft(draftKey(open), { text: now ? `${now}\n\n${text}` : text, stamp: ++stamps })
 }
 
 /** Leaves the open session for the empty window (its delete waits behind an Undo). */
@@ -2181,6 +2420,27 @@ function onEvent(e: CoreEvent) {
       return
     case "update":
       if (state.update) set({ update: { ...state.update, installing: true, progress: { downloaded: e.downloaded, total: e.total } } })
+      return
+    case "worktree":
+      setWorktree(e.sessionId, e.worktree)
+      return
+    case "setup": {
+      const { sessionId, stream, text } = e
+      set((s) => {
+        const last = s.setups[sessionId]
+        // A line after a run ended is a new run's (Run again).
+        const run: SetupRun =
+          last && last.ended === null
+            ? last
+            : { command: last?.command ?? null, state: "running", code: null, lines: [], started: Date.now(), ended: null }
+        return { setups: { ...s.setups, [sessionId]: { ...run, lines: [...run.lines, { stream, text }].slice(-SETUP_LINES) } } }
+      })
+      // A run that began here: its command (and anything missed) comes from the shell's copy.
+      if (state.setups[sessionId]?.lines.length === 1) void loadSetup(e.directory, sessionId)
+      return
+    }
+    case "setupEnd":
+      set((s) => ({ setups: { ...s.setups, [e.sessionId]: e.run } }))
       return
   }
   const id = e.sessionId

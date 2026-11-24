@@ -71,6 +71,7 @@ import {
   TitleBar,
   Tooltip,
 } from "./ui"
+import { BranchName, worktreeTrouble } from "./worktree"
 
 /** A session's folder as the window names it: the app's own folder is "No project". */
 function usePlace(directory: string) {
@@ -467,6 +468,7 @@ function SessionLink({
   }
   const choosing = selecting.selected.size > 0
   const checked = selecting.selected.has(row.id)
+  const trouble = worktreeTrouble(row.worktree)
 
   if (renaming)
     return (
@@ -503,7 +505,7 @@ function SessionLink({
         aria-pressed={choosing ? checked : undefined}
         className={cn(
           "flex w-full items-center gap-2 rounded-lg px-2 text-left transition-colors focus-visible:status-focused-field",
-          showPlace ? "min-h-11 py-1.5" : "h-9",
+          showPlace || row.worktree ? "min-h-11 py-1.5" : "h-9",
           checked ? "bg-default" : active && !choosing ? "bg-default" : "hover:bg-default/60"
         )}
       >
@@ -524,16 +526,23 @@ function SessionLink({
             )}
             <span className="min-w-0 truncate">{row.title}</span>
           </span>
-          {showPlace && (
-            <span className="text-2xs block truncate text-muted">
-              <PlaceLabel directory={row.directory} />
+          {(showPlace || row.worktree) && (
+            <span className="text-2xs flex min-w-0 items-center gap-1.5 text-muted">
+              {showPlace && (
+                <span className="shrink-0 truncate">
+                  <PlaceLabel directory={row.directory} />
+                </span>
+              )}
+              {row.worktree && <BranchName worktree={row.worktree} />}
             </span>
           )}
         </span>
         {asking ? (
           <span className="size-1.5 shrink-0 rounded-full bg-warning" aria-label="Needs you" />
+        ) : busy ? (
+          <Spinner className="size-3" />
         ) : (
-          busy && <Spinner className="size-3" />
+          trouble && <span className="size-1.5 shrink-0 rounded-full bg-warning/70" aria-label={trouble} title={trouble} />
         )}
         <span
           className={cn(
@@ -569,7 +578,7 @@ function SessionLink({
           <Pencil className="size-3.5 text-muted" /> Rename
         </MenuItem>
         {!sameFolder(row.directory, scratch) && (
-          <MenuItem onSelect={go(() => void reveal(row.directory))}>
+          <MenuItem onSelect={go(() => void reveal(row.worktree?.path ?? row.directory))}>
             <FolderOpen className="size-3.5 text-muted" /> Open folder
           </MenuItem>
         )}

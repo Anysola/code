@@ -17,6 +17,10 @@ type Chrome = {
   /** The palette (Ctrl K): sessions and commands. */
   palette: boolean
   reviewing: boolean
+  /** What Review opens with for a worktree session (the palette's Apply and Discard); null: the list. */
+  reviewAction: "apply" | null
+  /** The open worktree session's discard confirm. */
+  discarding: boolean
   /** The open session's budget editor, under the header's budget. */
   budgeting: boolean
   /** Forks whose "Branched from" note was put away (remembered). */
@@ -62,6 +66,8 @@ let chrome: Chrome = {
   shortcuts: false,
   palette: false,
   reviewing: false,
+  reviewAction: null,
+  discarding: false,
   budgeting: false,
   forkNotes: readForkNotes(),
   deleting: null,
@@ -109,8 +115,12 @@ export function flash(text: string) {
   setTimeout(() => chrome.flash?.n === n && set({ flash: null }), 2500)
 }
 
-export function setReviewing(on: boolean) {
-  if (chrome.reviewing !== on) set({ reviewing: on })
+export function setReviewing(on: boolean, action: Chrome["reviewAction"] = null) {
+  if (chrome.reviewing !== on || chrome.reviewAction !== action) set({ reviewing: on, reviewAction: on ? action : null })
+}
+
+export function askDiscard(on: boolean) {
+  if (chrome.discarding !== on) set({ discarding: on })
 }
 
 export function showPalette(on: boolean) {

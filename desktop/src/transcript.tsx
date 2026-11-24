@@ -51,6 +51,8 @@ import {
   revealFile,
   rewind,
   useStore,
+  useWorktreeInfo,
+  workDir,
   type Asked,
   type Open,
   type Permission,
@@ -82,8 +84,10 @@ function blocks(items: Item[]): Block[] {
 }
 
 /** The open session's folder and whether a turn runs in it: what rows deep in the list need. */
-type Where = { directory: string; sessionId: string | null; live: boolean }
-const WhereContext = createContext<Where>({ directory: "", sessionId: null, live: false })
+/** `directory`: the session's folder (its calls go there); `files`: where its relative paths are
+ * (its worktree, else the folder). */
+type Where = { directory: string; files: string; sessionId: string | null; live: boolean }
+const WhereContext = createContext<Where>({ directory: "", files: "", sessionId: null, live: false })
 
 /** Kinds of failure that sending again won't fix. */
 const FINAL = new Set(["limit", "auth", "model", "elsewhere"])
@@ -124,9 +128,11 @@ export function Transcript({
         last?.kind === "error" &&
         last.retry !== false &&
         !(last.errorKind && FINAL.has(last.errorKind))))
+  // A subagent works in its root session's worktree: a peek reads paths where the open session works.
+  const files = useStore((s) => (readOnly && s.open ? workDir(s.open, s) : workDir(open, s)))
   const where = useMemo(
-    () => ({ directory: open.directory, sessionId: open.sessionId, live }),
-    [open.directory, open.sessionId, live]
+    () => ({ directory: open.directory, files, sessionId: open.sessionId, live }),
+    [open.directory, files, open.sessionId, live]
   )
   const shown = useMemo(() => turns(blocks(open.items), live), [open.items, live])
   // Nothing comes before the first message: there is no branching from it.
@@ -241,6 +247,8 @@ function TurnEnd({ elapsed, text }: { elapsed: number | null; text: string | nul
 /** A message the user sent: copy it, edit and send it again, or rewind to before it. */
 function UserMessage({ item, actions, forkable }: { item: UserItem; actions: boolean; forkable: boolean }) {
   const { directory, sessionId } = useContext(WhereContext)
+  // In a git folder a fork gets its own worktree with the files as they were; elsewhere they stay.
+  const isolates = useWorktreeInfo(directory)?.available ?? false
   // A running turn is half written: branching waits for it (the app refuses it too).
   const running = useStore((s) => (!!sessionId && s.busy.has(sessionId)) || (s.open?.sessionId === sessionId && !!s.open && isRunning(s.open)))
   const [editing, setEditing] = useState(false)
@@ -371,7 +379,11 @@ function UserMessage({ item, actions, forkable }: { item: UserItem; actions: boo
           {forkable && sessionId && !running && (
             <Tooltip
               label="Branch from here"
-              note="A new session with the conversation before this message. Files stay as they are now; nothing is rewound."
+              note={
+                isolates
+                  ? "A new session with the conversation before this message, in its own worktree with the files as they were then."
+                  : "A new session with the conversation before this message. Files stay as they are now; nothing is rewound."
+              }
               side="top"
             >
               <button
@@ -578,7 +590,7 @@ const Entry = memo(function Entry({ item, directory }: { item: Exclude<Item, Use
 
 /** A link in a reply: web and mail links go to the browser, a file of the folder to the editor. */
 function ReplyLink({ href, children }: { href?: string; children?: ReactNode }) {
-  const { directory } = useContext(WhereContext)
+  const { files: directory } = useContext(WhereContext)
   const go = () => {
     if (!href) return
     if (/^(https?:|mailto:)/i.test(href)) return openExternal(href)
@@ -1086,7 +1098,7 @@ function ToolRow({ tool, verb, icon }: { tool: Tool; verb?: string; icon?: typeo
   const Icon = icon ?? icons[tool.name] ?? Wrench
   const state = useToolState(tool)
   const input = useInput(tool)
-  const { directory } = useContext(WhereContext)
+  const { files: directory } = useContext(WhereContext)
   const error = cutShort(tool) ? null : tool.error
   const output = OPENS.has(tool.name) ? (error ?? tool.output) : error
   const [open, setOpen] = useState(false)
@@ -1279,8 +1291,8 @@ export function EditCard({
   const live = useContext(WhereContext).live
   const waiting = status === "running" && live
   // Review, outside the conversation, shows the open session's folder too.
-  const openDirectory = useStore((s) => s.open?.directory ?? "")
-  const directory = useContext(WhereContext).directory || openDirectory
+  const openDirectory = useStore((s) => (s.open ? workDir(s.open, s) : ""))
+  const directory = useContext(WhereContext).files || openDirectory
   return (
     <div className="group/tool overflow-hidden rounded-xl bg-surface">
       <div className="flex h-9 items-center hover:bg-default/30">

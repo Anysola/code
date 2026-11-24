@@ -42,10 +42,15 @@
  * not a git repository, so Review lists the session's edits (`long,nogit`: the long ones, as edits).
  *
  * Worktrees (only the web folder is a git repository): `?state=worktree-preparing|ready|conflict|
- * missing|applied` puts the open session in its own worktree in that state (`conflict`: ready, the
- * base brought in with markers left; `applied`: ready again after an apply). `?review=apply-conflict`
- * or `apply-dirty` makes the apply check refuse so. `?worktree=old-git` makes the folder's Git too
- * old to apply; `?worktree=no-commits` hides the choice. New sessions there start in a worktree
+ * missing|failed|discarded|notice|applied` puts the open session in its own worktree in that state
+ * (`conflict`: ready, the base brought in with markers left; `applied`: ready again after an apply;
+ * `notice`: ready with an apply cut off; `preparing`/`failed`: its first message waits).
+ * `?review=apply-conflict|apply-dirty|apply-staged|apply-detached|apply-operation|apply-empty|
+ * apply-busy|apply-git|apply-onto` makes the apply check answer so (`apply-onto`: the main folder is on
+ * another branch; `apply-stash-left` with `apply-dirty`: the edits set aside don't go back).
+ * `?worktree=old-git` makes the folder's Git too old to apply; `?worktree=no-commits` hides the
+ * choice. `?setup=hold` keeps a `pnpm install` setup running (preparing stays), `?setup=fail` makes
+ * it exit 1 (with a ready scene: a failed run already there). New sessions there start in a worktree
  * (preparing ~2 s, setup output streamed), forks get one with `?restored=kept|edits|now` as the report.
  */
 import type {
@@ -937,45 +942,103 @@ export function mockBridge(): Bridge {
         ? mockWorktree("brave-otter", "preparing")
         : worktreeScene === "missing"
           ? mockWorktree("brave-otter", "missing")
-          : worktreeScene === "applied"
-            ? mockWorktree("brave-otter", "ready", { baseCommit: "4d2b8e01c6", appliedCommit: "4d2b8e01c6" })
-            : mockWorktree("brave-otter", "ready")
+          : worktreeScene === "failed"
+            ? mockWorktree("brave-otter", "failed", { error: "Making the worktree was cut off." })
+            : worktreeScene === "discarded"
+              ? mockWorktree("brave-otter", "discarded")
+              : worktreeScene === "notice"
+                ? mockWorktree("brave-otter", "ready", { error: "An apply was cut off. Check the main folder’s changes before applying again." })
+                : worktreeScene === "applied"
+                  ? mockWorktree("brave-otter", "ready", { baseCommit: "4d2b8e01c6", appliedCommit: "4d2b8e01c6" })
+                  : mockWorktree("brave-otter", "ready")
+    // Another session of the folder in its own worktree, for the list.
+    rows.find((r) => r.id === "ses_search")!.worktree = mockWorktree("news-ranking", "ready")
+    // Being made (or failed while being made): the first message waits in the queue.
+    if (worktreeScene === "preparing" || worktreeScene === "failed") {
+      transcripts.set("ses_pricing", [])
+      queues.set("ses_pricing", [
+        { id: "qw", text: "Show the yearly price on the plan cards when the toggle is on yearly.", images: 0, delivery: "queue" },
+      ])
+    }
   }
   const worktreeParam = params.get("worktree")
+  /** `?setup=fail`: the setup command exits 1; `hold`: it keeps running (preparing stays). */
+  const setupScene = params.get("setup")
   const setupRuns = new Map<string, SetupRun>()
+  /** What runs once a session's worktree is ready: its waiting message. */
+  const afterReady = new Map<string, () => void>()
   /** Emits the row's worktree as the shell does on every change. */
   const worktreeChanged = (row: SessionRow) => {
     if (row.worktree) emit({ type: "worktree", directory: row.directory, sessionId: row.id, worktree: { ...row.worktree } })
   }
+  /** The worktree is ready: the waiting message starts. */
+  const ready = (row: SessionRow) => {
+    if (row.worktree?.state !== "preparing") return
+    row.worktree.state = "ready"
+    worktreeChanged(row)
+    const then = afterReady.get(row.id)
+    afterReady.delete(row.id)
+    then?.()
+  }
+  /** The waiting messages go into the session and its turn starts. */
+  const startWaiting = (id: string) => {
+    const waiting = queues.get(id) ?? []
+    if (!waiting.length) return
+    queues.set(id, [])
+    const list = transcripts.get(id) ?? []
+    transcripts.set(id, [
+      ...list,
+      ...waiting.map((q, i) => ({ kind: "user" as const, id: `uw${list.length + i}`, text: q.text, images: q.images, time: Date.now() })),
+    ])
+    running.add(id)
+    emit({ type: "started", sessionId: id })
+    emit({ type: "changed", sessionId: id })
+    void reply(id, "Working in the new worktree.")
+  }
+  const SETUP_OUT: string[] = [
+    "Scope: all 14 workspace projects",
+    "Lockfile is up to date, resolution step is skipped",
+    "Progress: resolved 1184, reused 1184, downloaded 0, added 1184, done",
+    "",
+    "dependencies:",
+    "+ @anysola/ui 0.14.2 <- packages/ui",
+    "+ react 19.2.0",
+  ]
   /** The shell's preparation: steps and setup output, then ready (the waiting message starts). */
   const prepare = (row: SessionRow, then?: () => void) => {
-    const command = prefs.worktreeSetup[row.directory] ?? null
+    if (then) afterReady.set(row.id, then)
+    const command = prefs.worktreeSetup[row.directory] ?? (setupScene ? "pnpm install" : null)
     const run: SetupRun = { command, state: "running", code: null, lines: [], started: Date.now(), ended: null }
     setupRuns.set(row.id, run)
+    const live = () => setupRuns.get(row.id) === run && run.state === "running"
     const line = (stream: "info" | "out" | "err", text: string) => {
+      if (!live()) return
       run.lines.push({ stream, text })
       emit({ type: "setup", directory: row.directory, sessionId: row.id, stream, text })
     }
-    const steps: [number, "info" | "out" | "err", string][] = [
+    type Step = [number, "info" | "out" | "err", string]
+    const steps: Step[] = [
       [100, "info", `Checking out ${row.worktree!.branch} from main`],
       [500, "info", "Copied 2 env files: .env, apps/web/.env.local"],
       ...(command
         ? ([
             [800, "info", `Running ${command}`],
-            [1200, "out", "Lockfile is up to date, resolution step is skipped"],
-            [1600, "out", "Done in 1.4s"],
-          ] as [number, "info" | "out" | "err", string][])
+            ...SETUP_OUT.map((t, i) => [900 + i * 100, "out", t] as Step),
+            [1650, "err", " WARN  deprecated eslint@8.57.1: This version is no longer supported."],
+            ...(setupScene === "fail"
+              ? ([[1800, "err", " ERR_PNPM_FETCH_404  GET https://registry.npmjs.org/@anysola%2Fcharts: Not Found - 404"]] as Step[])
+              : []),
+          ] as Step[])
         : []),
     ]
     for (const [at, stream, text] of steps) setTimeout(() => line(stream, text), at)
+    if (setupScene === "hold") return
     setTimeout(() => {
-      Object.assign(run, { state: "done", code: command ? 0 : null, ended: Date.now() })
-      emit({ type: "setupEnd", directory: row.directory, sessionId: row.id, run: { ...run, lines: [...run.lines] } })
-      if (row.worktree?.state === "preparing") {
-        row.worktree.state = "ready"
-        worktreeChanged(row)
-        then?.()
-      }
+      if (!live()) return
+      const failed = setupScene === "fail" && !!command
+      Object.assign(run, { state: failed ? "failed" : "done", code: command ? (failed ? 1 : 0) : null, ended: Date.now() })
+      emit({ type: "setupEnd", directory: row.directory, sessionId: row.id, run: structuredClone(run) })
+      ready(row)
     }, 2000)
   }
   const worktreeRow = (sessionId: string) => {
@@ -983,6 +1046,8 @@ export function mockBridge(): Bridge {
     if (!row?.worktree) throw new Error("This session works in the main folder.")
     return row
   }
+  /** Sessions applied with their main-folder edits set aside (the dirty check passes after). */
+  const stashed = new Set<string>()
   const applyCheck = async (sessionId: string): Promise<ApplyCheck> => {
     const row = worktreeRow(sessionId)
     await wait(300)
@@ -991,9 +1056,15 @@ export function mockBridge(): Bridge {
     if (worktreeScene === "conflict") return { ok: false, reason: "unresolved", files: ["apps/web/src/lib/plans.ts"] }
     if (review.has("apply-conflict"))
       return { ok: false, reason: "conflict", onto: row.worktree!.baseBranch ?? "main", files: ["apps/web/src/lib/plans.ts", "apps/web/src/routes/pricing.tsx"] }
-    if (review.has("apply-dirty"))
+    if (review.has("apply-dirty") && !stashed.has(sessionId))
       return { ok: false, reason: "dirty", onto: row.worktree!.baseBranch ?? "main", files: ["apps/web/src/components/plan-card.tsx"] }
-    return { ok: true, onto: row.worktree!.baseBranch ?? "main", files: 3, add: 42, del: 9, behind: 2 }
+    if (review.has("apply-staged")) return { ok: false, reason: "staged", onto: "main" }
+    if (review.has("apply-detached")) return { ok: false, reason: "detached" }
+    if (review.has("apply-operation")) return { ok: false, reason: "operation", what: "rebase" }
+    if (review.has("apply-empty")) return { ok: false, reason: "empty" }
+    if (review.has("apply-busy")) return { ok: false, reason: "busy" }
+    if (review.has("apply-git")) return { ok: false, reason: "git", message: "git merge-tree failed: fatal: unable to read tree 9c1e2a7f3b" }
+    return { ok: true, onto: review.has("apply-onto") ? "release/1.4" : (row.worktree!.baseBranch ?? "main"), files: 3, add: 42, del: 9, behind: 2 }
   }
   const empty = params.has("empty")
   let prefs: Prefs = structuredClone({ ...DEFAULT_PREFS, discord: { ...DEFAULT_PREFS.discord, enabled: !empty } })
@@ -1008,6 +1079,23 @@ export function mockBridge(): Bridge {
   let config = config0()
   let data = empty ? { ...data0(), imported: null, sessions: 0 } : data0()
   // What the folder's hooks are: `?hooks=` picks the scene, the calls below change it.
+  // The scenes' worktree runs: one being made (its message waits), or a finished setup run.
+  if (worktreeScene === "preparing") prepare(rows.find((r) => r.id === "ses_pricing")!, () => startWaiting("ses_pricing"))
+  else if (worktreeScene && setupScene === "fail")
+    setupRuns.set("ses_pricing", {
+      command: "pnpm install",
+      state: "failed",
+      code: 1,
+      lines: [
+        { stream: "info", text: "Checking out anysola/brave-otter from main" },
+        { stream: "info", text: "Copied 2 env files: .env, apps/web/.env.local" },
+        { stream: "info", text: "Running pnpm install" },
+        ...SETUP_OUT.map((text) => ({ stream: "out" as const, text })),
+        { stream: "err", text: " ERR_PNPM_FETCH_404  GET https://registry.npmjs.org/@anysola%2Fcharts: Not Found - 404" },
+      ],
+      started: now - 95_000,
+      ended: now - 61_000,
+    })
   const trustScene = empty ? null : params.get("trust")
   /** `five`: the `all` file, with rules and downloads waiting too. */
   const allScene = trustScene === "all" || trustScene === "five"
@@ -1676,7 +1764,8 @@ export function mockBridge(): Bridge {
       const commit = Math.random().toString(16).slice(2, 12)
       Object.assign(row.worktree!, { state: "ready", baseCommit: commit, appliedCommit: commit })
       worktreeChanged(row)
-      return { commit, stashLeft: null }
+      if (stash) stashed.add(sessionId)
+      return { commit, stashLeft: stash && review.has("apply-stash-left") ? "stash@{0}" : null }
     },
     async worktreeDiscard(_directory, sessionId) {
       const row = worktreeRow(sessionId)
@@ -1704,7 +1793,12 @@ export function mockBridge(): Bridge {
       const row = worktreeRow(sessionId)
       if (row.worktree!.state !== "preparing" && row.worktree!.state !== "failed")
         throw new Error("This session already works in its worktree; apply or discard it instead.")
+      const run = setupRuns.get(sessionId)
+      if (run?.state === "running") Object.assign(run, { state: "stopped", ended: Date.now() })
       row.worktree = null
+      afterReady.delete(sessionId)
+      // The waiting message runs in the main folder.
+      setTimeout(() => startWaiting(sessionId), 300)
       return structuredClone(row)
     },
     async setupOutput(_directory, sessionId) {
@@ -1712,12 +1806,17 @@ export function mockBridge(): Bridge {
       return run ? structuredClone(run) : null
     },
     async setupRun(_directory, sessionId) {
-      prepare(worktreeRow(sessionId))
+      const row = worktreeRow(sessionId)
+      if (setupRuns.get(sessionId)?.state === "running") throw new Error("The setup command is already running.")
+      prepare(row)
     },
     async setupStop(_directory, sessionId) {
       const run = setupRuns.get(sessionId)
       if (!run || run.state !== "running") return false
+      const row = worktreeRow(sessionId)
       Object.assign(run, { state: "stopped", ended: Date.now() })
+      emit({ type: "setupEnd", directory: row.directory, sessionId, run: structuredClone(run) })
+      ready(row)
       return true
     },
     async gitStatus(directory) {
@@ -1725,6 +1824,26 @@ export function mockBridge(): Bridge {
       const git = params.get("git")
       if (failing.has("gitStatus")) throw new Error("git status failed: not a valid object name HEAD.")
       if (git === "missing") return { repo: false as const, git: "missing" as const }
+      const own = rows.find((r) => r.worktree?.path === directory)?.worktree
+      if (own)
+        return {
+          repo: true,
+          root: own.path,
+          branch: own.branch,
+          detached: false,
+          upstream: null,
+          ahead: 0,
+          behind: 0,
+          files: [
+            { file: planCard.file, status: "modified" },
+            { file: pricing.file, status: "modified" },
+            { file: test.file, status: "added" },
+          ],
+          unmerged: worktreeScene === "conflict" ? ["apps/web/src/lib/plans.ts"] : [],
+          identity: true,
+          remote: "origin",
+          gh: true,
+        }
       if (directory !== WEB) return { repo: false as const }
       return {
         repo: true,
@@ -1811,17 +1930,19 @@ export function mockBridge(): Bridge {
         rows.unshift(row)
         emit({ type: "created", sessionId: id, title: "New session", directory })
         if (isolate) {
+          queues.set(id, [{ id: `q${Date.now()}`, text, images: files.length, delivery: "queue" }])
           worktreeChanged(row)
-          prepare(row, () => {
-            running.add(id)
-            emit({ type: "started", sessionId: id })
-            void reply(id, "Working in the new worktree.")
-          })
+          prepare(row, () => startWaiting(id))
           return { sessionId: id, queued: true }
         }
       }
       const own = rows.find((r) => r.id === id)?.worktree
-      if (own && own.state !== "ready" && own.state !== "preparing") {
+      if (own?.state === "preparing") {
+        queues.set(id, [...(queues.get(id) ?? []), { id: `q${Date.now()}`, text, images: files.length, delivery: "queue" }])
+        emit({ type: "changed", sessionId: id })
+        return { sessionId: id, queued: true }
+      }
+      if (own && own.state !== "ready") {
         emit({ type: "refused", sessionId: id, error: "This session’s folder is gone. Recreate it, discard it, or fork the session." })
         return { sessionId: id, queued: false }
       }

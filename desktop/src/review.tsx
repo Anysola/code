@@ -18,11 +18,18 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 
-import type { FileDiff } from "./bridge"
+import type { ApplyCheck, FileDiff, SessionWorktree } from "./bridge"
+import { askDiscard, flash, setReviewing, useChrome } from "./chrome"
 import {
   addComment,
+  applyCheck,
+  applyWorktree,
+  bringBase,
+  discardWorktree,
+  addToComposer,
+  hereOf,
   gitBranch,
   gitCommit,
   gitIdentity,
@@ -38,10 +45,15 @@ import {
   restoreFile,
   suggestCommitMessage,
   useStore,
+  useWorkDir,
+  useWorktree,
+  useWorktreeInfo,
+  type Here,
   type Open,
 } from "./store"
 import { EditCard } from "./transcript"
 import { btn, cn, Counts, DiffView, Popover, sameFolder, Spinner, Tooltip, useEscape } from "./ui"
+import { BranchName, worktreeTrouble } from "./worktree"
 
 // ---------------------------------------------------------------------------
 // Git
@@ -55,10 +67,14 @@ const GIT_DOWNLOAD = "https://git-scm.com/downloads"
 export function GitMenu({ open, compact = false }: { open: Open; compact?: boolean }) {
   const git = useStore((s) => s.git)
   const gitError = useStore((s) => s.gitError)
+  const worktree = useWorktree(open.sessionId)
+  // Where the session works: its worktree's git state is read there.
+  const where = useWorkDir(open)
   const [show, setShow] = useState(false)
   const [retrying, setRetrying] = useState(false)
   const close = useCallback(() => setShow(false), [])
-  if ((!git || !sameFolder(git.directory, open.directory)) && gitError && sameFolder(gitError.directory, open.directory))
+  if (worktree) return <WorktreeMenu open={open} worktree={worktree} compact={compact} />
+  if ((!git || !sameFolder(git.directory, where)) && gitError && sameFolder(gitError.directory, where))
     return (
       <div className="relative shrink-0">
         <Tooltip label="Git couldn’t be read">
@@ -95,7 +111,7 @@ export function GitMenu({ open, compact = false }: { open: Open; compact?: boole
         </Popover>
       </div>
     )
-  if (!git || !sameFolder(git.directory, open.directory)) return null
+  if (!git || !sameFolder(git.directory, where)) return null
   if (!git.repo) {
     if (git.git !== "missing") return null
     return (
@@ -154,6 +170,74 @@ export function GitMenu({ open, compact = false }: { open: Open; compact?: boole
       </Tooltip>
       <Popover open={show} onClose={close} side="bottom" align="end" label="Branch and changes" className="w-96">
         <GitPanel open={open} onDone={close} />
+      </Popover>
+    </div>
+  )
+}
+
+/**
+ * A worktree session's branch in the header: read-only (no commit, push, pull request or new
+ * branch from here); its way out is Review & apply.
+ */
+function WorktreeMenu({ open, worktree, compact }: { open: Open; worktree: SessionWorktree; compact: boolean }) {
+  const git = useStore((s) => s.git)
+  const [show, setShow] = useState(false)
+  const close = useCallback(() => setShow(false), [])
+  const read = git?.repo && sameFolder(git.directory, worktree.path) ? git : null
+  const changed = read?.files.length ?? 0
+  const conflicts = read?.unmerged?.length ?? 0
+  const trouble = worktreeTrouble(worktree)
+  const base = `${worktree.baseBranch ?? "a detached commit"}@${worktree.baseCommit.slice(0, 7)}`
+  return (
+    <div className="relative shrink-0">
+      <Tooltip label="This session’s worktree">
+        <button
+          onClick={() => setShow(!show)}
+          aria-expanded={show}
+          aria-label={`Worktree branch ${worktree.branch}${trouble ? `, ${trouble.toLowerCase()}` : ""}`}
+          className={btn("ghost", "sm", cn("gap-1.5 text-muted", compact ? "max-w-40" : "max-w-64"))}
+        >
+          <BranchName worktree={worktree} className="text-xs" />
+          {conflicts > 0 ? (
+            <span className="text-2xs shrink-0 text-warning tabular-nums">· {conflicts}!</span>
+          ) : (
+            changed > 0 && <span className="text-2xs shrink-0 tabular-nums">· {changed}</span>
+          )}
+          {trouble && <span className="size-1.5 shrink-0 rounded-full bg-warning" aria-hidden />}
+        </button>
+      </Tooltip>
+      <Popover open={show} onClose={close} side="bottom" align="end" label="This session’s worktree" className="w-80">
+        <div className="flex flex-col gap-3 p-1.5">
+          <div className="flex flex-col gap-1">
+            <BranchName worktree={worktree} className="text-xs text-foreground" />
+            <span className="text-2xs text-muted">
+              From{" "}<span className="font-mono">{base}</span>
+            </span>
+          </div>
+          <p className="text-2xs text-muted">
+            {worktree.state === "discarded"
+              ? "Discarded: the worktree and its branch are gone."
+              : trouble
+                ? `${trouble}.`
+                : "This session works in its own copy of the folder. Your main folder changes only when you apply."}
+          </p>
+          {read && changed > 0 && (
+            <span className="text-dense">
+              {changed} changed file{changed === 1 ? "" : "s"}
+            </span>
+          )}
+          {(worktree.state === "ready" || worktree.state === "applying") && (
+            <button
+              onClick={() => {
+                close()
+                setReviewing(true)
+              }}
+              className={btn("primary", "sm", "self-start")}
+            >
+              Review & apply
+            </button>
+          )}
+        </div>
       </Popover>
     </div>
   )
@@ -248,7 +332,7 @@ function GitPanel({ open, onDone }: { open: Open; onDone: () => void }) {
             {unmerged.map((f) => (
               <li key={f}>
                 <button
-                  onClick={() => void openInEditor(git.root ?? open.directory, f)}
+                  onClick={() => void openInEditor(git.root ?? git.directory, f)}
                   className="flex h-7 w-full items-center gap-2 rounded-md px-1.5 text-left hover:bg-default/60 focus-visible:status-focused-field"
                 >
                   <TriangleAlert className="size-3.5 shrink-0 text-warning" />
@@ -552,17 +636,43 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
   const net = read && "error" in read ? undefined : read
   const failed = read && "error" in read ? read.error : null
   const comments = useStore((s) => s.comments)
+  const worktree = useWorktree(open.sessionId)
+  const where = useWorkDir(open)
+  const action = useChrome((c) => c.reviewAction)
   const reload = useCallback(() => {
     setNet((r) => (r && "error" in r ? undefined : r))
     void readChanges().then(setNet)
   }, [])
-  useEffect(reload, [reload, open.items.length])
+  // A worktree's diff moves with its base (bringing the base in, an apply).
+  useEffect(reload, [reload, open.items.length, worktree?.baseCommit])
   const panel = useRef<HTMLDivElement>(null)
   useEscape(panel, onClose)
   const edits = changedFiles(open)
   const count = net ? net.length : failed ? 0 : edits.length
   // A few files open with their diffs; more start as rows, so the list reads first.
   const startOpen = count <= 6
+  const add = net?.reduce((n, f) => n + f.additions, 0) ?? 0
+  const del = net?.reduce((n, f) => n + f.deletions, 0) ?? 0
+  // A worktree session: what applying would do, read when the panel opens and again on Apply.
+  const [check, setCheck] = useState<ApplyCheck | { error: string } | null>(null)
+  const [applying, setApplying] = useState(action === "apply")
+  const here = hereOf(open)
+  const ready = worktree?.state === "ready"
+  useEffect(() => {
+    if (!ready || !here) return
+    let live = true
+    void applyCheck(here).then((c) => live && setCheck(c))
+    return () => {
+      live = false
+    }
+    // Once per session and base.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, open.sessionId, worktree?.baseCommit])
+  useEffect(() => {
+    if (action === "apply") setApplying(true)
+  }, [action])
+  const behind = check && "ok" in check && check.ok ? check.behind : 0
+  const base = worktree ? (worktree.baseBranch ?? "base") : null
   return (
     <div ref={panel} className="absolute inset-0 z-10 flex justify-end bg-scrim" onClick={onClose}>
       <aside
@@ -574,11 +684,35 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
           <span className="text-sm font-medium">Changes</span>
           <span className="text-2xs min-w-0 text-muted">
             {count} file{count === 1 ? "" : "s"}
+            {worktree && net && (
+              <>
+                {" · "}
+                <span className="text-success">+{add}</span>{" "}<span className="text-danger">−{del}</span>{" vs "}
+                <span className="font-mono">
+                  {base}@{worktree.baseCommit.slice(0, 7)}
+                </span>
+              </>
+            )}
+            {behind > 0 && ` · ${base} has ${behind} new commit${behind === 1 ? "" : "s"}`}
             {comments.length > 0 &&
               ` · ${comments.length} comment${comments.length === 1 ? "" : "s"} for your next message`}
           </span>
           <span className="ml-auto flex items-center gap-1">
             {net && net.length > 1 && <RevertAll files={net} onDone={reload} />}
+            {worktree && worktree.state !== "discarded" && (
+              <button onClick={() => askDiscard(true)} className={btn("ghost", "sm", "text-muted")}>
+                Discard
+              </button>
+            )}
+            {worktree && (ready || worktree.state === "applying") && !applying && (
+              <button
+                disabled={worktree.state === "applying" || !net?.length}
+                onClick={() => setApplying(true)}
+                className={btn("primary", "sm")}
+              >
+                Apply to main folder
+              </button>
+            )}
             <Tooltip label="Close" keys="Esc">
               <button onClick={onClose} className={btn("ghost", "sm", "text-muted", true)} aria-label="Close">
                 <X className="size-4" />
@@ -587,6 +721,21 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
           </span>
         </div>
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-6">
+          {worktree && here && applying && (
+            <ApplyBox
+              here={here}
+              worktree={worktree}
+              directory={open.directory}
+              files={net?.length ?? 0}
+              onClose={() => {
+                setApplying(false)
+                // The palette's Apply opens it again from here.
+                if (action) setReviewing(true)
+              }}
+              onChecked={setCheck}
+              onResolve={onClose}
+            />
+          )}
           {net === undefined && !failed && (
             <div className="flex justify-center pt-16">
               <Spinner />
@@ -615,12 +764,392 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
               ))}
             </>
           )}
-          {net?.length === 0 && <p className="text-dense px-1 pt-4 text-muted">Every file is back as it was before this session.</p>}
+          {net?.length === 0 && (
+            <p className="text-dense px-1 pt-4 text-muted">
+              {worktree
+                ? worktree.appliedCommit && worktree.appliedCommit === worktree.baseCommit
+                  ? `Everything is applied. New changes show here.`
+                  : `No changes from ${base} yet.`
+                : "Every file is back as it was before this session."}
+            </p>
+          )}
           {net?.map((f) => (
-            <ReviewFile key={f.file} file={f} directory={open.directory} onRestored={reload} startOpen={startOpen} />
+            <ReviewFile key={f.file} file={f} directory={where} base={base} onRestored={reload} startOpen={startOpen} />
           ))}
         </div>
       </aside>
+    </div>
+  )
+}
+
+const OPERATION = { merge: "merge", rebase: "rebase", "cherry-pick": "cherry-pick", revert: "revert" } as const
+
+type Phase =
+  | { kind: "message" }
+  | { kind: "checking" }
+  | { kind: "confirm"; onto: string; stash: boolean }
+  | { kind: "refused"; check: Exclude<ApplyCheck, { ok: true }> | { reason: "error"; message: string } }
+  | { kind: "merged"; conflicts: string[]; onto: string }
+  | { kind: "applying"; stash: boolean }
+  | { kind: "done"; commit: string; onto: string; stashLeft: string | null }
+
+/**
+ * Apply to the main folder: the commit message (suggested once, editable), then the check, then
+ * one commit. A refusal says why in a sentence and offers the way out it has.
+ */
+function ApplyBox({
+  here,
+  worktree,
+  directory,
+  files,
+  onClose,
+  onChecked,
+  onResolve,
+}: {
+  here: Here
+  worktree: SessionWorktree
+  directory: string
+  files: number
+  onClose: () => void
+  onChecked: (c: ApplyCheck | { error: string }) => void
+  onResolve: () => void
+}) {
+  const info = useWorktreeInfo(directory)
+  // Git too old to apply is known before any check: no message to write for it.
+  const old = info?.available === true && !info.canApply
+  const [text, setText] = useState("")
+  const [suggesting, setSuggesting] = useState(!old)
+  const [phase, setPhase] = useState<Phase>(old ? { kind: "refused", check: { ok: false, reason: "git", message: "" } } : { kind: "message" })
+  const [error, setError] = useState<string | null>(null)
+  const typed = useRef(false)
+  const box = useRef<HTMLTextAreaElement>(null)
+  // One suggestion when the box opens (a model call on the session's budget); never over typing.
+  useEffect(() => {
+    if (old) return
+    let live = true
+    void suggestCommitMessage().then((m) => {
+      if (!live) return
+      setSuggesting(false)
+      if (m && !typed.current) setText(m)
+      box.current?.focus()
+    })
+    return () => {
+      live = false
+    }
+  }, [])
+  const base = worktree.baseBranch
+  const apply = async (onto: string, stash: boolean) => {
+    setPhase({ kind: "applying", stash })
+    setError(null)
+    const done = await applyWorktree(here, text.trim(), onto, stash)
+    if ("error" in done) {
+      setError(done.error)
+      setPhase({ kind: "message" })
+      return
+    }
+    setPhase({ kind: "done", commit: done.commit, onto, stashLeft: done.stashLeft })
+  }
+  const run = async () => {
+    setPhase({ kind: "checking" })
+    setError(null)
+    const c = await applyCheck(here)
+    onChecked(c)
+    if ("error" in c) return setPhase({ kind: "refused", check: { reason: "error", message: c.error } })
+    if (!c.ok) return setPhase({ kind: "refused", check: c })
+    if (base !== c.onto) return setPhase({ kind: "confirm", onto: c.onto, stash: false })
+    await apply(c.onto, false)
+  }
+  const bring = async () => {
+    setPhase({ kind: "checking" })
+    const r = await bringBase(here)
+    if ("error" in r) return setPhase({ kind: "refused", check: { reason: "error", message: r.error } })
+    if (r.conflicts.length) return setPhase({ kind: "merged", conflicts: r.conflicts, onto: base ?? "the base" })
+    await run()
+  }
+  const ask = (list: string[]) => {
+    addToComposer(
+      `Bringing ${base ?? "the base branch"} in left conflict markers in ${list.join(", ")}. Resolve them, keeping what both sides meant, and run the tests that cover them.`
+    )
+    onResolve()
+  }
+
+  if (phase.kind === "done")
+    return (
+      <div className="flex shrink-0 flex-col gap-1.5 rounded-xl bg-surface px-4 py-3" role="status">
+        <span className="text-dense flex items-center gap-2">
+          <Check className="size-3.5 shrink-0 text-success" />
+          <span>
+            Applied as <span className="font-mono">{phase.commit.slice(0, 7)}</span> on {phase.onto}
+          </span>
+          <button onClick={onClose} className={btn("ghost", "sm", "ml-auto text-muted")}>
+            Done
+          </button>
+        </span>
+        {phase.stashLeft && (
+          <span className="text-2xs text-warning">
+            Your main-folder edits couldn’t go back cleanly. They’re kept in <span className="font-mono">{phase.stashLeft}</span>.
+          </span>
+        )}
+        <span className="text-2xs text-muted">The session goes on from this commit; you can apply again later.</span>
+      </div>
+    )
+
+  const busy = phase.kind === "checking" || phase.kind === "applying"
+  const refusal = phase.kind === "refused" ? phase.check : null
+  return (
+    <div className="flex shrink-0 flex-col gap-3 rounded-xl bg-surface p-3">
+      <div className="flex items-center gap-2 px-1">
+        <span className="text-dense">Apply to {base ?? "the main folder"}</span>
+        <span className="text-2xs text-muted">
+          One commit with {files} file{files === 1 ? "" : "s"}. Your hooks run as for any commit.
+        </span>
+      </div>
+      {!old && <textarea
+        ref={box}
+        value={text}
+        onChange={(e) => {
+          typed.current = true
+          setText(e.target.value)
+        }}
+        disabled={busy}
+        rows={3}
+        placeholder={suggesting ? "Writing a message…" : "Commit message"}
+        aria-label="Commit message"
+        className="text-dense block w-full resize-none rounded-lg bg-default/50 px-2.5 py-2 outline-none placeholder:text-field-placeholder focus-visible:status-focused-field disabled:opacity-70"
+      />}
+      {phase.kind === "confirm" && (
+        <Refusal
+          text={
+            base
+              ? `The main folder is on ${phase.onto}, not ${base}. Apply to ${phase.onto} instead?`
+              : `This session started from a detached commit. Apply to ${phase.onto}?`
+          }
+        >
+          <button onClick={() => void apply(phase.onto, phase.stash)} className={btn("primary", "sm")}>
+            Apply to {phase.onto}
+          </button>
+        </Refusal>
+      )}
+      {phase.kind === "merged" && (
+        <Refusal text={`Brought ${phase.onto} in. ${phase.conflicts.length === 1 ? "1 file has conflicts: fix it" : `${phase.conflicts.length} files have conflicts: fix them`}, then apply.`} files={phase.conflicts} directory={worktree.path}>
+          <button onClick={() => ask(phase.conflicts)} className={btn("secondary", "sm")}>
+            Ask the agent to resolve
+          </button>
+        </Refusal>
+      )}
+      {refusal && <Refused check={refusal} worktree={worktree} main={directory} canApply={info?.available ? info.canApply : true} onBring={() => void bring()} onStash={(onto) => (base !== onto ? setPhase({ kind: "confirm", onto, stash: true }) : void apply(onto, true))} onAsk={ask} onAgain={() => void run()} />}
+      {error && <p className="text-dense max-h-32 overflow-y-auto px-1 whitespace-pre-wrap text-danger select-text">{error}</p>}
+      <div className="flex items-center justify-end gap-2">
+        <button onClick={onClose} disabled={phase.kind === "applying"} className={btn("ghost", "sm")}>
+          Cancel
+        </button>
+        {phase.kind !== "confirm" && !old && (
+          <button disabled={!text.trim() || busy || (suggesting && !typed.current)} onClick={() => void run()} className={btn("primary", "sm", "gap-1.5")}>
+            {busy && <Spinner className="size-3.5 text-accent-foreground" />}
+            {phase.kind === "applying" ? "Applying…" : phase.kind === "checking" ? "Checking…" : refusal ? "Check again" : "Apply"}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** Why the apply can't go now, in one sentence, with the way out it has. */
+function Refused({
+  check,
+  worktree,
+  main,
+  canApply,
+  onBring,
+  onStash,
+  onAsk,
+  onAgain: _again,
+}: {
+  check: Exclude<ApplyCheck, { ok: true }> | { reason: "error"; message: string }
+  worktree: SessionWorktree
+  /** The main folder: its edited files open from there. */
+  main: string
+  canApply: boolean
+  onBring: () => void
+  onStash: (onto: string) => void
+  onAsk: (files: string[]) => void
+  onAgain: () => void
+}) {
+  const base = worktree.baseBranch ?? "the base"
+  switch (check.reason) {
+    case "conflict":
+      return (
+        <Refusal
+          text={`${check.files.length === 1 ? "This file" : `These ${check.files.length} files`} changed on ${check.onto} too, and the changes conflict.`}
+          files={check.files}
+          directory={worktree.path}
+        >
+          <Tooltip label={`Merges ${check.onto} into this session’s branch; conflicts stay there to fix`} side="top">
+            <button onClick={onBring} className={btn("secondary", "sm")}>
+              Bring {check.onto} in
+            </button>
+          </Tooltip>
+        </Refusal>
+      )
+    case "unresolved":
+      return (
+        <Refusal
+          text={check.files.length === 1 ? "This file still has conflict markers. Fix it, then apply." : `These ${check.files.length} files still have conflict markers. Fix them, then apply.`}
+          files={check.files}
+          directory={worktree.path}
+        >
+          <button onClick={() => onAsk(check.files)} className={btn("secondary", "sm")}>
+            Ask the agent to resolve
+          </button>
+        </Refusal>
+      )
+    case "dirty":
+      return (
+        <Refusal
+          text={`You have uncommitted edits in the main folder to ${check.files.length === 1 ? "a file" : "files"} this apply changes.`}
+          files={check.files}
+          directory={main}
+        >
+          <Tooltip label="Your edits are stashed, the commit is made, then they’re put back" side="top">
+            <button onClick={() => onStash(check.onto)} className={btn("secondary", "sm")}>
+              Set them aside and apply
+            </button>
+          </Tooltip>
+        </Refusal>
+      )
+    case "staged":
+      return <Refusal text="The main folder has staged changes, which would go into this commit. Commit or unstage them first." />
+    case "detached":
+      return <Refusal text="The main folder isn’t on a branch. Switch it to a branch to apply." />
+    case "operation":
+      return <Refusal text={`The main folder is in the middle of a ${OPERATION[check.what] ?? check.what}. Finish or abort it first.`} />
+    case "empty":
+      return <Refusal text={`Nothing to apply: the files match ${base}.`} />
+    case "busy":
+      return <Refusal text="The session is still working. Apply once it stops." />
+    case "git":
+      return !canApply ? (
+        <Refusal text="Update Git to apply. Applying needs Git 2.40 or later; the worktree works as it is.">
+          <button onClick={() => openExternal(GIT_DOWNLOAD)} className={btn("secondary", "sm", "gap-1")}>
+            Download Git
+            <ArrowUpRight className="size-3.5" />
+          </button>
+        </Refusal>
+      ) : (
+        <Refusal text={check.message} plain />
+      )
+    case "error":
+      return <Refusal text={check.message} plain />
+  }
+}
+
+function Refusal({
+  text,
+  files,
+  directory,
+  plain = false,
+  children,
+}: {
+  text: string
+  files?: string[]
+  /** Files open in the editor from here; null: listed only. */
+  directory?: string | null
+  plain?: boolean
+  children?: ReactNode
+}) {
+  return (
+    <div className="flex flex-col gap-2 rounded-lg bg-default/40 px-3 py-2.5">
+      <p className={cn("text-dense flex items-start gap-2", plain && "whitespace-pre-wrap select-text")}>
+        <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-warning" />
+        <span className="min-w-0">{text}</span>
+      </p>
+      {files && files.length > 0 && (
+        <ul className="flex max-h-28 flex-col overflow-y-auto pl-5">
+          {files.map((f) =>
+            directory ? (
+              <li key={f}>
+                <button
+                  onClick={() => void openInEditor(directory, f)}
+                  className="flex h-7 w-full items-center gap-2 rounded-md px-1.5 text-left hover:bg-default/60 focus-visible:status-focused-field"
+                >
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs">{f}</span>
+                  <ArrowUpRight className="size-3 shrink-0 text-muted" />
+                </button>
+              </li>
+            ) : (
+              <li key={f} className="flex h-7 items-center px-1.5">
+                <span className="min-w-0 truncate font-mono text-xs text-muted">{f}</span>
+              </li>
+            )
+          )}
+        </ul>
+      )}
+      {children && <div className="flex flex-wrap items-center gap-2 pl-5">{children}</div>}
+    </div>
+  )
+}
+
+/** Discard a worktree session's worktree and branch, after a confirm: it can't be undone. */
+export function DiscardConfirm({ open }: { open: Open }) {
+  const worktree = useWorktree(open.sessionId)
+  const [files, setFiles] = useState<number | null>(null)
+  const [working, setWorking] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const panel = useRef<HTMLDivElement>(null)
+  const close = useCallback(() => askDiscard(false), [])
+  useEscape(panel, close)
+  useEffect(() => {
+    let live = true
+    void readChanges().then((r) => live && setFiles(Array.isArray(r) ? r.length : null))
+    panel.current?.querySelector<HTMLButtonElement>("[data-cancel]")?.focus()
+    return () => {
+      live = false
+    }
+  }, [])
+  const here = hereOf(open)
+  if (!worktree || !here) return null
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim p-6" onClick={close}>
+      <div
+        ref={panel}
+        role="alertdialog"
+        aria-labelledby="discard-title"
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-sm rounded-2xl bg-overlay p-5"
+      >
+        <h2 id="discard-title" className="text-sm font-medium">
+          Discard this worktree?
+        </h2>
+        <p className="text-dense mt-1.5 text-muted">
+          Deletes the worktree and branch <span className="font-mono text-foreground/85">{worktree.branch}</span>
+          {files ? ` with ${files} changed file${files === 1 ? "" : "s"}` : ""}. The conversation stays.
+        </p>
+        {error && <p className="text-dense mt-3 whitespace-pre-wrap text-danger select-text">{error}</p>}
+        <div className="mt-5 flex items-center justify-end gap-2">
+          <button data-cancel onClick={close} className={btn("ghost", "sm")}>
+            Cancel
+          </button>
+          <button
+            disabled={working}
+            onClick={() =>
+              void (async () => {
+                setWorking(true)
+                setError(null)
+                const r = await discardWorktree(here)
+                setWorking(false)
+                if (r !== true) return setError(r)
+                close()
+                setReviewing(false)
+                flash("Worktree discarded")
+              })()
+            }
+            className={btn("danger-soft", "sm", "gap-1.5")}
+          >
+            {working && <Spinner className="size-3.5" />}
+            Discard
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -683,11 +1212,15 @@ const VERB = { added: "Added", modified: "Edited", deleted: "Deleted" } as const
 function ReviewFile({
   file,
   directory,
+  base,
   onRestored,
   startOpen,
 }: {
   file: FileDiff
+  /** Where relative paths are: the worktree for a worktree session. */
   directory: string
+  /** A worktree session's base branch: files go back as they are there. */
+  base: string | null
   onRestored: () => void
   startOpen: boolean
 }) {
@@ -755,7 +1288,7 @@ function ReviewFile({
             </button>
           </span>
         ) : (
-          <Tooltip label={file.status === "added" ? "Delete this new file" : "Put this file back as it was before the session"}>
+          <Tooltip label={file.status === "added" ? "Delete this new file" : base ? `Put this file back as on ${base}` : "Put this file back as it was before the session"}>
             <button onClick={() => setConfirm(true)} className={btn("ghost", "sm", "shrink-0 gap-1.5 text-muted")}>
               <RotateCcw className="size-3.5" />
               Revert
