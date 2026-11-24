@@ -260,6 +260,54 @@ function usePast(at: number | false, ms: number) {
   return past
 }
 
+/**
+ * Two Escapes in a row stop the running turn, wherever focus is (the box, the transcript, the
+ * sidebar, nowhere): the one place their presses are counted, so a press is never counted twice.
+ * A press something else took is no press here: a panel, menu or sheet closing (layers, see
+ * `useEscape`), a field it leaves (the title, a rename, the search), the sidebar's selection, the
+ * box's own menu or the ask it denies. They all mark the key (`preventDefault`) or stop it before
+ * the window. True while the first press waits for the second: the box shows the hint.
+ */
+function useDoubleEscape(running: boolean, sessionId: string | null) {
+  const [hint, setHint] = useState(false)
+  const at = useRef(0)
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const runningRef = useRef(running)
+  runningRef.current = running
+  // Another session, or the turn ended: a press made before counts for nothing.
+  useEffect(() => {
+    at.current = 0
+    clearTimeout(timer.current)
+    setHint(false)
+  }, [sessionId, running])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // `anyLayer` too: a layer's close may already have dropped it by now, but not before.
+      if (e.key !== "Escape" || e.defaultPrevented || e.repeat || e.isComposing || anyLayer()) return
+      if (!runningRef.current) return
+      clearTimeout(timer.current)
+      if (Date.now() - at.current < ESC_AGAIN) {
+        at.current = 0
+        setHint(false)
+        stop()
+      } else {
+        at.current = Date.now()
+        setHint(true)
+        timer.current = setTimeout(() => {
+          at.current = 0
+          setHint(false)
+        }, ESC_AGAIN)
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => {
+      window.removeEventListener("keydown", onKey)
+      clearTimeout(timer.current)
+    }
+  }, [])
+  return hint
+}
+
 export function Composer({ open }: { open: Open }) {
   const mode = useStore((s) => s.mode)
   const sendKey = usePrefs((p) => p.conversation.send)
@@ -281,11 +329,10 @@ export function Composer({ open }: { open: Open }) {
   const [dismissed, setDismissed] = useState<number | null>(null)
   /** How far back ArrowUp went through the sent messages; null when not recalling. */
   const [recall, setRecall] = useState<number | null>(null)
-  const [escHint, setEscHint] = useState(false)
-  const escAt = useRef(0)
   const area = useRef<HTMLTextAreaElement>(null)
   const picker = useRef<HTMLInputElement>(null)
   const running = isRunning(open)
+  const escHint = useDoubleEscape(running, open.sessionId)
   // A stop that hasn't ended the turn after a few seconds may be pressed again.
   const stopStuck = usePast(open.stopping, STOP_AGAIN)
   const blocked = useBlocked(open)
@@ -638,22 +685,11 @@ export function Composer({ open }: { open: Open }) {
               if (empty && asking) {
                 if (Date.now() - askedAt.current >= ASK_SETTLE) void reply(asking, "once")
               } else submit()
-            } else if (e.key === "Escape") {
-              // A panel or menu over the window takes Escape; this one is never for the box.
-              if (anyLayer()) return
-              if (asking) void reply(asking, "reject")
-              else if (running) {
-                // One press could be meant for something else; two in a row stop the turn.
-                if (Date.now() - escAt.current < ESC_AGAIN) {
-                  escAt.current = 0
-                  setEscHint(false)
-                  stop()
-                } else {
-                  escAt.current = Date.now()
-                  setEscHint(true)
-                  setTimeout(() => setEscHint(false), ESC_AGAIN)
-                }
-              }
+            } else if (e.key === "Escape" && asking && !anyLayer() && !e.repeat && !e.nativeEvent.isComposing) {
+              // Denies the waiting ask, in the box only; taken, so it is no press toward a stop.
+              // Every other Escape goes on to the window, where the stop's presses are counted.
+              e.preventDefault()
+              void reply(asking, "reject")
             }
           }}
           placeholder={

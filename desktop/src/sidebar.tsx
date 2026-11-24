@@ -207,11 +207,15 @@ export function Sidebar() {
   useEffect(() => {
     // Ctrl K (focus the search) is in shortcuts.tsx, which also unfolds the sidebar for it.
     const onKey = (e: KeyboardEvent) => {
-      // Under Settings, a panel or a menu, Escape is theirs.
-      if (e.key === "Escape" && selected.size > 0 && !anyLayer()) setSelected(new Set())
+      // Under Settings, a panel or a menu, Escape is theirs. Taken (marked) before the window
+      // hears it, where two presses stop a running turn: this one only clears the selection.
+      if (e.key === "Escape" && !e.defaultPrevented && selected.size > 0 && !anyLayer()) {
+        e.preventDefault()
+        setSelected(new Set())
+      }
     }
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
+    document.addEventListener("keydown", onKey)
+    return () => document.removeEventListener("keydown", onKey)
   }, [selected.size])
 
   const selecting: Selecting = {
@@ -264,6 +268,8 @@ export function Sidebar() {
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Escape") {
+                  // Leaves the field only: no press toward stopping a turn.
+                  e.preventDefault()
                   setQuery("")
                   e.currentTarget.blur()
                 }
@@ -510,6 +516,8 @@ function SessionLink({
           onKeyDown={(e) => {
             if (e.key === "Enter") e.currentTarget.blur()
             if (e.key === "Escape") {
+              // Leaves the field only: no press toward stopping a turn.
+              e.preventDefault()
               e.currentTarget.value = row.title
               e.currentTarget.blur()
             }
