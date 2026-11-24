@@ -815,6 +815,9 @@ async fn prepare(handle: AppHandle, core: Core, db: Arc<Db>, id: String, made: M
             if go() {
                 copy_env_files(&out, Path::new(&folder), worktree, &go);
             }
+            if go() {
+                copy_local_files(&out, Path::new(&folder), worktree, &go);
+            }
         })
     };
     let _ = steps.await;
@@ -911,6 +914,95 @@ fn copy_env_files(out: &Out, folder: &Path, worktree: &Path, go: &dyn Fn() -> bo
         0 => {}
         1 => out.info(&format!("Copied {}", copied[0])),
         n => out.info(&format!("Copied {n} env files: {}", copied.join(", "))),
+    }
+}
+
+/// Local files under these folders that Git doesn't track (hook scripts, settings) come along.
+const LOCAL_FOLDERS: [&str; 2] = [".claude", ".anysola"];
+/// At most this many local files, each at most this large.
+const LOCAL_FILES: usize = 200;
+const LOCAL_SIZE: u64 = 1024 * 1024;
+
+/// Copies the main folder's untracked and ignored files under `.claude/` and `.anysola/` into
+/// the worktree where it has none, so hooks whose scripts exist only locally run there too.
+fn copy_local_files(out: &Out, folder: &Path, worktree: &Path, go: &dyn Fn() -> bool) {
+    let Some(top) = top_of(folder) else {
+        return;
+    };
+    let copied = copy_local(&top, worktree, go);
+    match copied.len() {
+        0 => {}
+        1..=4 => out.info(&format!(
+            "Copied local hook and config files: {}",
+            copied.join(", ")
+        )),
+        n => out.info(&format!("Copied {n} local hook and config files")),
+    }
+}
+
+/// The copy itself; returns the copied files' paths (relative, `/`-separated).
+fn copy_local(top: &Path, worktree: &Path, go: &dyn Fn() -> bool) -> Vec<String> {
+    let tracked: std::collections::HashSet<String> =
+        wgit(top, &["ls-files", "-z", "--", ".claude", ".anysola"])
+            .run()
+            .map(|o| {
+                o.stdout
+                    .split('\0')
+                    .filter(|p| !p.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+    let mut found: Vec<String> = Vec::new();
+    for folder in LOCAL_FOLDERS {
+        find_local(top, &top.join(folder), &mut found);
+    }
+    let mut copied = Vec::new();
+    for relative in found {
+        if copied.len() >= LOCAL_FILES || !go() || !worktree.is_dir() {
+            break;
+        }
+        if tracked.contains(&relative) {
+            continue;
+        }
+        let from = top.join(&relative);
+        let to = worktree.join(&relative);
+        let fits =
+            std::fs::symlink_metadata(&from).is_ok_and(|m| m.is_file() && m.len() <= LOCAL_SIZE);
+        if !fits || to.symlink_metadata().is_ok() {
+            continue;
+        }
+        if let Some(parent) = to.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if std::fs::copy(&from, &to).is_ok() {
+            copied.push(relative);
+        }
+    }
+    copied
+}
+
+/// Files under `dir` (any depth, `node_modules` skipped, links not followed), relative to `top`.
+fn find_local(top: &Path, dir: &Path, found: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if found.len() >= LOCAL_FILES * 4 {
+            return;
+        }
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_dir() {
+            if entry.file_name() != "node_modules" {
+                find_local(top, &entry.path(), found);
+            }
+        } else if kind.is_file()
+            && let Ok(relative) = entry.path().strip_prefix(top)
+        {
+            found.push(relative.to_string_lossy().replace('\\', "/"));
+        }
     }
 }
 

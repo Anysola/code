@@ -442,6 +442,109 @@ fn writing_git_data_always_asks() {
     );
 }
 
+/// Claude Code's documented hook form, `"$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh`, runs as
+/// written: in a main-folder session from the main folder, in a worktree session from the
+/// worktree (where the desktop copied the ignored script), with the worktree as project folder.
+#[test]
+fn the_documented_hook_form_runs_in_both_kinds_of_session() {
+    // Each session's first turn writes one.txt.
+    let gateway = turns(vec![vec![(
+        "write",
+        json!({"path": "one.txt", "content": "1"}),
+    )]]);
+    let env = env(&gateway.url);
+    let log = env.home.home().join("hook.log");
+    let config = json!({"hooks": {"PreToolUse": [{"matcher": "Write", "hooks": [{"type": "command",
+        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/x.sh"}]}]}});
+    env.home.write(".anysola/config.json", &config.to_string());
+    let project = project(&env, &[(".gitignore", ".claude/hooks/\n")]);
+    let script = format!(
+        "#!/bin/sh\necho \"$PWD|$CLAUDE_PROJECT_DIR\" >> '{}'\nexit 0\n",
+        log.display()
+    );
+    env.home.write("proj/.claude/hooks/x.sh", &script);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            project.join(".claude/hooks/x.sh"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    answering(&runtime, &core, |_, _| Answer::Once);
+    // A main-folder session.
+    let (main_session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&main_session.id, prompt("one"), TurnOptions::default()))
+        .unwrap();
+    assert!(
+        project.join("one.txt").exists(),
+        "the hook let the write through"
+    );
+    // A worktree session, its ignored script copied in as the desktop does.
+    let (id, top) = isolated(&runtime, &core);
+    std::fs::create_dir_all(top.join(".claude/hooks")).unwrap();
+    std::fs::copy(
+        project.join(".claude/hooks/x.sh"),
+        top.join(".claude/hooks/x.sh"),
+    )
+    .unwrap();
+    runtime
+        .block_on(core.prompt(&id, prompt("two"), TurnOptions::default()))
+        .unwrap();
+    assert!(top.join("one.txt").exists());
+    let lines: Vec<String> = read(&log).unwrap().lines().map(str::to_string).collect();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    let real = |p: &str| real(Path::new(p));
+    let (pwd, dir) = lines[0].split_once('|').unwrap();
+    assert_eq!(
+        (real(pwd), real(dir)),
+        (
+            real(&project.display().to_string()),
+            real(&project.display().to_string())
+        )
+    );
+    let (pwd, dir) = lines[1].split_once('|').unwrap();
+    assert_eq!(
+        (real(pwd), real(dir)),
+        (
+            real(&top.display().to_string()),
+            real(&top.display().to_string())
+        )
+    );
+}
+
+/// A hook that writes its data argument (`prettier --write "$CLAUDE_PROJECT_DIR/README.md"`)
+/// from a worktree session writes the worktree's file, never the main folder's.
+#[test]
+fn a_formatting_hook_in_a_worktree_leaves_the_main_folder_alone() {
+    let gateway = turns(vec![vec![(
+        "write",
+        json!({"path": "a.txt", "content": "a"}),
+    )]]);
+    let env = env(&gateway.url);
+    let config = json!({"hooks": {"PostToolUse": [{"matcher": "Write", "hooks": [{"type": "command",
+        "command": "sh -c 'echo formatted > \"$1\"' prettier \"$CLAUDE_PROJECT_DIR/README.md\""}]}]}});
+    env.home.write(".anysola/config.json", &config.to_string());
+    let project = project(&env, &[]);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    answering(&runtime, &core, |_, _| Answer::Once);
+    let (id, top) = isolated(&runtime, &core);
+    runtime
+        .block_on(core.prompt(&id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    assert_eq!(read(&top.join("README.md")).as_deref(), Some("formatted\n"));
+    assert_eq!(
+        read(&project.join("README.md")).as_deref(),
+        Some("hi"),
+        "BREAK: wrote F"
+    );
+}
+
 /// The user's root-relative denial names the main folder's file reached by absolute path from a
 /// worktree, and the worktree's own copy, even with the outside folder approved.
 #[test]

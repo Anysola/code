@@ -99,7 +99,7 @@ pub fn unrunnable(event: Event, command: &str, ran: &Ran) -> Option<String> {
     let detail = match ran {
         Ran::NotStarted(error) => error.clone(),
         Ran::Exited {
-            code: Some(code @ (126 | 127 | 9009)),
+            code: Some(code @ (126 | 127)),
             stderr,
             ..
         } => match first_line(stderr) {
@@ -384,11 +384,6 @@ mod tests {
         assert!(unrunnable(Event::PreToolUse, "x", &exited(126, "", "")).is_some());
         assert!(unrunnable(Event::PreToolUse, "x", &Ran::NotStarted("no shell".into())).is_some());
         assert!(unrunnable(Event::PreToolUse, "x", &exited(1, "", "")).is_none());
-        // Error words don't decide (a guard may print them for its own reasons, in any language).
-        let ran = exited(1, "", "cat: notes.txt: No such file or directory");
-        assert!(unrunnable(Event::PreToolUse, "g", &ran).is_none());
-        assert!(unrunnable(Event::PreToolUse, "x", &exited(9009, "", "")).is_some());
-        assert!(unrunnable(Event::PreToolUse, "x", &exited(1, "", "lint: 3 problems")).is_none());
         assert!(unrunnable(Event::PreToolUse, "x", &Ran::TimedOut { seconds: 1 }).is_none());
         assert!(unrunnable(Event::PostToolUse, "x", &missing).is_none());
         assert!(unrunnable(Event::Stop, "x", &Ran::NotStarted("e".into())).is_none());

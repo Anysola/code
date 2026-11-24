@@ -780,3 +780,26 @@ fn markers_of_an_open_merge_are_never_applied_anyway() {
     assert!(apply(&marks(), &row, "x", "main", false, true).is_err());
     assert_eq!(state(&sandbox, &main), before);
 }
+
+/// Local hook and config files under `.claude/` and `.anysola/` that Git doesn't track come
+/// along; tracked ones (already there) and `node_modules` don't.
+#[test]
+fn local_hook_files_are_copied() {
+    let sandbox = Sandbox::new("local");
+    let (main, row) = sandbox.session();
+    write(&main, ".claude/settings.json", "{}\n");
+    sandbox.git(&main, &["add", "-f", ".claude/settings.json"]);
+    sandbox.git(&main, &["commit", "-qm", "settings"]);
+    write(&main, ".claude/hooks/x.sh", "#!/bin/sh\nexit 0\n");
+    write(&main, ".anysola/local.json", "{\"a\": 1}\n");
+    write(&main, ".anysola/node_modules/pkg/index.js", "x\n");
+    write(&main, ".claude/settings.json", "{\"changed\": true}\n");
+    let mut copied = copy_local(&main, &w(&row), &|| true);
+    copied.sort();
+    assert_eq!(copied, [".anysola/local.json", ".claude/hooks/x.sh"]);
+    assert_eq!(read(&w(&row), ".claude/hooks/x.sh"), "#!/bin/sh\nexit 0\n");
+    assert!(!w(&row).join(".anysola/node_modules").exists());
+    // Already there: left alone.
+    assert!(copy_local(&main, &w(&row), &|| true).is_empty());
+    assert!(copy_local(&main, &w(&row), &|| false).is_empty());
+}

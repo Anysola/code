@@ -40,8 +40,7 @@ the reason, and JSON on stdout can add context or deny a call. Settings → Hook
 
 Hooks only tighten: a hook can block a call or have you asked about it, never allow something your permissions
 would not. Hooks in `~/.anysola/config.json` run right away; a project's hooks run only once you approve them in
-the conversation, and again after they change. A `PreToolUse` hook whose command or script can't be found blocks the
-call, naming the hook. The agent's edit and write tools always ask before changing your
+the conversation, and again after they change. The agent's edit and write tools always ask before changing your
 config files, the files your hooks run and the app's database.
 
 ## What a project can change
@@ -76,9 +75,10 @@ The session's file tools treat only its worktree as inside. They never write int
 session's worktree, in any mode and whatever you allowed for a parent folder: apply the changes instead. Reading
 there asks as for any outside folder, and your rules still name those files as they would in the main folder. The project's
 config, hooks and MCP servers are the main folder's; an edit to the worktree's `anysola.json` counts once
-applied. A hook that names its script by the project folder (`$CLAUDE_PROJECT_DIR/…`) or relative to it
-(`./hooks/x.sh`) runs the main folder's copy, through `$ANYSOLA_MAIN_PROJECT_DIR`, with the worktree as its
-project folder. The file tools also never write the worktree's own `.git`.
+applied. Hooks in a worktree session run from the worktree, with it as their project folder
+(`$CLAUDE_PROJECT_DIR`). Local hook and config files under `.claude/` and `.anysola/` that Git doesn't track
+(ignored or untracked) are copied in from the main folder when the worktree is made; later changes to them in the
+main folder aren't picked up until Recreate. The file tools also never write the worktree's own `.git`.
 
 A worktree is not a sandbox. Only the file tools are held to it: shell commands run as anywhere else and can
 reach any folder, MCP servers run with the main folder as their folder and aren't confined either, and Git in a
