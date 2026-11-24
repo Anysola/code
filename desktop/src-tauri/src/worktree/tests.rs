@@ -95,8 +95,12 @@ fn write(dir: &Path, file: &str, text: &str) {
     std::fs::write(path, text).unwrap();
 }
 
+/// The file's text with `\r\n` read as `\n`: Git for Windows writes files it checks out or puts
+/// back from a stash with CRLF (`core.autocrlf`), which is the same text.
 fn read(dir: &Path, file: &str) -> String {
-    std::fs::read_to_string(dir.join(file)).unwrap_or_default()
+    std::fs::read_to_string(dir.join(file))
+        .unwrap_or_default()
+        .replace("\r\n", "\n")
 }
 
 fn w(row: &SessionWorktreeRow) -> PathBuf {
