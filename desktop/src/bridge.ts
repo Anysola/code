@@ -9,8 +9,133 @@ import { listen } from "@tauri-apps/api/event"
  * A root session as the list shows it. `forkOf`: the session it was forked from (`forkSession`),
  * kept through renames and restarts; null for any other session. The source may since be
  * deleted, so look it up rather than assume it is listed.
+ *
+ * `directory` is always the main folder, also for a session working in its own worktree: every
+ * call routes by it (the folder's core), and the list groups by it. `worktree` says where such a
+ * session works; null for a session in the main folder (every session from before 1.1.9).
  */
-export type SessionRow = { id: string; title: string; directory: string; updated: number; forkOf: string | null }
+export type SessionRow = {
+  id: string
+  title: string
+  directory: string
+  updated: number
+  forkOf: string | null
+  worktree: SessionWorktree | null
+}
+
+// ---------------------------------------------------------------------------
+// Worktrees: a session in its own git worktree of the main folder
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a new session in a git folder works: its own worktree (the default) or the main folder.
+ * A worktree is made from the main folder's `HEAD`; uncommitted main-folder changes are not in it.
+ */
+export type Place = "worktree" | "folder"
+
+export type WorktreeState =
+  /** Being made (checkout, env files, submodules, setup); the first message waits for it. */
+  | "preparing"
+  /** The session works there. Also after an apply: the session goes on from the applied commit. */
+  | "ready"
+  /** The folder is gone (deleted outside the app): Recreate, Discard or Fork. Turns refuse. */
+  | "missing"
+  /** Making it failed or was cut off; `error` says why. Try again (`worktreeRecreate`) or `worktreeToFolder`. */
+  | "failed"
+  /** An apply runs; everything else on the session waits. */
+  | "applying"
+  /** Reserved: an apply that ends the session. Not reached in 1.1.9 (an apply goes back to `ready`). */
+  | "applied"
+  /** Discarded: the worktree and branch are gone; the session stays readable, turns refuse. */
+  | "discarded"
+
+/** How a fork's files were put back to its fork point. */
+export type ForkRestore = {
+  /** Every file the snapshots cover is as it was at the fork point. */
+  exact: boolean
+  /** Files left as on the commit the fork started from: over 2 MB and never captured. */
+  kept: string[]
+  /**
+   * How it was done when not from the fork point's snapshot: "edits" = only the session's own
+   * later edits undone (history from before 1.1.9; commits and edits made outside it since stay);
+   * "now" = the fork point's files are gone (`snapshots: false`, or pruned after ~2 weeks), so
+   * the source's files as they are now. null when restored from the fork point's snapshot.
+   * Ignored files (`.env`, `node_modules`, build output) are never in snapshots in any case.
+   */
+  fallback: "edits" | "now" | null
+}
+
+export type SessionWorktree = {
+  /** The folder the session works in (the worktree's top; for a subfolder project the session works in the same subfolder of it). */
+  path: string
+  /** `anysola/<slug>`. */
+  branch: string
+  /** The branch it was made from; null when the main folder was on a detached HEAD. */
+  baseBranch: string | null
+  /** What the session's changes are measured from: moves when the base is brought in, and to the applied commit after an apply. */
+  baseCommit: string
+  state: WorktreeState
+  /** Why it failed; with `ready`, a notice to show once (an apply cut off by a crash). */
+  error: string | null
+  /** The last commit an apply made on the base branch; the session goes on from it. */
+  appliedCommit: string | null
+  /** For a fork: how its files were put back. */
+  restored: ForkRestore | null
+  /** The folder or branch couldn't be removed yet (a program may hold it); retried at start. */
+  leftover: boolean
+}
+
+export type WorktreeInfo =
+  /** "no-commits": the repository has no commit yet; new sessions use the main folder. */
+  | { available: false; reason: "not-git" | "git-missing" | "no-commits" }
+  | {
+      available: true
+      /** null: detached HEAD. */
+      branch: string | null
+      /** Uncommitted files in the main folder (not carried into a new worktree: say so). */
+      uncommitted: number
+      /** This folder's setup command (`Prefs.worktreeSetup`). */
+      setup: string | null
+      /** Git older than 2.40: worktrees work, but applying needs a newer Git ("Update Git to apply"). */
+      canApply: boolean
+    }
+
+/**
+ * Whether the session's changes can be applied onto the main folder's current branch, checked
+ * without touching the main folder. `onto`: that branch; when it differs from `baseBranch` the
+ * window confirms "Apply to `onto` instead of `baseBranch`?". `behind`: commits on `onto` since
+ * the base (the apply still lands on its tip).
+ */
+export type ApplyCheck =
+  | { ok: true; onto: string; files: number; add: number; del: number; behind: number }
+  /** Nothing to apply. */
+  | { ok: false; reason: "empty" }
+  /** A turn, a subagent or the setup command runs. */
+  | { ok: false; reason: "busy" }
+  /** Conflict markers or unmerged files left in the worktree (after bringing the base in). */
+  | { ok: false; reason: "unresolved"; files: string[] }
+  /** The changes conflict with `onto`: bring the base in, open the files, or discard. */
+  | { ok: false; reason: "conflict"; onto: string; files: string[] }
+  /** Main-folder edits in files the apply touches; apply with `stash` to set them aside and back. */
+  | { ok: false; reason: "dirty"; onto: string; files: string[] }
+  /** Staged changes in the main folder would go into the commit. */
+  | { ok: false; reason: "staged"; onto: string }
+  /** The main folder is on a detached HEAD: switch it to a branch to apply. */
+  | { ok: false; reason: "detached" }
+  | { ok: false; reason: "operation"; what: "merge" | "rebase" | "cherry-pick" | "revert" }
+  /** Git failed, or is older than 2.40 ("Update Git to 2.40 or later to apply"); `message` says it. */
+  | { ok: false; reason: "git"; message: string }
+
+/** The setup command's last run in a session's worktree. */
+export type SetupRun = {
+  command: string | null
+  state: "running" | "done" | "failed" | "stopped" | "timeout"
+  code: number | null
+  /** The last 2000 lines; "info" lines are the app's own (preparation steps). */
+  lines: { stream: "info" | "out" | "err"; text: string }[]
+  started: number
+  ended: number | null
+}
 
 /**
  * A session's share of the account's 5-hour window, as `sessionUsage` and `setBudget` return it
@@ -206,6 +331,8 @@ export type Prefs = {
     /** Read skills from Claude Code's folders (`~/.claude/skills`, a project's `.claude/skills`). */
     claudeSkills: boolean
   }
+  /** Each main folder's worktree setup command (`folderKey` of the folder); empty by default. Only the user's own, never a repository's. */
+  worktreeSetup: Record<string, string>
 }
 
 /** The agent's settings in `~/.anysola/config.json`. */
@@ -445,6 +572,12 @@ export type SendRequest = {
   agent: string | null
   files: Attachment[]
   skills: string[]
+  /**
+   * New sessions in a git folder with a commit only: its own worktree (the default) or the main
+   * folder. Ignored otherwise. With a worktree, `prompt` returns at once with `queued: true`;
+   * the message runs once the worktree is ready (`worktree` events say when).
+   */
+  place?: Place
 }
 
 /** A staged rewind: the turns it hides and the files it put back. */
@@ -640,6 +773,11 @@ export type CoreEvent =
   | { type: "closeRequested"; busy: number }
   /** An update is downloading; `total` null when the size isn't known. */
   | { type: "update"; downloaded: number; total: number | null }
+  /** A session's worktree changed (state, base, apply, restore report). `directory`: the main folder. */
+  | { type: "worktree"; directory: string; sessionId: string; worktree: SessionWorktree }
+  /** A line of a worktree's preparation or setup command. */
+  | { type: "setup"; directory: string; sessionId: string; stream: "info" | "out" | "err"; text: string }
+  | { type: "setupEnd"; directory: string; sessionId: string; run: SetupRun }
 
 export type GitStatus =
   /** `git: "missing"`: Git isn't installed (or isn't found), which is why nothing shows. */
@@ -703,6 +841,7 @@ export type Bridge = {
   /** A sent message's images as data URLs, in order. */
   messageImages(directory: string, sessionId: string, messageId: string): Promise<string[]>
   renameSession(sessionId: string, title: string): Promise<void>
+  /** Also removes the session's worktree and its branch (its changes are gone). */
   deleteSession(directory: string, sessionId: string): Promise<boolean>
   /**
    * Copies the session into a new one: the whole conversation, or only what came before
@@ -716,9 +855,11 @@ export type Bridge = {
    * message (nothing comes before it), and with a rewind staged somewhere other than a user
    * message.
    *
-   * IMPORTANT: a fork works in the same folder as its source, and nothing rewinds files. Forking
-   * from an earlier message gives the conversation as it was then, but the files stay as they
-   * are now, edits of the later turns included; both sessions then change the same files.
+   * In a git folder with a commit the fork gets its own worktree (`worktree` on the row, state
+   * `preparing` until env files and setup are done), with the files put back as they were at the
+   * fork point; `worktree.restored` says how exactly (show a note only when not `exact`).
+   * Elsewhere (no git, the scratch folder) a fork works in the same folder as its source and
+   * nothing rewinds files: the conversation is as it was then, the files stay as they are now.
    */
   forkSession(directory: string, sessionId: string, before: string | null): Promise<SessionRow>
   /**
@@ -750,7 +891,9 @@ export type Bridge = {
   selectAgent(directory: string, sessionId: string, agent: string): Promise<Info>
   projectFiles(directory: string): Promise<string[]>
   scratchFolder(): Promise<string>
+  /** Main-folder sessions: each file the session changed, from before its first change. Worktree sessions: the worktree's files vs `worktree.baseCommit` (commands' changes included). */
   changes(directory: string, sessionId: string): Promise<FileDiff[] | null>
+  /** Puts one file back: as before the session changed it, or for a worktree session as on `worktree.baseCommit`. */
   restoreFile(directory: string, sessionId: string, file: string): Promise<void>
   gitStatus(directory: string): Promise<GitStatus>
   gitBranch(directory: string, name: string): Promise<void>
@@ -774,6 +917,36 @@ export type Bridge = {
    * and a folder opens in the file manager: a file is never handed to the system to "open".
    */
   openInEditor(directory: string, path: string | null, line: number | null): Promise<void>
+
+  /** Whether new sessions of the folder can get their own worktree. */
+  worktreeInfo(directory: string): Promise<WorktreeInfo>
+  worktreeApplyCheck(directory: string, sessionId: string): Promise<ApplyCheck>
+  /**
+   * One commit with `message` on the main folder's branch `onto` (must equal the check's; the
+   * user's hooks and identity apply), main folder untouched until the check passes. `stash`:
+   * set main-folder edits of touched files aside and put them back after; `stashLeft` names the
+   * stash when putting back conflicted ("Your edits to X are kept in the stash"). After it the
+   * session goes on: its worktree and branch move to `commit`, which becomes `baseCommit`.
+   */
+  worktreeApply(
+    directory: string,
+    sessionId: string,
+    message: string,
+    onto: string,
+    stash: boolean
+  ): Promise<{ commit: string; stashLeft: string | null }>
+  /** Deletes the worktree and its branch (irreversible: confirm first). The session stays readable. */
+  worktreeDiscard(directory: string, sessionId: string): Promise<void>
+  /** Merges the base branch into the session's branch; conflicts stay in the worktree as markers. */
+  worktreeBringBase(directory: string, sessionId: string): Promise<{ conflicts: string[] }>
+  /** For `missing` or `failed`: makes the worktree again (uncommitted work up to the last step comes back); `preparing` again. */
+  worktreeRecreate(directory: string, sessionId: string): Promise<SessionWorktree>
+  /** Only while preparing or failed, before anything ran there: the session moves to the main folder (a waiting message then runs there). */
+  worktreeToFolder(directory: string, sessionId: string): Promise<SessionRow>
+  setupOutput(directory: string, sessionId: string): Promise<SetupRun | null>
+  setupRun(directory: string, sessionId: string): Promise<void>
+  /** False when nothing ran. */
+  setupStop(directory: string, sessionId: string): Promise<boolean>
 
   prefsGet(): Promise<Prefs>
   prefsSet(prefs: Prefs): Promise<Prefs>
@@ -904,6 +1077,17 @@ function tauriBridge(): Bridge {
     scratchFolder: () => invoke("scratch_folder"),
     changes: (directory, sessionId) => invoke("changes", { directory, sessionId }),
     restoreFile: (directory, sessionId, file) => invoke("restore_file", { directory, sessionId, file }),
+    worktreeInfo: (directory) => invoke("worktree_info", { directory }),
+    worktreeApplyCheck: (directory, sessionId) => invoke("worktree_apply_check", { directory, sessionId }),
+    worktreeApply: (directory, sessionId, message, onto, stash) =>
+      invoke("worktree_apply", { directory, sessionId, message, onto, stash }),
+    worktreeDiscard: (directory, sessionId) => invoke("worktree_discard", { directory, sessionId }),
+    worktreeBringBase: (directory, sessionId) => invoke("worktree_bring_base", { directory, sessionId }),
+    worktreeRecreate: (directory, sessionId) => invoke("worktree_recreate", { directory, sessionId }),
+    worktreeToFolder: (directory, sessionId) => invoke("worktree_to_folder", { directory, sessionId }),
+    setupOutput: (directory, sessionId) => invoke("setup_output", { directory, sessionId }),
+    setupRun: (directory, sessionId) => invoke("setup_run", { directory, sessionId }),
+    setupStop: (directory, sessionId) => invoke("setup_stop", { directory, sessionId }),
     gitStatus: (directory) => invoke("git_status", { directory }),
     gitBranch: (directory, name) => invoke("git_branch", { directory, name }),
     gitCommit: (directory, message, files) => invoke("git_commit", { directory, message, files }),

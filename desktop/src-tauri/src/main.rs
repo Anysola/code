@@ -501,8 +501,9 @@ fn notify(handle: &AppHandle, event: &Event) {
 }
 
 fn session_json(row: &SessionRow) -> Value {
+    // `worktree`: the session's own worktree (the shell's worktree round fills it in).
     json!({"id": row.id, "title": row.title, "directory": row.directory, "updated": row.time_updated,
-           "forkOf": row.fork_session_id})
+           "forkOf": row.fork_session_id, "worktree": null})
 }
 
 /// The session's model, its effort and every model to pick from, with the 5-hour window when
@@ -1357,7 +1358,8 @@ mod tests {
         row.fork_session_id = Some("ses_1".into());
         assert_eq!(
             session_json(&row),
-            json!({"id": "ses_2", "title": "Renamed", "directory": "/work", "updated": 2, "forkOf": "ses_1"})
+            json!({"id": "ses_2", "title": "Renamed", "directory": "/work", "updated": 2, "forkOf": "ses_1",
+                   "worktree": null})
         );
     }
 

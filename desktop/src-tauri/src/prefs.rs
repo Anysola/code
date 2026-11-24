@@ -20,6 +20,9 @@ pub struct Prefs {
     pub notifications: Notifications,
     pub discord: Discord,
     pub sources: Sources,
+    /// Each main folder's worktree setup command, by the window's folder key; only the user's
+    /// own, never a repository's.
+    pub worktree_setup: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -184,6 +187,11 @@ impl Prefs {
         one_of(&mut c.lookups, &["grouped", "listed"], "grouped");
         one_of(&mut c.send, &["enter", "ctrl-enter"], "enter");
         optional(&mut self.discord.application_id);
+        self.worktree_setup = std::mem::take(&mut self.worktree_setup)
+            .into_iter()
+            .map(|(k, v)| (k, v.trim().to_string()))
+            .filter(|(_, v)| !v.is_empty())
+            .collect();
         self
     }
 
@@ -221,6 +229,7 @@ impl Prefs {
                 section!("notifications", notifications);
                 section!("discord", discord);
                 section!("sources", sources);
+                section!("worktreeSetup", worktree_setup);
                 prefs.normalized()
             }
             _ => {
@@ -333,6 +342,7 @@ mod tests {
                 "discord": {"enabled": false, "project": true, "session": false, "model": true,
                             "elapsed": true, "applicationId": null},
                 "sources": {"claudeSkills": true},
+                "worktreeSetup": {},
             })
         );
     }
@@ -390,10 +400,18 @@ mod tests {
         prefs.discord.application_id = Some(" 123 ".into());
         prefs.general.start_mode = "auto".into();
         prefs.general.editor = Some("cursor".into());
+        prefs
+            .worktree_setup
+            .insert("/p".into(), " pnpm install ".into());
+        prefs.worktree_setup.insert("/q".into(), "  ".into());
         let prefs = prefs.normalized();
         prefs.save(&file).unwrap();
         assert_eq!(Prefs::load(&file), prefs);
         assert_eq!(prefs.discord.application_id.as_deref(), Some("123"));
+        assert_eq!(
+            serde_json::to_value(&prefs.worktree_setup).unwrap(),
+            json!({"/p": "pnpm install"})
+        );
         let left: Vec<_> = std::fs::read_dir(file.parent().unwrap()).unwrap().collect();
         assert_eq!(left.len(), 1, "no temporary file left behind");
         std::fs::remove_dir_all(dir).unwrap();

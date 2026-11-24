@@ -40,9 +40,18 @@
  *
  * Review: `?review=long` gives the session five long changed files; `?review=nogit` makes its folder
  * not a git repository, so Review lists the session's edits (`long,nogit`: the long ones, as edits).
+ *
+ * Worktrees (only the web folder is a git repository): `?state=worktree-preparing|ready|conflict|
+ * missing|applied` puts the open session in its own worktree in that state (`conflict`: ready, the
+ * base brought in with markers left; `applied`: ready again after an apply). `?review=apply-conflict`
+ * or `apply-dirty` makes the apply check refuse so. `?worktree=old-git` makes the folder's Git too
+ * old to apply; `?worktree=no-commits` hides the choice. New sessions there start in a worktree
+ * (preparing ~2 s, setup output streamed), forks get one with `?restored=kept|edits|now` as the report.
  */
 import type {
   About,
+  ApplyCheck,
+  ForkRestore,
   Account,
   AgentConfig,
   BackgroundCommand,
@@ -70,6 +79,8 @@ import type {
   SavedPermission,
   SessionRow,
   SessionUsage,
+  SessionWorktree,
+  SetupRun,
   Sources,
   Todo,
   Usage,
@@ -84,13 +95,29 @@ const MAIL = "/home/alex/code/mailwick"
 const now = Date.now()
 
 const rows: SessionRow[] = [
-  { id: "ses_pricing", title: "Yearly price on /pricing", directory: WEB, updated: now - 20_000, forkOf: null },
-  { id: "ses_alerts", title: "Gateway health alerts", directory: CODE, updated: now - 60_000, forkOf: null },
-  { id: "ses_search", title: "News search ranking", directory: WEB, updated: now - 2 * 3_600_000, forkOf: null },
-  { id: "ses_footer", title: "Footer links on mobile", directory: WEB, updated: now - 26 * 3_600_000, forkOf: null },
-  { id: "ses_load", title: "Load test for streams", directory: CODE, updated: now - 30 * 3_600_000, forkOf: null },
-  { id: "ses_imap", title: "IMAP idle reconnect", directory: MAIL, updated: now - 3 * 86_400_000, forkOf: null },
+  { id: "ses_pricing", title: "Yearly price on /pricing", directory: WEB, updated: now - 20_000, forkOf: null, worktree: null },
+  { id: "ses_alerts", title: "Gateway health alerts", directory: CODE, updated: now - 60_000, forkOf: null, worktree: null },
+  { id: "ses_search", title: "News search ranking", directory: WEB, updated: now - 2 * 3_600_000, forkOf: null, worktree: null },
+  { id: "ses_footer", title: "Footer links on mobile", directory: WEB, updated: now - 26 * 3_600_000, forkOf: null, worktree: null },
+  { id: "ses_load", title: "Load test for streams", directory: CODE, updated: now - 30 * 3_600_000, forkOf: null, worktree: null },
+  { id: "ses_imap", title: "IMAP idle reconnect", directory: MAIL, updated: now - 3 * 86_400_000, forkOf: null, worktree: null },
 ]
+
+/** A session's worktree in the mock's web folder. */
+function mockWorktree(slug: string, state: SessionWorktree["state"], extra: Partial<SessionWorktree> = {}): SessionWorktree {
+  return {
+    path: `/home/alex/.anysola/worktrees/anysola-web-3f9a1c/${slug}`,
+    branch: `anysola/${slug}`,
+    baseBranch: "main",
+    baseCommit: "9c1e2a7f3b",
+    state,
+    error: null,
+    appliedCommit: null,
+    restored: null,
+    leftover: false,
+    ...extra,
+  }
+}
 
 const planCard: FileDiff = {
   file: "apps/web/src/components/plan-card.tsx",
@@ -901,6 +928,73 @@ export function mockBridge(): Bridge {
     if (failing.has(name)) throw new Error("The gateway didn’t answer (502). Try again in a moment.")
     return value()
   }
+  // `?state=worktree-*`: the open session works in its own worktree.
+  const worktreeScene = state.startsWith("worktree-") ? state.slice("worktree-".length) : null
+  if (worktreeScene) {
+    const pricing = rows.find((r) => r.id === "ses_pricing")!
+    pricing.worktree =
+      worktreeScene === "preparing"
+        ? mockWorktree("brave-otter", "preparing")
+        : worktreeScene === "missing"
+          ? mockWorktree("brave-otter", "missing")
+          : worktreeScene === "applied"
+            ? mockWorktree("brave-otter", "ready", { baseCommit: "4d2b8e01c6", appliedCommit: "4d2b8e01c6" })
+            : mockWorktree("brave-otter", "ready")
+  }
+  const worktreeParam = params.get("worktree")
+  const setupRuns = new Map<string, SetupRun>()
+  /** Emits the row's worktree as the shell does on every change. */
+  const worktreeChanged = (row: SessionRow) => {
+    if (row.worktree) emit({ type: "worktree", directory: row.directory, sessionId: row.id, worktree: { ...row.worktree } })
+  }
+  /** The shell's preparation: steps and setup output, then ready (the waiting message starts). */
+  const prepare = (row: SessionRow, then?: () => void) => {
+    const command = prefs.worktreeSetup[row.directory] ?? null
+    const run: SetupRun = { command, state: "running", code: null, lines: [], started: Date.now(), ended: null }
+    setupRuns.set(row.id, run)
+    const line = (stream: "info" | "out" | "err", text: string) => {
+      run.lines.push({ stream, text })
+      emit({ type: "setup", directory: row.directory, sessionId: row.id, stream, text })
+    }
+    const steps: [number, "info" | "out" | "err", string][] = [
+      [100, "info", `Checking out ${row.worktree!.branch} from main`],
+      [500, "info", "Copied 2 env files: .env, apps/web/.env.local"],
+      ...(command
+        ? ([
+            [800, "info", `Running ${command}`],
+            [1200, "out", "Lockfile is up to date, resolution step is skipped"],
+            [1600, "out", "Done in 1.4s"],
+          ] as [number, "info" | "out" | "err", string][])
+        : []),
+    ]
+    for (const [at, stream, text] of steps) setTimeout(() => line(stream, text), at)
+    setTimeout(() => {
+      Object.assign(run, { state: "done", code: command ? 0 : null, ended: Date.now() })
+      emit({ type: "setupEnd", directory: row.directory, sessionId: row.id, run: { ...run, lines: [...run.lines] } })
+      if (row.worktree?.state === "preparing") {
+        row.worktree.state = "ready"
+        worktreeChanged(row)
+        then?.()
+      }
+    }, 2000)
+  }
+  const worktreeRow = (sessionId: string) => {
+    const row = rows.find((r) => r.id === sessionId)
+    if (!row?.worktree) throw new Error("This session works in the main folder.")
+    return row
+  }
+  const applyCheck = async (sessionId: string): Promise<ApplyCheck> => {
+    const row = worktreeRow(sessionId)
+    await wait(300)
+    if (running.has(sessionId)) return { ok: false, reason: "busy" }
+    if (worktreeParam === "old-git") return { ok: false, reason: "git", message: "Update Git to 2.40 or later to apply." }
+    if (worktreeScene === "conflict") return { ok: false, reason: "unresolved", files: ["apps/web/src/lib/plans.ts"] }
+    if (review.has("apply-conflict"))
+      return { ok: false, reason: "conflict", onto: row.worktree!.baseBranch ?? "main", files: ["apps/web/src/lib/plans.ts", "apps/web/src/routes/pricing.tsx"] }
+    if (review.has("apply-dirty"))
+      return { ok: false, reason: "dirty", onto: row.worktree!.baseBranch ?? "main", files: ["apps/web/src/components/plan-card.tsx"] }
+    return { ok: true, onto: row.worktree!.baseBranch ?? "main", files: 3, add: 42, del: 9, behind: 2 }
+  }
   const empty = params.has("empty")
   let prefs: Prefs = structuredClone({ ...DEFAULT_PREFS, discord: { ...DEFAULT_PREFS.discord, enabled: !empty } })
   for (const key of ["changes", "commands", "lookups"] as const) {
@@ -1559,6 +1653,73 @@ export function mockBridge(): Bridge {
       return state === "long" ? reviewFiles : [planCard, pricing, test]
     },
     async restoreFile() {},
+    async worktreeInfo(directory) {
+      if (directory !== WEB) return { available: false, reason: "not-git" }
+      if (worktreeParam === "no-commits") return { available: false, reason: "no-commits" }
+      return {
+        available: true,
+        branch: "main",
+        uncommitted: 3,
+        setup: prefs.worktreeSetup[directory] ?? null,
+        canApply: worktreeParam !== "old-git",
+      }
+    },
+    worktreeApplyCheck: (_directory, sessionId) => applyCheck(sessionId),
+    async worktreeApply(_directory, sessionId, _message, onto, stash) {
+      const row = worktreeRow(sessionId)
+      const check = await applyCheck(sessionId)
+      if (check.ok ? check.onto !== onto : !(check.reason === "dirty" && stash))
+        throw new Error("The main folder changed since the check. Check again.")
+      row.worktree!.state = "applying"
+      worktreeChanged(row)
+      await wait(600)
+      const commit = Math.random().toString(16).slice(2, 12)
+      Object.assign(row.worktree!, { state: "ready", baseCommit: commit, appliedCommit: commit })
+      worktreeChanged(row)
+      return { commit, stashLeft: null }
+    },
+    async worktreeDiscard(_directory, sessionId) {
+      const row = worktreeRow(sessionId)
+      if (running.has(sessionId)) throw new Error("This session is working. Stop it first.")
+      row.worktree!.state = "discarded"
+      worktreeChanged(row)
+    },
+    async worktreeBringBase(_directory, sessionId) {
+      const row = worktreeRow(sessionId)
+      await wait(400)
+      const conflicts = review.has("apply-conflict") ? ["apps/web/src/lib/plans.ts"] : []
+      if (!conflicts.length) row.worktree!.baseCommit = "b71f0c9d24"
+      worktreeChanged(row)
+      return { conflicts }
+    },
+    async worktreeRecreate(_directory, sessionId) {
+      const row = worktreeRow(sessionId)
+      if (row.worktree!.state !== "missing" && row.worktree!.state !== "failed") throw new Error("This session’s worktree is there.")
+      Object.assign(row.worktree!, { state: "preparing", error: null })
+      worktreeChanged(row)
+      prepare(row)
+      return { ...row.worktree! }
+    },
+    async worktreeToFolder(_directory, sessionId) {
+      const row = worktreeRow(sessionId)
+      if (row.worktree!.state !== "preparing" && row.worktree!.state !== "failed")
+        throw new Error("This session already works in its worktree; apply or discard it instead.")
+      row.worktree = null
+      return structuredClone(row)
+    },
+    async setupOutput(_directory, sessionId) {
+      const run = setupRuns.get(sessionId)
+      return run ? structuredClone(run) : null
+    },
+    async setupRun(_directory, sessionId) {
+      prepare(worktreeRow(sessionId))
+    },
+    async setupStop(_directory, sessionId) {
+      const run = setupRuns.get(sessionId)
+      if (!run || run.state !== "running") return false
+      Object.assign(run, { state: "stopped", ended: Date.now() })
+      return true
+    },
     async gitStatus(directory) {
       // `?git=missing|conflict|noidentity|behind`: the git menu's other states.
       const git = params.get("git")
@@ -1632,12 +1793,37 @@ export function mockBridge(): Bridge {
       const m = info.models.find((x) => x.id === model) ?? info.models[0]
       return { ...info, model: m.name, modelId: m.id, variant }
     },
-    async prompt(directory, { sessionId, text, files }) {
+    async prompt(directory, { sessionId, text, files, place }) {
       if (!sessionId && params.get("slow")) await wait(Number(params.get("slow")))
       const id = sessionId ?? `ses_${Math.random().toString(36).slice(2, 10)}`
       if (!sessionId) {
-        rows.unshift({ id, title: "New session", directory, updated: Date.now(), forkOf: null })
+        // As the shell: a new session in a git folder gets its own worktree unless asked not to;
+        // the message waits until it is ready.
+        const isolate = directory === WEB && place !== "folder" && worktreeParam !== "no-commits"
+        const row: SessionRow = {
+          id,
+          title: "New session",
+          directory,
+          updated: Date.now(),
+          forkOf: null,
+          worktree: isolate ? mockWorktree(`calm-${id.slice(4, 9)}`, "preparing") : null,
+        }
+        rows.unshift(row)
         emit({ type: "created", sessionId: id, title: "New session", directory })
+        if (isolate) {
+          worktreeChanged(row)
+          prepare(row, () => {
+            running.add(id)
+            emit({ type: "started", sessionId: id })
+            void reply(id, "Working in the new worktree.")
+          })
+          return { sessionId: id, queued: true }
+        }
+      }
+      const own = rows.find((r) => r.id === id)?.worktree
+      if (own && own.state !== "ready" && own.state !== "preparing") {
+        emit({ type: "refused", sessionId: id, error: "This session’s folder is gone. Recreate it, discard it, or fork the session." })
+        return { sessionId: id, queued: false }
       }
       if (state === "refused") {
         // The core answers after the spawned turn has already said no.
@@ -1854,11 +2040,31 @@ export function mockBridge(): Bridge {
       if (copied.length === 0) throw new Error("There is nothing before that message to fork.")
       // The core gives a fork its source's title as it is; only `forkOf` tells it.
       const id = `ses_${Math.random().toString(36).slice(2, 10)}`
-      const row = { id, title: source.title, directory: source.directory, updated: Date.now(), forkOf: source.id }
+      // In a git folder the fork gets its own worktree with the files put back (`?restored=`
+      // picks the report).
+      const scene = params.get("restored")
+      const restored: ForkRestore =
+        scene === "kept"
+          ? { exact: false, kept: ["apps/web/public/hero.mp4"], fallback: null }
+          : scene === "edits" || scene === "now"
+            ? { exact: false, kept: [], fallback: scene }
+            : { exact: true, kept: [], fallback: null }
+      const row: SessionRow = {
+        id,
+        title: source.title,
+        directory: source.directory,
+        updated: Date.now(),
+        forkOf: source.id,
+        worktree: source.directory === WEB ? mockWorktree(`swift-${id.slice(4, 9)}`, "preparing", { restored }) : null,
+      }
       rows.unshift(row)
       transcripts.set(id, structuredClone(copied))
       emit({ type: "created", sessionId: id, title: row.title, directory })
-      return { ...row }
+      if (row.worktree) {
+        worktreeChanged(row)
+        prepare(row)
+      }
+      return structuredClone(row)
     },
     async setBudget(_directory, sessionId, budget) {
       if (!rows.some((r) => r.id === sessionId)) throw new Error("A subagent’s session can’t be changed on its own.")

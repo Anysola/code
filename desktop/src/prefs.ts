@@ -15,6 +15,7 @@ export const DEFAULT_PREFS: Prefs = {
   notifications: { enabled: true, approval: true, question: true, finished: true, failed: true },
   discord: { enabled: false, project: true, session: false, model: true, elapsed: true, applicationId: null },
   sources: { claudeSkills: true },
+  worktreeSetup: {},
 }
 
 /** Whether Light and System are offered; a stored one shows as dark while this is off. */

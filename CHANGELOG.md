@@ -4,6 +4,15 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## Unreleased
+
+- In a Git folder a new session works in its own worktree and branch, so sessions don't change each other's
+  files or the main folder. Review shows its changes; Apply makes them one commit on the main folder's branch and
+  the session goes on from there; Discard deletes the worktree and branch. Choose "Main folder" to work as before.
+- A branch from an earlier message gets its own worktree with the files as they were at that message.
+- A session moved into a worktree by the agent now rewinds and reviews that worktree's files, not the main
+  folder's.
+
 ## 1.1.8 (2026-11-24)
 
 - A turn that stops at its budget sends a notification, like a finished one.

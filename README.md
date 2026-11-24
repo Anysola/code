@@ -60,6 +60,21 @@ project is an outside path. A subagent is bound by the rules of every session ab
 A project can still choose the model, replace an agent's prompt and turn snapshots off. Shell commands are judged
 by your `shell` rules only: a `read` rule does not stop `cat`.
 
+## Worktrees
+
+In a Git folder a new session works in its own worktree, on a branch `anysola/<name>` made from the folder's
+current commit, under `~/.anysola/worktrees`. Uncommitted changes of the main folder are not in it. Review shows
+the session's changes against that commit; Apply puts them on the main folder's branch as one commit (your Git
+hooks and identity apply; Git 2.40 or later), after which the session goes on from that commit. Discard deletes
+the worktree and the branch. A branch made from an earlier message gets its own worktree with the files as they
+were then.
+
+The session's file tools treat only its worktree as inside: the main folder and other sessions' worktrees are
+outside and ask first, and your rules still name their files as they would in the main folder. The project's
+config, hooks and MCP servers are the main folder's; an edit to the worktree's `anysola.json` counts once
+applied. A worktree is not a sandbox: shell commands run as anywhere else, and Git in a worktree shares the
+repository's branches and objects (it can move or push them).
+
 ## Usage limits
 
 Anysola Code and Anysola Chat share two usage windows per account: a 5-hour window that starts with your first
