@@ -869,17 +869,16 @@ impl Core {
         shared
             .db
             .set_directory(session_id, &shared.directory.display().to_string())?;
-        if gone {
-            shared.db.delete_session_worktree(session_id)?;
-        } else {
-            shared.db.update_session_worktree(
-                session_id,
-                WorktreeState::Discarded,
-                &[("leftover", 1i64.into())],
-            )?;
-            // The session is the main folder's again; cleanup finds the folder by the row of a
-            // session that no longer points there.
+        // The session is the main folder's again, so its row goes either way (a kept row would
+        // pin it to the worktree). A folder that could not be removed yet (a program holds it)
+        // is left for the user; nothing of the session's work was in it.
+        if !gone {
+            crate::log::warn(
+                "a worktree folder could not be removed",
+                &[("directory", &row.directory)],
+            );
         }
+        shared.db.delete_session_worktree(session_id)?;
         self.wake_waiting(session_id)?;
         shared
             .db
