@@ -4,6 +4,17 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.1.7 (2026-11-24)
+
+- Ctrl K opens a palette: recent sessions first, then commands with their keys (new session, modes, review
+  changes, branch, budget, settings).
+- A session can have a budget, a share of the 5-hour window. It shows in the header, subagents count toward it,
+  and every model call stops there, `/compact` included. "Budget reached" offers to raise or remove it.
+- Branch from any of your messages but the first: the conversation up to it is copied into a new session. Files
+  are not rewound; the folder stays as it is. A branch keeps its mark after a rename.
+- Pressing Escape twice stops a running turn wherever the focus is, not only in the message box.
+- Shortcuts work on non-Latin keyboard layouts, and on Turkish Q, Ctrl ç no longer stops a turn.
+
 ## 1.1.6 (2026-11-21)
 
 - Settings > Usage names limits plainly: "5-hour limit" and "Weekly limit", "Resets in …", and each saved reset
