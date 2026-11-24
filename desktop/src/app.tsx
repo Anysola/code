@@ -6,7 +6,7 @@ import { Composer, Tasks } from "./composer"
 import { BackgroundRow, Banner, CloseConfirm, ContextMeter, FaultScreen, ForkNote, QueueChips, WorktreeStrip } from "./conversation"
 import { FormCard } from "./form-card"
 import { TrustCards } from "./hooks-card"
-import { SessionHeader, SidebarToggle, Toasts } from "./header"
+import { DeleteConfirm, SessionHeader, SidebarToggle, Toasts } from "./header"
 import { DiscardConfirm, Review } from "./review"
 import { Settings, sectionLabel } from "./settings"
 import { ShortcutsSheet, useShortcuts } from "./shortcuts"
@@ -61,6 +61,7 @@ export function App() {
       </div>
       <ShortcutsSheet />
       <Palette />
+      <DeleteConfirm />
       <CloseConfirm />
     </div>
   )

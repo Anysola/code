@@ -26,13 +26,19 @@ import { btn, cn, folderName, Popover, Spinner, Tooltip } from "./ui"
 // The branch
 // ---------------------------------------------------------------------------
 
-/** `⎇ anysola/x`: muted and small; struck once discarded. */
-export function BranchName({ worktree, className }: { worktree: SessionWorktree; className?: string }) {
+/**
+ * `⎇ anysola/x`: muted and small; struck once discarded. A long branch is cut short, the whole
+ * name (and the folder) on hover; `hint` false where a tooltip already covers it.
+ */
+export function BranchName({ worktree, className, hint = true }: { worktree: SessionWorktree; className?: string; hint?: boolean }) {
   const gone = worktree.state === "discarded"
   return (
-    <span className={cn("flex min-w-0 items-center gap-1", className)} title={gone ? `${worktree.branch} (discarded)` : worktree.path}>
+    <span
+      className={cn("flex min-w-0 items-center gap-1 overflow-hidden", className)}
+      title={hint ? (gone ? `${worktree.branch} (discarded)` : `${worktree.branch}\n${worktree.path}`) : undefined}
+    >
       <GitBranch className="size-3 shrink-0" strokeWidth={1.75} />
-      <span className={cn("truncate font-mono", gone && "line-through decoration-muted/70")}>{worktree.branch}</span>
+      <span className={cn("min-w-0 truncate font-mono", gone && "line-through decoration-muted/70")}>{worktree.branch}</span>
     </span>
   )
 }

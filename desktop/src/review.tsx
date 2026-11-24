@@ -9,6 +9,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  CircleAlert,
   ExternalLink,
   GitBranch,
   GitCommitHorizontal,
@@ -40,6 +41,7 @@ import {
   openInEditor,
   openNow,
   readChanges,
+  recreateWorktree,
   refreshGit,
   removeComment,
   restoreFile,
@@ -158,11 +160,11 @@ export function GitMenu({ open, compact = false }: { open: Open; compact?: boole
           className={btn("ghost", "sm", cn("gap-1.5 text-muted", compact ? "max-w-36" : "max-w-56"))}
         >
           <GitBranch className="size-3.5 shrink-0" />
-          <span className="min-w-0 truncate font-mono text-xs">{git.branch || "no branch"}</span>
+          <span className="min-w-0 flex-1 truncate font-mono text-xs">{git.branch || "no branch"}</span>
           {conflicts > 0 ? (
-            <span className="text-2xs shrink-0 text-warning tabular-nums">· {conflicts}!</span>
+            <span className="text-2xs shrink-0 whitespace-nowrap text-warning tabular-nums">· {conflicts}!</span>
           ) : (
-            changed > 0 && <span className="text-2xs shrink-0 tabular-nums">· {changed}</span>
+            changed > 0 && <span className="text-2xs shrink-0 whitespace-nowrap tabular-nums">· {changed}</span>
           )}
           {git.ahead > 0 && <span className="text-2xs shrink-0 tabular-nums">↑{git.ahead}</span>}
           {git.behind > 0 && <span className="text-2xs shrink-0 tabular-nums">↓{git.behind}</span>}
@@ -183,7 +185,8 @@ function WorktreeMenu({ open, worktree, compact }: { open: Open; worktree: Sessi
   const git = useStore((s) => s.git)
   const [show, setShow] = useState(false)
   const close = useCallback(() => setShow(false), [])
-  const read = git?.repo && sameFolder(git.directory, worktree.path) ? git : null
+  // A folder that's gone has no changes to count (the last read of it may linger).
+  const read = git?.repo && sameFolder(git.directory, worktree.path) && worktree.state !== "missing" ? git : null
   const changed = read?.files.length ?? 0
   const conflicts = read?.unmerged?.length ?? 0
   const trouble = worktreeTrouble(worktree)
@@ -197,11 +200,12 @@ function WorktreeMenu({ open, worktree, compact }: { open: Open; worktree: Sessi
           aria-label={`Worktree branch ${worktree.branch}${trouble ? `, ${trouble.toLowerCase()}` : ""}`}
           className={btn("ghost", "sm", cn("gap-1.5 text-muted", compact ? "max-w-40" : "max-w-64"))}
         >
-          <BranchName worktree={worktree} className="text-xs" />
+          <BranchName worktree={worktree} className="flex-1 text-xs" hint={false} />
+          {/* The count stays whole: only the branch gives way. */}
           {conflicts > 0 ? (
-            <span className="text-2xs shrink-0 text-warning tabular-nums">· {conflicts}!</span>
+            <span className="text-2xs shrink-0 whitespace-nowrap text-warning tabular-nums">· {conflicts}!</span>
           ) : (
-            changed > 0 && <span className="text-2xs shrink-0 tabular-nums">· {changed}</span>
+            changed > 0 && <span className="text-2xs shrink-0 whitespace-nowrap tabular-nums">· {changed}</span>
           )}
           {trouble && <span className="size-1.5 shrink-0 rounded-full bg-warning" aria-hidden />}
         </button>
@@ -209,7 +213,7 @@ function WorktreeMenu({ open, worktree, compact }: { open: Open; worktree: Sessi
       <Popover open={show} onClose={close} side="bottom" align="end" label="This session’s worktree" className="w-80">
         <div className="flex flex-col gap-3 p-1.5">
           <div className="flex flex-col gap-1">
-            <BranchName worktree={worktree} className="text-xs text-foreground" />
+            <BranchName worktree={worktree} className="text-xs text-foreground [&>span]:whitespace-normal [&>span]:[overflow-wrap:anywhere]" />
             <span className="text-2xs text-muted">
               From{" "}<span className="font-mono">{base}</span>
             </span>
@@ -643,12 +647,19 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
     setNet((r) => (r && "error" in r ? undefined : r))
     void readChanges().then(setNet)
   }, [])
-  // A worktree's diff moves with its base (bringing the base in, an apply).
-  useEffect(reload, [reload, open.items.length, worktree?.baseCommit])
+  // Its folder is gone (deleted outside the app, heard while Review is open): nothing to read.
+  const gone = worktree?.state === "missing"
+  // While its folder is being made again there is nothing to read yet; once ready it reads again.
+  const readable = !worktree || (worktree.state !== "missing" && worktree.state !== "preparing")
+  // A worktree's diff moves with its base (bringing the base in, an apply), and comes back with a recreated folder.
+  useEffect(() => {
+    if (readable) reload()
+  }, [reload, readable, open.items.length, worktree?.baseCommit])
   const panel = useRef<HTMLDivElement>(null)
   useEscape(panel, onClose)
   const edits = changedFiles(open)
   const count = net ? net.length : failed ? 0 : edits.length
+  const [recreating, setRecreating] = useState(false)
   // A few files open with their diffs; more start as rows, so the list reads first.
   const startOpen = count <= 6
   const add = net?.reduce((n, f) => n + f.additions, 0) ?? 0
@@ -682,7 +693,7 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
       >
         <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 py-1.5 pr-3 pl-5">
           <span className="text-sm font-medium">Changes</span>
-          <span className="text-2xs min-w-0 text-muted">
+          {!gone && <span className="text-2xs min-w-0 text-muted">
             {count} file{count === 1 ? "" : "s"}
             {worktree && net && (
               <>
@@ -696,9 +707,9 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
             {behind > 0 && ` · ${base} has ${behind} new commit${behind === 1 ? "" : "s"}`}
             {comments.length > 0 &&
               ` · ${comments.length} comment${comments.length === 1 ? "" : "s"} for your next message`}
-          </span>
+          </span>}
           <span className="ml-auto flex items-center gap-1">
-            {net && net.length > 1 && <RevertAll files={net} onDone={reload} />}
+            {net && net.length > 1 && !gone && <RevertAll files={net} onDone={reload} />}
             {worktree && worktree.state !== "discarded" && (
               <button onClick={() => askDiscard(true)} className={btn("ghost", "sm", "text-muted")}>
                 Discard
@@ -721,7 +732,29 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
           </span>
         </div>
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-6">
-          {worktree && here && applying && (
+          {gone && here && (
+            <div className="flex flex-col items-start gap-3 px-1 pt-4" role="status">
+              <div className="flex flex-col gap-1">
+                <p className="text-dense flex items-center gap-2">
+                  <CircleAlert className="size-3.5 shrink-0 text-warning" />
+                  This session’s folder is gone, so its changes can’t be shown.
+                </p>
+                <p className="text-2xs pl-5.5 text-muted">Recreate brings its work back as of its last step.</p>
+              </div>
+              <button
+                disabled={recreating}
+                onClick={() => {
+                  setRecreating(true)
+                  void recreateWorktree(here).finally(() => setRecreating(false))
+                }}
+                className={btn("secondary", "sm", "ml-5.5 gap-1.5")}
+              >
+                {recreating && <Spinner className="size-3" />}
+                Recreate
+              </button>
+            </div>
+          )}
+          {worktree && here && applying && !gone && (
             <ApplyBox
               here={here}
               worktree={worktree}
@@ -736,12 +769,12 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
               onResolve={onClose}
             />
           )}
-          {net === undefined && !failed && (
+          {net === undefined && !failed && !gone && (
             <div className="flex justify-center pt-16">
               <Spinner />
             </div>
           )}
-          {failed && (
+          {failed && !gone && (
             <div className="flex flex-col items-start gap-3 px-1 pt-4">
               <p className="text-dense">This session’s changes couldn’t be read.</p>
               <p className="text-2xs max-h-24 overflow-y-auto whitespace-pre-wrap text-muted select-text">{failed}</p>
@@ -750,7 +783,7 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
               </button>
             </div>
           )}
-          {net === null && (
+          {net === null && !gone && (
             <>
               <p className="text-dense px-1 text-muted">
                 This folder isn’t a Git repository, so these are the edits as they were made, and files can’t be reverted.
@@ -764,7 +797,7 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
               ))}
             </>
           )}
-          {net?.length === 0 && (
+          {net?.length === 0 && !gone && (
             <p className="text-dense px-1 pt-4 text-muted">
               {worktree
                 ? worktree.appliedCommit && worktree.appliedCommit === worktree.baseCommit
@@ -773,7 +806,7 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
                 : "Every file is back as it was before this session."}
             </p>
           )}
-          {net?.map((f) => (
+          {!gone && net?.map((f) => (
             <ReviewFile key={f.file} file={f} directory={where} base={base} onRestored={reload} startOpen={startOpen} />
           ))}
         </div>
@@ -866,9 +899,13 @@ function ApplyBox({
     if (r.conflicts.length) return setPhase({ kind: "merged", conflicts: r.conflicts, onto: base ?? "the base" })
     await run()
   }
-  const ask = (list: string[]) => {
+  // `merged`: right after bringing the base in here; otherwise markers were found with no merge
+  // known to have left them, so the message doesn't name one.
+  const ask = (list: string[], merged: boolean) => {
     addToComposer(
-      `Bringing ${base ?? "the base branch"} in left conflict markers in ${list.join(", ")}. Resolve them, keeping what both sides meant, and run the tests that cover them.`
+      merged
+        ? `Bringing ${base ?? "the base branch"} in left conflict markers in ${list.join(", ")}. Resolve them, keeping what both sides meant, and run the tests that cover them.`
+        : `These files still have conflict markers: ${list.join(", ")}. Resolve them, keeping what both sides meant, and run the tests that cover them.`
     )
     onResolve()
   }
@@ -932,12 +969,12 @@ function ApplyBox({
       )}
       {phase.kind === "merged" && (
         <Refusal text={`Brought ${phase.onto} in. ${phase.conflicts.length === 1 ? "1 file has conflicts: fix it" : `${phase.conflicts.length} files have conflicts: fix them`}, then apply.`} files={phase.conflicts} directory={worktree.path}>
-          <button onClick={() => ask(phase.conflicts)} className={btn("secondary", "sm")}>
+          <button onClick={() => ask(phase.conflicts, true)} className={btn("secondary", "sm")}>
             Ask the agent to resolve
           </button>
         </Refusal>
       )}
-      {refusal && <Refused check={refusal} worktree={worktree} main={directory} canApply={info?.available ? info.canApply : true} onBring={() => void bring()} onStash={(onto) => (base !== onto ? setPhase({ kind: "confirm", onto, stash: true }) : void apply(onto, true))} onAsk={ask} onAgain={() => void run()} />}
+      {refusal && <Refused check={refusal} worktree={worktree} main={directory} canApply={info?.available ? info.canApply : true} onBring={() => void bring()} onStash={(onto) => (base !== onto ? setPhase({ kind: "confirm", onto, stash: true }) : void apply(onto, true))} onAsk={(files) => ask(files, false)} onAgain={() => void run()} />}
       {error && <p className="text-dense max-h-32 overflow-y-auto px-1 whitespace-pre-wrap text-danger select-text">{error}</p>}
       <div className="flex items-center justify-end gap-2">
         <button onClick={onClose} disabled={phase.kind === "applying"} className={btn("ghost", "sm")}>
@@ -994,7 +1031,7 @@ function Refused({
     case "unresolved":
       return (
         <Refusal
-          text={check.files.length === 1 ? "This file still has conflict markers. Fix it, then apply." : `These ${check.files.length} files still have conflict markers. Fix them, then apply.`}
+          text={check.files.length === 1 ? "This file still has conflict markers:" : `These ${check.files.length} files still have conflict markers:`}
           files={check.files}
           directory={worktree.path}
         >

@@ -1,7 +1,7 @@
 /** Discord, Data and About. */
 import { useEffect, useState } from "react"
 
-import type { DataInfo, DiscordStatus, Prefs } from "../bridge"
+import type { DataInfo, DiscordStatus, Prefs, WorktreeWithWork } from "../bridge"
 import { setPref, usePrefs } from "../prefs"
 import { currentBridge, reloadSessions, useStore } from "../store"
 import { btn, cn, folderName, Mark, Spinner } from "../ui"
@@ -201,7 +201,7 @@ export function DataSection() {
             </Group>
             <Export />
             <Group label="Delete">
-              <Row label="Delete all sessions" hint="Sessions with a turn running are kept">
+              <Row label="Delete all sessions" hint="Sessions with a turn running or being applied are kept">
                 <DeleteAll count={data.sessions} onDone={() => load.reload()} />
               </Row>
             </Group>
@@ -287,20 +287,63 @@ function Export() {
   )
 }
 
+/** What Delete all left: the sessions kept because a turn runs, and those kept while being applied. */
+function deletedText(deleted: number, kept: number, applying: number) {
+  const running = kept - applying
+  const parts = [`Deleted ${deleted.toLocaleString("en-GB")}.`]
+  if (running > 0) parts.push(`${running} kept: ${running === 1 ? "a turn is" : "turns are"} running.`)
+  if (applying > 0)
+    parts.push(`${applying} kept: ${applying === 1 ? "its changes were" : "their changes were"} being applied.`)
+  return parts.join(" ")
+}
+
 function DeleteAll({ count, onDone }: { count: number; onDone: () => void }) {
   const [result, setResult] = useState<string | null>(null)
+  // The worktrees whose changes aren't applied, read when the question opens; undefined while reading, null when it couldn't be read.
+  const [work, setWork] = useState<WorktreeWithWork[] | null | undefined>(undefined)
   if (result) return <span className="text-dense text-muted">{result}</span>
   if (count === 0) return <Value>No sessions</Value>
+  const n = count.toLocaleString("en-GB")
   return (
     <Confirm
       label="Delete all…"
       variant="danger-soft"
-      question={`Delete all ${count.toLocaleString("en-GB")}? This can’t be undone.`}
-      action={`Delete ${count.toLocaleString("en-GB")}`}
+      onAsk={() => {
+        setWork(undefined)
+        currentBridge()
+          .worktreesWithWork()
+          .then(setWork, () => setWork(null))
+      }}
+      waiting={work === undefined}
+      question={
+        work && work.length > 0 ? (
+          <span className="flex flex-col gap-2 text-left">
+            <span>
+              Delete all {n}? This can’t be undone. {work.length === 1 ? "This worktree goes" : "These worktrees go"} with
+              changes that aren’t applied:
+            </span>
+            <ul className="flex max-h-40 flex-col gap-0.5 overflow-y-auto">
+              {work.map((w) => (
+                <li key={w.sessionId} className="flex min-w-0 items-baseline gap-3 rounded-md bg-default/30 px-2.5 py-1.5">
+                  <span className="min-w-0 flex-1 truncate" title={w.title}>
+                    {w.title}
+                  </span>
+                  <span className="text-2xs shrink-0 text-muted tabular-nums">
+                    {w.files} file{w.files === 1 ? "" : "s"} not applied
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </span>
+        ) : (
+          `Delete all ${n}? This can’t be undone.`
+        )
+      }
+      action={`Delete ${n}`}
       run={async () => {
         try {
-          const { deleted, kept } = await currentBridge().deleteAllSessions()
-          setResult(kept > 0 ? `Deleted ${deleted}. ${kept} kept: a turn is running.` : `Deleted ${deleted}.`)
+          const { deleted, kept, applying } = await currentBridge().deleteAllSessions()
+          setResult(deletedText(deleted, kept, applying ?? 0))
           void reloadSessions()
           onDone()
         } catch (e) {

@@ -1468,8 +1468,10 @@ export async function rewind(messageId: string) {
   const sessionId = open.sessionId
   const n = ++reads
   try {
-    const { text, view, filesKept } = await bridge.revert(open.directory, sessionId, messageId)
+    const { text, view, filesKept, crossesApply } = await bridge.revert(open.directory, sessionId, messageId)
     latest(n)
+    if (crossesApply) crossing.add(sessionId)
+    else crossing.delete(sessionId)
     setOpen((o) => ({ ...viewPatch(view, o), live: [], status: { kind: "idle" } }), sessionId)
     // The message returns to the composer, in front of what was being typed there (kept, as are
     // folded pastes); Redo takes it out again.
@@ -1501,6 +1503,7 @@ export async function redo() {
   try {
     const view = await bridge.unrevert(open.directory, sessionId)
     latest(n)
+    crossing.delete(sessionId)
     setOpen((o) => viewPatch(view, o), sessionId)
     // The rewound message leaves the composer unless the user changed it; what they had typed stays.
     const text = rewound.get(sessionId)
@@ -1511,6 +1514,15 @@ export async function redo() {
   } catch (e) {
     set({ notice: message(e) })
   }
+}
+
+/** Sessions whose staged rewind goes back past changes already applied to the main folder.
+ * Known only from the rewind's own answer: a staged rewind read again (after a restart) says nothing. */
+const crossing = new Set<string>()
+
+/** Whether the session's staged rewind goes back past an apply (or a base brought in). */
+export function rewindCrossesApply(sessionId: string | null) {
+  return !!sessionId && crossing.has(sessionId)
 }
 
 /** The text a rewind put in a session's composer, so Redo can take it out again. */
@@ -1810,6 +1822,23 @@ export async function forkSession(directory: string, sessionId: string, before: 
   } catch (e) {
     set({ notice: `The session couldn’t be branched. ${message(e)}` })
   }
+}
+
+/**
+ * For a delete: each worktree session among `rows` with changes not applied to the main folder,
+ * and how many files. A read that fails counts as unknown (`files` null): ask anyway.
+ */
+export async function unappliedOf(rows: SessionRow[]): Promise<{ row: SessionRow; files: number | null }[]> {
+  const asked = rows.filter((r) => r.worktree && r.worktree.state !== "discarded" && r.worktree.state !== "applied")
+  const read = await Promise.all(
+    asked.map((row) =>
+      bridge.worktreeUnapplied(row.directory, row.id).then(
+        (files) => ({ row, files: files as number | null }),
+        () => ({ row, files: null })
+      )
+    )
+  )
+  return read.filter((r) => r.files === null || r.files > 0)
 }
 
 export async function deleteSession(row: SessionRow) {

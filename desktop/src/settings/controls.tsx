@@ -233,6 +233,8 @@ export function Confirm({
   variant = "ghost",
   className,
   icon,
+  onAsk,
+  waiting = false,
 }: {
   label: ReactNode
   question: ReactNode
@@ -243,20 +245,26 @@ export function Confirm({
   variant?: "ghost" | "secondary" | "danger-soft"
   className?: string
   icon?: ReactNode
+  /** When the question opens: read what it needs to say. */
+  onAsk?: () => void
+  /** The question is still being read: the action waits. */
+  waiting?: boolean
 }) {
   const [asking, setAsking] = useState(false)
   const [working, setWorking] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const confirm = useRef<HTMLButtonElement>(null)
+  // Focus goes to the action once it can be pressed (after what the question reads).
   useEffect(() => {
-    if (asking) confirm.current?.focus()
-  }, [asking])
+    if (asking && !waiting) confirm.current?.focus()
+  }, [asking, waiting])
   if (!asking)
     return (
       <button type="button"
         onClick={() => {
           setError(null)
           setAsking(true)
+          onAsk?.()
         }}
         className={btn(variant, "sm", cn("shrink-0 gap-1.5", variant === "ghost" && "text-muted", className))}
       >
@@ -279,7 +287,7 @@ export function Confirm({
       <span className="flex shrink-0 items-center gap-1">
         <button type="button"
           ref={confirm}
-          disabled={working}
+          disabled={working || waiting}
           onClick={() => {
             setWorking(true)
             setError(null)

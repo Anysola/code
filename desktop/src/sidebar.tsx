@@ -32,7 +32,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import type { SessionRow, Window as AccountWindow } from "./bridge"
-import { deleteLater, FEEDBACK, flushDeletes, HELP, RELEASES, showShortcuts, useChrome } from "./chrome"
+import { askDelete, FEEDBACK, flushDeletes, HELP, RELEASES, showShortcuts, useChrome } from "./chrome"
 import { capitalize } from "./composer"
 import { exportSession, SidebarToggle } from "./header"
 import { SearchButton } from "./palette"
@@ -414,7 +414,7 @@ function SelectionBar({ rows, onDone }: { rows: SessionRow[]; onDone: () => void
         {confirm ? (
           <button
             onClick={() => {
-              deleteLater(rows, openId)
+              void askDelete(rows, openId)
               onDone()
             }}
             className={btn("danger-soft", "sm", "gap-1.5")}
@@ -528,12 +528,13 @@ function SessionLink({
           </span>
           {(showPlace || row.worktree) && (
             <span className="text-2xs flex min-w-0 items-center gap-1.5 text-muted">
+              {/* Both give way on a narrow row: the folder up to half, the branch takes the rest. */}
               {showPlace && (
-                <span className="shrink-0 truncate">
+                <span className={cn("min-w-0 truncate", row.worktree ? "max-w-[45%] shrink-0" : "shrink")}>
                   <PlaceLabel directory={row.directory} />
                 </span>
               )}
-              {row.worktree && <BranchName worktree={row.worktree} />}
+              {row.worktree && <BranchName worktree={row.worktree} className="flex-1" />}
             </span>
           )}
         </span>
@@ -589,7 +590,7 @@ function SessionLink({
           <ListChecks className="size-3.5 text-muted" /> Select
         </MenuItem>
         <MenuSeparator />
-        <MenuItem danger onSelect={go(() => deleteLater([row], openId))}>
+        <MenuItem danger onSelect={go(() => void askDelete([row], openId))}>
           <Trash2 className="size-3.5" /> Delete
         </MenuItem>
       </Popover>

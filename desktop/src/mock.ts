@@ -44,7 +44,13 @@
  * Worktrees (only the web folder is a git repository): `?state=worktree-preparing|ready|conflict|
  * missing|failed|discarded|notice|applied` puts the open session in its own worktree in that state
  * (`conflict`: ready, the base brought in with markers left; `applied`: ready again after an apply;
- * `notice`: ready with an apply cut off; `preparing`/`failed`: its first message waits).
+ * `notice`: ready with an apply cut off; `preparing`/`failed`: its first message waits; `markers`:
+ * ready, conflict markers left in two files with no merge in progress; `applied` also makes a
+ * rewind cross that apply). In every worktree scene the open session has 3 files not applied and
+ * the other worktree session 1 (a delete asks first); Delete all keeps that one as being applied.
+ * `?worktree=long-branch` gives both worktree sessions long branch names.
+ * `?worktree=vanish`: the open session's folder goes ~2.5 s after start (a `missing` event; its
+ * changes can't be read after).
  * `?review=apply-conflict|apply-dirty|apply-staged|apply-detached|apply-operation|apply-empty|
  * apply-busy|apply-git|apply-onto` makes the apply check answer so (`apply-onto`: the main folder is on
  * another branch; `apply-stash-left` with `apply-dirty`: the edits set aside don't go back).
@@ -962,6 +968,15 @@ export function mockBridge(): Bridge {
     }
   }
   const worktreeParam = params.get("worktree")
+  // `?worktree=long-branch`: branch names too long for the header and the sidebar.
+  if (worktreeParam === "long-branch")
+    for (const [id, branch] of [
+      ["ses_pricing", "anysola/yearly-price-on-the-plan-cards-and-checkout-toggle"],
+      ["ses_search", "anysola/news-search-ranking-with-recency-and-pinned-posts"],
+    ] as const) {
+      const w = rows.find((r) => r.id === id)?.worktree
+      if (w) w.branch = branch
+    }
   /** `?setup=fail`: the setup command exits 1; `hold`: it keeps running (preparing stays). */
   const setupScene = params.get("setup")
   const setupRuns = new Map<string, SetupRun>()
@@ -1054,6 +1069,8 @@ export function mockBridge(): Bridge {
     if (running.has(sessionId)) return { ok: false, reason: "busy" }
     if (worktreeParam === "old-git") return { ok: false, reason: "git", message: "Update Git to 2.40 or later to apply." }
     if (worktreeScene === "conflict") return { ok: false, reason: "unresolved", files: ["apps/web/src/lib/plans.ts"] }
+    if (worktreeScene === "markers")
+      return { ok: false, reason: "unresolved", files: ["apps/web/src/lib/plans.ts", "apps/web/src/components/plan-card.tsx"] }
     if (review.has("apply-conflict"))
       return { ok: false, reason: "conflict", onto: row.worktree!.baseBranch ?? "main", files: ["apps/web/src/lib/plans.ts", "apps/web/src/routes/pricing.tsx"] }
     if (review.has("apply-dirty") && !stashed.has(sessionId))
@@ -1066,6 +1083,20 @@ export function mockBridge(): Bridge {
     if (review.has("apply-git")) return { ok: false, reason: "git", message: "git merge-tree failed: fatal: unable to read tree 9c1e2a7f3b" }
     return { ok: true, onto: review.has("apply-onto") ? "release/1.4" : (row.worktree!.baseBranch ?? "main"), files: 3, add: 42, del: 9, behind: 2 }
   }
+  /** Files a worktree session changed that aren't on the main folder (see the scenes above). */
+  const unapplied = (sessionId: string) => {
+    const w = rows.find((r) => r.id === sessionId)?.worktree
+    if (!w || w.state === "discarded" || w.state === "preparing" || w.state === "failed") return 0
+    if (sessionId === "ses_pricing") return w.appliedCommit && w.appliedCommit === w.baseCommit ? 0 : 3
+    return sessionId === "ses_search" ? 1 : 0
+  }
+  if (worktreeParam === "vanish")
+    setTimeout(() => {
+      const row = rows.find((r) => r.id === "ses_pricing")
+      if (row?.worktree?.state !== "ready") return
+      row.worktree.state = "missing"
+      worktreeChanged(row)
+    }, 2500)
   const empty = params.has("empty")
   let prefs: Prefs = structuredClone({ ...DEFAULT_PREFS, discord: { ...DEFAULT_PREFS.discord, enabled: !empty } })
   for (const key of ["changes", "commands", "lookups"] as const) {
@@ -1678,7 +1709,13 @@ export function mockBridge(): Bridge {
       revert = state === "long" ? longRevert : rewound
       revertAt = messageId
       // Only the web folder is a git repository here (see gitStatus).
-      return { text: text?.kind === "user" ? text.text : "", view: view(sessionId), filesKept: directory !== WEB }
+      return {
+        text: text?.kind === "user" ? text.text : "",
+        view: view(sessionId),
+        filesKept: directory !== WEB,
+        // `worktree-applied`: the rewind goes back past that apply.
+        crossesApply: worktreeScene === "applied" && sessionId === "ses_pricing",
+      }
     },
     async unrevert(_directory, sessionId) {
       revert = null
@@ -1735,6 +1772,10 @@ export function mockBridge(): Bridge {
     },
     async changes(_directory, sessionId) {
       if (failing.has("changes")) throw new Error("git diff failed: index.lock exists.")
+      const where = rows.find((r) => r.id === sessionId)?.worktree?.state
+      if (where === "preparing") throw new Error("The worktree is still being made.")
+      if (where === "missing")
+        throw new Error("The worktree folder is gone: ~/.anysola/worktrees/anysola-web-3f9a1c/brave-otter")
       if (sessionId !== "ses_pricing") return []
       if (review.has("nogit")) return null
       if (review.has("long")) return longReview
@@ -1753,6 +1794,16 @@ export function mockBridge(): Bridge {
       }
     },
     worktreeApplyCheck: (_directory, sessionId) => applyCheck(sessionId),
+    async worktreeUnapplied(_directory, sessionId) {
+      await wait(150)
+      return unapplied(sessionId)
+    },
+    async worktreesWithWork() {
+      await wait(150)
+      return rows
+        .filter((r) => unapplied(r.id) > 0)
+        .map((r) => ({ sessionId: r.id, title: r.title, directory: r.directory, files: unapplied(r.id) }))
+    },
     async worktreeApply(_directory, sessionId, _message, onto, stash) {
       const row = worktreeRow(sessionId)
       const check = await applyCheck(sessionId)
@@ -2395,11 +2446,13 @@ export function mockBridge(): Bridge {
     deleteAllSessions: () =>
       settle("deleteAllSessions", () => {
         // The open session's turn is running in most states, so it stays.
-        const kept = rows.filter((r) => r.id === "ses_pricing")
+        // In a worktree scene the other worktree session's changes are being applied, so it stays too.
+        const applying = worktreeScene ? rows.filter((r) => r.id === "ses_search") : []
+        const kept = rows.filter((r) => r.id === "ses_pricing" || applying.includes(r))
         const deleted = data.sessions - kept.length
         rows.splice(0, rows.length, ...kept)
         data = { ...data, sessions: kept.length }
-        return { deleted, kept: kept.length }
+        return { deleted, kept: kept.length, applying: applying.length }
       }),
     exportSession: (_directory, sessionId) => settle("exportSession", () => `${HOME}/Downloads/${sessionId}.json`),
     about: () => settle("about", () => about),

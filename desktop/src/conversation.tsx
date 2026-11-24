@@ -226,7 +226,8 @@ function forkFiles(worktree: SessionRow["worktree"]) {
   const r = worktree.restored
   if (!r || r.exact) return "Its own worktree, with the files as they were then."
   if (r.fallback === "now") return "The files from that message are no longer kept, so this fork starts with the files as they are now."
-  if (r.fallback === "edits") return "This session’s later edits were undone; changes made outside it since (commits, pulls) are kept."
+  if (r.fallback === "edits")
+    return "Starts from the main folder’s current commit with the original session’s edits as of that message. Other uncommitted changes in the main folder aren’t in it."
   const n = r.kept.length
   return `Files are as of that message, except ${n} large file${n === 1 ? "" : "s"}, which ${n === 1 ? "is" : "are"} as on the commit it started from.`
 }

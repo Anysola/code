@@ -56,8 +56,9 @@ export type ForkRestore = {
   /** Files left as on the commit the fork started from: over 2 MB and never captured. */
   kept: string[]
   /**
-   * How it was done when not from the fork point's snapshot: "edits" = only the session's own
-   * later edits undone (history from before 1.1.9; commits and edits made outside it since stay);
+   * How it was done when not from the fork point's snapshot: "edits" = the fork started from the
+   * main folder's current commit with only the source session's own edits as of that message put
+   * back (history from before 1.1.9); other uncommitted changes of the main folder are not in it.
    * "now" = the fork point's files are gone (`snapshots: false`, or pruned after ~2 weeks), so
    * the source's files as they are now. null when restored from the fork point's snapshot.
    * Ignored files (`.env`, `node_modules`, build output) are never in snapshots in any case.
@@ -112,7 +113,10 @@ export type ApplyCheck =
   | { ok: false; reason: "empty" }
   /** A turn, a subagent or the setup command runs. */
   | { ok: false; reason: "busy" }
-  /** Conflict markers or unmerged files left in the worktree (after bringing the base in). */
+  /**
+   * Conflict markers or unmerged files left in the worktree: after bringing the base in, or
+   * markers found in any changed file with no merge in progress. Say neither cause; list the files.
+   */
   | { ok: false; reason: "unresolved"; files: string[] }
   /** The changes conflict with `onto`: bring the base in, open the files, or discard. */
   | { ok: false; reason: "conflict"; onto: string; files: string[] }
@@ -125,6 +129,9 @@ export type ApplyCheck =
   | { ok: false; reason: "operation"; what: "merge" | "rebase" | "cherry-pick" | "revert" }
   /** Git failed, or is older than 2.40 ("Update Git to 2.40 or later to apply"); `message` says it. */
   | { ok: false; reason: "git"; message: string }
+
+/** A session whose worktree holds changes not applied to the main folder (`files` of them). */
+export type WorktreeWithWork = { sessionId: string; title: string; directory: string; files: number }
 
 /** The setup command's last run in a session's worktree. */
 export type SetupRun = {
@@ -879,12 +886,17 @@ export type Bridge = {
   setBudget(directory: string, sessionId: string, budget: number | null): Promise<SessionUsage>
   /** What the session has used of the 5-hour window, and its budget. */
   sessionUsage(directory: string, sessionId: string): Promise<SessionUsage>
-  /** `filesKept`: the folder keeps no snapshots (not git), so the turns' edits stay. */
+  /**
+   * `filesKept`: the folder keeps no snapshots (not git), so the turns' edits stay.
+   * `crossesApply`: a worktree session's rewind goes back past an apply or a "Bring main in", so
+   * its files go back to before changes already on the main folder (Review then shows them as
+   * undoing those changes). Only in this result: not on `View.revert`.
+   */
   revert(
     directory: string,
     sessionId: string,
     messageId: string
-  ): Promise<{ text: string; view: View; filesKept: boolean }>
+  ): Promise<{ text: string; view: View; filesKept: boolean; crossesApply: boolean }>
   unrevert(directory: string, sessionId: string): Promise<View>
   resend(directory: string, sessionId: string, messageId: string, text: string | null, mode: Mode): Promise<{ sessionId: string }>
   palette(directory: string): Promise<Palette>
@@ -945,6 +957,13 @@ export type Bridge = {
   worktreeRecreate(directory: string, sessionId: string): Promise<SessionWorktree>
   /** Only while preparing or failed, before anything ran there: the session moves to the main folder (a waiting message then runs there). */
   worktreeToFolder(directory: string, sessionId: string): Promise<SessionRow>
+  /**
+   * Files the session changed that aren't applied to the main folder; 0 for none, for a
+   * main-folder session, or a released (discarded) worktree. Asked before a delete.
+   */
+  worktreeUnapplied(directory: string, sessionId: string): Promise<number>
+  /** Every root session whose worktree has changes not applied to the main folder. */
+  worktreesWithWork(): Promise<WorktreeWithWork[]>
   setupOutput(directory: string, sessionId: string): Promise<SetupRun | null>
   setupRun(directory: string, sessionId: string): Promise<void>
   /** False when nothing ran. */
@@ -1009,8 +1028,11 @@ export type Bridge = {
 
   dataInfo(): Promise<DataInfo>
   dataClear(id: DataInfo["caches"][number]["id"]): Promise<DataInfo>
-  /** Sessions with a turn running are kept. */
-  deleteAllSessions(): Promise<{ deleted: number; kept: number }>
+  /**
+   * Sessions with a turn running are kept, and so are those whose changes are being applied:
+   * `applying` of the `kept` (the rest were kept because a turn runs).
+   */
+  deleteAllSessions(): Promise<{ deleted: number; kept: number; applying: number }>
   /** Asks where to save the session as JSON; null when cancelled. */
   exportSession(directory: string, sessionId: string): Promise<string | null>
 
@@ -1087,6 +1109,8 @@ function tauriBridge(): Bridge {
     worktreeBringBase: (directory, sessionId) => invoke("worktree_bring_base", { directory, sessionId }),
     worktreeRecreate: (directory, sessionId) => invoke("worktree_recreate", { directory, sessionId }),
     worktreeToFolder: (directory, sessionId) => invoke("worktree_to_folder", { directory, sessionId }),
+    worktreeUnapplied: (directory, sessionId) => invoke("worktree_unapplied", { directory, sessionId }),
+    worktreesWithWork: () => invoke("worktrees_with_work"),
     setupOutput: (directory, sessionId) => invoke("setup_output", { directory, sessionId }),
     setupRun: (directory, sessionId) => invoke("setup_run", { directory, sessionId }),
     setupStop: (directory, sessionId) => invoke("setup_stop", { directory, sessionId }),

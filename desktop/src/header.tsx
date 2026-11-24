@@ -1,7 +1,7 @@
 /**
  * The session header (title, folder, git, Review, the editor and the session's own menu), the
  * sidebar's fold button, and the small notices at the window's foot: Undo for a delete, "Updated
- * to X", and short confirmations.
+ * to X", and short confirmations; and the confirm before deleting a worktree's changes that aren't applied.
  */
 import {
   ArrowUpRight,
@@ -21,17 +21,20 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react"
 
 import {
-  deleteLater,
+  answerDelete,
+  askDelete,
   dismissUpdated,
   editBudget,
   flash,
   loadEditors,
   preferredEditor,
   RELEASES,
+  reviewInstead,
   setReviewing,
   toggleSidebar,
   undoDelete,
   useChrome,
+  type DeleteAsk,
 } from "./chrome"
 import { HeaderBudget } from "./budget"
 import { usePrefs } from "./prefs"
@@ -51,7 +54,7 @@ import {
   worktreeOf,
   type Open,
 } from "./store"
-import { btn, cn, Counts, MenuItem, MenuSeparator, Popover, sameFolder, TitleBar, Tooltip } from "./ui"
+import { btn, cn, Counts, MenuItem, MenuSeparator, Popover, sameFolder, TitleBar, Tooltip, useEscape } from "./ui"
 
 /** A home folder as `~`. */
 function tilde(path: string) {
@@ -313,12 +316,93 @@ function SessionMenu({ open, onRename }: { open: Open; onRename: () => void }) {
         {row && (
           <>
             <MenuSeparator />
-            <MenuItem danger onSelect={go(() => deleteLater([row], row.id))}>
+            <MenuItem danger onSelect={go(() => void askDelete([row], row.id))}>
               <Trash2 className="size-3.5" /> Delete
             </MenuItem>
           </>
         )}
       </Popover>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Deleting a worktree's work
+// ---------------------------------------------------------------------------
+
+function files(n: number | null) {
+  return n === null ? "changes" : `${n} changed file${n === 1 ? "" : "s"}`
+}
+
+/**
+ * Before deleting sessions whose worktrees hold changes not applied to the main folder: what
+ * goes with them, and for one session the way to keep it (Review & apply).
+ */
+export function DeleteConfirm() {
+  const ask = useChrome((c) => c.deleteAsk)
+  if (!ask) return null
+  return <DeleteAsking key={ask.rows.map((r) => r.id).join()} ask={ask} />
+}
+
+function DeleteAsking({ ask }: { ask: DeleteAsk }) {
+  const panel = useRef<HTMLDivElement>(null)
+  const cancel = useCallback(() => answerDelete(false), [])
+  useEscape(panel, cancel)
+  useEffect(() => panel.current?.querySelector<HTMLButtonElement>("[data-cancel]")?.focus(), [])
+  const one = ask.rows.length === 1 && ask.lost.length === 1 ? ask.lost[0] : null
+  const n = ask.rows.length
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim p-6" onClick={cancel}>
+      <div
+        ref={panel}
+        role="alertdialog"
+        aria-labelledby="delete-title"
+        aria-describedby="delete-detail"
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-sm rounded-2xl bg-overlay p-5"
+      >
+        <h2 id="delete-title" className="text-sm font-medium">
+          {one ? "Delete this session?" : `Delete ${n} session${n === 1 ? "" : "s"}?`}
+        </h2>
+        {one ? (
+          <p id="delete-detail" className="text-dense mt-1.5 text-muted">
+            Deletes the worktree and branch <span className="font-mono [overflow-wrap:anywhere] text-foreground/85">{one.row.worktree?.branch}</span>{" "}
+            with {files(one.files)} that {one.files === 1 ? "isn’t" : "aren’t"} applied.
+          </p>
+        ) : (
+          <>
+            <p id="delete-detail" className="text-dense mt-1.5 text-muted">
+              {ask.lost.length === 1 ? "This worktree has" : "These worktrees have"} changes that aren’t applied. Deleting removes{" "}
+              {ask.lost.length === 1 ? "it and its branch" : "them and their branches"}.
+            </p>
+            <ul className="mt-3 flex max-h-44 flex-col gap-0.5 overflow-y-auto">
+              {ask.lost.map(({ row, files: count }) => (
+                <li key={row.id} className="text-dense flex min-w-0 items-baseline gap-3 rounded-md bg-default/30 px-2.5 py-1.5">
+                  <span className="min-w-0 flex-1 truncate" title={row.title}>
+                    {row.title}
+                  </span>
+                  <span className="text-2xs shrink-0 text-muted tabular-nums">
+                    {count === null ? "Not applied" : `${count} file${count === 1 ? "" : "s"} not applied`}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+        <div className="mt-5 flex items-center justify-end gap-2">
+          <button data-cancel onClick={cancel} className={btn("ghost", "sm")}>
+            Cancel
+          </button>
+          {one && (
+            <button onClick={() => void reviewInstead(one.row)} className={btn("secondary", "sm")}>
+              Review & apply
+            </button>
+          )}
+          <button onClick={() => answerDelete(true)} className={btn("danger-soft", "sm")}>
+            {n === 1 ? "Delete" : `Delete ${n}`}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

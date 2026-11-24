@@ -8,7 +8,7 @@ import { useSyncExternalStore } from "react"
 import type { Editor, SessionRow } from "./bridge"
 import { getPrefs } from "./prefs"
 import { onBeforeClose } from "./ui"
-import { closeSession, currentBridge, deleteSessions, openSession } from "./store"
+import { closeSession, currentBridge, deleteSessions, openNow, openSession, unappliedOf } from "./store"
 
 type Chrome = {
   /** The sidebar folded away (remembered). */
@@ -27,6 +27,8 @@ type Chrome = {
   forkNotes: Set<string>
   /** Sessions deleted from the window but not yet from the computer. */
   deleting: { ids: Set<string>; rows: SessionRow[]; wasOpen: string | null } | null
+  /** A delete held for a confirm: some of its worktree sessions have changes not applied. */
+  deleteAsk: DeleteAsk | null
   /** The editors found, the preferred first; null until read. */
   editors: Editor[] | null
   /** Set once after the app restarted on a newer version. */
@@ -71,6 +73,7 @@ let chrome: Chrome = {
   budgeting: false,
   forkNotes: readForkNotes(),
   deleting: null,
+  deleteAsk: null,
   editors: null,
   updated: null,
   flash: null,
@@ -205,6 +208,40 @@ export function deleteLater(rows: SessionRow[], openId: string | null) {
   remember(rows)
   set({ deleting: { ids: new Set(rows.map((r) => r.id)), rows, wasOpen: open } })
   timer = setTimeout(() => void flushDeletes(), UNDO_FOR)
+}
+
+export type DeleteAsk = {
+  rows: SessionRow[]
+  openId: string | null
+  /** The worktree sessions whose changes would go; `files` null when they couldn't be counted. */
+  lost: { row: SessionRow; files: number | null }[]
+}
+
+/**
+ * Delete from the sidebar or the header: at once behind an Undo, unless a worktree session among
+ * them has changes not applied to the main folder; then a confirm says what goes first.
+ */
+export async function askDelete(rows: SessionRow[], openId: string | null) {
+  if (rows.length === 0) return
+  const lost = await unappliedOf(rows)
+  if (lost.length === 0) deleteLater(rows, openId)
+  else set({ deleteAsk: { rows, openId, lost } })
+}
+
+/** The confirm's answer: delete (behind the usual Undo), or keep them. */
+export function answerDelete(go: boolean) {
+  const ask = chrome.deleteAsk
+  if (!ask) return
+  set({ deleteAsk: null })
+  if (go) deleteLater(ask.rows, ask.openId)
+}
+
+/** "Review & apply" from the confirm: the session opens with its Review. */
+export async function reviewInstead(row: SessionRow) {
+  set({ deleteAsk: null })
+  if (openNow()?.sessionId !== row.id) await openSession(row)
+  // After the window has switched sessions (which closes Review), not before.
+  setTimeout(() => setReviewing(true), 0)
 }
 
 export function undoDelete() {
