@@ -1852,10 +1852,9 @@ export function mockBridge(): Bridge {
       }
       const copied = end === null ? items : items.slice(0, items.findIndex((i) => i.id === end))
       if (copied.length === 0) throw new Error("There is nothing before that message to fork.")
-      // The core numbers a source's forks by how many it has: `(fork #n)` on the source's title.
-      const forks = rows.filter((r) => r.forkOf === source.id).length
+      // The core gives a fork its source's title as it is; only `forkOf` tells it.
       const id = `ses_${Math.random().toString(36).slice(2, 10)}`
-      const row = { id, title: `${source.title} (fork #${forks + 1})`, directory: source.directory, updated: Date.now(), forkOf: source.id }
+      const row = { id, title: source.title, directory: source.directory, updated: Date.now(), forkOf: source.id }
       rows.unshift(row)
       transcripts.set(id, structuredClone(copied))
       emit({ type: "created", sessionId: id, title: row.title, directory })

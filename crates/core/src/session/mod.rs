@@ -286,6 +286,11 @@ fn settle_stale(shared: &Shared, session_id: &str) {
 fn finish(shared: &Arc<Shared>, session_id: &str, outcome: &Outcome, unsent: bool, asked: bool) {
     goal::ended(shared, session_id, outcome);
     shared.usage.close_turn(session_id);
+    // Woken turns note a budget stop once per budget: the ones after the first are marked so a
+    // front end leaves them out. What the user asked for always says why.
+    let repeat = matches!(outcome, Outcome::Interrupted(InterruptReason::Budget))
+        && !shared.usage.note_budget_stop(session_id)
+        && !asked;
     let (outcome_label, event) = match outcome {
         Outcome::Succeeded => (
             "succeeded",
@@ -306,6 +311,7 @@ fn finish(shared: &Arc<Shared>, session_id: &str, outcome: &Outcome, unsent: boo
             Event::Interrupted {
                 session_id: session_id.to_string(),
                 reason: *reason,
+                repeat,
             },
         ),
     };
@@ -314,12 +320,7 @@ fn finish(shared: &Arc<Shared>, session_id: &str, outcome: &Outcome, unsent: boo
         Outcome::Failed(error) => idle["error"] = encode(error),
         Outcome::Interrupted(reason) => {
             idle["reason"] = json!(interrupt_label(*reason));
-            // Woken turns note a budget stop once per budget: the ones after the first are
-            // marked so a front end leaves them out. What the user asked for always says why.
-            if *reason == InterruptReason::Budget
-                && !shared.usage.note_budget_stop(session_id)
-                && !asked
-            {
+            if repeat {
                 idle["repeat"] = json!(true);
             }
         }

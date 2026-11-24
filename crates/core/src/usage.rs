@@ -62,7 +62,7 @@ impl Usage {
     }
 
     fn key(session_id: &str) -> String {
-        format!("anysola:usage:{session_id}")
+        format!("{}{session_id}", crate::storage::USAGE_PREFIX)
     }
 
     fn with<T>(&self, session_id: &str, f: impl FnOnce(&mut State) -> T) -> T {
@@ -86,6 +86,14 @@ impl Usage {
                 ..State::default()
             },
             None => State::default(),
+        }
+    }
+
+    /// Drops the state of sessions that were deleted (their stored rows go with the session).
+    pub fn forget(&self, session_ids: &[String]) {
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        for id in session_ids {
+            sessions.remove(id);
         }
     }
 

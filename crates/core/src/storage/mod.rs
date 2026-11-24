@@ -40,6 +40,8 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 
 /// KV key prefix of a session's `/goal` state (`goal:<sessionID>`); deleting the session drops it.
 pub(crate) const GOAL_PREFIX: &str = "goal:";
+/// KV key prefix of a session's usage totals (see `usage.rs`).
+pub(crate) const USAGE_PREFIX: &str = "anysola:usage:";
 
 pub struct Db {
     conn: Mutex<Connection>,
@@ -348,18 +350,6 @@ impl Db {
                 Ok((r.get(0)?, r.get(1)?, held))
             })?;
             rows.collect()
-        })
-    }
-
-    /// Titles of sessions forked from `source`, to number a new fork.
-    pub fn fork_count(&self, source: &str) -> Result<u64> {
-        self.with(|c| {
-            c.query_row(
-                "SELECT COUNT(*) FROM session WHERE fork_session_id = ?1",
-                [source],
-                |r| r.get::<_, i64>(0),
-            )
-            .map(|n| n as u64)
         })
     }
 

@@ -286,7 +286,21 @@ impl Db {
         })
     }
 
-    /// Deletes a session and its descendants; false when it does not exist.
+    /// The session and its descendants (ids; empty when it does not exist).
+    pub fn session_tree(&self, id: &str) -> Result<Vec<String>> {
+        self.with(|c| {
+            let mut statement = c.prepare(
+                "WITH RECURSIVE tree(id) AS (
+                    SELECT id FROM session WHERE id = ?1
+                    UNION ALL SELECT session.id FROM session JOIN tree ON session.parent_id = tree.id)
+                 SELECT id FROM tree",
+            )?;
+            statement.query_map([id], |r| r.get(0))?.collect()
+        })
+    }
+
+    /// Deletes a session and its descendants, with their goal and usage rows; false when it does
+    /// not exist.
     pub fn delete_session(&self, id: &str) -> Result<bool> {
         self.with(|c| {
             let tx = c.transaction()?;
@@ -298,8 +312,8 @@ impl Db {
                 tx.execute(
                     "WITH RECURSIVE tree(id) AS (
                         SELECT ?1 UNION ALL SELECT session.id FROM session JOIN tree ON session.parent_id = tree.id)
-                     DELETE FROM kv WHERE key IN (SELECT ?2 || id FROM tree)",
-                    rusqlite::params![id, super::GOAL_PREFIX],
+                     DELETE FROM kv WHERE key IN (SELECT ?2 || id FROM tree UNION ALL SELECT ?3 || id FROM tree)",
+                    rusqlite::params![id, super::GOAL_PREFIX, super::USAGE_PREFIX],
                 )?;
                 tx.execute(
                     "WITH RECURSIVE tree(id) AS (

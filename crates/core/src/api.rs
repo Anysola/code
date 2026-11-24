@@ -734,8 +734,8 @@ impl Core {
         source: &SessionRow,
         before: Option<&str>,
     ) -> Result<SessionRow, CoreError> {
-        let number = self.shared.db.fork_count(&source.id)? + 1;
-        let title = format!("{} (fork #{number})", source.title);
+        // A fork keeps its source's title; the sidebar tells it by `fork_session_id`.
+        let title = source.title.clone();
         let mut messages = self.shared.db.messages(&source.id)?;
         if let Some(before) = before
             && let Some(at) = messages.iter().position(|m| m.id == before)

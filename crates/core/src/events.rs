@@ -191,6 +191,9 @@ pub enum Event {
     Interrupted {
         session_id: String,
         reason: InterruptReason,
+        /// A stop at the budget the session has noted already (a woken turn the user did not
+        /// ask for): the transcript leaves it out and the shell does not announce it.
+        repeat: bool,
     },
     /// An MCP server asks for input; answered with [`crate::api::Core::reply_form`]. Session
     /// [`crate::mcp::GLOBAL`].

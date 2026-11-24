@@ -708,10 +708,9 @@ export type Bridge = {
    * Copies the session into a new one: the whole conversation, or only what came before
    * `before`, the id of a message the user sent (a `user` item of the transcript, as `revert`
    * and `resend` take; that message and everything after it are left out). The new session is a
-   * root session, listed like any other, with `forkOf` set to the source; its first title is
-   * the source's with ` (fork #n)`, which a rename drops (tell a fork by `forkOf`, never by
-   * its title). Use the returned row; the `created` event that also comes only refreshes the
-   * list. With a rewind staged it copies what the window shows: up to the rewind's message, as
+   * root session, listed like any other, with `forkOf` set to the source; its title is
+   * the source's as it is (tell a fork by `forkOf`, never by its title). Use the returned row;
+   * the `created` event that also comes only refreshes the list. With a rewind staged it copies what the window shows: up to the rewind's message, as
    * if it were final (`before` must come before it). Refused for a subagent's session, while a
    * turn runs, for a `before` that is not a shown user message of the session, for the first
    * message (nothing comes before it), and with a rewind staged somewhere other than a user

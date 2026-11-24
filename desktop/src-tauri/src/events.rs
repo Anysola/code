@@ -112,7 +112,9 @@ pub fn to_json(event: &Event, directory: &str) -> Option<Value> {
             json!({"type": "failed", "sessionId": session_id, "error": plain(kind, &error.message),
                    "kind": kind, "unsent": unsent})
         }
-        Event::Interrupted { session_id, reason } => json!({
+        Event::Interrupted {
+            session_id, reason, ..
+        } => json!({
             "type": "interrupted",
             "sessionId": session_id,
             "reason": match reason {

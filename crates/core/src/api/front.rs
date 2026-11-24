@@ -53,7 +53,10 @@ impl Core {
                 token.cancel();
             }
         }
-        Ok(self.shared.db.delete_session(session_id)?)
+        let tree = self.shared.db.session_tree(session_id)?;
+        let deleted = self.shared.db.delete_session(session_id)?;
+        self.shared.usage.forget(&tree);
+        Ok(deleted)
     }
 
     /// `{info, messages}` as `anysola session export` writes it.

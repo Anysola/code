@@ -290,7 +290,7 @@ fn forks_and_children() {
         fork.fork_boundary,
         Some(json!({"type": "through", "messageID": last.id}))
     );
-    assert!(fork.title.ends_with(" (fork #1)"));
+    assert_eq!(fork.title, db.session(&session.id).unwrap().unwrap().title);
     assert_eq!(
         db.messages(&fork.id).unwrap().len(),
         db.messages(&session.id).unwrap().len()
@@ -318,8 +318,9 @@ fn a_session_forks_more_than_once() {
     // The whole session, twice, and once more cut before its second prompt.
     let first = core.fork_session(&session.id, None).unwrap();
     let second = core.fork_session(&session.id, None).unwrap();
-    assert!(first.title.ends_with(" (fork #1)"));
-    assert!(second.title.ends_with(" (fork #2)"));
+    let title = db.session(&session.id).unwrap().unwrap().title;
+    assert_eq!(first.title, title);
+    assert_eq!(second.title, title);
     for fork in [&first, &second] {
         let rows = db.messages(&fork.id).unwrap();
         assert_eq!(rows.len(), source.len());
@@ -335,7 +336,7 @@ fn a_session_forks_more_than_once() {
         copied.len(),
         source.iter().position(|r| r.id == cut.id).unwrap()
     );
-    assert_eq!(db.fork_count(&session.id).unwrap(), 3);
+    assert_eq!(before.title, title);
 
     // A fork forks too, more than once, and its forks answer a prompt.
     let nested = core.fork_session(&first.id, None).unwrap();
@@ -374,6 +375,41 @@ fn a_session_forks_more_than_once() {
     assert!(!listed.contains(&child.id));
     let usage = core.usage(&first.id);
     assert_eq!((usage.total, usage.turns), (0.0, 0));
+}
+
+/// Deleting a session takes its usage with it: the stored rows of the whole subtree, and what the
+/// core keeps in memory.
+#[test]
+fn deleting_a_session_removes_the_usage_of_its_subtree() {
+    let gateway = FakeGateway::start(|request, _| text(request, "ok"));
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (parent, _) = core.open(&Target::New, false).unwrap();
+    let (other, _) = core.open(&Target::New, false).unwrap();
+    let child = core.create_child(&parent.id, None).unwrap();
+    for id in [&parent.id, &other.id] {
+        runtime
+            .block_on(core.prompt(id, prompt("one"), TurnOptions::default()))
+            .unwrap();
+    }
+    core.set_budget(&child.id, Some(50)).unwrap();
+    let db = Db::open(&env.home.home().join(".anysola/anysola.db")).unwrap();
+    let key = |id: &str| format!("anysola:usage:{id}");
+    for id in [&parent.id, &child.id, &other.id] {
+        assert!(db.kv_get(&key(id)).unwrap().is_some(), "{id} has no row");
+    }
+    assert!(core.usage(&parent.id).total > 0.0);
+    assert_eq!(core.usage(&child.id).budget, Some(50));
+
+    assert!(core.delete_session(&parent.id).unwrap());
+    for id in [&parent.id, &child.id] {
+        assert!(db.kv_get(&key(id)).unwrap().is_none(), "{id} kept its row");
+        let usage = core.usage(id);
+        assert_eq!((usage.total, usage.turns, usage.budget), (0.0, 0, None));
+    }
+    assert!(db.kv_get(&key(&other.id)).unwrap().is_some());
+    assert!(core.usage(&other.id).total > 0.0);
 }
 
 #[test]

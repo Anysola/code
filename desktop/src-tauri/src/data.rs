@@ -229,16 +229,17 @@ pub async fn delete_all_sessions(app: State<'_, App>) -> Answer {
     let mut deleted = 0;
     let mut kept = 0;
     for (id, directory, held) in db.all_root_sessions().map_err(text)? {
-        let busy = held
-            || app
-                .running(&directory)
-                .await
-                .is_some_and(|core| core.is_busy(&id));
-        if busy {
+        let core = app.running(&directory).await;
+        if held || core.as_ref().is_some_and(|core| core.is_busy(&id)) {
             kept += 1;
             continue;
         }
-        if db.delete_session(&id).map_err(text)? {
+        // A running core also drops the session's usage it keeps in memory.
+        let removed = match &core {
+            Some(core) => core.delete_session(&id).map_err(text)?,
+            None => db.delete_session(&id).map_err(text)?,
+        };
+        if removed {
             deleted += 1;
         }
     }

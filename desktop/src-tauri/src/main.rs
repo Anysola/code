@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anysola_core::api::{Core, Prompt, Steered, Target};
-use anysola_core::events::Event;
+use anysola_core::events::{Event, InterruptReason};
 use anysola_core::gateway::account::DeviceLogin;
 use anysola_core::mcp::FormReply;
 use anysola_core::model::{ModelRef, PROVIDER};
@@ -449,6 +449,15 @@ fn notify(handle: &AppHandle, event: &Event) {
                 n.failed
             })
         }
+        // Only a stop at the budget: the user's own stop and a declined call need no word, and
+        // a repeat of a budget stop is silent in the transcript too.
+        Event::Interrupted {
+            session_id,
+            reason: InterruptReason::Budget,
+            repeat: false,
+        } => (session_id, "Stopped at its budget.", |n: &Notifications| {
+            n.finished
+        }),
         _ => return,
     };
     let wanted = handle.state::<App>().prefs().notifications;
@@ -1099,10 +1108,12 @@ async fn rename_session(app: State<'_, App>, session_id: String, title: String) 
 
 #[tauri::command]
 async fn delete_session(app: State<'_, App>, directory: String, session_id: String) -> Answer {
-    if let Some(core) = app.running(&directory).await
-        && core.is_busy(&session_id)
-    {
-        return Err("Stop the session before deleting it.".into());
+    // A running core also drops the session's usage it keeps in memory.
+    if let Some(core) = app.running(&directory).await {
+        if core.is_busy(&session_id) {
+            return Err("Stop the session before deleting it.".into());
+        }
+        return Ok(json!(core.delete_session(&session_id).map_err(text)?));
     }
     Ok(json!(app.db()?.delete_session(&session_id).map_err(text)?))
 }
