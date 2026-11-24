@@ -4,7 +4,7 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
-## Unreleased
+## 1.2.0 (2026-11-24)
 
 - In a Git folder a new session works in its own worktree and branch, so sessions don't change each other's
   files or the main folder. Review shows its changes; Apply makes them one commit on the main folder's branch and
@@ -23,6 +23,7 @@ branch.
   other edits in the way and put back. A crash during an apply puts those edits back at the next start, or says
   which stash holds them.
 - Deleting a session whose worktree has changes not applied asks first.
+- Writing into a `.git` folder with the file tools always asks, in every session.
 - A branch from an earlier message gets its own worktree with the files as they were at that message.
 - A session moved into a worktree by the agent now rewinds and reviews that worktree's files, not the main
   folder's.
