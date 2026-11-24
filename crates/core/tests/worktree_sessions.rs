@@ -281,18 +281,102 @@ fn a_pinned_session_writes_in_its_worktree_only() {
         "{:?}",
         last_results(&gateway)
     );
+    // Refused outright, not asked: no answer could open the main folder to a worktree session.
+    let text = last_results(&gateway)[1]["content"].to_string();
+    assert!(text.contains("works in its own worktree"), "{text}");
     let asked = asked.lock().unwrap();
-    let external = asked
-        .iter()
-        .find(|(a, _, _)| a == "external_directory")
-        .expect("the main folder is outside");
     assert!(
-        external.1.iter().any(|r| r.contains("/proj/")),
-        "{external:?}"
+        !asked.iter().any(|(a, _, _)| a == "external_directory"),
+        "{asked:?}"
     );
-    // No "always" for the main folder: one would open it to every worktree session.
-    assert!(external.2.is_empty(), "{external:?}");
     assert_eq!(git(&project, &["status", "--porcelain"]), "");
+}
+
+/// Auto mode never asks about outside folders, and a saved "always" for a parent folder allows
+/// them; a pinned session still can't write or edit the main folder or another session's
+/// worktree. Reading the main folder stays possible.
+#[test]
+fn a_pinned_session_never_writes_the_main_folder_in_auto_mode() {
+    let paths = Arc::new(Mutex::new((String::new(), String::new())));
+    let shared = paths.clone();
+    let gateway = FakeGateway::start(move |request, _| {
+        if request.is_title() {
+            return text(request, "title");
+        }
+        let (main, other) = shared.lock().unwrap().clone();
+        let calls = [
+            (
+                "write",
+                json!({"path": format!("{main}/new.txt"), "content": "x"}),
+            ),
+            (
+                "edit",
+                json!({"path": format!("{main}/README.md"), "oldString": "hi", "newString": "HACKED"}),
+            ),
+            (
+                "write",
+                json!({"path": format!("{other}/planted.txt"), "content": "x"}),
+            ),
+            ("read", json!({"path": format!("{main}/README.md")})),
+            ("write", json!({"path": "mine.txt", "content": "x"})),
+        ];
+        match calls.get(results(request).len()) {
+            Some((name, input)) => {
+                let model = request.json()["model"].as_str().unwrap().to_string();
+                Reply::Sse {
+                    body: Stream::new()
+                        .tool(&format!("t{}", results(request).len()), name, input.clone())
+                        .finish(&model, Some(1)),
+                }
+            }
+            None => text(request, "done"),
+        }
+    });
+    let env = env(&gateway.url);
+    let home = env.home.home().display().to_string().replace('\\', "/");
+    // A saved "always" for the whole home folder (a parent of the main folder and the worktrees).
+    env.home.write(
+        ".anysola/config.json",
+        &format!(
+            r#"{{"permissions": [{{"action": "external_directory", "resource": "{home}/*", "effect": "allow"}}]}}"#
+        ),
+    );
+    let project = project(&env, &[]);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let asked = answering(&runtime, &core, |_, _| Answer::Once);
+    let (id, top) = isolated(&runtime, &core);
+    let (_, other) = isolated(&runtime, &core);
+    *paths.lock().unwrap() = (project.display().to_string(), other.display().to_string());
+    // Auto: no floor, the default agent allows everything.
+    runtime
+        .block_on(core.prompt(&id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    let results = last_results(&gateway);
+    assert_eq!(results.len(), 5, "{results:?}");
+    for r in &results[..3] {
+        let text = r["content"].to_string();
+        assert!(text.contains("works in its own worktree"), "BREAK: {text}");
+    }
+    assert!(
+        results[3]["content"].to_string().contains("hi"),
+        "{results:?}"
+    );
+    assert!(top.join("mine.txt").exists());
+    assert!(
+        !project.join("new.txt").exists(),
+        "BREAK: wrote the main folder"
+    );
+    assert_eq!(read(&project.join("README.md")).as_deref(), Some("hi"));
+    assert!(
+        !other.join("planted.txt").exists(),
+        "BREAK: wrote another worktree"
+    );
+    assert_eq!(git(&project, &["status", "--porcelain"]), "");
+    assert!(
+        !asked.lock().unwrap().iter().any(|(a, _, _)| a == "edit"),
+        "refused before any ask"
+    );
 }
 
 /// The user's root-relative denial names the main folder's file reached by absolute path from a

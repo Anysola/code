@@ -298,6 +298,44 @@ pub fn relative_path(from: &Path, to: &Path) -> String {
     parts.join("/")
 }
 
+/// The sentence a pinned session gets for a write outside its worktree that would land in the
+/// main folder or another session's worktree.
+pub const FOREIGN_WRITE: &str =
+    "This session works in its own worktree; apply its changes to bring them to the main folder.";
+
+/// A session pinned to its own worktree never writes into the main folder or another session's
+/// worktree, in any mode and whatever was saved for a parent folder: such a write is refused
+/// before anything is asked. Reads are not affected, and other outside folders are asked about
+/// as usual. Both the path as written and the file it really reaches are checked, against both
+/// spellings of each root (symlinks, Windows short names).
+pub fn refuse_foreign_write(ctx: &ToolContext, target: &Target) -> Result<(), ToolError> {
+    if !ctx.pinned() || target.external.is_none() {
+        return Ok(());
+    }
+    let real = crate::config::real_path;
+    let written = Places::written(ctx);
+    let places = Places::real(ctx);
+    let paths = [target.absolute.clone(), real(&target.absolute)];
+    let mains = [written.main.clone(), places.main.clone()];
+    let own = [written.worktree.clone(), places.worktree.clone()];
+    let bases = [written.sessions.clone(), places.sessions.clone()];
+    let foreign = paths.iter().any(|path| {
+        let in_main = mains
+            .iter()
+            .any(|m| m.parent().is_some() && contains(m, path));
+        let in_own = own.iter().any(|w| contains(w, path));
+        let in_other = !in_own && bases.iter().any(|b| contains(b, path));
+        (in_main && !in_own) || in_other
+    });
+    if foreign {
+        return Err(ToolError {
+            kind: super::ToolErrorKind::Blocked,
+            message: FOREIGN_WRITE.into(),
+        });
+    }
+    Ok(())
+}
+
 /// Asks `external_directory` once for every distinct external directory among `targets`.
 pub async fn authorize_external(ctx: &ToolContext, targets: &[&Target]) -> Result<(), ToolError> {
     let mut resources: Vec<String> = Vec::new();

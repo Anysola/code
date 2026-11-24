@@ -75,6 +75,7 @@ async fn edit(input: &Input, ctx: &ToolContext) -> ToolResult {
         .locks
         .lock(&mutation::lock_key(&target.absolute).await)
         .await;
+    access::refuse_foreign_write(ctx, &target)?;
     access::authorize_external(ctx, &[&target]).await?;
 
     let original =

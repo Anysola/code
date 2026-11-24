@@ -69,9 +69,9 @@ hooks and identity apply; Git 2.40 or later), after which the session goes on fr
 the worktree and the branch. A branch made from an earlier message gets its own worktree with the files as they
 were then.
 
-The session's file tools treat only its worktree as inside: the main folder and other sessions' worktrees are
-outside, so in Ask and Edits modes they ask first (Auto mode doesn't ask about outside folders, here as
-anywhere), and your rules still name their files as they would in the main folder. The project's
+The session's file tools treat only its worktree as inside. They never write into the main folder or another
+session's worktree, in any mode and whatever you allowed for a parent folder: apply the changes instead. Reading
+there asks as for any outside folder, and your rules still name those files as they would in the main folder. The project's
 config, hooks and MCP servers are the main folder's; an edit to the worktree's `anysola.json` counts once
 applied. A worktree is not a sandbox: shell commands run as anywhere else, and Git in a worktree shares the
 repository's branches and objects (it can move or push them).

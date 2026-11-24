@@ -59,6 +59,7 @@ impl Tool for WriteTool {
 async fn write(input: &Input, ctx: &ToolContext) -> ToolResult {
     let failed = || ToolError::execution(format!("Unable to write {}", input.path));
     let target = access::resolve(ctx, &input.path, Some(Kind::File));
+    access::refuse_foreign_write(ctx, &target)?;
     access::authorize_external(ctx, &[&target]).await?;
     let current = match mutation::read_text(&target.absolute).await {
         Ok(file) => Some(file.text),
