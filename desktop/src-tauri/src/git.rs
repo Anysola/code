@@ -18,14 +18,14 @@ use tauri::{AppHandle, State};
 use crate::{Answer, App, core_for, text};
 
 /// Reading the repository.
-const LOCAL: Duration = Duration::from_secs(30);
+pub(crate) const LOCAL: Duration = Duration::from_secs(30);
 /// A commit runs the repository's hooks, which can take a while.
-const COMMIT: Duration = Duration::from_secs(300);
+pub(crate) const COMMIT: Duration = Duration::from_secs(300);
 /// Talking to the remote, a credential helper's sign-in included.
-const NETWORK: Duration = Duration::from_secs(120);
+pub(crate) const NETWORK: Duration = Duration::from_secs(120);
 
 #[cfg(test)]
-static TEST_ENV: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+pub(crate) static TEST_ENV: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
 
 #[cfg(test)]
 thread_local! {
@@ -35,15 +35,15 @@ thread_local! {
 }
 
 /// What a finished call printed.
-struct Output {
-    status: ExitStatus,
-    stdout: String,
-    stderr: String,
+pub(crate) struct Output {
+    pub(crate) status: ExitStatus,
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
 }
 
 /// Why a call has no output to show.
 #[derive(Debug, PartialEq)]
-enum Failure {
+pub(crate) enum Failure {
     /// The program isn't installed or isn't on PATH.
     Missing,
     /// It ran past its time and was stopped.
@@ -56,7 +56,7 @@ enum Failure {
 }
 
 /// One call to git or gh.
-struct Call<'a> {
+pub(crate) struct Call<'a> {
     program: &'a str,
     directory: &'a Path,
     args: &'a [&'a str],
@@ -68,7 +68,7 @@ struct Call<'a> {
 }
 
 impl<'a> Call<'a> {
-    fn new(program: &'a str, directory: &'a Path, args: &'a [&'a str]) -> Self {
+    pub(crate) fn new(program: &'a str, directory: &'a Path, args: &'a [&'a str]) -> Self {
         Call {
             program,
             directory,
@@ -84,31 +84,31 @@ impl<'a> Call<'a> {
         }
     }
 
-    fn timeout(mut self, timeout: Duration) -> Self {
+    pub(crate) fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
 
-    fn input(mut self, input: Vec<u8>) -> Self {
+    pub(crate) fn input(mut self, input: Vec<u8>) -> Self {
         self.input = Some(input);
         self
     }
 
     /// The call takes the index lock and keeps it until it ends (`add`, `commit --only`), so a
     /// lock made while it ran is its own.
-    fn holds_index(mut self) -> Self {
+    pub(crate) fn holds_index(mut self) -> Self {
         self.lock = Lock::Own;
         self
     }
 
-    fn env(mut self, key: &'static str, value: impl Into<String>) -> Self {
+    pub(crate) fn env(mut self, key: &'static str, value: impl Into<String>) -> Self {
         self.env.push((key, value.into()));
         self
     }
 
     /// Runs it to the end or to its time limit. A helper the program left behind may keep its
     /// pipes open: the output is taken as far as it came, never waited for past the exit.
-    fn run(self) -> Result<Output, Failure> {
+    pub(crate) fn run(self) -> Result<Output, Failure> {
         let mut command =
             anysola_core::console::command(anysola_core::which::program(self.program));
         command
@@ -182,7 +182,7 @@ impl<'a> Call<'a> {
     }
 
     /// stdout on success; on failure the program's own message (stderr, else stdout).
-    fn ok(self) -> Result<String, Failure> {
+    pub(crate) fn ok(self) -> Result<String, Failure> {
         let out = self.run()?;
         if out.status.success() {
             return Ok(out.stdout.trim().to_string());
@@ -236,7 +236,7 @@ fn drain(pipe: Option<impl Read + Send + 'static>) -> Drained {
     Drained { bytes, ended }
 }
 
-fn git<'a>(directory: &'a Path, args: &'a [&'a str]) -> Call<'a> {
+pub(crate) fn git<'a>(directory: &'a Path, args: &'a [&'a str]) -> Call<'a> {
     Call::new("git", directory, args)
 }
 
@@ -278,7 +278,7 @@ fn locked(directory: &Path, lock: Lock, started: std::time::SystemTime) -> bool 
 
 /// What the user was doing, for the headline when git's message says nothing more specific.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Op {
+pub(crate) enum Op {
     Status,
     Branch,
     Commit,
@@ -289,7 +289,7 @@ enum Op {
 }
 
 /// The sentence for a failure, with the program's own words on the next line.
-fn explain(op: Op, failure: Failure) -> String {
+pub(crate) fn explain(op: Op, failure: Failure) -> String {
     let detail = match failure {
         Failure::Missing if op == Op::Pr => {
             return "GitHub CLI isn’t installed, or the app can’t find it.".into();
@@ -495,7 +495,7 @@ fn headline(op: Op, detail: &str) -> &'static str {
     }
 }
 
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
     tauri::async_runtime::spawn_blocking(f)
@@ -530,11 +530,11 @@ fn parse_branch(line: &str) -> (String, Option<String>, u64, u64) {
 
 /// One changed path of `git status`: relative to the repository's top.
 #[derive(Debug, PartialEq)]
-struct Entry {
-    file: String,
+pub(crate) struct Entry {
+    pub(crate) file: String,
     status: &'static str,
     /// A rename's or copy's old path.
-    from: Option<String>,
+    pub(crate) from: Option<String>,
     /// Both sides changed it: a merge conflict.
     unmerged: bool,
     /// Not in the repository yet (`??`).
@@ -578,7 +578,7 @@ fn parse_status(raw: &str) -> (Option<String>, Vec<Entry>) {
     (branch, entries)
 }
 
-fn status_entries(directory: &Path) -> Result<(Option<String>, Vec<Entry>), Failure> {
+pub(crate) fn status_entries(directory: &Path) -> Result<(Option<String>, Vec<Entry>), Failure> {
     let raw = git(
         directory,
         &[
@@ -623,7 +623,7 @@ fn pick_remote<'a>(remotes: impl Iterator<Item = &'a str>) -> Option<String> {
 }
 
 /// `user.name` and `user.email` are both set.
-fn has_identity(directory: &Path) -> bool {
+pub(crate) fn has_identity(directory: &Path) -> bool {
     let Ok(found) = git(
         directory,
         &["config", "--get-regexp", r"^user\.(name|email)$"],
@@ -648,7 +648,7 @@ fn gh_installed(directory: &Path) -> bool {
 }
 
 /// Conflict markers are still in the text: `<<<<<<<` and `>>>>>>>` lines.
-fn has_markers(text: &str) -> bool {
+pub(crate) fn has_markers(text: &str) -> bool {
     let mut lines = text.lines();
     lines.any(|l| l.starts_with("<<<<<<<")) && lines.any(|l| l.starts_with(">>>>>>>"))
 }

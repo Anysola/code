@@ -229,8 +229,18 @@ pub async fn delete_all_sessions(app: State<'_, App>) -> Answer {
     let mut deleted = 0;
     let mut kept = 0;
     for (id, directory, held) in db.all_root_sessions().map_err(text)? {
+        // A worktree session's core is its main folder's.
+        let directory = crate::worktree::folder_of(&db, &directory, &id);
         let core = app.running(&directory).await;
         if held || core.as_ref().is_some_and(|core| core.is_busy(&id)) {
+            kept += 1;
+            continue;
+        }
+        // Its worktree goes too; one being applied is kept.
+        if crate::worktree::before_delete(core.as_ref(), &db, &id)
+            .await
+            .is_err()
+        {
             kept += 1;
             continue;
         }
@@ -239,6 +249,7 @@ pub async fn delete_all_sessions(app: State<'_, App>) -> Answer {
             Some(core) => core.delete_session(&id).map_err(text)?,
             None => db.delete_session(&id).map_err(text)?,
         };
+        crate::worktree::after_delete(&db, &id).await;
         if removed {
             deleted += 1;
         }

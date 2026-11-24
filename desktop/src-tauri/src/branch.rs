@@ -2,9 +2,10 @@
 //! before one message) into a new session listed like any other; the budget is the share of the
 //! 5-hour window the session may use, read back with what it has used so far.
 //!
-//! A fork works in the same folder as its source: no file is put back to how it was at the
-//! message it was forked from. It copies what the window shows: with a rewind staged, the
-//! conversation up to the rewind's message, as if the rewind were final.
+//! In a git folder with a commit the fork gets its own worktree with the files put back as they
+//! were at the fork point (`Core::fork_into_worktree`). Elsewhere it works in the same folder as
+//! its source and no file is put back. It copies what the window shows: with a rewind staged,
+//! the conversation up to the rewind's message, as if the rewind were final.
 
 use anysola_core::api::{Core, CoreError};
 use anysola_core::events::UsageSnapshot;
@@ -118,10 +119,22 @@ pub async fn fork_session(
         .collect();
     let staged = core.revert_boundary(&session_id).map_err(text)?;
     let before = fork_point(&ids, before.as_deref(), staged.as_deref())?;
+    let db = app.db()?.clone();
+    // In a git folder the fork gets its own worktree with the files as at the fork point.
+    if crate::worktree::available(&app, &directory).await {
+        let made = core
+            .fork_into_worktree(&session_id, before.as_deref())
+            .await;
+        if let Ok((row, _)) = &made {
+            crate::worktree::start_made(&handle, &core, &db, &row.id);
+        }
+        let (row, _) = made.map_err(fork_error)?;
+        return Ok(crate::worktree::session_value(&db, &row));
+    }
     let row = core
         .fork_session(&session_id, before.as_deref())
         .map_err(fork_error)?;
-    Ok(session_json(&row))
+    Ok(session_json(&row, None))
 }
 
 /// Sets (`budget` 1 to 100) or clears (`null`) the session's budget. Returns the usage with

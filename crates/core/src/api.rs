@@ -40,8 +40,10 @@ pub use crate::hooks::{HookDocument, HookInfo, HookScope};
 pub use crate::trust::{ConfiguredRule, TrustEntry, TrustItem, TrustKind};
 pub use isolate::{
     Checkout, Cleaned, Fallback, ForkRestore, Release, cleanup as cleanup_worktrees,
+    forget_deleted as forget_deleted_worktree,
 };
 pub(crate) use isolate::{TurnGate, turn_gate};
+pub use revert::file_diff_value;
 pub use state::Loaded;
 
 #[derive(Debug, thiserror::Error)]

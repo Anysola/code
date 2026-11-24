@@ -34,6 +34,9 @@ pub fn entries(core: &Core, session_id: &str) -> Result<Vec<Entry>, String> {
 /// (turns hidden, files put back), the latest todo list, what waits in its inbox, how full the
 /// model's context is and the background commands still running.
 pub fn view(core: &Core, session_id: &str, directory: &str) -> Result<Value, String> {
+    // Paths read relative to where the session works: its own worktree, when it has one.
+    let own = core.session(session_id).ok().flatten().map(|r| r.directory);
+    let directory = own.as_deref().unwrap_or(directory);
     let messages = entries(core, session_id)?;
     let boundary = core.revert_boundary(session_id).map_err(crate::text)?;
     let (shown, hidden) = match &boundary {

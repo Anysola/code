@@ -595,6 +595,21 @@ impl Core {
             || crate::session::subagent::has_running_child(&self.shared, session_id)
     }
 
+    /// After the base branch was brought into the session's branch: the session's changes are
+    /// measured from `commit` (the base's tip) from now on. Only while the row is in `state`.
+    pub fn set_worktree_base(
+        &self,
+        session_id: &str,
+        state: WorktreeState,
+        commit: &str,
+    ) -> Result<bool, CoreError> {
+        Ok(self.shared.db.update_session_worktree(
+            session_id,
+            state,
+            &[("base_commit", commit.to_string().into())],
+        )?)
+    }
+
     /// Records where an apply starts (the main folder's `HEAD`) and the tree it puts there, while
     /// `applying`, so an apply cut off by a crash can be told finished or not.
     pub fn mark_apply(&self, session_id: &str, from: &str, tree: &str) -> Result<bool, CoreError> {
@@ -1243,6 +1258,36 @@ impl Core {
     }
 }
 
+/// A deleted session's worktree: its folder, branch and hidden refs, and its rows.
+fn drop_deleted(db: &Db, top: &Path, row: &SessionWorktreeRow) {
+    remove_checkout(top, row);
+    unpin(top, &row.session_id);
+    let _ = db.delete_worktree(&row.project_id, &row.directory);
+    let _ = db.delete_session_worktree(&row.session_id);
+}
+
+/// After a session was deleted: its worktree, branch and hidden refs go now instead of at the
+/// next start. Nothing happens while the session still exists. False when something is left
+/// for the start-up cleanup (the main folder is gone, or the folder is held).
+pub fn forget_deleted(db: &Db, session_id: &str) -> bool {
+    let Ok(Some(row)) = db.session_worktree(session_id) else {
+        return true;
+    };
+    if db.session_exists(session_id).unwrap_or(true) {
+        return false;
+    }
+    let Ok(top) = git_sync(
+        Path::new(&row.folder),
+        &["rev-parse", "--show-toplevel"],
+        &[],
+    ) else {
+        return false;
+    };
+    let top = canonical(Path::new(&top));
+    drop_deleted(db, &top, &row);
+    !Path::new(&row.directory).exists()
+}
+
 /// What [`cleanup`] did with one row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cleaned {
@@ -1284,10 +1329,7 @@ pub fn cleanup(db: &Db) -> Vec<Cleaned> {
                 .unwrap_or(false)
         };
         if !db.session_exists(&row.session_id).unwrap_or(true) {
-            remove_checkout(&top, &row);
-            unpin(&top, &row.session_id);
-            let _ = db.delete_worktree(&row.project_id, &row.directory);
-            let _ = db.delete_session_worktree(&row.session_id);
+            drop_deleted(db, &top, &row);
             cleaned.state = None;
             out.push(cleaned);
             continue;

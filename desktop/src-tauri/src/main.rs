@@ -24,6 +24,7 @@ mod transcript;
 mod tree;
 mod trust;
 mod update;
+mod worktree;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -38,7 +39,7 @@ use anysola_core::paths::Paths;
 use anysola_core::session::TurnOptions;
 use anysola_core::session::gate::{Floor, Reply};
 use anysola_core::session::message::InvokedSkill;
-use anysola_core::storage::{Db, SessionRow};
+use anysola_core::storage::{Db, SessionRow, SessionWorktreeRow};
 use anysola_core::tool::question::QuestionReply;
 use prefs::Notifications;
 use serde::Deserialize;
@@ -500,10 +501,12 @@ fn notify(handle: &AppHandle, event: &Event) {
         .show();
 }
 
-fn session_json(row: &SessionRow) -> Value {
-    // `worktree`: the session's own worktree (the shell's worktree round fills it in).
-    json!({"id": row.id, "title": row.title, "directory": row.directory, "updated": row.time_updated,
-           "forkOf": row.fork_session_id, "worktree": null})
+/// `SessionRow` in bridge.ts. A session in its own worktree lists under its main folder (every
+/// call routes by it); `worktree` says where it works.
+pub(crate) fn session_json(row: &SessionRow, worktree: Option<&SessionWorktreeRow>) -> Value {
+    let directory = worktree.map_or(row.directory.as_str(), |w| w.folder.as_str());
+    json!({"id": row.id, "title": row.title, "directory": directory, "updated": row.time_updated,
+           "forkOf": row.fork_session_id, "worktree": worktree.map(worktree::json)})
 }
 
 /// The session's model, its effort and every model to pick from, with the 5-hour window when
@@ -562,19 +565,28 @@ pub(crate) fn info(core: &Core, row: Option<&SessionRow>) -> Value {
 /// Null when it is gone or a subagent's.
 #[tauri::command]
 async fn session_row(app: State<'_, App>, session_id: String) -> Answer {
-    let row = app.db()?.session(&session_id).map_err(text)?;
+    let db = app.db()?;
+    let row = db.session(&session_id).map_err(text)?;
     Ok(row
         .filter(|r| r.parent_id.is_none())
-        .map_or(Value::Null, |r| session_json(&r)))
+        .map_or(Value::Null, |r| worktree::session_value(db, &r)))
 }
 
 #[tauri::command]
 async fn sessions(app: State<'_, App>) -> Answer {
-    let rows = app
-        .db()?
-        .list_sessions(None, None, SESSION_LIST)
-        .map_err(text)?;
-    Ok(Value::Array(rows.iter().map(session_json).collect()))
+    let db = app.db()?;
+    let rows = db.list_sessions(None, None, SESSION_LIST).map_err(text)?;
+    let worktrees: HashMap<String, SessionWorktreeRow> = db
+        .session_worktrees()
+        .map_err(text)?
+        .into_iter()
+        .map(|w| (w.session_id.clone(), w))
+        .collect();
+    Ok(Value::Array(
+        rows.iter()
+            .map(|r| session_json(r, worktrees.get(&r.id)))
+            .collect(),
+    ))
 }
 
 #[tauri::command]
@@ -598,7 +610,7 @@ async fn open_session(
         }
     }
     Ok(json!({
-        "session": session_json(&row),
+        "session": worktree::session_value(app.db()?, &row),
         "view": transcript::view(&core, &row.id, &row.directory)?,
         "info": info(&core, Some(&row)),
         "busy": core.is_busy(&row.id),
@@ -700,6 +712,9 @@ struct Send {
     /// Skills mentioned as `@<name>`: their content goes before the text.
     #[serde(default)]
     skills: Vec<String>,
+    /// A new session in a git folder: its own worktree (default) or the main folder.
+    #[serde(default)]
+    place: Option<String>,
 }
 
 /// A new session's settings from the composer: the session (created when there is none), its
@@ -793,9 +808,17 @@ async fn prompt(
         agent,
         files,
         skills,
+        place,
     } = request;
     let core = core_for(&handle, &app, &directory).await?;
+    let new = session_id.is_none();
     let id = prepare(&core, session_id, &mode, model, variant, agent)?;
+    // A new session in a git folder works in its own worktree unless asked otherwise: the
+    // message waits until it is ready (`worktree` events say when).
+    let isolated = new
+        && place.as_deref() != Some("folder")
+        && worktree::available(&app, &directory).await
+        && worktree::start_new(&handle, &core, app.db()?, &id).await;
     let loaded = core.loaded();
     let skills = skills
         .iter()
@@ -819,7 +842,7 @@ async fn prompt(
     // A running turn takes it when it ends: the core queues it for that turn, or starts one if
     // the turn ended meanwhile. Messages left from a stopped or failed turn run after it, in the
     // order `View.queued` shows them.
-    let queued = core.is_busy(&id);
+    let queued = isolated || core.is_busy(&id);
     spawn_turn(handle.clone(), core, id.clone(), prompt);
     Ok(json!({"sessionId": id, "queued": queued}))
 }
@@ -1109,14 +1132,20 @@ async fn rename_session(app: State<'_, App>, session_id: String, title: String) 
 
 #[tauri::command]
 async fn delete_session(app: State<'_, App>, directory: String, session_id: String) -> Answer {
+    let db = app.db()?.clone();
     // A running core also drops the session's usage it keeps in memory.
-    if let Some(core) = app.running(&directory).await {
-        if core.is_busy(&session_id) {
-            return Err("Stop the session before deleting it.".into());
-        }
-        return Ok(json!(core.delete_session(&session_id).map_err(text)?));
+    let core = app.running(&directory).await;
+    if core.as_ref().is_some_and(|core| core.is_busy(&session_id)) {
+        return Err("Stop the session before deleting it.".into());
     }
-    Ok(json!(app.db()?.delete_session(&session_id).map_err(text)?))
+    // Its worktree and branch go with it.
+    worktree::before_delete(core.as_ref(), &db, &session_id).await?;
+    let removed = match &core {
+        Some(core) => core.delete_session(&session_id).map_err(text)?,
+        None => db.delete_session(&session_id).map_err(text)?,
+    };
+    worktree::after_delete(&db, &session_id).await;
+    Ok(json!(removed))
 }
 
 /// Shows one notification now, focused or not, so the user sees what they look like.
@@ -1215,6 +1244,8 @@ fn main() {
             let state = app.state::<App>();
             let wanted = state.prefs().discord;
             let _ = state.discord.set(discord::Handle::start(wanted));
+            // Session worktrees left from the last run, settled in the background.
+            worktree::cleanup_at_start(state.db.clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1258,6 +1289,16 @@ fn main() {
             actions::scratch_folder,
             actions::changes,
             actions::restore_file,
+            worktree::worktree_info,
+            worktree::worktree_apply_check,
+            worktree::worktree_apply,
+            worktree::worktree_discard,
+            worktree::worktree_bring_base,
+            worktree::worktree_recreate,
+            worktree::worktree_to_folder,
+            worktree::setup_output,
+            worktree::setup_run,
+            worktree::setup_stop,
             session_row,
             branch::fork_session,
             branch::set_budget,
@@ -1322,6 +1363,7 @@ fn main() {
             // servers would outlive the window.
             if let tauri::RunEvent::Exit = event {
                 let app = handle.state::<App>();
+                worktree::stop_all_setups();
                 tauri::async_runtime::block_on(async {
                     let _ = tokio::time::timeout(EXIT_GRACE, app.drop_cores()).await;
                 });
@@ -1354,12 +1396,40 @@ mod tests {
             time_created: 1,
             time_updated: 2,
         };
-        assert_eq!(session_json(&row)["forkOf"], Value::Null);
+        assert_eq!(session_json(&row, None)["forkOf"], Value::Null);
         row.fork_session_id = Some("ses_1".into());
         assert_eq!(
-            session_json(&row),
+            session_json(&row, None),
             json!({"id": "ses_2", "title": "Renamed", "directory": "/work", "updated": 2, "forkOf": "ses_1",
                    "worktree": null})
+        );
+        // A worktree session lists under its main folder and says where it works.
+        row.directory = "/data/worktrees/work-abc123/s".into();
+        let worktree = SessionWorktreeRow {
+            session_id: "ses_2".into(),
+            project_id: "p".into(),
+            folder: "/work".into(),
+            directory: "/data/worktrees/work-abc123/s".into(),
+            branch: "anysola/s".into(),
+            base_branch: Some("main".into()),
+            base_commit: "abc".into(),
+            snapshot_dir: None,
+            state: anysola_core::storage::WorktreeState::Ready,
+            error: None,
+            applied_commit: None,
+            apply_from: None,
+            apply_tree: None,
+            restored: None,
+            leftover: false,
+            time_created: 1,
+            time_updated: 2,
+        };
+        assert_eq!(
+            session_json(&row, Some(&worktree)),
+            json!({"id": "ses_2", "title": "Renamed", "directory": "/work", "updated": 2, "forkOf": "ses_1",
+                   "worktree": {"path": "/data/worktrees/work-abc123/s", "branch": "anysola/s",
+                                "baseBranch": "main", "baseCommit": "abc", "state": "ready", "error": null,
+                                "appliedCommit": null, "restored": null, "leftover": false}})
         );
     }
 

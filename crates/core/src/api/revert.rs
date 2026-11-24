@@ -248,3 +248,23 @@ fn file_diff(store: &crate::snapshot::Store, from: &str, to: &str, file: &str) -
     };
     Some(FileDiff::new(file, &text(&before), &text(&after), status).to_value())
 }
+
+/// A file's change as the window's `FileDiff` shows it: `None` before = added, `None` after =
+/// deleted; `None` when it is neither.
+pub fn file_diff_value(file: &str, before: Option<&str>, after: Option<&str>) -> Option<Value> {
+    let status = match (before, after) {
+        (None, None) => return None,
+        (None, Some(_)) => Status::Added,
+        (Some(_), None) => Status::Deleted,
+        (Some(_), Some(_)) => Status::Modified,
+    };
+    Some(
+        FileDiff::new(
+            file,
+            before.unwrap_or_default(),
+            after.unwrap_or_default(),
+            status,
+        )
+        .to_value(),
+    )
+}

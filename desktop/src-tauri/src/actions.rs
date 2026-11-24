@@ -179,6 +179,10 @@ pub async fn changes(
     directory: String,
     session_id: String,
 ) -> Answer {
+    // A worktree session: its worktree against its base, git-based (commands' changes too).
+    if let Some(found) = crate::worktree::changes(app.db()?, &session_id).await? {
+        return Ok(found);
+    }
     let core = core_for(&handle, &app, &directory).await?;
     let found = tauri::async_runtime::spawn_blocking(move || core.session_changes(&session_id))
         .await
@@ -197,6 +201,9 @@ pub async fn restore_file(
     file: String,
 ) -> Answer {
     let core = core_for(&handle, &app, &directory).await?;
+    if crate::worktree::restore(&core, app.db()?, &session_id, &file).await? {
+        return Ok(Value::Null);
+    }
     if core.is_busy(&session_id) {
         return Err("Stop the session before putting files back.".into());
     }
