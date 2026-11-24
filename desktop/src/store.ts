@@ -2064,7 +2064,9 @@ async function loadSetup(directory: string, sessionId: string) {
     if (run)
       set((s) => {
         const here = s.setups[sessionId]
-        const keep = here && here.ended === null && here.lines.length > run.lines.length
+        // An end heard meanwhile is newer than a copy read while it ran.
+        const ended = here && here.ended !== null && run.ended === null
+        const keep = here && (ended || (here.ended === null && here.lines.length > run.lines.length))
         return { setups: { ...s.setups, [sessionId]: keep ? { ...here, command: run.command } : run } }
       })
   } catch {

@@ -112,8 +112,11 @@ pub fn unrunnable(event: Event, command: &str, ran: &Ran) -> Option<String> {
             code: Some(code),
             stderr,
             ..
-        } if *code != 0 && names_missing(stderr) => {
-            format!("exit code {code}: {}", first_line(stderr))
+        } if *code != 0 && missing_line(stderr).is_some() => {
+            format!(
+                "exit code {code}: {}",
+                missing_line(stderr).unwrap_or_default()
+            )
         }
         _ => return None,
     };
@@ -122,15 +125,10 @@ pub fn unrunnable(event: Event, command: &str, ran: &Ran) -> Option<String> {
     )))
 }
 
-/// Whether a failed command's error output says the program or script itself wasn't found.
-fn names_missing(stderr: &str) -> bool {
-    let text: String = stderr
-        .lines()
-        .take(6)
-        .collect::<Vec<_>>()
-        .join("\n")
-        .to_lowercase();
-    [
+/// The line of a failed command's error output that says the program or script itself wasn't
+/// found, if one does.
+fn missing_line(stderr: &str) -> Option<&str> {
+    const NEEDLES: [&str; 12] = [
         "no such file or directory",
         "cannot find module",
         "can't open file",
@@ -143,9 +141,11 @@ fn names_missing(stderr: &str) -> bool {
         "the system cannot find the",
         "does not exist",
         "enoent",
-    ]
-    .iter()
-    .any(|needle| text.contains(needle))
+    ];
+    stderr.lines().take(8).map(str::trim).find(|line| {
+        let line = line.to_lowercase();
+        NEEDLES.iter().any(|n| line.contains(n))
+    })
 }
 
 pub fn interpret(event: Event, ran: &Ran) -> Verdict {

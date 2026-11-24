@@ -99,10 +99,15 @@ pub(crate) fn scripts_from_main(
                     at = after;
                     continue;
                 }
-                let rest: String = tail
-                    .chars()
-                    .take_while(|c| !c.is_whitespace() && !"\"';|&<>()`".contains(*c))
-                    .collect();
+                // Inside double quotes the path runs to the closing quote (spaces included).
+                let quoted = out[..start].matches('"').count() % 2 == 1;
+                let rest: String = if quoted {
+                    tail.chars().take_while(|c| *c != '"').collect()
+                } else {
+                    tail.chars()
+                        .take_while(|c| !c.is_whitespace() && !"\"';|&<>()`".contains(*c))
+                        .collect()
+                };
                 if in_main(&rest) {
                     out.replace_range(start..after, &replacement);
                     at = start + replacement.len();
@@ -838,6 +843,13 @@ mod tests {
         assert_eq!(
             scripts_from_main("./hooks/a.sh", &w, f, "pwsh"),
             r#"& "$env:ANYSOLA_MAIN_PROJECT_DIR/hooks/a.sh""#
+        );
+        std::fs::create_dir_all(main.join("hooks dir")).unwrap();
+        std::fs::write(main.join("hooks dir/guard.sh"), "").unwrap();
+        assert_eq!(
+            sh(r#"sh "$CLAUDE_PROJECT_DIR/hooks dir/guard.sh""#),
+            r#"sh "$ANYSOLA_MAIN_PROJECT_DIR/hooks dir/guard.sh""#,
+            "a quoted path with a space"
         );
         assert_eq!(sh("npm test"), "npm test");
         // A main-folder session: as written.

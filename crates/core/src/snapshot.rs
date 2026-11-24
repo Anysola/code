@@ -509,9 +509,36 @@ pub fn overlay(
             .stdout,
     );
     let wanted: std::collections::HashSet<String> = wanted.into_iter().collect();
+    // Tracked files the ignore rules match (force-added) are never captured: their absence from
+    // the tree says nothing, so they stay.
+    let missing: Vec<&String> = tracked.iter().filter(|p| !wanted.contains(*p)).collect();
+    let ignored: std::collections::HashSet<String> = if missing.is_empty() {
+        Default::default()
+    } else {
+        let input: Vec<u8> = missing
+            .iter()
+            .flat_map(|p| [p.as_bytes(), b"\0"].concat())
+            .collect();
+        let mut child = crate::console::command("git")
+            .args(["check-ignore", "--no-index", "--stdin", "-z"])
+            .current_dir(target)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        {
+            use std::io::Write;
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(&input);
+            }
+        }
+        let out = child.wait_with_output().map_err(|e| e.to_string())?;
+        split(out.stdout).into_iter().collect()
+    };
     let mut kept = Vec::new();
     for path in tracked {
-        if wanted.contains(&path) {
+        if wanted.contains(&path) || ignored.contains(&path) {
             continue;
         }
         let file = target.join(&path);

@@ -1305,6 +1305,36 @@ fn a_recreate_reopens_a_merge_of_the_base() {
     );
 }
 
+/// A force-added file the ignore rules match is never captured; recreating keeps it.
+#[test]
+fn a_recreate_keeps_force_added_ignored_files() {
+    let gateway = turns(vec![vec![(
+        "write",
+        json!({"path": "a.txt", "content": "a1"}),
+    )]]);
+    let env = env(&gateway.url);
+    project(&env, &[("a.txt", "a0"), (".gitignore", "cache\n")]);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    answering(&runtime, &core, |_, _| Answer::Once);
+    let (id, top) = isolated(&runtime, &core);
+    std::fs::write(top.join("cache"), "kept").unwrap();
+    git(&top, &["add", "-f", "cache"]);
+    git(&top, &["commit", "-qm", "cache"]);
+    runtime
+        .block_on(core.prompt(&id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    std::fs::remove_dir_all(&top).unwrap();
+    anysola_core::api::cleanup_worktrees(&db(&env));
+    runtime.block_on(core.recreate_worktree(&id)).unwrap();
+    assert_eq!(
+        read(&top.join("cache")).as_deref(),
+        Some("kept"),
+        "BREAK: deleted"
+    );
+    assert_eq!(read(&top.join("a.txt")).as_deref(), Some("a1"));
+}
+
 /// Start-up cleanup: a cut-off preparation fails and its folder goes; a deleted session's
 /// worktree, branch and row go; an apply cut off after its commit finishes, one cut off before
 /// it leaves the main folder alone.
