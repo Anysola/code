@@ -853,15 +853,30 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
 
 const OPERATION = { merge: "merge", rebase: "rebase", "cherry-pick": "cherry-pick", revert: "revert" } as const
 
-function UndoApplyButton({ here, onUndone, compact = false }: { here: Here; onUndone: () => void; compact?: boolean }) {
+function UndoApplyButton({
+  here,
+  onUndone,
+  onError,
+  compact = false,
+}: {
+  here: Here
+  onUndone: () => void
+  onError?: (err: string | null) => void
+  compact?: boolean
+}) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const run = async () => {
     setBusy(true)
     setError(null)
+    onError?.(null)
     const r = await undoApplyWorktree(here)
     setBusy(false)
-    if ("error" in r) return setError(r.error)
+    if ("error" in r) {
+      if (onError) onError(r.error)
+      else setError(r.error)
+      return
+    }
     flash("Undid the last apply")
     onUndone()
   }
@@ -1002,12 +1017,13 @@ function ApplyBox({
             Applied as <span className="font-mono">{phase.commit.slice(0, 7)}</span> on {phase.onto}
           </span>
           <span className="ml-auto flex items-center gap-1">
-            <UndoApplyButton here={here} onUndone={onClose} compact />
+            <UndoApplyButton here={here} onUndone={onClose} onError={setError} compact />
             <button onClick={onClose} className={btn("ghost", "sm", "text-muted")}>
               Done
             </button>
           </span>
         </span>
+        {error && <span className="text-2xs text-danger select-text">{error}</span>}
         {phase.stashLeft && (
           <span className="text-2xs text-warning">
             Your main-folder edits couldn’t go back cleanly. They’re kept in <span className="font-mono">{phase.stashLeft}</span>.

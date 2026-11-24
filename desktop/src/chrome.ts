@@ -25,6 +25,8 @@ type Chrome = {
   previewOpen: boolean
   /** Active localhost URL shown in the preview panel. */
   previewUrl: string | null
+  /** True while dragging a split resize handle so iframes don't swallow mouse events. */
+  resizing: boolean
   /** The open worktree session's discard confirm. */
   discarding: boolean
   /** The open session's budget editor, under the header's budget. */
@@ -78,6 +80,7 @@ let chrome: Chrome = {
   terminalOpen: false,
   previewOpen: false,
   previewUrl: null,
+  resizing: false,
   discarding: false,
   budgeting: false,
   forkNotes: readForkNotes(),
@@ -149,6 +152,10 @@ export function togglePreview() {
 
 export function setPreviewUrl(url: string | null) {
   if (chrome.previewUrl !== url) set({ previewUrl: url })
+}
+
+export function setResizing(on: boolean) {
+  if (chrome.resizing !== on) set({ resizing: on })
 }
 
 export function askDiscard(on: boolean) {

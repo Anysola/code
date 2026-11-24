@@ -59,13 +59,17 @@ pub fn resolve_for_hooks(configured: Option<&str>) -> String {
 }
 
 fn select_hooks_windows(file: Option<&str>) -> String {
+    // Prefer Git Bash on Windows (even if SHELL=powershell.exe is set) so Claude Code-style
+    // POSIX hooks work out of the box when Git for Windows is installed.
+    if let Some(bash) = git_bash()
+        && let Some(shell) = executable(&bash)
+    {
+        return shell;
+    }
     if let Some(file) = file.filter(|f| !f.is_empty() && !DENIED.contains(&name(f).as_str()))
         && let Some(shell) = executable(file)
     {
         return shell;
-    }
-    if let Some(bash) = git_bash() {
-        return full(&bash);
     }
     windows_fallback()
 }
@@ -185,17 +189,35 @@ fn git_bash_option() -> Option<String> {
     crate::env::var("GIT_BASH_PATH").filter(|p| !p.is_empty())
 }
 
-/// Git Bash: the option, else `bash.exe` next to Git's `bin` if it is non-empty.
+/// Git Bash: the option, else `bash.exe` next to Git's `bin`, else standard Git for Windows paths.
 fn git_bash() -> Option<String> {
     if !cfg!(windows) {
         return None;
     }
-    git_bash_option().or_else(|| {
-        let git = crate::which::which("git")?;
-        let bash = git.parent()?.parent()?.join("bin").join("bash.exe");
-        let size = std::fs::metadata(&bash).ok()?.len();
-        (size > 0).then(|| display(bash))
-    })
+    if let Some(opt) = git_bash_option()
+        && Path::new(&opt).is_file()
+    {
+        return Some(opt);
+    }
+    if let Some(git) = crate::which::which("git")
+        && let Some(bash) = git
+            .parent()
+            .and_then(Path::parent)
+            .map(|p| p.join("bin").join("bash.exe"))
+        && std::fs::metadata(&bash).ok().is_some_and(|m| m.len() > 0)
+    {
+        return Some(display(bash));
+    }
+    for standard in [
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\bin\bash.exe",
+    ] {
+        let p = Path::new(standard);
+        if std::fs::metadata(p).ok().is_some_and(|m| m.len() > 0) {
+            return Some(standard.to_string());
+        }
+    }
+    None
 }
 
 fn display(path: PathBuf) -> String {

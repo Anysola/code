@@ -1,16 +1,15 @@
 //! OS-level filesystem (and optional network) sandboxing for the `shell` tool.
 //!
 //! On Linux, when `bwrap` (bubblewrap) is installed and unprivileged user namespaces are allowed,
-//! commands run with `/` mounted read-only, `/tmp` on a fresh tmpfs, and only the session's
-//! working root (`ctx.worktree`, plus an explicitly approved external `cwd`) writable.
+//! commands run with `/` mounted read-only, `/tmp` on a private tmpfs, and only the session's
+//! working root (`ctx.worktree`, plus its `.git/worktrees/<name>` metadata dir if it is a git
+//! worktree, and an explicitly approved external `cwd`) writable.
 //!
 //! Defaults: enabled automatically for isolated worktree sessions (`ctx.main != ctx.worktree`)
 //! and off in the main folder unless `"sandbox": true` or `{"enabled": true, "network": false}`
-//! is set in config. Set `"sandbox": false` to disable everywhere.
+//! is set in user/managed config. Project config files cannot disable or override `"sandbox"`.
 
-use std::path::Path;
-#[cfg(target_os = "linux")]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(target_os = "linux")]
 use std::sync::OnceLock;
 
@@ -94,6 +93,31 @@ pub fn wrap(
     (bwrap.to_string_lossy().into_owned(), wrapped, true)
 }
 
+/// If `root/.git` is a gitfile (`gitdir: <path>`), returns the canonicalized worktree admin
+/// directory (e.g. `<main>/.git/worktrees/<slug>`) so `git status`/`git add` work without
+/// exposing the main folder's working tree.
+fn worktree_gitdir(root: &Path) -> Option<PathBuf> {
+    let dot_git = root.join(".git");
+    if !dot_git.is_file() {
+        return None;
+    }
+    let content = std::fs::read_to_string(&dot_git).ok()?;
+    let target = content.trim().strip_prefix("gitdir:")?.trim();
+    if target.is_empty() {
+        return None;
+    }
+    let path = Path::new(target);
+    let resolved = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+    let canon = std::fs::canonicalize(&resolved).ok()?;
+    // Only bind an actual worktree admin folder (`.git/worktrees/<name>`), never an arbitrary dir.
+    let parent_name = canon.parent().and_then(|p| p.file_name())?.to_str()?;
+    (parent_name == "worktrees" && canon.is_dir()).then_some(canon)
+}
+
 fn build_bwrap_args(
     program: &str,
     args: &[String],
@@ -120,14 +144,31 @@ fn build_bwrap_args(
         root_s.clone(),
         root_s,
     ];
+    if let Some(gitdir) = worktree_gitdir(&root) {
+        let g = gitdir.to_string_lossy().into_owned();
+        out.extend(["--bind".into(), g.clone(), g]);
+    }
     if !cwd_real.starts_with(&root) {
         out.extend(["--bind".into(), cwd_s.clone(), cwd_s.clone()]);
     }
     if !network {
         out.push("--unshare-net".into());
     }
-    out.push("--die-with-parent".into());
-    out.extend(["--chdir".into(), cwd_s, "--".into(), program.into()]);
+    // Redirect temp and XDG cache dirs into the private /tmp tmpfs so build tools don't fail
+    // trying to write caches under a read-only $HOME.
+    out.extend([
+        "--setenv".into(),
+        "TMPDIR".into(),
+        "/tmp".into(),
+        "--setenv".into(),
+        "XDG_CACHE_HOME".into(),
+        "/tmp/.cache".into(),
+        "--die-with-parent".into(),
+        "--chdir".into(),
+        cwd_s,
+        "--".into(),
+        program.into(),
+    ]);
     out.extend(args.iter().cloned());
     out
 }

@@ -3,16 +3,17 @@
 //! `didOpen`/`didChange` + `didSave`, waits briefly for `textDocument/publishDiagnostics`, and
 //! returns errors/warnings to append to the tool output.
 //!
-//! Only well-known locally installed language servers are ever spawned (never arbitrary commands
-//! from project config). If no matching server is installed, or if config sets `"lsp": false`,
-//! diagnostics silently return empty with zero overhead.
+//! Security: only well-known binaries resolved from `PATH` are ever spawned (never project-local
+//! executables under `node_modules/.bin` or `.venv/bin`, and never commands from project config).
+//! If no matching server is installed, or if config sets `"lsp": false`, diagnostics silently
+//! return empty with zero overhead.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
@@ -26,6 +27,8 @@ const INIT_TIMEOUT: Duration = Duration::from_secs(8);
 const DIAG_TIMEOUT: Duration = Duration::from_millis(2500);
 /// Brief settle window after the first diagnostics arrive in case a follow-up batch lands.
 const SETTLE_WAIT: Duration = Duration::from_millis(120);
+/// Cooldown before retrying a language server that failed to start or initialize.
+const RETRY_COOLDOWN: Duration = Duration::from_secs(60);
 /// Maximum diagnostics appended to a single tool result.
 const MAX_DIAGNOSTICS: usize = 20;
 
@@ -90,7 +93,8 @@ struct ServerSpec {
     args: &'static [&'static str],
 }
 
-/// Language server lookup by file extension. Only resolves binaries already present locally.
+/// Language server lookup by file extension. Resolves only from system/user `PATH` so untrusted
+/// repositories cannot execute arbitrary binaries from `node_modules/.bin` or `.venv/bin`.
 fn detect_server(root: &Path, path: &Path) -> Option<ServerSpec> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     match ext.as_str() {
@@ -101,8 +105,7 @@ fn detect_server(root: &Path, path: &Path) -> Option<ServerSpec> {
                 "js" | "mjs" | "cjs" => "javascript",
                 _ => "typescript",
             };
-            let cmd = local_node_bin(root, "typescript-language-server")
-                .or_else(|| crate::which::which("typescript-language-server"))?;
+            let cmd = crate::which::which("typescript-language-server")?;
             Some(ServerSpec {
                 id: "typescript",
                 language_id: lang,
@@ -128,7 +131,7 @@ fn detect_server(root: &Path, path: &Path) -> Option<ServerSpec> {
                 ("pyright-langserver", &["--stdio"][..]),
                 ("pylsp", &[][..]),
             ] {
-                if let Some(cmd) = local_venv_bin(root, bin).or_else(|| crate::which::which(bin)) {
+                if let Some(cmd) = crate::which::which(bin) {
                     return Some(ServerSpec {
                         id: "python",
                         language_id: "python",
@@ -180,41 +183,37 @@ fn has_ancestor_file(path: &Path, stop_at: &Path, filename: &str) -> bool {
     stop_at.join(filename).is_file()
 }
 
-fn local_node_bin(root: &Path, name: &str) -> Option<PathBuf> {
-    let bin = root.join("node_modules").join(".bin");
-    let candidate = if cfg!(windows) {
-        bin.join(format!("{name}.cmd"))
-    } else {
-        bin.join(name)
-    };
-    candidate.is_file().then_some(candidate)
-}
-
-fn local_venv_bin(root: &Path, name: &str) -> Option<PathBuf> {
-    let dir = if cfg!(windows) {
-        root.join(".venv").join("Scripts")
-    } else {
-        root.join(".venv").join("bin")
-    };
-    let candidate = if cfg!(windows) {
-        dir.join(format!("{name}.exe"))
-    } else {
-        dir.join(name)
-    };
-    candidate.is_file().then_some(candidate)
-}
-
 fn file_uri(path: &Path) -> Option<String> {
-    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let canonical = crate::paths::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     Url::from_file_path(canonical).ok().map(String::from)
+}
+
+/// Normalizes a `file://` URI into a stable map key across platforms (handles Windows drive-letter
+/// casing and percent-encoded colons like `file:///c%3A/...` from `vscode-uri` servers).
+fn uri_key(uri: &str) -> String {
+    if let Ok(parsed) = Url::parse(uri)
+        && parsed.scheme() == "file"
+        && let Ok(path) = parsed.to_file_path()
+    {
+        let canonical = crate::paths::canonicalize(&path).unwrap_or(path);
+        let text = canonical.to_string_lossy();
+        return if cfg!(windows) {
+            text.replace('/', "\\").to_lowercase()
+        } else {
+            text.into_owned()
+        };
+    }
+    uri.to_string()
 }
 
 /// Manages lazily spawned language servers for a [`crate::api::Core`].
 #[derive(Default)]
 pub struct LspManager {
-    clients: AsyncMutex<HashMap<ServerKey, Arc<LspClient>>>,
-    /// Servers that failed to start or initialize so we don't stall every subsequent edit.
-    broken: Mutex<HashMap<ServerKey, ()>>,
+    clients: Mutex<HashMap<ServerKey, Arc<LspClient>>>,
+    /// Serializes starting a server without blocking `shutdown()` on `clients`.
+    starting: AsyncMutex<()>,
+    /// Servers that recently failed to start or initialize, with cooldown.
+    broken: Mutex<HashMap<ServerKey, Instant>>,
 }
 
 impl LspManager {
@@ -241,11 +240,13 @@ impl LspManager {
             root: root.to_path_buf(),
             id: spec.id,
         };
-        if self
+        if let Some(at) = self
             .broken
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .contains_key(&key)
+            .get(&key)
+            .copied()
+            && at.elapsed() < RETRY_COOLDOWN
         {
             return Vec::new();
         }
@@ -255,51 +256,81 @@ impl LspManager {
                 self.broken
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .insert(key, ());
+                    .insert(key, Instant::now());
                 return Vec::new();
             }
         };
         match client.diagnose_file(path, spec.language_id, text).await {
             Ok(diags) => diags,
             Err(_) => {
-                // Drop a dead client so a later edit can try fresh if needed.
-                self.clients.lock().await.remove(&key);
+                if let Some(dead) = self
+                    .clients
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&key)
+                {
+                    dead.kill();
+                }
                 Vec::new()
             }
         }
     }
 
     async fn get_or_start(&self, key: &ServerKey, spec: &ServerSpec) -> Option<Arc<LspClient>> {
-        let mut map = self.clients.lock().await;
-        if let Some(existing) = map.get(key) {
-            return Some(existing.clone());
+        if let Some(existing) = self
+            .clients
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(key)
+            .cloned()
+        {
+            return Some(existing);
+        }
+        let _guard = self.starting.lock().await;
+        if let Some(existing) = self
+            .clients
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(key)
+            .cloned()
+        {
+            return Some(existing);
         }
         let client = LspClient::start(&spec.command, spec.args, &key.root)
             .await
             .ok()?;
         let client = Arc::new(client);
-        map.insert(key.clone(), client.clone());
+        self.clients
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key.clone(), client.clone());
         Some(client)
     }
 
-    /// Terminates every running language server process.
+    /// Terminates every running language server process without blocking on async locks.
     pub fn shutdown(&self) {
-        if let Ok(mut map) = self.clients.try_lock() {
-            for (_, client) in map.drain() {
-                client.kill();
-            }
+        let drained: Vec<Arc<LspClient>> = self
+            .clients
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain()
+            .map(|(_, c)| c)
+            .collect();
+        for client in drained {
+            client.kill();
         }
     }
 }
 
 struct SharedState {
     pending: HashMap<i64, oneshot::Sender<Value>>,
-    diagnostics: HashMap<String, (u64, Vec<Diagnostic>)>,
+    /// Keyed by `uri_key(uri)`: `(generation, optional_version, diagnostics)`.
+    diagnostics: HashMap<String, (u64, Option<i32>, Vec<Diagnostic>)>,
     versions: HashMap<String, i32>,
 }
 
 struct LspClient {
-    stdin: AsyncMutex<ChildStdin>,
+    stdin: Arc<AsyncMutex<ChildStdin>>,
     child: Mutex<Option<Child>>,
     next_id: AtomicI64,
     state: Arc<Mutex<SharedState>>,
@@ -321,7 +352,7 @@ impl LspClient {
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
         let mut child = cmd.spawn().map_err(|e| e.to_string())?;
-        let stdin = child.stdin.take().ok_or("no stdin")?;
+        let stdin = Arc::new(AsyncMutex::new(child.stdin.take().ok_or("no stdin")?));
         let stdout = child.stdout.take().ok_or("no stdout")?;
 
         let state = Arc::new(Mutex::new(SharedState {
@@ -331,22 +362,27 @@ impl LspClient {
         }));
         let notify = Arc::new(Notify::new());
         let client = Self {
-            stdin: AsyncMutex::new(stdin),
+            stdin: stdin.clone(),
             child: Mutex::new(Some(child)),
             next_id: AtomicI64::new(1),
             state: state.clone(),
             notify: notify.clone(),
         };
 
-        // Background reader task: parses Content-Length JSON-RPC frames from stdout.
+        // Background reader task: parses Content-Length JSON-RPC frames from stdout, delivers
+        // responses/diagnostics, and replies `result: null` to server-initiated requests so
+        // servers like pyright, gopls, and rust-analyzer never stall waiting on client replies.
         let reader_state = state.clone();
         let reader_notify = notify.clone();
+        let reply_stdin = stdin;
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
             while let Ok(Some(msg)) = read_message(&mut reader).await {
-                handle_incoming(&reader_state, &reader_notify, msg);
+                if let Some(reply) = handle_incoming(&reader_state, &reader_notify, msg) {
+                    let mut guard = reply_stdin.lock().await;
+                    let _ = write_message(&mut *guard, &reply).await;
+                }
             }
-            // Wake any pending waiters on EOF.
             reader_state
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -355,7 +391,7 @@ impl LspClient {
             reader_notify.notify_waiters();
         });
 
-        let root_uri = file_uri(root).unwrap_or_else(|| format!("file://{}", root.display()));
+        let root_uri = file_uri(root).ok_or("invalid root uri")?;
         let init_params = json!({
             "processId": std::process::id(),
             "rootUri": root_uri,
@@ -365,7 +401,10 @@ impl LspClient {
                     "publishDiagnostics": { "relatedInformation": false }
                 }
             },
-            "workspaceFolders": [{ "uri": root_uri, "name": root.file_name().and_then(|n| n.to_str()).unwrap_or("workspace") }]
+            "workspaceFolders": [{
+                "uri": root_uri,
+                "name": root.file_name().and_then(|n| n.to_str()).unwrap_or("workspace")
+            }]
         });
         client
             .request("initialize", init_params, INIT_TIMEOUT)
@@ -435,59 +474,70 @@ impl LspClient {
         text: &str,
     ) -> Result<Vec<Diagnostic>, String> {
         let uri = file_uri(path).ok_or("invalid file uri")?;
-        let (prev_gen, version, opened) = {
-            let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            let prev = st.diagnostics.get(&uri).map(|(g, _)| *g).unwrap_or(0);
-            let entry = st.versions.entry(uri.clone()).or_insert(0);
-            let opened = *entry > 0;
-            *entry += 1;
-            (prev, *entry, opened)
-        };
+        let key = uri_key(&uri);
 
-        if !opened {
-            self.notify_server(
-                "textDocument/didOpen",
+        // Hold `stdin` across version bump + didOpen/didChange + didSave so concurrent edits
+        // never send out-of-order document versions.
+        let (prev_gen, version) = {
+            let mut stdin = self.stdin.lock().await;
+            let (prev, ver, opened) = {
+                let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                let prev = st.diagnostics.get(&key).map(|(g, _, _)| *g).unwrap_or(0);
+                let entry = st.versions.entry(key.clone()).or_insert(0);
+                let opened = *entry > 0;
+                *entry += 1;
+                (prev, *entry, opened)
+            };
+            let change = if !opened {
                 json!({
-                    "textDocument": {
-                        "uri": uri,
-                        "languageId": language_id,
-                        "version": version,
-                        "text": text,
+                    "jsonrpc": "2.0",
+                    "method": "textDocument/didOpen",
+                    "params": {
+                        "textDocument": {
+                            "uri": uri,
+                            "languageId": language_id,
+                            "version": ver,
+                            "text": text,
+                        }
                     }
-                }),
-            )
-            .await?;
-        } else {
-            self.notify_server(
-                "textDocument/didChange",
+                })
+            } else {
                 json!({
-                    "textDocument": { "uri": uri, "version": version },
-                    "contentChanges": [{ "text": text }],
-                }),
-            )
-            .await?;
-        }
-        self.notify_server(
-            "textDocument/didSave",
-            json!({
-                "textDocument": { "uri": uri },
-                "text": text,
-            }),
-        )
-        .await?;
+                    "jsonrpc": "2.0",
+                    "method": "textDocument/didChange",
+                    "params": {
+                        "textDocument": { "uri": uri, "version": ver },
+                        "contentChanges": [{ "text": text }],
+                    }
+                })
+            };
+            write_message(&mut *stdin, &change).await?;
+            let save = json!({
+                "jsonrpc": "2.0",
+                "method": "textDocument/didSave",
+                "params": {
+                    "textDocument": { "uri": uri },
+                    "text": text,
+                }
+            });
+            write_message(&mut *stdin, &save).await?;
+            (prev, ver)
+        };
 
         let deadline = tokio::time::Instant::now() + DIAG_TIMEOUT;
         loop {
-            let current_gen = self
-                .state
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .diagnostics
-                .get(&uri)
-                .map(|(g, _)| *g)
-                .unwrap_or(0);
-            if current_gen > prev_gen {
-                // Brief settle window in case the server publishes a refined batch right after.
+            // Register the waiter BEFORE checking state to eliminate lost wakeups.
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
+            let ready = {
+                let st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                st.diagnostics.get(&key).is_some_and(|(g, v, _)| {
+                    *g > prev_gen && v.is_none_or(|reported| reported >= version)
+                })
+            };
+            if ready {
                 tokio::time::sleep(SETTLE_WAIT).await;
                 break;
             }
@@ -495,7 +545,6 @@ impl LspClient {
             if now >= deadline {
                 break;
             }
-            let notified = self.notify.notified();
             let _ = tokio::time::timeout(deadline - now, notified).await;
         }
 
@@ -504,8 +553,8 @@ impl LspClient {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .diagnostics
-            .get(&uri)
-            .map(|(_, d)| d.clone())
+            .get(&key)
+            .map(|(_, _, d)| d.clone())
             .unwrap_or_default();
         Ok(diags)
     }
@@ -517,10 +566,39 @@ impl LspClient {
     }
 }
 
-fn handle_incoming(state: &Arc<Mutex<SharedState>>, notify: &Arc<Notify>, msg: Value) {
+/// Processes an incoming JSON-RPC message. Returns an optional JSON-RPC response when the server
+/// sent a request (`id` + `method`) that expects a reply.
+fn handle_incoming(
+    state: &Arc<Mutex<SharedState>>,
+    notify: &Arc<Notify>,
+    msg: Value,
+) -> Option<Value> {
+    let has_method = msg.get("method").and_then(Value::as_str);
+    let id_val = msg.get("id");
+
+    // Server-initiated request (both `id` and `method` present): reply with `result: null`
+    // (or `[]` for `workspace/configuration`).
+    if let (Some(id), Some(method)) = (id_val, has_method) {
+        let result = if method == "workspace/configuration" {
+            let n = msg
+                .get("params")
+                .and_then(|p| p.get("items"))
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len);
+            Value::Array(vec![Value::Null; n])
+        } else {
+            Value::Null
+        };
+        return Some(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result,
+        }));
+    }
+
     // Response to one of our requests
-    if let Some(id) = msg.get("id").and_then(Value::as_i64)
-        && msg.get("method").is_none()
+    if let Some(id) = id_val.and_then(Value::as_i64)
+        && has_method.is_none()
     {
         if let Some(tx) = state
             .lock()
@@ -530,21 +608,27 @@ fn handle_incoming(state: &Arc<Mutex<SharedState>>, notify: &Arc<Notify>, msg: V
         {
             let _ = tx.send(msg);
         }
-        return;
+        return None;
     }
 
     // publishDiagnostics notification
-    if msg.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
+    if has_method == Some("textDocument/publishDiagnostics")
         && let Some(params) = msg.get("params")
         && let Some(uri) = params.get("uri").and_then(Value::as_str)
     {
+        let key = uri_key(uri);
+        let version = params
+            .get("version")
+            .and_then(Value::as_i64)
+            .map(|v| v as i32);
         let parsed = parse_diagnostics(params.get("diagnostics"));
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-        let next_gen = st.diagnostics.get(uri).map(|(g, _)| g + 1).unwrap_or(1);
-        st.diagnostics.insert(uri.to_string(), (next_gen, parsed));
+        let next_gen = st.diagnostics.get(&key).map(|(g, _, _)| g + 1).unwrap_or(1);
+        st.diagnostics.insert(key, (next_gen, version, parsed));
         drop(st);
         notify.notify_waiters();
     }
+    None
 }
 
 fn parse_diagnostics(value: Option<&Value>) -> Vec<Diagnostic> {
@@ -636,6 +720,35 @@ mod tests {
         let decoded = read_message(&mut reader).await.unwrap().unwrap();
         assert_eq!(decoded, msg);
         assert!(read_message(&mut reader).await.unwrap().is_none());
+    }
+
+    #[test]
+    fn replies_to_server_requests() {
+        let state = Arc::new(Mutex::new(SharedState {
+            pending: HashMap::new(),
+            diagnostics: HashMap::new(),
+            versions: HashMap::new(),
+        }));
+        let notify = Arc::new(Notify::new());
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": "cfg-1",
+            "method": "workspace/configuration",
+            "params": {"items": [{}, {}]}
+        });
+        let reply = handle_incoming(&state, &notify, req).unwrap();
+        assert_eq!(reply["id"], "cfg-1");
+        assert_eq!(reply["result"], json!([null, null]));
+
+        let progress = json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "window/workDoneProgress/create",
+            "params": {"token": "1"}
+        });
+        let reply = handle_incoming(&state, &notify, progress).unwrap();
+        assert_eq!(reply["id"], 7);
+        assert_eq!(reply["result"], Value::Null);
     }
 
     #[test]

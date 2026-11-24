@@ -6,14 +6,14 @@
 import { ExternalLink, Globe, Monitor, RotateCw, Smartphone, Tablet, X } from "lucide-react"
 import { useEffect, useRef, useState, type FormEvent } from "react"
 
-import { setPreviewOpen, setPreviewUrl, useChrome } from "./chrome"
+import { setPreviewOpen, setPreviewUrl, setResizing, useChrome } from "./chrome"
 import { KEYS } from "./shortcuts"
 import { openExternal } from "./store"
 import { btn, cn, Tooltip } from "./ui"
 
 const WIDTH_KEY = "anysola.previewWidth"
-const DEFAULT_WIDTH = 520
-const MIN_WIDTH = 320
+const DEFAULT_WIDTH = 440
+const MIN_WIDTH = 300
 
 type Viewport = "desktop" | "tablet" | "mobile"
 
@@ -23,12 +23,22 @@ const VIEWPORT_WIDTH: Record<Viewport, number | null> = {
   mobile: 390,
 }
 
+function maxWidth(): number {
+  // Reserve room for sidebar + a usable conversation column even at minWidth (880px).
+  const available = window.innerWidth - 280
+  return Math.max(MIN_WIDTH, Math.floor(available * 0.52))
+}
+
+function clampWidth(px: number): number {
+  return Math.min(maxWidth(), Math.max(MIN_WIDTH, px))
+}
+
 function readWidth(): number {
   try {
     const n = Number(localStorage.getItem(WIDTH_KEY))
-    return Number.isFinite(n) && n >= MIN_WIDTH ? n : DEFAULT_WIDTH
+    return Number.isFinite(n) && n >= MIN_WIDTH ? clampWidth(n) : clampWidth(DEFAULT_WIDTH)
   } catch {
-    return DEFAULT_WIDTH
+    return clampWidth(DEFAULT_WIDTH)
   }
 }
 
@@ -62,42 +72,42 @@ export function normalizeLocalUrl(raw: string): string | null {
 const LOCAL_URL_RE = /\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):\d{2,5}(?:\/[^\s"'<>)\x1b]*)?/gi
 
 // Detected localhost URLs from terminal output (most recent first, max 6).
-const detectedUrls: string[] = []
+let detectedUrls: string[] = []
 const detectedListeners = new Set<() => void>()
 
 export function noteTerminalUrls(text: string) {
   const matches = text.match(LOCAL_URL_RE)
   if (!matches) return
-  let changed = false
+  let next = detectedUrls
   for (const raw of matches) {
     const cleaned = raw.replace(/[.,;:]+$/, "")
     const norm = normalizeLocalUrl(cleaned)
     if (!norm) continue
-    const idx = detectedUrls.indexOf(norm)
-    if (idx === 0) continue
-    if (idx > 0) detectedUrls.splice(idx, 1)
-    detectedUrls.unshift(norm)
-    if (detectedUrls.length > 6) detectedUrls.length = 6
-    changed = true
+    if (next[0] === norm) continue
+    next = [norm, ...next.filter((u) => u !== norm)].slice(0, 6)
   }
-  if (changed) detectedListeners.forEach((l) => l())
+  if (next !== detectedUrls) {
+    detectedUrls = next
+    detectedListeners.forEach((l) => l())
+  }
 }
 
 function useDetectedUrls(): string[] {
-  const [, bump] = useState(0)
+  const [list, setList] = useState<string[]>(detectedUrls)
   useEffect(() => {
-    const fn = () => bump((n) => n + 1)
+    const fn = () => setList(detectedUrls)
     detectedListeners.add(fn)
     return () => {
       detectedListeners.delete(fn)
     }
   }, [])
-  return detectedUrls
+  return list
 }
 
 export function PreviewPanel() {
   const shown = useChrome((c) => c.previewOpen)
   const url = useChrome((c) => c.previewUrl)
+  const resizing = useChrome((c) => c.resizing)
   const detected = useDetectedUrls()
   const [width, setWidth] = useState(readWidth)
   const [input, setInput] = useState(url ?? "")
@@ -107,11 +117,17 @@ export function PreviewPanel() {
   const dragging = useRef(false)
 
   useEffect(() => {
+    const onResize = () => setWidth((w) => clampWidth(w))
+    window.addEventListener("resize", onResize)
+    return () => window.removeEventListener("resize", onResize)
+  }, [])
+
+  useEffect(() => {
     setInput(url ?? "")
     setError(null)
   }, [url])
 
-  // Auto-fill the first detected localhost URL when the panel opens empty.
+  // Auto-fill the first detected localhost URL when the panel is open and empty.
   useEffect(() => {
     if (shown && !url && detected.length > 0) {
       setPreviewUrl(detected[0])
@@ -141,16 +157,16 @@ export function PreviewPanel() {
   const onDragStart = (e: React.MouseEvent) => {
     e.preventDefault()
     dragging.current = true
+    setResizing(true)
     const startX = e.clientX
     const startW = width
     const onMove = (ev: MouseEvent) => {
       if (!dragging.current) return
-      const max = Math.max(MIN_WIDTH, Math.floor(window.innerWidth * 0.65))
-      const next = Math.min(max, Math.max(MIN_WIDTH, startW + (startX - ev.clientX)))
-      setWidth(next)
+      setWidth(clampWidth(startW + (startX - ev.clientX)))
     }
     const onUp = () => {
       dragging.current = false
+      setResizing(false)
       window.removeEventListener("mousemove", onMove)
       window.removeEventListener("mouseup", onUp)
       setWidth((w) => {
@@ -168,19 +184,21 @@ export function PreviewPanel() {
     <aside
       aria-label="Preview"
       style={{ width }}
-      className="relative flex h-full shrink-0 border-l border-separator bg-background/85"
+      className="relative flex h-full shrink-0 bg-background/75"
     >
-      {/* Left drag handle */}
+      {/* Tone-stepped drag handle (no hard hairline border) */}
       <div
         onMouseDown={onDragStart}
         role="separator"
         aria-orientation="vertical"
         aria-label="Resize preview"
-        className="w-1.5 shrink-0 cursor-col-resize transition-colors hover:bg-default-hover/70"
-      />
+        className="group flex w-2 shrink-0 cursor-col-resize items-center justify-center"
+      >
+        <span className="h-8 w-0.5 rounded-full bg-transparent transition-colors group-hover:bg-muted/40" />
+      </div>
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Toolbar */}
-        <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-separator px-2.5">
+        {/* Slim toolbar (matches Terminal header height, no bottom border) */}
+        <div className="flex h-9 shrink-0 items-center gap-1.5 pr-2.5 pl-1">
           <Tooltip label="Reload" side="bottom">
             <button
               type="button"
@@ -199,9 +217,18 @@ export function PreviewPanel() {
                 setInput(e.target.value)
                 if (error) setError(null)
               }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setInput(url ?? "")
+                  setError(null)
+                  e.currentTarget.blur()
+                }
+              }}
               placeholder="http://localhost:3000"
               aria-label="Preview URL"
-              className="text-2xs h-7 w-full rounded-md bg-default/60 px-2.5 font-mono text-foreground outline-none placeholder:text-muted focus-visible:status-focused-field"
+              className="text-2xs h-7 w-full rounded-md bg-default/70 px-2.5 font-mono text-foreground outline-none placeholder:text-muted focus-visible:status-focused-field"
             />
           </form>
           <div className="flex shrink-0 items-center gap-0.5 rounded-md bg-default/40 p-0.5">
@@ -252,17 +279,21 @@ export function PreviewPanel() {
           </Tooltip>
         </div>
 
-        {error && <p className="text-2xs shrink-0 border-b border-separator px-3 py-1.5 text-danger">{error}</p>}
+        {error && <p className="text-2xs shrink-0 px-3 py-1.5 text-danger">{error}</p>}
 
         {/* Body */}
         {url ? (
-          <div className="flex min-h-0 flex-1 items-stretch justify-center overflow-auto bg-background p-0">
+          <div className="flex min-h-0 flex-1 items-stretch justify-center overflow-auto bg-background">
             <iframe
               key={`${url}#${nonce}`}
               src={url}
               title="Local preview"
               style={vpWidth ? { width: vpWidth } : undefined}
-              className={cn("h-full border-0 bg-white", vpWidth ? "shrink-0 shadow-sm" : "w-full")}
+              className={cn(
+                "h-full border-0 bg-background",
+                vpWidth ? "shrink-0" : "w-full",
+                resizing && "pointer-events-none"
+              )}
             />
           </div>
         ) : (

@@ -93,9 +93,9 @@ function Main() {
         <>
           <SessionHeader open={open} />
           <div className="flex min-h-0 flex-1">
-            <div className="flex min-w-0 flex-1 flex-col">
+            <div className="@container flex min-w-0 flex-1 flex-col">
               <Conversation open={open} />
-              <div className="mx-auto w-full max-w-(--conversation-width) px-8 pb-5">
+              <div className="mx-auto w-full max-w-(--conversation-width) px-4 pb-5 @xl:px-8">
                 <BackgroundRow open={open} />
                 <Tasks todos={open.todos} />
                 <Banner open={open} />

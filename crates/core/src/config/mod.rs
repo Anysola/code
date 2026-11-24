@@ -472,6 +472,10 @@ impl Config {
         {
             merge_formatter(&mut self.values, formatter);
         }
+        if document.project {
+            // A project document can never disable or weaken the user's or worktree's sandbox.
+            data.remove("sandbox");
+        }
         for (key, value) in data {
             self.values.insert(key, value);
         }

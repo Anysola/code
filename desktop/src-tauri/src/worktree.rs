@@ -1882,12 +1882,21 @@ pub async fn worktree_undo_apply(
     };
     let undone = undone.and_then(|r| r);
     match undone {
-        Ok(parent) => {
-            let result = core.undo_apply(&session_id, &parent);
-            emit(&handle, &db, &session_id);
-            result.map_err(plain_error)?;
-            Ok(json!({"commit": parent}))
-        }
+        Ok(parent) => match core.undo_apply(&session_id, &parent) {
+            Ok(_) => {
+                emit(&handle, &db, &session_id);
+                Ok(json!({"commit": parent}))
+            }
+            Err(err) => {
+                let _ = core.set_worktree_state(
+                    &session_id,
+                    WorktreeState::Applying,
+                    WorktreeState::Ready,
+                );
+                emit(&handle, &db, &session_id);
+                Err(plain_error(err))
+            }
+        },
         Err(error) => {
             let _ =
                 core.set_worktree_state(&session_id, WorktreeState::Applying, WorktreeState::Ready);
@@ -1903,6 +1912,11 @@ fn undo_apply(row: &SessionWorktreeRow) -> Result<String, String> {
         .as_deref()
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "There’s no applied commit to undo.".to_string())?;
+    verify_worktree(row)?;
+    let worktree = Path::new(&row.directory);
+    if row.base_pending.is_some() || merge_open(worktree) {
+        return Err("Finish bringing main in before undoing the last apply.".into());
+    }
     let folder = Path::new(&row.folder);
     let top = top_of(folder)
         .ok_or_else(|| "The main folder isn’t a Git repository anymore.".to_string())?;
@@ -1921,8 +1935,10 @@ fn undo_apply(row: &SessionWorktreeRow) -> Result<String, String> {
         &["rev-parse", "--verify", "--quiet", &format!("{applied}^")],
     )
     .ok_or_else(|| "That commit has no parent to return to.".to_string())?;
-    let staged = wgit(&top, &["diff", "--cached", "--quiet"]).run();
-    if staged.is_ok_and(|o| !o.status.success()) {
+    let staged = wgit(&top, &["diff", "--cached", "--quiet"])
+        .run()
+        .map_err(|f| git::explain(Op::Status, f))?;
+    if !staged.status.success() {
         return Err("The main folder has staged changes. Commit or unstage them first.".into());
     }
     if let Err(failure) = run_git(&top, &["read-tree", "-m", "-u", applied, &parent]) {
@@ -2251,6 +2267,9 @@ pub async fn worktree_discard(
     })
     .await?;
     isolate_done(&session_id).await;
+    if let Ok(Some(w)) = db.session_worktree(&session_id) {
+        app.terminals.close_in_directory(&w.directory);
+    }
     let result = core.release_worktree(&session_id, Release::Discarded).await;
     emit(&handle, &db, &session_id);
     result.map_err(plain_error)?;
@@ -2302,6 +2321,11 @@ pub async fn worktree_to_folder(
     })
     .await?;
     isolate_done(&session_id).await;
+    if let Ok(db) = app.db()
+        && let Ok(Some(w)) = db.session_worktree(&session_id)
+    {
+        app.terminals.close_in_directory(&w.directory);
+    }
     let row = core.unisolate(&session_id).await.map_err(plain_error)?;
     crate::changed(&handle, &session_id);
     Ok(crate::session_json(&row, None))

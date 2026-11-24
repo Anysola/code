@@ -115,7 +115,7 @@ export function SidebarToggle({ hidden }: { hidden: boolean }) {
 const WIDE = 960
 const NARROW = 760
 /** The editor's name needs this much more. */
-const ROOMY = 1200
+const ROOMY = 1000
 
 export function SessionHeader({ open }: { open: Open }) {
   const hidden = useChrome((c) => c.sidebarHidden)
@@ -188,7 +188,7 @@ export function SessionHeader({ open }: { open: Open }) {
               onClick={() => toggleTerminal()}
               aria-label={terminalOpen ? "Hide terminal" : "Show terminal"}
               aria-pressed={terminalOpen}
-              className={btn("ghost", "sm", terminalOpen ? "bg-default/70 text-foreground" : "text-muted", true)}
+              className={btn("ghost", "sm", terminalOpen ? "bg-default/45 text-foreground" : "text-muted", true)}
             >
               <TerminalIcon className="size-4" strokeWidth={1.75} />
             </button>
@@ -199,7 +199,7 @@ export function SessionHeader({ open }: { open: Open }) {
               onClick={() => togglePreview()}
               aria-label={previewOpen ? "Hide preview" : "Show preview"}
               aria-pressed={previewOpen}
-              className={btn("ghost", "sm", previewOpen ? "bg-default/70 text-foreground" : "text-muted", true)}
+              className={btn("ghost", "sm", previewOpen ? "bg-default/45 text-foreground" : "text-muted", true)}
             >
               <Globe className="size-4" strokeWidth={1.75} />
             </button>

@@ -4,6 +4,25 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.4.1 (2026-11-24)
+
+- Security & reliability hardening from a full pass over 1.3.0/1.4.0:
+  - Project config files can no longer disable or weaken the `sandbox` setting.
+  - LSP diagnostics only resolve language servers from `PATH` (never untrusted project-local `node_modules/.bin`
+    or `.venv/bin` binaries), reply to server-initiated JSON-RPC requests (`workspace/configuration`,
+    `window/workDoneProgress/create`), normalize Windows `vscode-uri` paths, and eliminate lost wakeups.
+  - Linux `bwrap` sandbox now binds a worktree's `.git/worktrees/<name>` admin directory and redirects `TMPDIR`
+    and `XDG_CACHE_HOME` into the private `/tmp` tmpfs so `git` and build tools work inside worktrees.
+  - Windows hook shell selection prefers Git Bash even when `SHELL` is set to PowerShell and checks standard
+    Git for Windows install paths.
+  - Discarding or deleting a worktree session now closes any embedded terminal holding that folder open,
+    early terminal output/exit events are buffered across open, and `undo_apply` recovers cleanly on errors.
+- UI polish:
+  - Preview shortcut moved from `Ctrl Shift V` (which clashed with paste) to `Ctrl Shift O`.
+  - Terminal and Preview panels drop hard hairline borders and shadows in favour of Grafit tone steps, matching
+    header heights, transparent terminal canvas, dark-friendly iframe background, drag-safe iframe resizing,
+    and clamped widths/heights on narrow windows.
+
 ## 1.4.0 (2026-11-24)
 
 - Post-edit LSP diagnostics: after `edit` or `write`, Anysola Code checks the changed file with an installed

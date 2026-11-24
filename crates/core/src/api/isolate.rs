@@ -863,6 +863,7 @@ impl Core {
                 ("apply_from", rusqlite::types::Value::Null),
                 ("apply_tree", rusqlite::types::Value::Null),
                 ("apply_stash", rusqlite::types::Value::Null),
+                ("base_pending", rusqlite::types::Value::Null),
                 ("error", rusqlite::types::Value::Null),
             ],
         )?;

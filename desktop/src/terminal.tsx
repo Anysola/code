@@ -10,22 +10,30 @@ import { Terminal, type ITheme } from "@xterm/xterm"
 import { RotateCw, Terminal as TerminalIcon, Trash2, X } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
-import { setTerminalOpen, useChrome } from "./chrome"
+import { setResizing, setTerminalOpen, useChrome } from "./chrome"
 import { noteTerminalUrls } from "./preview"
 import { KEYS } from "./shortcuts"
 import { currentBridge, useWorkDir, useWorktree, type Open } from "./store"
-import { btn, cn, folderName, Tooltip } from "./ui"
+import { btn, cn, folderKey, folderName, Tooltip } from "./ui"
 
 const HEIGHT_KEY = "anysola.terminalHeight"
 const DEFAULT_HEIGHT = 240
 const MIN_HEIGHT = 140
 
+function maxHeight(): number {
+  return Math.max(MIN_HEIGHT, Math.floor(window.innerHeight * 0.55))
+}
+
+function clampHeight(px: number): number {
+  return Math.min(maxHeight(), Math.max(MIN_HEIGHT, px))
+}
+
 function readHeight(): number {
   try {
     const n = Number(localStorage.getItem(HEIGHT_KEY))
-    return Number.isFinite(n) && n >= MIN_HEIGHT ? n : DEFAULT_HEIGHT
+    return Number.isFinite(n) && n >= MIN_HEIGHT ? clampHeight(n) : clampHeight(DEFAULT_HEIGHT)
   } catch {
-    return DEFAULT_HEIGHT
+    return clampHeight(DEFAULT_HEIGHT)
   }
 }
 
@@ -42,12 +50,13 @@ function isDark(): boolean {
 }
 
 function xtermTheme(dark: boolean): ITheme {
+  // Exact match with the drawer surface (`bg-[#f6f5f2] dark:bg-[#161411]`) so there is no seam.
   if (dark) {
     return {
-      background: "#181613",
+      background: "#161411",
       foreground: "#f5f4f2",
       cursor: "#e7e4de",
-      cursorAccent: "#181613",
+      cursorAccent: "#161411",
       selectionBackground: "rgba(231, 228, 222, 0.22)",
       black: "#26231f",
       red: "#e06c75",
@@ -68,10 +77,10 @@ function xtermTheme(dark: boolean): ITheme {
     }
   }
   return {
-    background: "#f7f6f4",
+    background: "#f6f5f2",
     foreground: "#1c1a17",
     cursor: "#2b2824",
-    cursorAccent: "#f7f6f4",
+    cursorAccent: "#f6f5f2",
     selectionBackground: "rgba(28, 26, 23, 0.16)",
     black: "#2b2824",
     red: "#c23b45",
@@ -103,6 +112,10 @@ function decodeBase64(b64: string): Uint8Array {
 // Live PTY instances keyed by working folder (kept across session switches)
 // ---------------------------------------------------------------------------
 
+type TerminalEvent =
+  | { type: "terminalData"; id: string; data: string }
+  | { type: "terminalExit"; id: string; code: number | null }
+
 type TermInstance = {
   key: string
   directory: string
@@ -114,25 +127,36 @@ type TermInstance = {
   fit: FitAddon
   host: HTMLDivElement | null
   starting: boolean
+  decoder: TextDecoder
+  lineBuf: string
   listeners: Set<() => void>
 }
 
 const instances = new Map<string, TermInstance>()
 const byPtyId = new Map<string, TermInstance>()
+/** Buffer early events that arrive before `terminalOpen` resolves and registers `byPtyId`. */
+const pendingEvents = new Map<string, TerminalEvent[]>()
 
 function notifyInstance(inst: TermInstance) {
   inst.listeners.forEach((fn) => fn())
 }
 
-/** Routed from `store.ts`'s single `core` event listener. */
-export function handleTerminalEvent(event: { type: "terminalData"; id: string; data: string } | { type: "terminalExit"; id: string; code: number | null }) {
-  const inst = byPtyId.get(event.id)
-  if (!inst) return
+function applyEvent(inst: TermInstance, event: TerminalEvent) {
   if (event.type === "terminalData") {
     const bytes = decodeBase64(event.data)
     inst.term.write(bytes)
     try {
-      noteTerminalUrls(new TextDecoder().decode(bytes))
+      const chunk = inst.decoder.decode(bytes, { stream: true })
+      inst.lineBuf = (inst.lineBuf + chunk).slice(-1024)
+      const lines = inst.lineBuf.split(/\r?\n/)
+      // Scan completed lines plus a trailing slice once whitespace terminates a URL.
+      if (lines.length > 1) {
+        noteTerminalUrls(lines.slice(0, -1).join("\n"))
+        inst.lineBuf = lines[lines.length - 1]
+      }
+      if (/\s$/.test(inst.lineBuf)) {
+        noteTerminalUrls(inst.lineBuf)
+      }
     } catch {
       // Non-UTF-8 chunk: skip URL scan.
     }
@@ -146,8 +170,22 @@ export function handleTerminalEvent(event: { type: "terminalData"; id: string; d
   }
 }
 
+/** Routed from `store.ts`'s single `core` event listener. */
+export function handleTerminalEvent(event: TerminalEvent) {
+  const inst = byPtyId.get(event.id)
+  if (!inst) {
+    const list = pendingEvents.get(event.id) ?? []
+    if (list.length < 200) {
+      list.push(event)
+      pendingEvents.set(event.id, list)
+    }
+    return
+  }
+  applyEvent(inst, event)
+}
+
 function getOrCreate(directory: string): TermInstance {
-  const key = directory.toLowerCase()
+  const key = folderKey(directory)
   const existing = instances.get(key)
   if (existing) return existing
 
@@ -174,21 +212,28 @@ function getOrCreate(directory: string): TermInstance {
     fit,
     host: null,
     starting: false,
+    decoder: new TextDecoder(),
+    lineBuf: "",
     listeners: new Set(),
   }
 
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== "keydown") return true
     const ctrl = (e.ctrlKey || e.metaKey) && !e.altKey
-    // Let Ctrl+` bubble to the window shortcut to toggle the drawer.
+    // Let Ctrl+` and Ctrl+Shift+O bubble to window shortcuts.
     if (ctrl && (e.key === "`" || e.code === "Backquote")) return false
+    if (ctrl && e.shiftKey && e.key.toLowerCase() === "o") return false
     // Copy when text is selected (or Ctrl+Shift+C); otherwise send ^C to the PTY.
     if (ctrl && e.key.toLowerCase() === "c" && (e.shiftKey || term.hasSelection())) {
+      e.preventDefault()
+      e.stopPropagation()
       const sel = term.getSelection()
       if (sel) void navigator.clipboard.writeText(sel)
       return false
     }
     if (ctrl && e.key.toLowerCase() === "v") {
+      e.preventDefault()
+      e.stopPropagation()
       void navigator.clipboard.readText().then((text) => {
         if (text && inst.ptyId) void currentBridge().terminalWrite(inst.ptyId, text)
       })
@@ -210,6 +255,7 @@ async function startPty(inst: TermInstance) {
   inst.starting = true
   inst.error = null
   inst.exited = null
+  inst.lineBuf = ""
   notifyInstance(inst)
   try {
     const cols = Math.max(20, inst.term.cols || 80)
@@ -218,6 +264,12 @@ async function startPty(inst: TermInstance) {
     inst.ptyId = id
     inst.shell = shell
     byPtyId.set(id, inst)
+    // Flush any early output/exit events that arrived before `terminalOpen` returned.
+    const buffered = pendingEvents.get(id)
+    if (buffered) {
+      pendingEvents.delete(id)
+      for (const ev of buffered) applyEvent(inst, ev)
+    }
   } catch (e) {
     inst.error = e instanceof Error ? e.message : String(e)
   } finally {
@@ -230,6 +282,7 @@ async function restartPty(inst: TermInstance) {
   if (inst.ptyId) {
     const old = inst.ptyId
     byPtyId.delete(old)
+    pendingEvents.delete(old)
     inst.ptyId = null
     await currentBridge().terminalClose(old).catch(() => {})
   }
@@ -250,6 +303,13 @@ export function TerminalDrawer({ open }: { open: Open }) {
   const [, bump] = useState(0)
   const mountRef = useRef<HTMLDivElement>(null)
   const dragging = useRef(false)
+
+  // Keep height clamped when the window shrinks.
+  useEffect(() => {
+    const onResize = () => setHeight((h) => clampHeight(h))
+    window.addEventListener("resize", onResize)
+    return () => window.removeEventListener("resize", onResize)
+  }, [])
 
   // Keep xterm theme synced with light/dark mode toggles.
   useEffect(() => {
@@ -316,16 +376,16 @@ export function TerminalDrawer({ open }: { open: Open }) {
   const onDragStart = (e: React.MouseEvent) => {
     e.preventDefault()
     dragging.current = true
+    setResizing(true)
     const startY = e.clientY
     const startH = height
     const onMove = (ev: MouseEvent) => {
       if (!dragging.current) return
-      const max = Math.max(MIN_HEIGHT, Math.floor(window.innerHeight * 0.65))
-      const next = Math.min(max, Math.max(MIN_HEIGHT, startH + (startY - ev.clientY)))
-      setHeight(next)
+      setHeight(clampHeight(startH + (startY - ev.clientY)))
     }
     const onUp = () => {
       dragging.current = false
+      setResizing(false)
       window.removeEventListener("mousemove", onMove)
       window.removeEventListener("mouseup", onUp)
       setHeight((h) => {
@@ -341,24 +401,26 @@ export function TerminalDrawer({ open }: { open: Open }) {
     <section
       aria-label="Terminal"
       style={{ height }}
-      className="flex shrink-0 flex-col border-t border-separator bg-background/85"
+      className="flex shrink-0 flex-col bg-[#f6f5f2] dark:bg-[#161411]"
     >
-      {/* Drag handle */}
+      {/* Tone-stepped drag handle (no hard hairline border) */}
       <div
         onMouseDown={onDragStart}
         role="separator"
         aria-orientation="horizontal"
         aria-label="Resize terminal"
-        className="h-1.5 shrink-0 cursor-row-resize transition-colors hover:bg-default-hover/70"
-      />
-      {/* Slim header */}
-      <div className="flex h-8 shrink-0 items-center gap-2 px-3">
+        className="group flex h-2 shrink-0 cursor-row-resize items-center justify-center"
+      >
+        <span className="h-0.5 w-8 rounded-full bg-transparent transition-colors group-hover:bg-muted/40" />
+      </div>
+      {/* Slim header (matches Preview height) */}
+      <div className="flex h-9 shrink-0 items-center gap-2 px-3">
         <TerminalIcon className="size-3.5 shrink-0 text-muted" strokeWidth={1.75} />
         <span className="text-2xs min-w-0 truncate font-mono text-muted" title={directory}>
           {folderName(directory)}
           {worktree ? ` · ${worktree.branch}` : ""}
         </span>
-        {inst.shell && <span className="text-3xs shrink-0 rounded bg-default/70 px-1.5 py-0.5 font-mono text-muted">{inst.shell}</span>}
+        {inst.shell && <span className="text-3xs shrink-0 rounded bg-default/60 px-1.5 py-0.5 font-mono text-muted">{inst.shell}</span>}
         {inst.exited && (
           <span className="text-2xs shrink-0 text-muted">
             Exited{inst.exited.code !== null ? ` (${inst.exited.code})` : ""}
@@ -411,7 +473,7 @@ export function TerminalDrawer({ open }: { open: Open }) {
         <div
           ref={mountRef}
           onClick={() => inst.term.focus()}
-          className={cn("min-h-0 flex-1 overflow-hidden px-2 pb-1.5")}
+          className={cn("min-h-0 flex-1 overflow-hidden px-3 pb-2")}
         />
       )}
     </section>

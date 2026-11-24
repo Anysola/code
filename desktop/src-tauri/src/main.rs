@@ -1149,7 +1149,10 @@ async fn delete_session(app: State<'_, App>, directory: String, session_id: Stri
     if core.as_ref().is_some_and(|core| core.is_busy(&session_id)) {
         return Err("Stop the session before deleting it.".into());
     }
-    // Its worktree and branch go with it.
+    // Its worktree and branch go with it (close any terminal holding the folder open first).
+    if let Ok(Some(w)) = db.session_worktree(&session_id) {
+        app.terminals.close_in_directory(&w.directory);
+    }
     worktree::before_delete(core.as_ref(), &db, &session_id).await?;
     let removed = match &core {
         Some(core) => core.delete_session(&session_id).map_err(text)?,

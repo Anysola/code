@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -18,8 +18,9 @@ use tauri::{AppHandle, Emitter, State};
 use crate::{Answer, App};
 
 struct Entry {
-    master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    directory: PathBuf,
+    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
 }
 
@@ -28,6 +29,17 @@ struct Entry {
 pub(crate) struct Manager {
     next: Arc<AtomicU64>,
     entries: Arc<Mutex<HashMap<String, Entry>>>,
+}
+
+fn dir_key(path: &Path) -> String {
+    let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let s = canon.to_string_lossy();
+    let trimmed = s.trim_end_matches(['/', '\\']);
+    if cfg!(windows) {
+        trimmed.replace('/', "\\").to_lowercase()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 impl Manager {
@@ -88,8 +100,9 @@ impl Manager {
             .insert(
                 id.clone(),
                 Entry {
-                    master: pair.master,
-                    writer,
+                    directory: dir.to_path_buf(),
+                    master: Arc::new(Mutex::new(pair.master)),
+                    writer: Arc::new(Mutex::new(writer)),
                     killer,
                 },
             );
@@ -126,24 +139,29 @@ impl Manager {
     }
 
     pub(crate) fn write(&self, id: &str, data: &str) -> Result<(), String> {
-        let mut map = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        let entry = map
-            .get_mut(id)
-            .ok_or_else(|| "This terminal has closed.".to_string())?;
-        entry
-            .writer
+        let writer = {
+            let map = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+            map.get(id)
+                .map(|e| e.writer.clone())
+                .ok_or_else(|| "This terminal has closed.".to_string())?
+        };
+        let mut guard = writer.lock().unwrap_or_else(|e| e.into_inner());
+        guard
             .write_all(data.as_bytes())
-            .and_then(|_| entry.writer.flush())
+            .and_then(|_| guard.flush())
             .map_err(|e| format!("Couldn’t send input to the terminal: {e}"))
     }
 
     pub(crate) fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
-        let map = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(entry) = map.get(id) else {
-            return Ok(());
+        let master = {
+            let map = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(entry) = map.get(id) else {
+                return Ok(());
+            };
+            entry.master.clone()
         };
-        entry
-            .master
+        let guard = master.lock().unwrap_or_else(|e| e.into_inner());
+        guard
             .resize(PtySize {
                 rows: rows.clamp(2, 500),
                 cols: cols.clamp(10, 500),
@@ -160,6 +178,34 @@ impl Manager {
             .unwrap_or_else(|e| e.into_inner())
             .remove(id)
         {
+            let _ = entry.killer.kill();
+        }
+    }
+
+    /// Closes any terminal whose working folder is inside `directory` (e.g. before removing a
+    /// worktree so Windows does not hold a directory handle open).
+    pub(crate) fn close_in_directory(&self, directory: &str) {
+        let target = dir_key(Path::new(directory));
+        let mut to_kill = Vec::new();
+        {
+            let mut map = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+            let ids: Vec<String> = map
+                .iter()
+                .filter(|(_, e)| {
+                    let k = dir_key(&e.directory);
+                    k == target
+                        || k.starts_with(&format!("{target}/"))
+                        || k.starts_with(&format!("{target}\\"))
+                })
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in ids {
+                if let Some(entry) = map.remove(&id) {
+                    to_kill.push(entry);
+                }
+            }
+        }
+        for mut entry in to_kill {
             let _ = entry.killer.kill();
         }
     }
@@ -209,7 +255,10 @@ pub async fn terminal_resize(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    app.terminals.resize(&id, cols, rows)
+    let manager = app.terminals.clone();
+    tokio::task::spawn_blocking(move || manager.resize(&id, cols, rows))
+        .await
+        .map_err(|e| format!("Terminal resize failed: {e}"))?
 }
 
 #[tauri::command]
@@ -229,6 +278,7 @@ mod tests {
         assert!(mgr.write("missing", "hi").is_err());
         assert!(mgr.resize("missing", 80, 24).is_ok());
         mgr.close("missing");
+        mgr.close_in_directory("/no/such/path");
         mgr.close_all();
     }
 }
