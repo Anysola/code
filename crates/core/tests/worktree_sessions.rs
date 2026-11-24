@@ -470,6 +470,15 @@ fn the_documented_hook_form_runs_in_both_kinds_of_session() {
                 log.display()
             ),
         )
+    } else if cfg!(windows) {
+        (
+            r#"sh "$CLAUDE_PROJECT_DIR/.claude/hooks/x.sh""#.to_string(),
+            "x.sh",
+            format!(
+                "#!/bin/sh\necho \"$(pwd -W)|$CLAUDE_PROJECT_DIR\" >> '{}'\nexit 0\n",
+                log.display().to_string().replace('\\', "/")
+            ),
+        )
     } else {
         (
             r#""$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh"#.to_string(),
