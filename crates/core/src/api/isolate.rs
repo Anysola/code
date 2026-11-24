@@ -824,6 +824,58 @@ impl Core {
             .ok_or_else(|| worktree_error("This session has no worktree."))
     }
 
+    /// Reverts the database state after the desktop undid the last applied commit on the main
+    /// folder (`applying` → `ready`): `base_commit` moves back to `new_base` (the undone commit's
+    /// parent) and `applied_commit` is cleared so the session's changes show as ready to apply
+    /// again without touching the worktree's files.
+    pub fn undo_apply(
+        &self,
+        session_id: &str,
+        new_base: &str,
+    ) -> Result<SessionWorktreeRow, CoreError> {
+        let shared = &self.shared;
+        let row = shared
+            .db
+            .session_worktree(session_id)?
+            .ok_or_else(|| worktree_error("This session has no worktree."))?;
+        if row.state != WorktreeState::Applying {
+            return Err(worktree_error("This session is not updating its apply."));
+        }
+        let top = shared.top();
+        let new_base = git_sync(
+            &top,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{new_base}^{{commit}}"),
+            ],
+            &[],
+        )
+        .map_err(|_| worktree_error(format!("No commit {new_base}")))?;
+        let moved = shared.db.update_session_worktree(
+            session_id,
+            WorktreeState::Applying,
+            &[
+                ("state", WorktreeState::Ready.as_str().to_string().into()),
+                ("base_commit", new_base.into()),
+                ("applied_commit", rusqlite::types::Value::Null),
+                ("apply_from", rusqlite::types::Value::Null),
+                ("apply_tree", rusqlite::types::Value::Null),
+                ("apply_stash", rusqlite::types::Value::Null),
+                ("error", rusqlite::types::Value::Null),
+            ],
+        )?;
+        if !moved {
+            return Err(worktree_error("This session's apply changed meanwhile."));
+        }
+        self.wake_waiting(session_id)?;
+        shared
+            .db
+            .session_worktree(session_id)?
+            .ok_or_else(|| worktree_error("This session has no worktree."))
+    }
+
     /// Lets the worktree go: background commands stop, the branch tip is pinned, the folder and
     /// the branch are removed. Applied: from `applying`; discarded: from any state but
     /// `applying`. A part that cannot be removed yet leaves `leftover` for cleanup.

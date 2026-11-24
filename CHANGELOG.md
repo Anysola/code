@@ -4,6 +4,17 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.3.0 (2026-11-24)
+
+- Embedded interactive terminal drawer at the bottom of a session (`Ctrl \``, the header button, or the Ctrl K
+  palette). It opens in the session's working folder (its worktree when isolated, otherwise the main folder),
+  resizes by dragging its top edge, and stays alive when you switch sessions.
+- Undo the last worktree apply from Review, the worktree menu, or the Ctrl K palette. It reverts the main
+  folder's branch only when `HEAD` is still that applied commit and none of its files have uncommitted or staged
+  edits, while keeping the worktree's changes intact so you can adjust and apply again.
+- On Windows, hooks now use Git Bash by default when it is installed (unless a `shell` is configured), so
+  Claude Code-style `"$CLAUDE_PROJECT_DIR"/.claude/hooks/*.sh` commands work out of the box.
+
 ## 1.2.0 (2026-11-24)
 
 - In a Git folder a new session works in its own worktree and branch, so sessions don't change each other's

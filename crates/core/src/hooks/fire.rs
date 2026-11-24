@@ -151,7 +151,7 @@ impl Context {
         payload.extend(extra);
         let input = serde_json::to_vec(&Value::Object(payload)).unwrap_or_default();
         let env = self.environment();
-        let shell = crate::tool::shell::select::resolve(self.shell.as_deref());
+        let shell = crate::tool::shell::select::resolve_for_hooks(self.shell.as_deref());
         let cwd = working_dir(&[&self.cwd, &self.project_dir, &self.home]);
         let runs = handlers.iter().map(|handler| {
             run(

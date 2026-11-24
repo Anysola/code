@@ -211,6 +211,12 @@ fn answer(app: &App, core: &anysola_core::api::Core) -> Answer {
     } else {
         json!(detected)
     };
+    let hooks_detected = anysola_core::tool::shell::hook_shell(None);
+    out["hooksShellDetected"] = if hooks_detected.is_empty() {
+        Value::Null
+    } else {
+        json!(hooks_detected)
+    };
     out["overridden"] = json!(overridden);
     out["warnings"] = json!(warnings);
     Ok(out)

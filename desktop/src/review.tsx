@@ -27,6 +27,7 @@ import {
   addComment,
   applyCheck,
   applyWorktree,
+  undoApplyWorktree,
   bringBase,
   discardWorktree,
   addToComposer,
@@ -185,7 +186,23 @@ export function GitMenu({ open, compact = false }: { open: Open; compact?: boole
 function WorktreeMenu({ open, worktree, compact }: { open: Open; worktree: SessionWorktree; compact: boolean }) {
   const git = useStore((s) => s.git)
   const [show, setShow] = useState(false)
-  const close = useCallback(() => setShow(false), [])
+  const [undoing, setUndoing] = useState(false)
+  const [undoError, setUndoError] = useState<string | null>(null)
+  const close = useCallback(() => {
+    setShow(false)
+    setUndoError(null)
+  }, [])
+  const here = hereOf(open)
+  const undo = async () => {
+    if (!here) return
+    setUndoing(true)
+    setUndoError(null)
+    const r = await undoApplyWorktree(here)
+    setUndoing(false)
+    if ("error" in r) return setUndoError(r.error)
+    close()
+    flash("Undid the last apply")
+  }
   // A folder that's gone has no changes to count (the last read of it may linger).
   const read = git?.repo && sameFolder(git.directory, worktree.path) && worktree.state !== "missing" ? git : null
   const changed = read?.files.length ?? 0
@@ -232,16 +249,25 @@ function WorktreeMenu({ open, worktree, compact }: { open: Open; worktree: Sessi
             </span>
           )}
           {(worktree.state === "ready" || worktree.state === "applying") && (
-            <button
-              onClick={() => {
-                close()
-                setReviewing(true)
-              }}
-              className={btn("primary", "sm", "self-start")}
-            >
-              Review & apply
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => {
+                  close()
+                  setReviewing(true)
+                }}
+                className={btn("primary", "sm")}
+              >
+                Review & apply
+              </button>
+              {worktree.state === "ready" && worktree.appliedCommit && (
+                <button disabled={undoing} onClick={() => void undo()} className={btn("ghost", "sm", "gap-1.5 text-muted")}>
+                  {undoing ? <Spinner className="size-3" /> : <RotateCcw className="size-3.5" />}
+                  Undo apply
+                </button>
+              )}
+            </div>
           )}
+          {undoError && <p className="text-2xs text-danger select-text">{undoError}</p>}
         </div>
       </Popover>
     </div>
@@ -803,13 +829,18 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
             </>
           )}
           {net?.length === 0 && !gone && (
-            <p className="text-dense px-1 pt-4 text-muted">
-              {worktree
-                ? worktree.appliedCommit && worktree.appliedCommit === worktree.baseCommit
-                  ? `Everything is applied. New changes show here.`
-                  : `No changes from ${base} yet.`
-                : "Every file is back as it was before this session."}
-            </p>
+            <div className="flex flex-col items-start gap-2.5 px-1 pt-4">
+              <p className="text-dense text-muted">
+                {worktree
+                  ? worktree.appliedCommit && worktree.appliedCommit === worktree.baseCommit
+                    ? `Everything is applied. New changes show here.`
+                    : `No changes from ${base} yet.`
+                  : "Every file is back as it was before this session."}
+              </p>
+              {worktree && worktree.state === "ready" && worktree.appliedCommit && here && (
+                <UndoApplyButton here={here} onUndone={reload} />
+              )}
+            </div>
           )}
           {!gone && net?.map((f) => (
             <ReviewFile key={f.file} file={f} directory={where} base={base} onRestored={reload} startOpen={startOpen} />
@@ -821,6 +852,29 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
 }
 
 const OPERATION = { merge: "merge", rebase: "rebase", "cherry-pick": "cherry-pick", revert: "revert" } as const
+
+function UndoApplyButton({ here, onUndone, compact = false }: { here: Here; onUndone: () => void; compact?: boolean }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const run = async () => {
+    setBusy(true)
+    setError(null)
+    const r = await undoApplyWorktree(here)
+    setBusy(false)
+    if ("error" in r) return setError(r.error)
+    flash("Undid the last apply")
+    onUndone()
+  }
+  return (
+    <span className={cn("inline-flex flex-col items-start gap-1", compact && "items-end")}>
+      <button disabled={busy} onClick={() => void run()} className={btn(compact ? "ghost" : "secondary", "sm", "gap-1.5 text-muted")}>
+        {busy ? <Spinner className="size-3" /> : <RotateCcw className="size-3.5" />}
+        {compact ? "Undo" : "Undo apply"}
+      </button>
+      {error && <span className="text-2xs text-danger select-text">{error}</span>}
+    </span>
+  )
+}
 
 type Phase =
   | { kind: "message" }
@@ -947,9 +1001,12 @@ function ApplyBox({
           <span>
             Applied as <span className="font-mono">{phase.commit.slice(0, 7)}</span> on {phase.onto}
           </span>
-          <button onClick={onClose} className={btn("ghost", "sm", "ml-auto text-muted")}>
-            Done
-          </button>
+          <span className="ml-auto flex items-center gap-1">
+            <UndoApplyButton here={here} onUndone={onClose} compact />
+            <button onClick={onClose} className={btn("ghost", "sm", "text-muted")}>
+              Done
+            </button>
+          </span>
         </span>
         {phase.stashLeft && (
           <span className="text-2xs text-warning">

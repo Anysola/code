@@ -13,6 +13,7 @@ import { ShortcutsSheet, useShortcuts } from "./shortcuts"
 import { Sidebar } from "./sidebar"
 import { closePeek, dismissNotice, openSettings, start, useStore, type Open, type Peek } from "./store"
 import { Palette } from "./palette"
+import { TerminalDrawer } from "./terminal"
 import { Transcript } from "./transcript"
 import { btn, cn, folderKey, sameFolder, Spinner, TitleBar, Tooltip, useEscape } from "./ui"
 import { Home, NewSessionStart, SignIn } from "./welcome"
@@ -104,6 +105,7 @@ function Main() {
               <ContextMeter open={open} />
             </div>
           </div>
+          <TerminalDrawer open={open} />
           {reviewing && <Review open={open} onClose={() => setReviewing(false)} />}
           {discarding && <DiscardConfirm open={open} />}
           <PeekSheet />

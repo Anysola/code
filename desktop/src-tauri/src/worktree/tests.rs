@@ -839,3 +839,59 @@ fn a_linked_local_folder_is_skipped() {
     assert!(copy_local(&main, &w(&row), &|| true).is_empty());
     assert!(!w(&row).join(".claude").exists());
 }
+
+#[test]
+fn undo_apply_reverts_head_and_keeps_worktree_changes() {
+    let sandbox = Sandbox::new("undo-apply");
+    let (main, mut row) = sandbox.session();
+    let before_head = read_git(&main, &["rev-parse", "HEAD"]).unwrap();
+    write(&w(&row), "undo_new.txt", "created in worktree\n");
+    let (applied, _) = apply(&marks(), &row, "apply worktree", "main", false, false).unwrap();
+    assert_eq!(
+        read_git(&main, &["rev-parse", "HEAD"]).as_deref(),
+        Some(applied.as_str())
+    );
+    assert_eq!(
+        std::fs::read_to_string(main.join("undo_new.txt")).unwrap(),
+        "created in worktree\n"
+    );
+    row.applied_commit = Some(applied.clone());
+    row.base_commit = applied.clone();
+
+    let parent = undo_apply(&row).unwrap();
+    assert_eq!(parent, before_head);
+    assert_eq!(
+        read_git(&main, &["rev-parse", "HEAD"]).as_deref(),
+        Some(before_head.as_str())
+    );
+    assert!(!main.join("undo_new.txt").exists());
+    // Worktree files remain intact so the user can edit or apply again.
+    assert_eq!(
+        std::fs::read_to_string(w(&row).join("undo_new.txt")).unwrap(),
+        "created in worktree\n"
+    );
+}
+
+#[test]
+fn undo_apply_refuses_when_main_moved_or_dirty() {
+    let sandbox = Sandbox::new("undo-refuse");
+    let (main, mut row) = sandbox.session();
+    write(&w(&row), "a.txt", "v1\n");
+    let (applied, _) = apply(&marks(), &row, "apply v1", "main", false, false).unwrap();
+    row.applied_commit = Some(applied.clone());
+    row.base_commit = applied.clone();
+
+    // Uncommitted edit to an applied file blocks undo without touching it.
+    write(&main, "a.txt", "local edit\n");
+    assert!(undo_apply(&row).is_err());
+    assert_eq!(
+        std::fs::read_to_string(main.join("a.txt")).unwrap(),
+        "local edit\n"
+    );
+
+    // A newer commit on main also blocks undo.
+    sandbox.git(&main, &["add", "a.txt"]);
+    sandbox.git(&main, &["commit", "-qm", "later commit"]);
+    let err = undo_apply(&row).unwrap_err();
+    assert!(err.contains("moved past"), "{err}");
+}

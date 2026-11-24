@@ -454,9 +454,14 @@ fn the_documented_hook_form_runs_in_both_kinds_of_session() {
     )]]);
     let env = env(&gateway.url);
     let log = env.home.home().join("hook.log");
-    // The form as Claude Code documents it for a POSIX shell; on Windows the hook shell is
-    // PowerShell (the `shell` tool's choice), where a project script is named this way.
-    let (command, name, script) = if cfg!(windows) {
+    // The form as Claude Code documents it for a POSIX shell; falls back to PowerShell syntax
+    // only on Windows machines without Git Bash.
+    let hook_shell = anysola_core::tool::shell::hook_shell(None);
+    let is_pwsh = matches!(
+        anysola_core::tool::shell::shell_name(Some(&hook_shell)).as_str(),
+        "pwsh" | "powershell"
+    );
+    let (command, name, script) = if is_pwsh {
         (
             r#"& "$env:CLAUDE_PROJECT_DIR/.claude/hooks/x.cmd""#.to_string(),
             "x.cmd",
@@ -548,8 +553,13 @@ fn a_formatting_hook_in_a_worktree_leaves_the_main_folder_alone() {
         json!({"path": "a.txt", "content": "a"}),
     )]]);
     let env = env(&gateway.url);
-    // A formatter writing the file named by the project folder (PowerShell on Windows).
-    let command = if cfg!(windows) {
+    // A formatter writing the file named by the project folder (POSIX when Git Bash is present).
+    let hook_shell = anysola_core::tool::shell::hook_shell(None);
+    let is_pwsh = matches!(
+        anysola_core::tool::shell::shell_name(Some(&hook_shell)).as_str(),
+        "pwsh" | "powershell"
+    );
+    let command = if is_pwsh {
         r#"Set-Content -LiteralPath "$env:CLAUDE_PROJECT_DIR/README.md" -Value formatted"#
     } else {
         r#"sh -c 'echo formatted > "$1"' prettier "$CLAUDE_PROJECT_DIR/README.md""#

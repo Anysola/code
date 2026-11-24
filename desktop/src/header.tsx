@@ -14,6 +14,7 @@ import {
   PanelLeft,
   Pencil,
   Plus,
+  Terminal as TerminalIcon,
   Trash2,
   Wallet,
   X,
@@ -32,6 +33,7 @@ import {
   reviewInstead,
   setReviewing,
   toggleSidebar,
+  toggleTerminal,
   undoDelete,
   useChrome,
   type DeleteAsk,
@@ -115,6 +117,7 @@ const ROOMY = 1200
 
 export function SessionHeader({ open }: { open: Open }) {
   const hidden = useChrome((c) => c.sidebarHidden)
+  const terminalOpen = useChrome((c) => c.terminalOpen)
   const { files, add, del } = useChangeCounts(open)
   const bar = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(1280)
@@ -176,6 +179,17 @@ export function SessionHeader({ open }: { open: Open }) {
         </div>
         <div className="mr-2 ml-3 flex shrink-0 items-center gap-1">
           <EditorButton directory={place} compact={width < ROOMY} />
+          <Tooltip label={terminalOpen ? "Hide terminal" : "Show terminal"} keys={KEYS.terminal}>
+            <button
+              type="button"
+              onClick={() => toggleTerminal()}
+              aria-label={terminalOpen ? "Hide terminal" : "Show terminal"}
+              aria-pressed={terminalOpen}
+              className={btn("ghost", "sm", terminalOpen ? "bg-default/70 text-foreground" : "text-muted", true)}
+            >
+              <TerminalIcon className="size-4" strokeWidth={1.75} />
+            </button>
+          </Tooltip>
           <GitMenu open={open} compact={narrow} />
           <HeaderBudget open={open} />
           {files > 0 &&

@@ -5,7 +5,7 @@
 import { useEffect, useRef } from "react"
 
 import type { SessionRow } from "./bridge"
-import { setReviewing, showPalette, showShortcuts, toggleSidebar, useChrome } from "./chrome"
+import { setReviewing, showPalette, showShortcuts, toggleSidebar, toggleTerminal, useChrome } from "./chrome"
 import { usePrefs } from "./prefs"
 import { closeSettings, isRunning, newSession, openSession, openSettings, stop, useStore } from "./store"
 import { btn, folderKey, Kbd, useEscape } from "./ui"
@@ -28,6 +28,7 @@ export function useShortcutList(): { label: string; rows: Shortcut[] }[] {
         { label: "Go to the message box", keys: ["Ctrl L"] },
         { label: "Stop the running turn", keys: ["Ctrl ."] },
         { label: "Review changes", keys: ["Ctrl Shift D"] },
+        { label: "Show or hide the terminal", keys: ["Ctrl `"] },
         { label: "Settings", keys: ["Ctrl ,"] },
         { label: "Keyboard shortcuts", keys: ["Ctrl /"] },
         { label: "Zoom in, out, or back", keys: ["Ctrl +", "Ctrl −", "Ctrl 0"] },
@@ -82,6 +83,7 @@ export const KEYS = {
   sidebar: "Ctrl B",
   stop: "Ctrl .",
   review: "Ctrl Shift D",
+  terminal: "Ctrl `",
   settings: "Ctrl ,",
   shortcuts: "Ctrl /",
 } as const
@@ -165,6 +167,7 @@ export function useShortcuts() {
       // A new session's first turn has no id yet: Stop waits for it.
       if (ctrl && key === "." && open && (isRunning(open) || (!!open.sessionId && busy.has(open.sessionId)))) return run(stop)
       if (ctrl && e.shiftKey && key === "d" && open) return run(() => setReviewing(true))
+      if (ctrl && (key === "`" || e.code === "Backquote") && open) return run(() => toggleTerminal())
       if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
         const list = sessionOrder(
           sessions.filter((s) => !deleting?.ids.has(s.id)),

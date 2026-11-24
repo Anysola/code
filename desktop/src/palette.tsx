@@ -2,14 +2,14 @@
  * The palette (Ctrl K, or Search in the sidebar): recent sessions, then commands with their keys.
  * A layer like any panel: Escape closes it and is not a press toward stopping a turn.
  */
-import { GitBranch, GitMerge, Keyboard, MessageSquare, Plus, Search, Settings as SettingsIcon, SquarePen, Trash2, Wallet } from "lucide-react"
+import { GitBranch, GitMerge, Keyboard, MessageSquare, Plus, RotateCcw, Search, Settings as SettingsIcon, SquarePen, Terminal as TerminalIcon, Trash2, Wallet } from "lucide-react"
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 
 import type { SessionRow } from "./bridge"
-import { askDiscard, editBudget, setReviewing, showPalette, showShortcuts, useChrome } from "./chrome"
+import { askDiscard, editBudget, flash, setReviewing, showPalette, showShortcuts, toggleTerminal, useChrome } from "./chrome"
 import { modes } from "./composer"
 import { KEYS } from "./shortcuts"
-import { closeSettings, forkSession, isRunning, newSession, openSession, openSettings, pickMode, useStore, useWorktree, useWorktreeInfo } from "./store"
+import { closeSettings, forkSession, isRunning, newSession, notify, openSession, openSettings, pickMode, undoApplyWorktree, useStore, useWorktree, useWorktreeInfo } from "./store"
 import { ago, cn, folderName, Kbd, sameFolder, useEscape } from "./ui"
 
 type Row = { key: string; section: string; run: () => void; node: ReactNode }
@@ -66,6 +66,19 @@ function useCommands(): Command[] {
         icon: <GitMerge className={i} strokeWidth={1.75} />,
         run: () => setReviewing(true, "apply"),
       })
+    if (worktree?.state === "ready" && worktree.appliedCommit)
+      list.push({
+        id: "undo-apply",
+        label: "Undo last apply",
+        hint: worktree.appliedCommit.slice(0, 7),
+        icon: <RotateCcw className={i} strokeWidth={1.75} />,
+        run: () => {
+          void undoApplyWorktree({ directory, sessionId }).then((r) => {
+            if ("error" in r) notify(r.error)
+            else flash("Undid the last apply")
+          })
+        },
+      })
     if (worktree && worktree.state !== "discarded" && worktree.state !== "applying" && worktree.state !== "preparing")
       list.push({
         id: "discard",
@@ -77,6 +90,13 @@ function useCommands(): Command[] {
       })
   }
   if (open) {
+    list.push({
+      id: "terminal",
+      label: "Toggle terminal",
+      icon: <TerminalIcon className={i} strokeWidth={1.75} />,
+      keys: KEYS.terminal,
+      run: () => toggleTerminal(),
+    })
     const shown = open.info?.agent === "plan" ? "plan" : mode
     const hasPlan = open.info?.agents.some((a) => a.id === "plan") ?? false
     for (const m of modes)

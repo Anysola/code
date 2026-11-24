@@ -172,6 +172,12 @@ pub fn invocation(configured: Option<&str>, command: &str) -> (String, Vec<Strin
     (shell, args)
 }
 
+/// The shell hooks run with: respects an explicit `configured` shell, and prefers Git Bash on
+/// Windows when none is configured.
+pub fn hook_shell(configured: Option<&str>) -> String {
+    select::resolve_for_hooks(configured)
+}
+
 /// `process.platform` as the description names it.
 fn os_name() -> &'static str {
     match std::env::consts::OS {

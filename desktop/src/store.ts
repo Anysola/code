@@ -4,6 +4,7 @@
  * says it changed; only streaming text lives here between reads.
  */
 import { useSyncExternalStore } from "react"
+import { handleTerminalEvent } from "./terminal"
 
 import {
   getBridge,
@@ -2156,6 +2157,16 @@ export async function applyWorktree(
   }
 }
 
+export async function undoApplyWorktree(h: Here): Promise<{ commit: string } | { error: string }> {
+  try {
+    return await bridge.worktreeUndoApply(h.directory, h.sessionId)
+  } catch (e) {
+    return { error: message(e) }
+  } finally {
+    if (state.open?.sessionId === h.sessionId) void refreshGit()
+  }
+}
+
 export async function bringBase(h: Here): Promise<{ conflicts: string[] } | { error: string }> {
   try {
     return await bridge.worktreeBringBase(h.directory, h.sessionId)
@@ -2446,6 +2457,10 @@ function onEvent(e: CoreEvent) {
       return
     case "closeRequested":
       set({ closing: e.busy })
+      return
+    case "terminalData":
+    case "terminalExit":
+      handleTerminalEvent(e)
       return
     case "update":
       if (state.update) set({ update: { ...state.update, installing: true, progress: { downloaded: e.downloaded, total: e.total } } })

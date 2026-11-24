@@ -1838,6 +1838,14 @@ export function mockBridge(): Bridge {
         emit({ type: "notice", message: "Stopped 2 background commands for the apply: pnpm dev, pnpm vitest --watch pricing" })
       return { commit, stashLeft: stash && review.has("apply-stash-left") ? "stash@{0}" : null }
     },
+    async worktreeUndoApply(_directory, sessionId) {
+      const row = worktreeRow(sessionId)
+      if (!row.worktree?.appliedCommit) throw new Error("There’s no applied commit to undo.")
+      const parent = "3c1a9f4001"
+      Object.assign(row.worktree, { state: "ready", baseCommit: parent, appliedCommit: null })
+      worktreeChanged(row)
+      return { commit: parent }
+    },
     async worktreeDiscard(_directory, sessionId) {
       const row = worktreeRow(sessionId)
       if (running.has(sessionId)) throw new Error("This session is working. Stop it first.")
@@ -2484,6 +2492,20 @@ export function mockBridge(): Bridge {
           : { state: "off" as const, detail: null }
       ),
     async presence() {},
+    async terminalOpen(directory) {
+      const id = `mock_term_${Math.random().toString(16).slice(2, 8)}`
+      setTimeout(() => {
+        const prompt = `\x1b[2m${directory}\x1b[0m $ `
+        emit({ type: "terminalData", id, data: btoa(prompt) })
+      }, 30)
+      return { id, shell: "bash" }
+    },
+    async terminalWrite(id, data) {
+      const out = data === "\r" ? "\r\n$ " : data
+      emit({ type: "terminalData", id, data: btoa(out) })
+    },
+    async terminalResize() {},
+    async terminalClose() {},
     async pickFolder() {
       return WEB
     },

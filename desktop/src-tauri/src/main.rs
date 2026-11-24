@@ -20,6 +20,7 @@ mod path_repair;
 mod prefs;
 mod servers;
 mod sources;
+mod terminal;
 mod transcript;
 mod tree;
 mod trust;
@@ -104,6 +105,7 @@ pub(crate) struct App {
     /// cell, so a folder that is slow to start holds up nothing but itself.
     cores: Mutex<HashMap<PathBuf, Arc<OnceCell<Running>>>>,
     pub(crate) login: Mutex<Option<DeviceLogin>>,
+    pub(crate) terminals: terminal::Manager,
 }
 
 /// One key per folder however it is spelled: Windows hands the same folder over with either
@@ -1215,6 +1217,7 @@ fn main() {
             sign_ins: Mutex::default(),
             cores: Mutex::default(),
             login: Mutex::default(),
+            terminals: terminal::Manager::default(),
         })
         // Closing the window while turns run asks first; `quit` then stops them and exits. A
         // second close soon after does the same without the window, which may not be answering.
@@ -1303,6 +1306,7 @@ fn main() {
             worktree::worktrees_with_work,
             worktree::worktree_apply_check,
             worktree::worktree_apply,
+            worktree::worktree_undo_apply,
             worktree::worktree_discard,
             worktree::worktree_bring_base,
             worktree::worktree_recreate,
@@ -1366,6 +1370,10 @@ fn main() {
             notify_test,
             discord::discord_status,
             discord::presence,
+            terminal::terminal_open,
+            terminal::terminal_write,
+            terminal::terminal_resize,
+            terminal::terminal_close,
         ])
         .build(tauri::generate_context!())
         .expect("the Anysola Code window failed to start")
@@ -1375,6 +1383,7 @@ fn main() {
             if let tauri::RunEvent::Exit = event {
                 let app = handle.state::<App>();
                 worktree::stop_all_setups();
+                app.terminals.close_all();
                 tauri::async_runtime::block_on(async {
                     let _ = tokio::time::timeout(EXIT_GRACE, app.drop_cores()).await;
                 });

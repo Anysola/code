@@ -1850,6 +1850,107 @@ pub async fn worktree_apply(
     }
 }
 
+/// Undoes the last commit this session applied onto the main folder, as long as the main folder's
+/// `HEAD` is still that exact commit and none of its files have uncommitted or staged edits. The
+/// worktree's own files are kept intact and its base moves back to the undone commit's parent.
+#[tauri::command]
+pub async fn worktree_undo_apply(
+    handle: AppHandle,
+    app: State<'_, App>,
+    directory: String,
+    session_id: String,
+) -> Answer {
+    let core = core_for(&handle, &app, &directory).await?;
+    let db = app.db()?.clone();
+    if setup_running(&session_id) {
+        return Err("The setup command is running. Stop it first.".into());
+    }
+    if !core
+        .set_worktree_state(&session_id, WorktreeState::Ready, WorktreeState::Applying)
+        .map_err(plain_error)?
+    {
+        return Err("This session’s worktree isn’t ready.".into());
+    }
+    emit(&handle, &db, &session_id);
+    let undone = {
+        let (db, id) = (db.clone(), session_id.clone());
+        git::blocking(move || {
+            let row = row_of(&db, &id)?;
+            Ok(undo_apply(&row))
+        })
+        .await
+    };
+    let undone = undone.and_then(|r| r);
+    match undone {
+        Ok(parent) => {
+            let result = core.undo_apply(&session_id, &parent);
+            emit(&handle, &db, &session_id);
+            result.map_err(plain_error)?;
+            Ok(json!({"commit": parent}))
+        }
+        Err(error) => {
+            let _ =
+                core.set_worktree_state(&session_id, WorktreeState::Applying, WorktreeState::Ready);
+            emit(&handle, &db, &session_id);
+            Err(error)
+        }
+    }
+}
+
+fn undo_apply(row: &SessionWorktreeRow) -> Result<String, String> {
+    let applied = row
+        .applied_commit
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "There’s no applied commit to undo.".to_string())?;
+    let folder = Path::new(&row.folder);
+    let top = top_of(folder)
+        .ok_or_else(|| "The main folder isn’t a Git repository anymore.".to_string())?;
+    if let Some(what) = operation(&top) {
+        return Err(format!("Finish the {what} in the main folder first."));
+    }
+    let head = read_git(&top, &["rev-parse", "HEAD"])
+        .ok_or_else(|| "Couldn’t read the main folder’s commit.".to_string())?;
+    if head != applied {
+        return Err(
+            "The main folder has moved past the applied commit. Undo it with Git instead.".into(),
+        );
+    }
+    let parent = read_git(
+        &top,
+        &["rev-parse", "--verify", "--quiet", &format!("{applied}^")],
+    )
+    .ok_or_else(|| "That commit has no parent to return to.".to_string())?;
+    let staged = wgit(&top, &["diff", "--cached", "--quiet"]).run();
+    if staged.is_ok_and(|o| !o.status.success()) {
+        return Err("The main folder has staged changes. Commit or unstage them first.".into());
+    }
+    if let Err(failure) = run_git(&top, &["read-tree", "-m", "-u", applied, &parent]) {
+        return Err(match failure {
+            Failure::Failed(m) if m.contains("not uptodate") || m.contains("would be overwritten") => {
+                "The main folder has uncommitted edits in files from that commit. Save or stash them first.".into()
+            }
+            Failure::Failed(m) => m,
+            other => git::explain(Op::Commit, other),
+        });
+    }
+    if let Err(failure) = run_git(
+        &top,
+        &[
+            "update-ref",
+            "-m",
+            "anysola: undo apply",
+            "HEAD",
+            &parent,
+            applied,
+        ],
+    ) {
+        let _ = run_git(&top, &["read-tree", "-m", "-u", &parent, applied]);
+        return Err(git::explain(Op::Commit, failure));
+    }
+    Ok(parent)
+}
+
 /// The apply itself, while `applying`. `Ok((commit, stash left))`; on `Err` the main folder is
 /// as it was (or, after a hook changed files, as the hook left it: the error says so).
 /// What the core keeps of an apply while it runs: where it starts and the tree it puts there

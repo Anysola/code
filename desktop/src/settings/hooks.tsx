@@ -302,7 +302,7 @@ function usePowerShell(directory: string) {
     currentBridge()
       .configGet(directory)
       .then(
-        (c) => live && setPwsh(/(pwsh|powershell)(\.exe)?$/i.test(c.shell ?? c.shellDetected ?? "")),
+        (c) => live && setPwsh(/(pwsh|powershell)(\.exe)?$/i.test(c.shell ?? c.hooksShellDetected ?? c.shellDetected ?? "")),
         () => {}
       )
     return () => {

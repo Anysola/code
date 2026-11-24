@@ -39,6 +39,37 @@ pub fn resolve(configured: Option<&str>) -> String {
         .clone()
 }
 
+/// The shell for hooks: an explicit `shell` config wins; otherwise, on Windows, Git Bash is
+/// preferred over PowerShell when installed so Claude Code's POSIX hook commands
+/// (`"$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh`) work out of the box.
+pub fn resolve_for_hooks(configured: Option<&str>) -> String {
+    if let Some(configured) = configured.filter(|c| !c.is_empty()) {
+        return select(Some(configured));
+    }
+    if !cfg!(windows) {
+        return resolve(None);
+    }
+    if git_bash_option().is_some() {
+        return select_hooks_windows(env::var("SHELL").ok().as_deref());
+    }
+    static DEFAULT_HOOKS: OnceLock<String> = OnceLock::new();
+    DEFAULT_HOOKS
+        .get_or_init(|| select_hooks_windows(env::var("SHELL").ok().as_deref()))
+        .clone()
+}
+
+fn select_hooks_windows(file: Option<&str>) -> String {
+    if let Some(file) = file.filter(|f| !f.is_empty() && !DENIED.contains(&name(f).as_str()))
+        && let Some(shell) = executable(file)
+    {
+        return shell;
+    }
+    if let Some(bash) = git_bash() {
+        return full(&bash);
+    }
+    windows_fallback()
+}
+
 /// Arguments that make `shell` run `command` (not a login shell).
 pub fn args(shell: &str, command: &str) -> Vec<String> {
     args_for(shell, command, cfg!(windows))
@@ -243,11 +274,22 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn configured_shell_wins_unless_unusable() {
         assert_eq!(resolve(Some("/bin/sh")), "/bin/sh");
+        assert_eq!(resolve_for_hooks(Some("/bin/sh")), "/bin/sh");
         assert_eq!(name(&resolve(Some("sh"))), "sh");
         let fallback = unix_fallback();
         assert_eq!(resolve(Some("fish")), fallback);
         assert_eq!(resolve(Some("/usr/bin/nu")), fallback);
         assert_eq!(resolve(Some("/no/such/shell")), fallback);
         assert_eq!(name(&fallback), "bash");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn hooks_prefer_git_bash_on_windows_when_installed() {
+        if let Some(bash) = git_bash() {
+            assert_eq!(name(&resolve_for_hooks(None)), "bash");
+            assert_eq!(name(&bash), "bash");
+        }
+        assert_eq!(name(&resolve_for_hooks(Some("cmd"))), "cmd");
     }
 }

@@ -19,6 +19,8 @@ type Chrome = {
   reviewing: boolean
   /** What Review opens with for a worktree session (the palette's Apply and Discard); null: the list. */
   reviewAction: "apply" | null
+  /** Embedded terminal drawer open at the bottom of the session. */
+  terminalOpen: boolean
   /** The open worktree session's discard confirm. */
   discarding: boolean
   /** The open session's budget editor, under the header's budget. */
@@ -69,6 +71,7 @@ let chrome: Chrome = {
   palette: false,
   reviewing: false,
   reviewAction: null,
+  terminalOpen: false,
   discarding: false,
   budgeting: false,
   forkNotes: readForkNotes(),
@@ -120,6 +123,14 @@ export function flash(text: string) {
 
 export function setReviewing(on: boolean, action: Chrome["reviewAction"] = null) {
   if (chrome.reviewing !== on || chrome.reviewAction !== action) set({ reviewing: on, reviewAction: on ? action : null })
+}
+
+export function setTerminalOpen(on: boolean) {
+  if (chrome.terminalOpen !== on) set({ terminalOpen: on })
+}
+
+export function toggleTerminal() {
+  set({ terminalOpen: !chrome.terminalOpen })
 }
 
 export function askDiscard(on: boolean) {
