@@ -75,8 +75,15 @@ The session's file tools treat only its worktree as inside. They never write int
 session's worktree, in any mode and whatever you allowed for a parent folder: apply the changes instead. Reading
 there asks as for any outside folder, and your rules still name those files as they would in the main folder. The project's
 config, hooks and MCP servers are the main folder's; an edit to the worktree's `anysola.json` counts once
-applied. A worktree is not a sandbox: shell commands run as anywhere else, and Git in a worktree shares the
-repository's branches and objects (it can move or push them).
+applied. A hook that names its script by the project folder (`$CLAUDE_PROJECT_DIR/…`) runs the main folder's
+copy, with the worktree as its project folder. The file tools also never write the worktree's own `.git`.
+
+A worktree is not a sandbox. Only the file tools are held to it: shell commands run as anywhere else and can
+reach any folder, MCP servers run with the main folder as their folder and aren't confined either, and Git in a
+worktree shares the repository's branches and objects (it can move or push them).
+
+A branch made from an older session (from before worktrees) starts from the main folder's current commit with
+only that session's own files as they were then; other uncommitted changes of the main folder aren't in it.
 
 ## Usage limits
 

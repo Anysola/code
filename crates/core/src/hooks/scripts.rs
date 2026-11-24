@@ -83,8 +83,9 @@ fn expand(word: &str, places: &Places<'_>) -> String {
     out
 }
 
-/// The existing files a hook command names: each word after expansion, as an absolute path or
-/// relative to the project root or the session directory. Directories are not files. The shell
+/// The files a hook command names: each word after expansion, as an absolute path or relative
+/// to the project root or the session directory. Directories are not files; a word that looks
+/// like a path (a separator or an extension) names its file even before it exists. The shell
 /// that will run the command is not known here, so the line is read both ways, with a backslash
 /// as an escape and as a path separator; a file either reading names is protected.
 pub fn files(command: &str, places: &Places<'_>) -> Vec<PathBuf> {
@@ -102,8 +103,18 @@ pub fn files(command: &str, places: &Places<'_>) -> Vec<PathBuf> {
         } else {
             vec![places.project.join(path), places.session.join(path)]
         };
-        for candidate in candidates {
-            if candidate.is_file() && !out.contains(&candidate) {
+        // A script not there yet is guarded too: creating it would decide what the hook runs.
+        let pathlike = word.contains('/') || word.contains('\\') || path.extension().is_some();
+        let existing: Vec<PathBuf> = candidates.iter().filter(|c| c.is_file()).cloned().collect();
+        let named = if !existing.is_empty() {
+            existing
+        } else if pathlike {
+            candidates.into_iter().filter(|c| !c.exists()).collect()
+        } else {
+            Vec::new()
+        };
+        for candidate in named {
+            if !out.contains(&candidate) {
                 out.push(candidate);
             }
         }
@@ -199,6 +210,18 @@ mod tests {
         );
         assert_eq!(files("./local.sh"), [session.join("./local.sh")]);
         assert!(files("npm test --silent").is_empty());
+        // A script the command names that isn't there yet: creating it is guarded too.
+        assert_eq!(
+            files(r#"node "$CLAUDE_PROJECT_DIR/hooks/new.mjs""#),
+            [project.join("hooks/new.mjs")]
+        );
+        assert_eq!(
+            files("sh scripts/later.sh"),
+            [
+                project.join("scripts/later.sh"),
+                session.join("scripts/later.sh")
+            ]
+        );
         assert!(files("ls hooks").is_empty(), "a directory is not a file");
     }
 }

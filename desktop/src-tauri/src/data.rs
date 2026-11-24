@@ -228,6 +228,8 @@ pub async fn delete_all_sessions(app: State<'_, App>) -> Answer {
     let db = app.db()?.clone();
     let mut deleted = 0;
     let mut kept = 0;
+    // Of `kept`: the ones whose changes were being applied (not a running turn).
+    let mut applying = 0;
     for (id, directory, held) in db.all_root_sessions().map_err(text)? {
         // A worktree session's core is its main folder's.
         let directory = crate::worktree::folder_of(&db, &directory, &id);
@@ -242,6 +244,7 @@ pub async fn delete_all_sessions(app: State<'_, App>) -> Answer {
             .is_err()
         {
             kept += 1;
+            applying += 1;
             continue;
         }
         // A running core also drops the session's usage it keeps in memory.
@@ -254,7 +257,7 @@ pub async fn delete_all_sessions(app: State<'_, App>) -> Answer {
             deleted += 1;
         }
     }
-    Ok(json!({"deleted": deleted, "kept": kept}))
+    Ok(json!({"deleted": deleted, "kept": kept, "applying": applying}))
 }
 
 /// `title.json`, with what file systems refuse taken out.

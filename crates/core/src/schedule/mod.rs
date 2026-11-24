@@ -481,10 +481,21 @@ async fn step(shared: &Arc<Shared>, mut row: ScheduleRow, now: i64) -> Result<()
         let _ = shared.db.schedule_save(&row, Guard::Active);
         return Ok(());
     }
+    // A session whose own worktree is being made or applied tries again later (its folder may
+    // not be there yet); one whose worktree is gone, failed or let go pauses.
+    let root = crate::session::gate::root(&shared.db, &session_id);
+    let worktree = shared.db.session_worktree(&root).ok().flatten();
+    if worktree.as_ref().is_some_and(|w| {
+        matches!(
+            w.state,
+            crate::storage::WorktreeState::Preparing | crate::storage::WorktreeState::Applying
+        )
+    }) {
+        return Err(Failure::Other);
+    }
     if !std::path::Path::new(&session.directory).is_dir() {
         return Err(Failure::Gone);
     }
-    // A session whose own worktree is gone, failed or let go pauses; one being made waits.
     match crate::api::turn_gate(shared, &session_id) {
         Ok(crate::api::TurnGate::Run) => {}
         Ok(crate::api::TurnGate::Wait) => return Err(Failure::Other),

@@ -44,9 +44,45 @@ pub(crate) struct Context {
     pub child: bool,
     pub cwd: PathBuf,
     pub project_dir: PathBuf,
+    /// The main folder's root: differs from `project_dir` for a session in its own worktree,
+    /// where a hook names its script by the project folder and that script is the main folder's
+    /// (the approved one), not the worktree's copy the agent can edit.
+    pub main_dir: PathBuf,
     pub home: PathBuf,
     pub agent: String,
     pub approved: Arc<super::Approved>,
+}
+
+/// For a session in its own worktree: the command with the project folder variables
+/// (`$CLAUDE_PROJECT_DIR`, `$ANYSOLA_PROJECT_DIR` in every spelling) written out as the main
+/// folder, so the script that runs is the main folder's, while the hook still gets the worktree
+/// as its project folder and runs there. A main folder whose path a shell would split or expand
+/// is left to the variable (the worktree's copy, whose writes always ask).
+fn scripts_from_main(
+    command: &str,
+    project_dir: &std::path::Path,
+    main_dir: &std::path::Path,
+) -> String {
+    if project_dir == main_dir {
+        return command.to_string();
+    }
+    let main = main_dir.display().to_string();
+    if main
+        .chars()
+        .any(|c| c.is_whitespace() || "'\"$`%;&|<>()".contains(c))
+    {
+        return command.to_string();
+    }
+    let mut out = command.to_string();
+    for name in ["CLAUDE_PROJECT_DIR", "ANYSOLA_PROJECT_DIR"] {
+        out = out
+            .replace(&format!("${{env:{name}}}"), &main)
+            .replace(&format!("$env:{name}"), &main)
+            .replace(&format!("%{name}%"), &main)
+            .replace(&format!("${{{name}}}"), &main)
+            .replace(&format!("${name}"), &main);
+    }
+    out
 }
 
 impl Context {
@@ -66,6 +102,7 @@ impl Context {
             child: session.parent_id.is_some(),
             cwd: PathBuf::from(&session.directory),
             project_dir: shared.checkout_of(session).root,
+            main_dir: shared.checkout_of(session).main,
             home: shared.paths.home.clone(),
             approved: shared.hooks.approved.clone(),
             agent: agent.to_string(),
@@ -152,11 +189,15 @@ impl Context {
         let env = self.environment();
         let shell = crate::tool::shell::select::resolve(self.shell.as_deref());
         let cwd = working_dir(&[&self.cwd, &self.project_dir, &self.home]);
-        let runs = handlers.iter().map(|handler| {
+        let commands: Vec<String> = handlers
+            .iter()
+            .map(|handler| scripts_from_main(&handler.command, &self.project_dir, &self.main_dir))
+            .collect();
+        let runs = handlers.iter().zip(&commands).map(|(handler, command)| {
             run(
                 Job {
                     shell: &shell,
-                    command: &handler.command,
+                    command,
                     cwd: &cwd,
                     env: env.clone(),
                     input: input.clone(),
@@ -689,5 +730,33 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         assert_eq!(working_dir(&[&gone, &root, dir.path()]), root);
         assert_eq!(working_dir(&[&gone]), std::env::temp_dir());
+    }
+
+    #[test]
+    fn a_worktree_sessions_hooks_run_the_main_folders_scripts() {
+        use std::path::Path;
+        let (w, f) = (Path::new("/data/worktrees/p/s"), Path::new("/code/proj"));
+        assert_eq!(
+            scripts_from_main(r#"node "$CLAUDE_PROJECT_DIR/hooks/guard.mjs""#, w, f),
+            r#"node "/code/proj/hooks/guard.mjs""#
+        );
+        assert_eq!(
+            scripts_from_main(
+                "sh ${ANYSOLA_PROJECT_DIR}/a.sh && pwsh $env:CLAUDE_PROJECT_DIR/b.ps1",
+                w,
+                f
+            ),
+            "sh /code/proj/a.sh && pwsh /code/proj/b.ps1"
+        );
+        // The main folder session: as written.
+        assert_eq!(
+            scripts_from_main("sh $CLAUDE_PROJECT_DIR/a.sh", f, f),
+            "sh $CLAUDE_PROJECT_DIR/a.sh"
+        );
+        // A main folder a shell would split: left to the variable.
+        assert_eq!(
+            scripts_from_main("sh $CLAUDE_PROJECT_DIR/a.sh", w, Path::new("/code/my proj")),
+            "sh $CLAUDE_PROJECT_DIR/a.sh"
+        );
     }
 }

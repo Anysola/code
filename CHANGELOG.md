@@ -15,6 +15,11 @@ branch.
   conflicts can be resolved there. Edits in the main folder to files an apply touches can be set aside and put
   back.
 - A session in its own worktree never writes into the main folder or another session's worktree, in any mode.
+  Only its file tools are held to the worktree: shell commands and MCP servers are not confined.
+- Applying never overwrites a file the main folder has outside Git (an ignored `.env`): it is set aside with the
+  other edits in the way and put back. A crash during an apply puts those edits back at the next start, or says
+  which stash holds them.
+- Deleting a session whose worktree has changes not applied asks first.
 - A branch from an earlier message gets its own worktree with the files as they were at that message.
 - A session moved into a worktree by the agent now rewinds and reviews that worktree's files, not the main
   folder's.

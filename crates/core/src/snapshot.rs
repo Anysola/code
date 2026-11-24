@@ -257,6 +257,9 @@ impl Store {
     /// touched when a tree can't be read.
     pub fn restore(&self, files: &[(String, String)]) -> Result<(), String> {
         self.readable(files)?;
+        for (path, _) in files {
+            plain_parents(&self.work_tree, path)?;
+        }
         for (path, tree) in files {
             let present = !self
                 .list(&["ls-tree", "-z", "--name-only", tree, "--", path])
@@ -335,6 +338,9 @@ impl Store {
     /// like [`Store::restore`] does in the store's own checkout; nothing when a tree can't be read.
     pub fn restore_into(&self, files: &[(String, String)], target: &Path) -> Result<(), String> {
         self.readable(files)?;
+        for (path, _) in files {
+            plain_parents(target, path)?;
+        }
         for (path, tree) in files {
             let file = target.join(path);
             match self.read(tree, path) {
@@ -365,6 +371,37 @@ impl Store {
     pub fn git_dir(&self) -> &Path {
         &self.git_dir
     }
+}
+
+/// Refuses a path whose folders below `root` are links (or not folders): a file put back or
+/// removed through one would land outside the checkout. Folders not there yet are fine.
+fn plain_parents(root: &Path, relative: &str) -> Result<(), String> {
+    let Some(parent) = Path::new(relative).parent() else {
+        return Ok(());
+    };
+    let mut at = root.to_path_buf();
+    for part in parent.components() {
+        match part {
+            std::path::Component::Normal(name) => at.push(name),
+            std::path::Component::CurDir => continue,
+            _ => {
+                return Err(format!(
+                    "Cannot put back {relative}: it leads outside the folder"
+                ));
+            }
+        }
+        match std::fs::symlink_metadata(&at) {
+            Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => {
+                return Err(format!(
+                    "Cannot put back {relative}: {} is a link or not a folder",
+                    at.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    Ok(())
 }
 
 /// Puts the files under `scope` in `target` (a checkout of the repository `git_dir` reaches the
@@ -447,6 +484,9 @@ pub fn overlay(
             continue;
         }
         let file = target.join(&path);
+        if plain_parents(target, &path).is_err() {
+            continue;
+        }
         match std::fs::symlink_metadata(&file) {
             Ok(meta) if meta.is_file() && meta.len() > MAX_UNTRACKED_BYTES => kept.push(path),
             Ok(_) => {
@@ -527,5 +567,23 @@ mod tests {
             Store::open(&data, "pid", root.path()).is_none(),
             "not a git project"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nothing_is_put_back_through_a_linked_folder() {
+        let root = std::env::temp_dir().join(format!("anysola-links-{}", crate::ids::part()));
+        let outside = root.join("outside");
+        let checkout = root.join("checkout");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(checkout.join("real")).unwrap();
+        std::os::unix::fs::symlink(&outside, checkout.join("sub")).unwrap();
+        assert!(plain_parents(&checkout, "sub/x.txt").is_err());
+        assert!(plain_parents(&checkout, "sub/deeper/x.txt").is_err());
+        assert!(plain_parents(&checkout, "real/x.txt").is_ok());
+        assert!(plain_parents(&checkout, "new/dir/x.txt").is_ok());
+        assert!(plain_parents(&checkout, "x.txt").is_ok());
+        assert!(plain_parents(&checkout, "../x.txt").is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

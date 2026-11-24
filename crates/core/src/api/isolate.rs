@@ -40,7 +40,8 @@ pub struct ForkRestore {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Fallback {
-    /// Only the session's own later edits were undone (history from before 1.1.9).
+    /// The source's commit now with only the session's own files as at the fork point (history
+    /// from before 1.1.9): other uncommitted changes of the source are not included.
     Edits,
     /// The fork point's files are gone: the source's files as they are now.
     Now,
@@ -215,9 +216,32 @@ pub(crate) fn turn_gate(shared: &Shared, session_id: &str) -> Result<TurnGate, C
         return Ok(TurnGate::Run);
     };
     match row.state {
+        // A folder deleted while the app runs is found here, not only at the next start.
+        WorktreeState::Ready if !Path::new(&row.directory).is_dir() => {
+            let _ = shared.db.cas_session_worktree(
+                &root,
+                WorktreeState::Ready,
+                WorktreeState::Missing,
+                None,
+            );
+            Err(worktree_error(blocked(WorktreeState::Missing)))
+        }
         WorktreeState::Ready => Ok(TurnGate::Run),
         WorktreeState::Preparing => Ok(TurnGate::Wait),
         state => Err(worktree_error(blocked(state))),
+    }
+}
+
+/// Refuses changing the session's files from outside a turn (rewind, redo, put back) unless its
+/// own worktree, if it has one, is ready: not while an apply or a merge of the base reads it.
+pub(crate) fn files_gate(shared: &Shared, session_id: &str) -> Result<(), CoreError> {
+    let root = crate::session::gate::root(&shared.db, session_id);
+    match shared.db.session_worktree(&root)?.map(|r| r.state) {
+        None | Some(WorktreeState::Ready) => Ok(()),
+        Some(state) => Err(worktree_error(match blocked(state) {
+            "" => "This session's worktree is being made. Try again in a moment.",
+            text => text,
+        })),
     }
 }
 
@@ -646,8 +670,8 @@ impl Core {
     }
 
     /// Stops the background commands of the session and its subagents (they may run in the
-    /// worktree about to go).
-    fn stop_background(&self, session_id: &str) {
+    /// worktree about to go, or write it while an apply reads it).
+    pub fn stop_background(&self, session_id: &str) {
         let tree = self
             .shared
             .db
@@ -884,12 +908,22 @@ impl Core {
             .ok_or(CoreError::SessionNotFound)?;
         let _ = std::fs::create_dir_all(&session.directory);
         shared.forget_store(&session.directory);
-        // The uncommitted work up to the last step comes back from its snapshot.
+        // The uncommitted work up to the last step comes back from its snapshot, but only when
+        // that step ran on the commit the branch is at now. After an apply or a merge of the base
+        // the branch moved on and holds that work already; laying the older files over it would
+        // undo the main folder's commits that came in.
         let last = steps(&shared.db.messages(session_id)?)
             .into_iter()
             .rev()
-            .find_map(|(_, s)| s.end.or(s.start));
-        if let (Some(tree), Some(store)) = (last, shared.store_for(&session))
+            .find_map(|(_, s)| Some((s.end.or(s.start)?, s.head)));
+        let tip = git_sync(
+            &directory,
+            &["rev-parse", "--verify", "--quiet", "HEAD"],
+            &[],
+        )
+        .ok();
+        if let (Some((tree, Some(head))), Some(store)) = (last, shared.store_for(&session))
+            && tip.as_deref() == Some(head.as_str())
             && store.has(&format!("{tree}^{{tree}}"))
         {
             store
@@ -1041,6 +1075,10 @@ impl Core {
             /// Only the commit: the session changed nothing (no fallback), or nothing of its
             /// files is left to put back (`Now`).
             Commit(String, Option<Fallback>),
+            /// The commit, then only the session's own files as the fork point's tree has them
+            /// (history from before heads were recorded): no other uncommitted change of the
+            /// source comes along, and no commit made since is undone.
+            Files(String, Vec<(String, String)>),
         }
         let scope_of = || {
             let top = shared.top();
@@ -1160,30 +1198,20 @@ impl Core {
                                 undo: Vec::new(),
                             }
                         }
-                        (Some(_), None) if store.is_some() && source_alive => {
-                            // History from before heads were recorded: undo the session's own
-                            // later edits on top of its files now.
-                            let mut undo: Vec<(String, String)> = Vec::new();
-                            for (_, step) in all.iter().filter(|(i, _)| *i >= cut) {
-                                let Some(start) = &step.start else { continue };
+                        (Some(tree), None)
+                            if store.is_some() && readable(format!("{tree}^{{tree}}")) =>
+                        {
+                            // History from before heads were recorded: the source's commit now,
+                            // with each file the session changed as the fork point had it.
+                            let mut files: Vec<(String, String)> = Vec::new();
+                            for (_, step) in &all {
                                 for file in step.files.iter().flatten() {
-                                    if !undo.iter().any(|(f, _)| f == file) {
-                                        undo.push((file.clone(), start.clone()));
+                                    if !files.iter().any(|(f, _)| f == file) {
+                                        files.push((file.clone(), tree.clone()));
                                     }
                                 }
                             }
-                            // An undo tree that is gone would read as "delete the file".
-                            let readable = undo.iter().all(|(_, tree)| {
-                                store
-                                    .as_ref()
-                                    .is_some_and(|s| s.has(&format!("{tree}^{{tree}}")))
-                            });
-                            if readable {
-                                current(Some(Fallback::Edits), undo)
-                                    .unwrap_or_else(|| last_recorded(Some(Fallback::Now)))
-                            } else {
-                                now_or_last(Some(Fallback::Now))
-                            }
+                            Plan::Files(source_head(), files)
                         }
                         _ => now_or_last(Some(Fallback::Now)),
                     }
@@ -1193,7 +1221,9 @@ impl Core {
 
         let fork = self.fork_before(&source, before)?;
         let commit = match &plan {
-            Plan::Tree { commit, .. } | Plan::Commit(commit, _) => commit.clone(),
+            Plan::Tree { commit, .. } | Plan::Commit(commit, _) | Plan::Files(commit, _) => {
+                commit.clone()
+            }
         };
         let (_, made) = self
             .make_checkout(&fork, &commit, base_branch, None)
@@ -1213,6 +1243,18 @@ impl Core {
                 kept: Vec::new(),
                 fallback,
             },
+            Plan::Files(_, files) => {
+                if let Some(store) = &store {
+                    store
+                        .restore_into(&files, &made.directory)
+                        .map_err(|m| fail(format!("Could not put the files back: {m}")))?;
+                }
+                ForkRestore {
+                    exact: false,
+                    kept: Vec::new(),
+                    fallback: Some(Fallback::Edits),
+                }
+            }
             Plan::Tree {
                 git_dir,
                 scope,
@@ -1256,6 +1298,51 @@ impl Core {
         )?;
         Ok((fork_row, restore))
     }
+}
+
+/// The message an apply's stash of main-folder edits carries, so a crash can't lose track of it.
+pub fn apply_stash_message(session_id: &str) -> String {
+    format!("Anysola Code: set aside to apply {session_id}")
+}
+
+/// The `stash@{n}` holding the session's apply stash, if one is left.
+fn find_stash(top: &Path, session_id: &str) -> Option<String> {
+    let wanted = apply_stash_message(session_id);
+    git_sync(top, &["stash", "list", "--format=%gd%x00%s"], &[])
+        .ok()?
+        .lines()
+        .find_map(|line| {
+            let (name, subject) = line.split_once('\0')?;
+            subject.ends_with(&wanted).then(|| name.to_string())
+        })
+}
+
+/// Puts an apply's stash back after its commit landed; on a conflict the main folder's touched
+/// files stay as committed and the stash is kept. The sentence to show when it is kept.
+fn pop_apply_stash(top: &Path, session_id: &str) -> Option<String> {
+    let name = find_stash(top, session_id)?;
+    let files: Vec<String> = git_sync(
+        top,
+        &["stash", "show", "--name-only", "--include-untracked", &name],
+        &[],
+    )
+    .unwrap_or_default()
+    .lines()
+    .filter(|l| !l.is_empty())
+    .map(str::to_string)
+    .collect();
+    if git_sync(top, &["stash", "pop", "--quiet", &name], &[]).is_ok() {
+        return None;
+    }
+    for file in &files {
+        let spec = format!(":(literal){file}");
+        let _ = git_sync(top, &["reset", "-q", "--", &spec], &[]);
+        let _ = git_sync(top, &["checkout", "HEAD", "--", &spec], &[]);
+    }
+    let name = find_stash(top, session_id).unwrap_or(name);
+    Some(format!(
+        "Your main-folder edits set aside for an apply are kept in the stash: {name} in git stash list."
+    ))
 }
 
 /// A deleted session's worktree: its folder, branch and hidden refs, and its rows.
@@ -1395,11 +1482,22 @@ pub fn cleanup(db: &Db) -> Vec<Cleaned> {
                     if reset.is_ok() {
                         extra.push(("base_commit", head.into()));
                     }
+                    let kept = pop_apply_stash(&top, &row.session_id);
+                    if let Some(kept) = &kept {
+                        extra.push(("error", kept.clone().into()));
+                    }
                     if set(WorktreeState::Ready, &extra) {
                         cleaned.state = Some(WorktreeState::Ready);
+                        cleaned.notice = kept;
                     }
                 } else {
-                    let notice = "An apply was cut off. Check the main folder's changes before applying again.";
+                    let notice = match find_stash(&top, &row.session_id) {
+                        Some(name) => format!(
+                            "An apply was cut off. Check the main folder's changes before applying again; your edits set aside for it are in the stash: {name} in git stash list."
+                        ),
+                        None => "An apply was cut off. Check the main folder's changes before applying again.".to_string(),
+                    };
+                    let notice = notice.as_str();
                     if set(
                         WorktreeState::Ready,
                         &[

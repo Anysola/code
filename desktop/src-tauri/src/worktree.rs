@@ -315,6 +315,9 @@ struct Slot {
     skip: AtomicBool,
     /// `git worktree add` of a new session runs: nothing may remove the worktree meanwhile.
     isolating: AtomicBool,
+    /// The worktree is going (discarded, deleted, back to the main folder): the preparation
+    /// stops at its next step or file, so nothing makes the folder again.
+    cancel: AtomicBool,
 }
 
 fn slots() -> &'static Mutex<HashMap<String, Arc<Slot>>> {
@@ -342,6 +345,14 @@ fn existing_slot(session_id: &str) -> Option<Arc<Slot>> {
 /// The session's setup command runs now.
 pub(crate) fn setup_running(session_id: &str) -> bool {
     existing_slot(session_id).is_some_and(|s| s.active.load(Ordering::SeqCst))
+}
+
+/// Stops the session's preparation where it is: no further step or file.
+fn cancel_prepare(session_id: &str) {
+    if let Some(slot) = existing_slot(session_id) {
+        slot.cancel.store(true, Ordering::SeqCst);
+    }
+    stop_setup(session_id);
 }
 
 /// Stops the session's setup command, if one runs, and waits a moment for it to go.
@@ -749,6 +760,7 @@ async fn prepare(handle: AppHandle, core: Core, db: Arc<Db>, id: String, made: M
     let out = Out::new(&handle, &folder, &id);
     out.slot.skip.store(false, Ordering::SeqCst);
     out.slot.stop.store(false, Ordering::SeqCst);
+    out.slot.cancel.store(false, Ordering::SeqCst);
     let state = handle.state::<App>();
     let command = setup_for(&state.prefs(), &folder);
     out.begin(command.clone());
@@ -795,11 +807,12 @@ async fn prepare(handle: AppHandle, core: Core, db: Arc<Db>, id: String, made: M
         let id = id.clone();
         tauri::async_runtime::spawn_blocking(move || {
             let worktree = Path::new(&row.directory);
-            if still_preparing(&db, &id) && worktree.join(".gitmodules").is_file() {
+            let go = || still_preparing(&db, &id) && !out.slot.cancel.load(Ordering::SeqCst);
+            if go() && worktree.join(".gitmodules").is_file() && verify_worktree(&row).is_ok() {
                 submodules(&out, worktree);
             }
-            if still_preparing(&db, &id) {
-                copy_env_files(&out, Path::new(&folder), worktree);
+            if go() {
+                copy_env_files(&out, Path::new(&folder), worktree, &go);
             }
         })
     };
@@ -808,6 +821,7 @@ async fn prepare(handle: AppHandle, core: Core, db: Arc<Db>, id: String, made: M
     if let Some(command) = command.as_deref()
         && still_preparing(&db, &id)
         && !out.slot.skip.load(Ordering::SeqCst)
+        && !out.slot.cancel.load(Ordering::SeqCst)
     {
         out.info(&format!("Running {command}"));
         let (out2, command, worktree) = (out.clone(), command.to_string(), row.directory.clone());
@@ -834,6 +848,26 @@ async fn prepare(handle: AppHandle, core: Core, db: Arc<Db>, id: String, made: M
         ran = Some(result);
     } else if command.is_some() && out.slot.skip.load(Ordering::SeqCst) {
         out.info("Setup skipped.");
+    }
+    if out.slot.cancel.load(Ordering::SeqCst) {
+        // Let go meanwhile: anything this preparation put back after the folder was removed goes.
+        let gone = db
+            .session_worktree(&id)
+            .ok()
+            .flatten()
+            .is_none_or(|r| r.state.released());
+        let worktree = PathBuf::from(&row.directory);
+        let ours = anysola_core::config::real_path(&worktree).starts_with(
+            anysola_core::config::real_path(&state.paths.data.join("worktrees")),
+        );
+        if gone && ours && worktree.exists() && std::fs::remove_dir_all(&worktree).is_err() {
+            anysola_core::log::warn(
+                "a cancelled worktree folder could not be removed",
+                &[("directory", &row.directory)],
+            );
+        }
+        out.end("stopped", None);
+        return;
     }
     let ready = core
         .set_worktree_state(&id, WorktreeState::Preparing, WorktreeState::Ready)
@@ -867,11 +901,11 @@ fn submodules(out: &Out, worktree: &Path) {
 
 /// Copies the main folder's ignored `.env*` files to the same place in the worktree, where
 /// none is there yet.
-fn copy_env_files(out: &Out, folder: &Path, worktree: &Path) {
+fn copy_env_files(out: &Out, folder: &Path, worktree: &Path, go: &dyn Fn() -> bool) {
     let Some(top) = top_of(folder) else {
         return;
     };
-    let copied = copy_env(&top, worktree);
+    let copied = copy_env(&top, worktree, go);
     match copied.len() {
         0 => {}
         1 => out.info(&format!("Copied {}", copied[0])),
@@ -880,7 +914,7 @@ fn copy_env_files(out: &Out, folder: &Path, worktree: &Path) {
 }
 
 /// The copy itself; returns the copied files' paths (relative, `/`-separated).
-fn copy_env(top: &Path, worktree: &Path) -> Vec<String> {
+fn copy_env(top: &Path, worktree: &Path, go: &dyn Fn() -> bool) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
     find_env(top, top, 0, &mut found);
     if found.is_empty() {
@@ -901,7 +935,8 @@ fn copy_env(top: &Path, worktree: &Path) -> Vec<String> {
         .collect();
     let mut copied = Vec::new();
     for relative in found {
-        if copied.len() >= ENV_FILES {
+        // Checked before each file: a worktree let go meanwhile is not made again here.
+        if copied.len() >= ENV_FILES || !go() || !worktree.is_dir() {
             break;
         }
         if !ignored.contains(&relative.as_str()) {
@@ -952,6 +987,44 @@ fn find_env(top: &Path, dir: &Path, depth: usize, found: &mut Vec<String>) {
 // ---------------------------------------------------------------------------
 // The session's diff
 // ---------------------------------------------------------------------------
+
+/// Checks, without running git there, that the worktree's `.git` still leads to its own
+/// administrative folder in the main repository: git run in the worktree reads its config and
+/// hooks from wherever `.git` points, and that file is in a folder the agent writes.
+fn verify_worktree(row: &SessionWorktreeRow) -> Result<(), String> {
+    let changed = || {
+        "This session’s worktree no longer points to its repository (its .git was changed). \
+         Discard it, or recreate it."
+            .to_string()
+    };
+    let worktree = Path::new(&row.directory);
+    let dot_git = worktree.join(".git");
+    let meta = std::fs::symlink_metadata(&dot_git).map_err(|_| changed())?;
+    if !meta.is_file() {
+        return Err(changed());
+    }
+    let text = std::fs::read_to_string(&dot_git).map_err(|_| changed())?;
+    let admin = text
+        .lines()
+        .next()
+        .and_then(|l| l.strip_prefix("gitdir:"))
+        .map(str::trim)
+        .ok_or_else(changed)?;
+    let real = anysola_core::config::real_path;
+    let admin = real(&worktree.join(admin));
+    let top = top_of(Path::new(&row.folder)).ok_or_else(changed)?;
+    let common = read_git(&top, &["rev-parse", "--git-common-dir"]).ok_or_else(changed)?;
+    let common = real(&top.join(common));
+    if admin.parent() != Some(common.join("worktrees").as_path()) {
+        return Err(changed());
+    }
+    // And the admin folder names this worktree back.
+    let back = std::fs::read_to_string(admin.join("gitdir")).map_err(|_| changed())?;
+    if real(Path::new(back.trim())) != real(&dot_git) {
+        return Err(changed());
+    }
+    Ok(())
+}
 
 /// The worktree's files as a tree (untracked non-ignored files included), without touching its
 /// index: a copy of it takes the changes.
@@ -1066,6 +1139,7 @@ fn worktree_changes(row: &SessionWorktreeRow) -> Result<Vec<Value>, String> {
     if !worktree.is_dir() {
         return Ok(Vec::new());
     }
+    verify_worktree(row)?;
     let tree = session_tree(worktree)?;
     let base = diff_base(worktree, row);
     let zero = |oid: &str| oid.chars().all(|c| c == '0');
@@ -1086,14 +1160,34 @@ fn worktree_changes(row: &SessionWorktreeRow) -> Result<Vec<Value>, String> {
 }
 
 /// Review for a worktree session (None: the session works in the main folder).
-pub(crate) async fn changes(db: &Arc<Db>, session_id: &str) -> Result<Option<Value>, String> {
+pub(crate) async fn changes(
+    handle: &AppHandle,
+    db: &Arc<Db>,
+    session_id: &str,
+) -> Result<Option<Value>, String> {
     let Some(row) = db.session_worktree(session_id).map_err(text)? else {
         return Ok(None);
     };
-    if row.state.released() {
+    if row.state.released() || noticed_missing(handle, db, &row) {
         return Ok(Some(json!([])));
     }
     git::blocking(move || worktree_changes(&row).map(|list| Some(json!(list)))).await
+}
+
+/// A ready worktree whose folder was deleted while the app runs becomes `missing` now (the
+/// window shows Recreate); true when that is the case.
+fn noticed_missing(handle: &AppHandle, db: &Db, row: &SessionWorktreeRow) -> bool {
+    if row.state != WorktreeState::Ready || Path::new(&row.directory).is_dir() {
+        return row.state == WorktreeState::Missing;
+    }
+    let _ = db.cas_session_worktree(
+        &row.session_id,
+        WorktreeState::Ready,
+        WorktreeState::Missing,
+        None,
+    );
+    emit(handle, db, &row.session_id);
+    true
 }
 
 /// "Put back" for a worktree session: the file as on its base (removed if the session added it).
@@ -1118,6 +1212,7 @@ pub(crate) async fn restore(
 
 /// The file as on the session's base, or gone when the session added it.
 fn put_back_file(row: &SessionWorktreeRow, file: &str) -> Result<(), String> {
+    verify_worktree(row)?;
     let worktree = Path::new(&row.directory);
     let relative = Path::new(&file);
     if relative.is_absolute()
@@ -1191,8 +1286,20 @@ fn identity_env<'a>(call: Call<'a>, directory: &Path) -> Call<'a> {
         .env("GIT_COMMITTER_EMAIL", FALLBACK_EMAIL)
 }
 
-/// Files of the worktree still in conflict: unmerged entries, or markers left in a file the
-/// session changed while a merge of the base is open.
+/// Conflict markers: a `<<<<<<<` line and a `>>>>>>>` line after it (alone or followed by a
+/// space and a name, as git writes them).
+fn has_conflict_markers(text: &str) -> bool {
+    let marker = |line: &str, mark: &str| {
+        line.strip_prefix(mark)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
+    };
+    let mut lines = text.lines().map(|l| l.trim_end_matches('\r'));
+    lines.any(|l| marker(l, "<<<<<<<")) && lines.any(|l| marker(l, ">>>>>>>"))
+}
+
+/// Files the apply would carry with conflict markers in them (from bringing the base in, or any
+/// other way), and files still unmerged in the worktree. Never applied: markers would land on
+/// the main folder's branch.
 fn unresolved(worktree: &Path, tree: &str, base: &str) -> Vec<String> {
     let unmerged: Vec<String> = read_git(worktree, &["diff", "--name-only", "--diff-filter=U"])
         .unwrap_or_default()
@@ -1200,23 +1307,19 @@ fn unresolved(worktree: &Path, tree: &str, base: &str) -> Vec<String> {
         .filter(|l| !l.is_empty())
         .map(str::to_string)
         .collect();
-    let merging = read_git(worktree, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]).is_some();
-    if !merging && unmerged.is_empty() {
-        return Vec::new();
-    }
     // A conflicted file counts as resolved once its markers are gone (as in the git menu).
     let mut files: Vec<String> = Vec::new();
     for (status, path, _, new, mode) in raw_changes(worktree, base, tree).unwrap_or_default() {
         if status == 'D' || mode == "160000" {
             continue;
         }
-        if git::has_markers(&blob_text(worktree, &new, &mode)) {
+        if has_conflict_markers(&blob_text(worktree, &new, &mode)) {
             files.push(path);
         }
     }
     for path in unmerged {
         let markers = std::fs::read(worktree.join(&path))
-            .is_ok_and(|b| git::has_markers(&String::from_utf8_lossy(&b)));
+            .is_ok_and(|b| has_conflict_markers(&String::from_utf8_lossy(&b)));
         if markers && !files.contains(&path) {
             files.push(path);
         }
@@ -1258,6 +1361,7 @@ fn plan(row: &SessionWorktreeRow) -> Result<Plan, Value> {
     if !worktree.is_dir() {
         return Err(git_refusal("This session’s folder is gone."));
     }
+    verify_worktree(row).map_err(git_refusal)?;
     let tree = session_tree(worktree).map_err(git_refusal)?;
     let base = diff_base(worktree, row);
     let open = unresolved(worktree, &tree, &base);
@@ -1354,13 +1458,22 @@ fn plan(row: &SessionWorktreeRow) -> Result<Plan, Value> {
         .unwrap_or(0);
     let (_, entries) =
         git::status_entries(&top).map_err(|f| git_refusal(git::explain(Op::Status, f)))?;
-    let dirty: Vec<String> = entries
+    let mut dirty: Vec<String> = entries
         .iter()
         .filter(|e| {
             touched.contains(&e.file) || e.from.as_ref().is_some_and(|f| touched.contains(f))
         })
         .map(|e| e.file.clone())
         .collect();
+    // A touched path that is in the main folder but not in its commit, ignored ones included
+    // (`.env`): moving the files there would overwrite it, and putting them back delete it.
+    let unknown: Vec<&String> = touched.iter().filter(|p| !dirty.contains(p)).collect();
+    let committed = in_commit(&top, &head, &unknown);
+    for path in unknown {
+        if !committed.contains(path) && top.join(path).symlink_metadata().is_ok() {
+            dirty.push(path.clone());
+        }
+    }
     Ok(Plan {
         top,
         onto,
@@ -1372,6 +1485,27 @@ fn plan(row: &SessionWorktreeRow) -> Result<Plan, Value> {
         behind,
         dirty,
     })
+}
+
+/// Which of `paths` the commit `rev` has (one `cat-file --batch-check` for all).
+fn in_commit(top: &Path, rev: &str, paths: &[&String]) -> std::collections::HashSet<String> {
+    let mut found = std::collections::HashSet::new();
+    if paths.is_empty() {
+        return found;
+    }
+    let input: String = paths.iter().map(|p| format!("{rev}:{p}\n")).collect();
+    let Ok(output) = wgit(top, &["cat-file", "--batch-check"])
+        .input(input.into_bytes())
+        .run()
+    else {
+        return found;
+    };
+    for (path, line) in paths.iter().zip(output.stdout.lines()) {
+        if !line.ends_with(" missing") {
+            found.insert((*path).clone());
+        }
+    }
+    found
 }
 
 /// The check before anything else is asked of the user.
@@ -1404,7 +1538,11 @@ pub async fn worktree_apply_check(
     session_id: String,
 ) -> Answer {
     let core = core_for(&handle, &app, &directory).await?;
-    let row = row_of(app.db()?, &session_id)?;
+    let db = app.db()?.clone();
+    let row = row_of(&db, &session_id)?;
+    if noticed_missing(&handle, &db, &row) {
+        return Ok(git_refusal("This session’s folder is gone."));
+    }
     git::blocking(move || Ok(check(&core, &row))).await
 }
 
@@ -1436,6 +1574,8 @@ pub async fn worktree_apply(
     {
         return Err("This session’s worktree isn’t ready.".into());
     }
+    // Background commands could write the worktree while its files are read and moved.
+    core.stop_background(&session_id);
     emit(&handle, &db, &session_id);
     let applied = {
         let (core, db, id) = (core.clone(), db.clone(), session_id.clone());
@@ -1473,6 +1613,7 @@ fn apply(
     stash: bool,
 ) -> Result<(String, Option<String>), String> {
     let row = row.clone();
+    verify_worktree(&row)?;
     let worktree = Path::new(&row.directory);
     // A merge of the base that is resolved now: finished on the session's branch first.
     if read_git(worktree, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]).is_some() {
@@ -1517,14 +1658,9 @@ fn apply(
     let top = &plan.top;
     let mut stashed: Option<String> = None;
     if !plan.dirty.is_empty() {
-        let mut args = vec![
-            "stash",
-            "push",
-            "--include-untracked",
-            "-m",
-            "Anysola Code: set aside to apply a session",
-            "--",
-        ];
+        // `--all`: ignored files in the way (an `.env` the session also has) are set aside too.
+        let message = anysola_core::api::apply_stash_message(&row.session_id);
+        let mut args = vec!["stash", "push", "--all", "-m", message.as_str(), "--"];
         let specs: Vec<String> = plan
             .dirty
             .iter()
@@ -1545,15 +1681,11 @@ fn apply(
         }
         // A pop that conflicted leaves the stash; the touched files go back to the commit so
         // no markers are left in the main folder.
-        let mut args = vec!["checkout", "HEAD", "--"];
-        let specs: Vec<String> = plan
-            .dirty
-            .iter()
-            .map(|f| format!(":(literal){f}"))
-            .collect();
-        args.extend(specs.iter().map(String::as_str));
         let _ = run_git(top, &["reset", "-q", "--", "."]);
-        let _ = run_git(top, &args);
+        for file in &plan.dirty {
+            let spec = format!(":(literal){file}");
+            let _ = run_git(top, &["checkout", "HEAD", "--", &spec]);
+        }
         Some("stash@{0}".into())
     };
     if !mark(&plan.head, &plan.result) {
@@ -1659,6 +1791,7 @@ pub async fn worktree_bring_base(
     {
         return Err("This session’s worktree isn’t ready.".into());
     }
+    core.stop_background(&session_id);
     let result = {
         let (core, db, id) = (core.clone(), db.clone(), session_id.clone());
         git::blocking(move || {
@@ -1678,6 +1811,7 @@ pub async fn worktree_bring_base(
 /// Merges the base branch's tip into the session's branch (pending work committed first).
 /// `(conflicts, the tip brought in)`.
 fn bring_base(row: &SessionWorktreeRow) -> Result<(Vec<String>, String), String> {
+    verify_worktree(row)?;
     let worktree = Path::new(&row.directory);
     let top =
         top_of(Path::new(&row.folder)).ok_or("The main folder isn’t a Git repository anymore.")?;
@@ -1743,7 +1877,11 @@ pub async fn worktree_discard(
     let core = core_for(&handle, &app, &directory).await?;
     let db = app.db()?.clone();
     let id = session_id.clone();
-    git::blocking(move || Ok(stop_setup(&id))).await?;
+    git::blocking(move || {
+        cancel_prepare(&id);
+        Ok(())
+    })
+    .await?;
     isolate_done(&session_id).await;
     let result = core.release_worktree(&session_id, Release::Discarded).await;
     emit(&handle, &db, &session_id);
@@ -1777,7 +1915,11 @@ pub async fn worktree_to_folder(
 ) -> Answer {
     let core = core_for(&handle, &app, &directory).await?;
     let id = session_id.clone();
-    git::blocking(move || Ok(stop_setup(&id))).await?;
+    git::blocking(move || {
+        cancel_prepare(&id);
+        Ok(())
+    })
+    .await?;
     isolate_done(&session_id).await;
     let row = core.unisolate(&session_id).await.map_err(plain_error)?;
     crate::changed(&handle, &session_id);
@@ -1787,6 +1929,91 @@ pub async fn worktree_to_folder(
 // ---------------------------------------------------------------------------
 // Deleting a session
 // ---------------------------------------------------------------------------
+
+/// Files the session changed that aren't on the main folder: its worktree against its base, or
+/// (folder gone) its branch against the base. 0 for a released worktree or none.
+fn unapplied(row: &SessionWorktreeRow) -> usize {
+    if row.state.released() {
+        return 0;
+    }
+    let worktree = Path::new(&row.directory);
+    if worktree.is_dir() && verify_worktree(row).is_ok() {
+        let base = diff_base(worktree, row);
+        return session_tree(worktree)
+            .ok()
+            .and_then(|tree| raw_changes(worktree, &base, &tree).ok())
+            .map_or(0, |c| c.len());
+    }
+    let Some(top) = top_of(Path::new(&row.folder)) else {
+        return 0;
+    };
+    let branch = format!("refs/heads/{}", row.branch);
+    read_git(&top, &["diff", "--name-only", &row.base_commit, &branch])
+        .map_or(0, |out| out.lines().filter(|l| !l.is_empty()).count())
+}
+
+/// How many changed files deleting the session would lose (the window confirms first).
+#[tauri::command]
+pub async fn worktree_unapplied(
+    app: State<'_, App>,
+    directory: String,
+    session_id: String,
+) -> Answer {
+    let _ = directory;
+    let Some(row) = app.db()?.session_worktree(&session_id).map_err(text)? else {
+        return Ok(json!(0));
+    };
+    git::blocking(move || Ok(json!(unapplied(&row)))).await
+}
+
+/// Every root session whose worktree holds changes not applied, for "Delete all"'s confirm.
+#[tauri::command]
+pub async fn worktrees_with_work(app: State<'_, App>) -> Answer {
+    let db = app.db()?.clone();
+    git::blocking(move || {
+        let mut out = Vec::new();
+        for row in db.session_worktrees().map_err(text)? {
+            let Some(session) = db.session(&row.session_id).map_err(text)? else {
+                continue;
+            };
+            if session.parent_id.is_some() {
+                continue;
+            }
+            let files = unapplied(&row);
+            if files > 0 {
+                out.push(json!({"sessionId": row.session_id, "title": session.title,
+                                "directory": row.folder, "files": files}));
+            }
+        }
+        Ok(Value::Array(out))
+    })
+    .await
+}
+
+/// For a rewind to before `message_id`: whether it goes back past an apply or a merge of the
+/// base, i.e. the first step it undoes ran on another commit than the worktree is on now.
+pub(crate) fn crosses_apply(core: &Core, db: &Db, session_id: &str, message_id: &str) -> bool {
+    use anysola_core::session::message::Message;
+    let Ok(Some(row)) = db.session_worktree(session_id) else {
+        return false;
+    };
+    let Some(now) = read_git(Path::new(&row.directory), &["rev-parse", "HEAD"]) else {
+        return false;
+    };
+    let Ok(messages) = core.messages(session_id) else {
+        return false;
+    };
+    let Some(at) = messages.iter().position(|(id, _)| id == message_id) else {
+        return false;
+    };
+    messages[at..]
+        .iter()
+        .find_map(|(_, m)| match m {
+            Message::Assistant(data) => data.snapshot.as_ref()?.head.clone(),
+            _ => None,
+        })
+        .is_some_and(|head| head != now)
+}
 
 /// Lets a session's worktree go before the session is deleted: with its core running, as a
 /// discard (its background commands stop); refused while an apply runs.
@@ -1802,7 +2029,11 @@ pub(crate) async fn before_delete(
         return Err("This session’s changes are being applied. Try again in a moment.".into());
     }
     let id = session_id.to_string();
-    let _ = git::blocking(move || Ok(stop_setup(&id))).await;
+    let _ = git::blocking(move || {
+        cancel_prepare(&id);
+        Ok(())
+    })
+    .await;
     isolate_done(session_id).await;
     if let Some(core) = core
         && !row.state.released()

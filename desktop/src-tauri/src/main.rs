@@ -1293,6 +1293,8 @@ fn main() {
             actions::changes,
             actions::restore_file,
             worktree::worktree_info,
+            worktree::worktree_unapplied,
+            worktree::worktrees_with_work,
             worktree::worktree_apply_check,
             worktree::worktree_apply,
             worktree::worktree_discard,

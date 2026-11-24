@@ -79,6 +79,8 @@ pub async fn revert(
         "view": transcript::view(&core, &session_id, &directory)?,
         // Outside git nothing was snapshotted: the turns hide but their edits stay.
         "filesKept": !core.restores_files(&session_id),
+        // Back past an apply or a merge of the base: Review will show undoing those changes.
+        "crossesApply": crate::worktree::crosses_apply(&core, app.db()?, &session_id, &message_id),
     }))
 }
 
@@ -180,7 +182,7 @@ pub async fn changes(
     session_id: String,
 ) -> Answer {
     // A worktree session: its worktree against its base, git-based (commands' changes too).
-    if let Some(found) = crate::worktree::changes(app.db()?, &session_id).await? {
+    if let Some(found) = crate::worktree::changes(&handle, app.db()?, &session_id).await? {
         return Ok(found);
     }
     let core = core_for(&handle, &app, &directory).await?;

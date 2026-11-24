@@ -303,21 +303,42 @@ pub fn relative_path(from: &Path, to: &Path) -> String {
 pub const FOREIGN_WRITE: &str =
     "This session works in its own worktree; apply its changes to bring them to the main folder.";
 
+/// The sentence for a write to the worktree's own `.git`.
+pub const FOREIGN_GIT: &str = "This session can't change its worktree's Git data (.git).";
+
 /// A session pinned to its own worktree never writes into the main folder or another session's
 /// worktree, in any mode and whatever was saved for a parent folder: such a write is refused
 /// before anything is asked. Reads are not affected, and other outside folders are asked about
 /// as usual. Both the path as written and the file it really reaches are checked, against both
 /// spellings of each root (symlinks, Windows short names).
 pub fn refuse_foreign_write(ctx: &ToolContext, target: &Target) -> Result<(), ToolError> {
-    if !ctx.pinned() || target.external.is_none() {
+    if !ctx.pinned() {
         return Ok(());
     }
+    let blocked = |message: &str| ToolError {
+        kind: super::ToolErrorKind::Blocked,
+        message: message.into(),
+    };
     let real = crate::config::real_path;
     let written = Places::written(ctx);
     let places = Places::real(ctx);
     let paths = [target.absolute.clone(), real(&target.absolute)];
-    let mains = [written.main.clone(), places.main.clone()];
     let own = [written.worktree.clone(), places.worktree.clone()];
+    // The worktree's `.git` names the repository data git runs with: never the agent's to write.
+    let in_git = paths.iter().any(|path| {
+        own.iter()
+            .any(|w| w.parent().is_some() && contains(&w.join(".git"), path))
+    });
+    if in_git {
+        return Err(blocked(FOREIGN_GIT));
+    }
+    if target.external.is_none() {
+        return Ok(());
+    }
+    if foreign_spelling(&target.absolute) {
+        return Err(blocked(FOREIGN_WRITE));
+    }
+    let mains = [written.main.clone(), places.main.clone()];
     let bases = [written.sessions.clone(), places.sessions.clone()];
     let foreign = paths.iter().any(|path| {
         let in_main = mains
@@ -327,13 +348,98 @@ pub fn refuse_foreign_write(ctx: &ToolContext, target: &Target) -> Result<(), To
         let in_other = !in_own && bases.iter().any(|b| contains(b, path));
         (in_main && !in_own) || in_other
     });
-    if foreign {
-        return Err(ToolError {
-            kind: super::ToolErrorKind::Blocked,
-            message: FOREIGN_WRITE.into(),
-        });
+    if foreign || reaches_by_identity(&target.absolute, &own[1], &mains[1], &bases[1]) {
+        return Err(blocked(FOREIGN_WRITE));
     }
     Ok(())
+}
+
+/// Path spellings a pinned session never writes through: network shares (`\\server\share`,
+/// `\\?\UNC\…`) and device paths (`\\.\…`), where a name can lead anywhere, the main folder
+/// included. A Windows notion; on other systems nothing is refused here.
+pub fn foreign_spelling(path: &Path) -> bool {
+    foreign_spelling_of(&path.to_string_lossy(), cfg!(windows))
+}
+
+fn foreign_spelling_of(text: &str, windows: bool) -> bool {
+    if !windows {
+        return false;
+    }
+    let text = text.replace('/', "\\");
+    let upper = text.to_ascii_uppercase();
+    if upper.starts_with("\\\\?\\UNC\\")
+        || upper.starts_with("\\\\.\\")
+        || upper.starts_with("\\??\\")
+    {
+        return true;
+    }
+    // `\\?\C:\…` is a plain local path written verbatim; any other `\\x` is a share.
+    text.starts_with("\\\\") && !upper.starts_with("\\\\?\\")
+}
+
+/// Whether the folder the path is in is, by the file system's own identity (device and inode;
+/// volume and file index on Windows), inside the main folder or the sessions' worktrees before
+/// it is inside the session's own worktree: a mapped drive, `subst`, a bind mount or a link
+/// spelling that path names alone don't reveal.
+fn reaches_by_identity(path: &Path, own: &Path, main: &Path, sessions: &Path) -> bool {
+    let (Some(own), main, sessions) = (file_id(own), file_id(main), file_id(sessions)) else {
+        return false;
+    };
+    let mut at = path.parent();
+    // The nearest folder that exists, then each one above it.
+    while let Some(dir) = at {
+        if let Some(id) = file_id(dir) {
+            if id == own {
+                return false;
+            }
+            if Some(id) == main || Some(id) == sessions {
+                return true;
+            }
+        }
+        at = dir.parent();
+    }
+    false
+}
+
+/// A file's identity on its file system: `(device, inode)`, or `(volume serial, file index)` on
+/// Windows. `None` when it can't be read.
+pub fn file_id(path: &Path) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = std::fs::metadata(path).ok()?;
+        Some((meta.dev(), meta.ino()))
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, GetFileInformationByHandle,
+        };
+        // Folders open only with backup semantics; no access is asked for, only the identity.
+        let file = std::fs::OpenOptions::new()
+            .access_mode(0)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+            .ok()?;
+        // SAFETY: a zeroed plain-data struct the call fills in; the handle lives as long as `file`.
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: the handle is open for the call's whole length and `info` is writable.
+        let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) };
+        if ok == 0 {
+            return None;
+        }
+        Some((
+            u64::from(info.dwVolumeSerialNumber),
+            (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+        ))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        None
+    }
 }
 
 /// Asks `external_directory` once for every distinct external directory among `targets`.
@@ -473,5 +579,61 @@ mod tests {
         let folder = crate::tool::test_support::folder_spellings(&outside);
         assert_eq!(asked[0].resources, folder);
         assert_eq!(asked[0].save, folder);
+    }
+
+    #[test]
+    fn shares_and_device_paths_are_foreign_spellings_on_windows() {
+        for path in [
+            r"\\server\share\proj\a.txt",
+            r"\\?\UNC\server\share\a.txt",
+            r"\\.\C:\proj\a.txt",
+            r"\??\C:\proj\a.txt",
+            "//server/share/a.txt",
+        ] {
+            assert!(foreign_spelling_of(path, true), "{path}");
+            assert!(!foreign_spelling_of(path, false), "{path}");
+        }
+        for path in [r"C:\proj\a.txt", r"\\?\C:\proj\a.txt", "/home/u/a.txt"] {
+            assert!(!foreign_spelling_of(path, true), "{path}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_is_known_by_its_identity_whatever_it_is_called() {
+        let root = std::env::temp_dir().join(format!("anysola-id-{}", crate::ids::part()));
+        let (main, base) = (root.join("main"), root.join("base"));
+        let own = base.join("p/s");
+        std::fs::create_dir_all(main.join("sub")).unwrap();
+        std::fs::create_dir_all(&own).unwrap();
+        // Another name for the main folder that no path comparison sees through.
+        let alias = root.join("alias");
+        std::os::unix::fs::symlink(&main, &alias).unwrap();
+        assert!(reaches_by_identity(
+            &alias.join("sub/new.txt"),
+            &own,
+            &main,
+            &base
+        ));
+        assert!(reaches_by_identity(
+            &alias.join("new/deeper.txt"),
+            &own,
+            &main,
+            &base
+        ));
+        assert!(!reaches_by_identity(&own.join("x.txt"), &own, &main, &base));
+        assert!(!reaches_by_identity(
+            &root.join("elsewhere/x.txt"),
+            &own,
+            &main,
+            &base
+        ));
+        assert!(reaches_by_identity(
+            &base.join("p/other/x.txt"),
+            &own,
+            &main,
+            &base
+        ));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

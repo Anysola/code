@@ -317,6 +317,10 @@ fn a_pinned_session_never_writes_the_main_folder_in_auto_mode() {
                 "write",
                 json!({"path": format!("{other}/planted.txt"), "content": "x"}),
             ),
+            (
+                "write",
+                json!({"path": ".git", "content": "gitdir: /tmp/elsewhere\n"}),
+            ),
             ("read", json!({"path": format!("{main}/README.md")})),
             ("write", json!({"path": "mine.txt", "content": "x"})),
         ];
@@ -353,13 +357,20 @@ fn a_pinned_session_never_writes_the_main_folder_in_auto_mode() {
         .block_on(core.prompt(&id, prompt("go"), TurnOptions::default()))
         .unwrap();
     let results = last_results(&gateway);
-    assert_eq!(results.len(), 5, "{results:?}");
+    assert_eq!(results.len(), 6, "{results:?}");
     for r in &results[..3] {
         let text = r["content"].to_string();
         assert!(text.contains("works in its own worktree"), "BREAK: {text}");
     }
+    let text = results[3]["content"].to_string();
+    assert!(text.contains("Git data"), "BREAK: {text}");
     assert!(
-        results[3]["content"].to_string().contains("hi"),
+        read(&top.join(".git"))
+            .is_some_and(|g| g.starts_with("gitdir: ") && !g.contains("elsewhere")),
+        "BREAK: the worktree's .git was rewritten"
+    );
+    assert!(
+        results[4]["content"].to_string().contains("hi"),
         "{results:?}"
     );
     assert!(top.join("mine.txt").exists());
@@ -909,6 +920,9 @@ fn a_fork_of_old_history_undoes_only_the_sessions_edits() {
     env.home.write("proj/later.txt", "later");
     git(&project, &["add", "later.txt"]);
     git(&project, &["commit", "-qm", "later"]);
+    // The user's own uncommitted work in the main folder: not the session's, not in the fork.
+    env.home.write("proj/README.md", "user edit");
+    env.home.write("proj/mine.txt", "user file");
     let second = user_messages(&env, &session.id)[1].clone();
     let (fork, restored) = runtime
         .block_on(core.fork_into_worktree(&session.id, Some(&second)))
@@ -919,6 +933,8 @@ fn a_fork_of_old_history_undoes_only_the_sessions_edits() {
     assert_eq!(read(&top.join("a.txt")).as_deref(), Some("a1"));
     assert_eq!(read(&top.join("b.txt")).as_deref(), Some("b0"));
     assert_eq!(read(&top.join("later.txt")).as_deref(), Some("later"));
+    assert_eq!(read(&top.join("README.md")).as_deref(), Some("hi"));
+    assert!(!top.join("mine.txt").exists());
 }
 
 /// A session whose worktree was discarded still forks exactly: from its kept snapshot store,
@@ -1108,9 +1124,93 @@ fn a_missing_worktree_is_recreated_with_its_files() {
     assert_eq!(read(&top.join("a.txt")).as_deref(), Some("a1"));
 }
 
+/// Recreating after the branch moved on (main brought in) keeps main's commits: the last step's
+/// files are not laid over a newer branch tip.
+#[test]
+fn a_recreate_after_main_came_in_keeps_mains_commits() {
+    let gateway = turns(vec![vec![(
+        "write",
+        json!({"path": "a.txt", "content": "a1"}),
+    )]]);
+    let env = env(&gateway.url);
+    let project = project(&env, &[("a.txt", "a0"), ("b.txt", "b0")]);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    answering(&runtime, &core, |_, _| Answer::Once);
+    let (id, top) = isolated(&runtime, &core);
+    runtime
+        .block_on(core.prompt(&id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    // Main moves on; the session brings it in (its work committed first, as the app does).
+    std::fs::write(project.join("b.txt"), "b-main").unwrap();
+    git(&project, &["commit", "-qam", "main edits b"]);
+    git(&top, &["add", "-A"]);
+    git(&top, &["commit", "-qm", "session work"]);
+    git(&top, &["merge", "-q", "--no-edit", "main"]);
+    std::fs::remove_dir_all(&top).unwrap();
+    anysola_core::api::cleanup_worktrees(&db(&env));
+    runtime.block_on(core.recreate_worktree(&id)).unwrap();
+    assert_eq!(read(&top.join("a.txt")).as_deref(), Some("a1"));
+    assert_eq!(
+        read(&top.join("b.txt")).as_deref(),
+        Some("b-main"),
+        "BREAK: main's commit was undone"
+    );
+}
+
 /// Start-up cleanup: a cut-off preparation fails and its folder goes; a deleted session's
 /// worktree, branch and row go; an apply cut off after its commit finishes, one cut off before
 /// it leaves the main folder alone.
+/// An apply cut off by a crash after its commit puts the main-folder edits it set aside back; one
+/// cut off before it leaves them in the stash and says where.
+#[test]
+fn a_crash_mid_apply_brings_the_stashed_edits_back_or_names_them() {
+    let gateway = turns(vec![]);
+    let env = env(&gateway.url);
+    let project = project(&env, &[("a.txt", "a0"), ("b.txt", "b0")]);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let stash = |id: &str, file: &str| {
+        let message = anysola_core::api::apply_stash_message(id);
+        git(
+            &project,
+            &["stash", "push", "-q", "-m", &message, "--", file],
+        );
+    };
+    // Finished: the edit to b.txt was set aside, the commit landed, then the crash.
+    let (done, _) = isolated(&runtime, &core);
+    core.set_worktree_state(&done, WorktreeState::Ready, WorktreeState::Applying)
+        .unwrap();
+    std::fs::write(project.join("b.txt"), "user's b").unwrap();
+    stash(&done, "b.txt");
+    let from = git(&project, &["rev-parse", "HEAD"]);
+    std::fs::write(project.join("a.txt"), "applied").unwrap();
+    git(&project, &["commit", "-qam", "applied"]);
+    core.mark_apply(&done, &from, &git(&project, &["rev-parse", "HEAD^{tree}"]))
+        .unwrap();
+    drop(core);
+    anysola_core::api::cleanup_worktrees(&db(&env));
+    assert_eq!(read(&project.join("b.txt")).as_deref(), Some("user's b"));
+    assert_eq!(git(&project, &["stash", "list"]), "");
+
+    // Cut off before its commit: the stash stays, and the notice names it.
+    let core = runtime.block_on(common::core(&env));
+    let (half, _) = isolated(&runtime, &core);
+    core.set_worktree_state(&half, WorktreeState::Ready, WorktreeState::Applying)
+        .unwrap();
+    std::fs::write(project.join("b.txt"), "user's b again").unwrap();
+    stash(&half, "b.txt");
+    let head = git(&project, &["rev-parse", "HEAD"]);
+    core.mark_apply(&half, &head, "0000000000000000000000000000000000000000")
+        .unwrap();
+    drop(core);
+    anysola_core::api::cleanup_worktrees(&db(&env));
+    let row = db(&env).session_worktree(&half).unwrap().unwrap();
+    let error = row.error.unwrap();
+    assert!(error.contains("stash@{0}"), "{error}");
+    assert!(git(&project, &["stash", "list"]).contains(&half));
+}
+
 #[test]
 fn cleanup_settles_every_state() {
     let gateway = turns(vec![]);

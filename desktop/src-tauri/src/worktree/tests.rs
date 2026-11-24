@@ -435,7 +435,7 @@ fn ignored_env_files_are_copied_and_nothing_else() {
     write(&main, "node_modules/pkg/.env", "SKIP=1\n");
     write(&main, ".env.example", "CHANGED=1\n");
     write(&main, "a/b/c/d/e/.env", "TOO_DEEP=1\n");
-    let mut copied = copy_env(&main, &wt);
+    let mut copied = copy_env(&main, &wt, &|| true);
     copied.sort();
     assert_eq!(copied, [".env", "apps/web/.env.local"]);
     assert_eq!(read(&wt, ".env"), "SECRET=1\n");
@@ -447,7 +447,7 @@ fn ignored_env_files_are_copied_and_nothing_else() {
     assert!(!wt.join("node_modules").exists());
     // Already there: left alone.
     write(&main, ".env", "SECRET=2\n");
-    assert!(copy_env(&main, &wt).is_empty());
+    assert!(copy_env(&main, &wt, &|| true).is_empty());
     assert_eq!(read(&wt, ".env"), "SECRET=1\n");
 }
 
@@ -527,4 +527,114 @@ fn the_setup_command_runs_is_stopped_and_times_out() {
         Duration::from_millis(300),
     );
     assert_eq!(ended, ("timeout", None));
+}
+
+fn hook_fails(main: &Path) {
+    let hooks = main.join(".git/hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    write(
+        &hooks,
+        "pre-commit",
+        "#!/bin/sh\necho 'lint failed' >&2\nexit 1\n",
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            hooks.join("pre-commit"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+}
+
+/// An ignored file of the main folder the session also has (tracked there with `add -f`): the
+/// apply never overwrites it, and a failed commit never deletes it.
+#[test]
+fn an_ignored_main_folder_file_is_never_overwritten_or_lost() {
+    let sandbox = Sandbox::new("ignored");
+    let (main, row) = sandbox.session();
+    let wt = w(&row);
+    write(&main, ".env", "MAIN=1\n");
+    write(&wt, ".env", "SESSION=1\n");
+    sandbox.git(&wt, &["add", "-f", ".env"]);
+    let plan = plan(&row).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(plan.dirty, [".env"]);
+    assert!(apply(&always, &row, "x", "main", false).is_err());
+    assert_eq!(
+        read(&main, ".env"),
+        "MAIN=1\n",
+        "BREAK: refused apply touched it"
+    );
+    // A failing hook: everything goes back, the user's .env included.
+    hook_fails(&main);
+    let before = state(&sandbox, &main);
+    assert!(apply(&always, &row, "x", "main", true).is_err());
+    assert_eq!(
+        read(&main, ".env"),
+        "MAIN=1\n",
+        "BREAK: the rollback lost the user's .env"
+    );
+    assert_eq!(state(&sandbox, &main), before);
+    assert_eq!(sandbox.git(&main, &["stash", "list"]), "");
+    // Applied with it set aside: the commit has the session's .env, the user's is kept.
+    std::fs::remove_file(main.join(".git/hooks/pre-commit")).unwrap();
+    let (_, left) = apply(&always, &row, "With env", "main", true).unwrap();
+    assert_eq!(sandbox.git(&main, &["show", "HEAD:.env"]), "SESSION=1");
+    let left = left.expect("the user's .env is kept in the stash");
+    let kept = sandbox.git(&main, &["show", &format!("{left}^3:.env")]);
+    assert_eq!(kept, "MAIN=1");
+}
+
+/// Conflict markers in a changed file are never applied, merge or not.
+#[test]
+fn conflict_markers_are_never_applied() {
+    let sandbox = Sandbox::new("markers");
+    let (_, row) = sandbox.session();
+    write(
+        &w(&row),
+        "a.txt",
+        "one\n<<<<<<< HEAD\ntwo\n=======\nTWO\n>>>>>>> other\nthree\n",
+    );
+    let refusal = plan_err(&row);
+    assert_eq!(reason(&refusal), "unresolved");
+    assert_eq!(refusal["files"], json!(["a.txt"]));
+    // Lines that only start alike are not markers.
+    write(&w(&row), "a.txt", "<<<<<<<<<< title\n>>>>>>>>>>\n");
+    assert!(plan(&row).is_ok());
+}
+
+/// A worktree whose `.git` was pointed elsewhere is not run git in.
+#[test]
+fn a_redirected_worktree_is_refused() {
+    let sandbox = Sandbox::new("redirect");
+    let (_, row) = sandbox.session();
+    let wt = w(&row);
+    write(&wt, "a.txt", "changed\n");
+    assert!(verify_worktree(&row).is_ok());
+    let elsewhere = sandbox.0.join("elsewhere");
+    sandbox.git(
+        &sandbox.0,
+        &["init", "-q", &elsewhere.display().to_string()],
+    );
+    write(
+        &wt,
+        ".git",
+        &format!("gitdir: {}/.git\n", elsewhere.display()),
+    );
+    assert!(verify_worktree(&row).is_err());
+    assert!(worktree_changes(&row).is_err());
+    assert_eq!(reason(&plan_err(&row)), "git");
+    assert!(bring_base(&row).is_err());
+    assert!(put_back_file(&row, "a.txt").is_err());
+}
+
+/// A preparation let go stops copying files.
+#[test]
+fn a_cancelled_preparation_copies_nothing() {
+    let sandbox = Sandbox::new("cancel");
+    let (main, row) = sandbox.session();
+    write(&main, ".env", "SECRET=1\n");
+    assert!(copy_env(&main, &w(&row), &|| false).is_empty());
+    assert!(!w(&row).join(".env").exists());
 }

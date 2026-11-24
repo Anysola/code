@@ -24,6 +24,7 @@ impl Core {
     /// Reverts the session to before `message_id`. Repeating it with another message keeps the
     /// files' original state from the first revert.
     pub fn revert(&self, session_id: &str, message_id: &str) -> Result<Value, CoreError> {
+        super::isolate::files_gate(&self.shared, session_id)?;
         let db = &self.shared.db;
         let boundary = db
             .message_seq(session_id, message_id)?
@@ -89,6 +90,7 @@ impl Core {
 
     /// Redo: puts back the files the staged revert changed and forgets it.
     pub fn unrevert(&self, session_id: &str) -> Result<(), CoreError> {
+        super::isolate::files_gate(&self.shared, session_id)?;
         let db = &self.shared.db;
         let Some(staged) = db.revert(session_id)? else {
             return Ok(());
@@ -194,6 +196,7 @@ impl Core {
 
     /// Puts one file back as it was before the session first changed it.
     pub fn restore_file(&self, session_id: &str, file: &str) -> Result<(), CoreError> {
+        super::isolate::files_gate(&self.shared, session_id)?;
         let store = self.store(session_id).ok_or(CoreError::Snapshot(
             "This folder isn’t a Git repository, so there’s no earlier copy to restore".into(),
         ))?;
