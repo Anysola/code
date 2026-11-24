@@ -454,20 +454,38 @@ fn the_documented_hook_form_runs_in_both_kinds_of_session() {
     )]]);
     let env = env(&gateway.url);
     let log = env.home.home().join("hook.log");
+    // The form as Claude Code documents it for a POSIX shell; on Windows the hook shell is
+    // PowerShell (the `shell` tool's choice), where a project script is named this way.
+    let (command, name, script) = if cfg!(windows) {
+        (
+            r#"& "$env:CLAUDE_PROJECT_DIR/.claude/hooks/x.cmd""#.to_string(),
+            "x.cmd",
+            format!(
+                "@echo %CD%^|%CLAUDE_PROJECT_DIR%>> \"{}\"\r\n@exit /b 0\r\n",
+                log.display()
+            ),
+        )
+    } else {
+        (
+            r#""$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh"#.to_string(),
+            "x.sh",
+            format!(
+                "#!/bin/sh\necho \"$PWD|$CLAUDE_PROJECT_DIR\" >> '{}'\nexit 0\n",
+                log.display()
+            ),
+        )
+    };
     let config = json!({"hooks": {"PreToolUse": [{"matcher": "Write", "hooks": [{"type": "command",
-        "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/x.sh"}]}]}});
+        "command": command}]}]}});
     env.home.write(".anysola/config.json", &config.to_string());
     let project = project(&env, &[(".gitignore", ".claude/hooks/\n")]);
-    let script = format!(
-        "#!/bin/sh\necho \"$PWD|$CLAUDE_PROJECT_DIR\" >> '{}'\nexit 0\n",
-        log.display()
-    );
-    env.home.write("proj/.claude/hooks/x.sh", &script);
+    env.home
+        .write(&format!("proj/.claude/hooks/{name}"), &script);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(
-            project.join(".claude/hooks/x.sh"),
+            project.join(".claude/hooks").join(name),
             std::fs::Permissions::from_mode(0o755),
         )
         .unwrap();
@@ -488,15 +506,19 @@ fn the_documented_hook_form_runs_in_both_kinds_of_session() {
     let (id, top) = isolated(&runtime, &core);
     std::fs::create_dir_all(top.join(".claude/hooks")).unwrap();
     std::fs::copy(
-        project.join(".claude/hooks/x.sh"),
-        top.join(".claude/hooks/x.sh"),
+        project.join(".claude/hooks").join(name),
+        top.join(".claude/hooks").join(name),
     )
     .unwrap();
     runtime
         .block_on(core.prompt(&id, prompt("two"), TurnOptions::default()))
         .unwrap();
     assert!(top.join("one.txt").exists());
-    let lines: Vec<String> = read(&log).unwrap().lines().map(str::to_string).collect();
+    let lines: Vec<String> = read(&log)
+        .unwrap()
+        .lines()
+        .map(|l| l.trim().to_string())
+        .collect();
     assert_eq!(lines.len(), 2, "{lines:?}");
     let real = |p: &str| real(Path::new(p));
     let (pwd, dir) = lines[0].split_once('|').unwrap();
@@ -526,8 +548,14 @@ fn a_formatting_hook_in_a_worktree_leaves_the_main_folder_alone() {
         json!({"path": "a.txt", "content": "a"}),
     )]]);
     let env = env(&gateway.url);
+    // A formatter writing the file named by the project folder (PowerShell on Windows).
+    let command = if cfg!(windows) {
+        r#"Set-Content -LiteralPath "$env:CLAUDE_PROJECT_DIR/README.md" -Value formatted"#
+    } else {
+        r#"sh -c 'echo formatted > "$1"' prettier "$CLAUDE_PROJECT_DIR/README.md""#
+    };
     let config = json!({"hooks": {"PostToolUse": [{"matcher": "Write", "hooks": [{"type": "command",
-        "command": "sh -c 'echo formatted > \"$1\"' prettier \"$CLAUDE_PROJECT_DIR/README.md\""}]}]}});
+        "command": command}]}]}});
     env.home.write(".anysola/config.json", &config.to_string());
     let project = project(&env, &[]);
     let runtime = runtime();
