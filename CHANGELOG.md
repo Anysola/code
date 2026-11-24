@@ -4,6 +4,12 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.1.8 (2026-11-24)
+
+- A turn that stops at its budget sends a notification, like a finished one.
+- A branch keeps its source's title; the branch icon marks it.
+- Deleting a session also drops its usage record.
+
 ## 1.1.7 (2026-11-24)
 
 - Ctrl K opens a palette: recent sessions first, then commands with their keys (new session, modes, review
