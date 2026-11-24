@@ -3,7 +3,7 @@
 Scope: everything the client sends to or reads from `https://api.anysola.com/v1/code/*` (and the few other Anysola
 URLs it opens). Rust rewrite must match the client side; the gateway stays.
 
-Paths: **C** = `/home/ubuntu/anysola-code/build/fork/` (branch `anysola`, 0.5.1). **G** = `/home/ubuntu/web/anysola/services/cloud/src/` (gateway, PM2 `code-index.ts`, :3520). **K** = `/home/ubuntu/web/anysola/packages/contracts/src/code/` (shared contracts).
+Paths: **C** = `/home/ubuntu/anysola-code/build/fork/` (branch `anysola`, 0.5.1). **G** = `/home/ubuntu/web/anysola/services/cloud/src/` (the TypeScript gateway this inventory was taken from; the live gateway is now its Rust port `services/code-gateway`, same :3520, which keeps the TS sources as the reference). **K** = `/home/ubuntu/web/anysola/packages/contracts/src/code/` (shared contracts).
 Verbatim copies: `spec/verbatim/protocol/` (`client/`, `contracts/`, `gateway/`, `captures/requests-0.5.1.jsonl` (wire captures from the real 0.5.1 binary), `captures/sse-gateway-examples.txt`, `user-strings.txt` (every user-facing string with file:line)).
 
 Status tags: `[1.0]` = the 1.0 protocol, which replaces the 0.5.1 text it sits next to (usage limits instead of credits; source of truth: K `client-api.ts` and `packages/contracts/src/account/usage-limits-core.ts`, minimum client version 1.0.0, no credit compatibility). `[0.5.1]` = live behaviour to reproduce. `[dead]` = code path that never fires against the real gateway. `[bug]` = 0.5.1 behaviour that looks wrong. Reproduce it or fix it deliberately, and say which.
