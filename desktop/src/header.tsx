@@ -11,6 +11,7 @@ import {
   FileDown,
   FolderClosed,
   FolderOpen,
+  Globe,
   PanelLeft,
   Pencil,
   Plus,
@@ -32,6 +33,7 @@ import {
   RELEASES,
   reviewInstead,
   setReviewing,
+  togglePreview,
   toggleSidebar,
   toggleTerminal,
   undoDelete,
@@ -118,6 +120,7 @@ const ROOMY = 1200
 export function SessionHeader({ open }: { open: Open }) {
   const hidden = useChrome((c) => c.sidebarHidden)
   const terminalOpen = useChrome((c) => c.terminalOpen)
+  const previewOpen = useChrome((c) => c.previewOpen)
   const { files, add, del } = useChangeCounts(open)
   const bar = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(1280)
@@ -188,6 +191,17 @@ export function SessionHeader({ open }: { open: Open }) {
               className={btn("ghost", "sm", terminalOpen ? "bg-default/70 text-foreground" : "text-muted", true)}
             >
               <TerminalIcon className="size-4" strokeWidth={1.75} />
+            </button>
+          </Tooltip>
+          <Tooltip label={previewOpen ? "Hide preview" : "Show preview"} keys={KEYS.preview}>
+            <button
+              type="button"
+              onClick={() => togglePreview()}
+              aria-label={previewOpen ? "Hide preview" : "Show preview"}
+              aria-pressed={previewOpen}
+              className={btn("ghost", "sm", previewOpen ? "bg-default/70 text-foreground" : "text-muted", true)}
+            >
+              <Globe className="size-4" strokeWidth={1.75} />
             </button>
           </Tooltip>
           <GitMenu open={open} compact={narrow} />

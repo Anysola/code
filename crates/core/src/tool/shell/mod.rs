@@ -4,6 +4,7 @@
 pub(crate) mod exec;
 mod output;
 pub mod parse;
+pub mod sandbox;
 pub mod scan;
 pub(crate) mod select;
 
@@ -354,11 +355,26 @@ impl ShellTool {
         std::fs::create_dir_all(&directory).map_err(|e| ToolError::unknown(e.to_string()))?;
         let id = crate::ids::shell();
         let file = directory.join(format!("{id}.out"));
+        let isolated = ctx.main != ctx.worktree;
+        let sandbox_cfg =
+            sandbox::SandboxConfig::from_value(ctx.host.config().get("sandbox"), isolated);
+        let raw_args = select::args(&shell, &input.command);
+        let (program, args, sandboxed) = sandbox::wrap(
+            &shell,
+            raw_args,
+            &target.absolute,
+            &ctx.worktree,
+            sandbox_cfg,
+        );
+        let mut env = environment(ctx);
+        if sandboxed {
+            env.push(("ANYSOLA_SANDBOX".into(), "1".into()));
+        }
         let job = Job {
-            program: &shell,
-            args: select::args(&shell, &input.command),
+            program: &program,
+            args,
             cwd: &target.absolute,
-            env: environment(ctx),
+            env,
             file: &file,
             timeout,
         };

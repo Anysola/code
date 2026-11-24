@@ -10,6 +10,13 @@ branch.
   language server (`typescript-language-server`, `rust-analyzer`, `basedpyright`/`pyright`/`pylsp`, `gopls`,
   or `clangd`) and appends errors and warnings directly to the tool output so the agent catches mistakes
   immediately. Set `"lsp": false` in config to disable it; servers are started lazily and stopped on exit.
+- Live local Preview panel beside the conversation (`Ctrl Shift V`, the header button, or the Ctrl K palette):
+  embeds a `localhost` / `127.0.0.1` dev server with reload, Desktop/Tablet/Mobile viewport presets, external
+  browser handoff, and automatic detection of local URLs printed in the embedded terminal.
+- Shell sandbox on Linux (`bwrap` / bubblewrap): mounts `/` read-only, `/tmp` as a private tmpfs, and limits
+  writes to the session's working folder. Enabled automatically for isolated worktree sessions when `bwrap` is
+  available, or opt-in for main-folder sessions via `"sandbox": true` (`{"enabled": true, "network": false}`
+  to also isolate network access; `"sandbox": false` disables it).
 
 ## 1.3.0 (2026-11-24)
 

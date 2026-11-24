@@ -21,6 +21,10 @@ type Chrome = {
   reviewAction: "apply" | null
   /** Embedded terminal drawer open at the bottom of the session. */
   terminalOpen: boolean
+  /** Live local preview panel open beside the conversation. */
+  previewOpen: boolean
+  /** Active localhost URL shown in the preview panel. */
+  previewUrl: string | null
   /** The open worktree session's discard confirm. */
   discarding: boolean
   /** The open session's budget editor, under the header's budget. */
@@ -72,6 +76,8 @@ let chrome: Chrome = {
   reviewing: false,
   reviewAction: null,
   terminalOpen: false,
+  previewOpen: false,
+  previewUrl: null,
   discarding: false,
   budgeting: false,
   forkNotes: readForkNotes(),
@@ -131,6 +137,18 @@ export function setTerminalOpen(on: boolean) {
 
 export function toggleTerminal() {
   set({ terminalOpen: !chrome.terminalOpen })
+}
+
+export function setPreviewOpen(on: boolean) {
+  if (chrome.previewOpen !== on) set({ previewOpen: on })
+}
+
+export function togglePreview() {
+  set({ previewOpen: !chrome.previewOpen })
+}
+
+export function setPreviewUrl(url: string | null) {
+  if (chrome.previewUrl !== url) set({ previewUrl: url })
 }
 
 export function askDiscard(on: boolean) {

@@ -11,6 +11,7 @@ import { RotateCw, Terminal as TerminalIcon, Trash2, X } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
 import { setTerminalOpen, useChrome } from "./chrome"
+import { noteTerminalUrls } from "./preview"
 import { KEYS } from "./shortcuts"
 import { currentBridge, useWorkDir, useWorktree, type Open } from "./store"
 import { btn, cn, folderName, Tooltip } from "./ui"
@@ -128,7 +129,13 @@ export function handleTerminalEvent(event: { type: "terminalData"; id: string; d
   const inst = byPtyId.get(event.id)
   if (!inst) return
   if (event.type === "terminalData") {
-    inst.term.write(decodeBase64(event.data))
+    const bytes = decodeBase64(event.data)
+    inst.term.write(bytes)
+    try {
+      noteTerminalUrls(new TextDecoder().decode(bytes))
+    } catch {
+      // Non-UTF-8 chunk: skip URL scan.
+    }
   } else {
     byPtyId.delete(event.id)
     inst.ptyId = null

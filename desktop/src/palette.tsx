@@ -2,11 +2,11 @@
  * The palette (Ctrl K, or Search in the sidebar): recent sessions, then commands with their keys.
  * A layer like any panel: Escape closes it and is not a press toward stopping a turn.
  */
-import { GitBranch, GitMerge, Keyboard, MessageSquare, Plus, RotateCcw, Search, Settings as SettingsIcon, SquarePen, Terminal as TerminalIcon, Trash2, Wallet } from "lucide-react"
+import { GitBranch, GitMerge, Globe, Keyboard, MessageSquare, Plus, RotateCcw, Search, Settings as SettingsIcon, SquarePen, Terminal as TerminalIcon, Trash2, Wallet } from "lucide-react"
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 
 import type { SessionRow } from "./bridge"
-import { askDiscard, editBudget, flash, setReviewing, showPalette, showShortcuts, toggleTerminal, useChrome } from "./chrome"
+import { askDiscard, editBudget, flash, setReviewing, showPalette, showShortcuts, togglePreview, toggleTerminal, useChrome } from "./chrome"
 import { modes } from "./composer"
 import { KEYS } from "./shortcuts"
 import { closeSettings, forkSession, isRunning, newSession, notify, openSession, openSettings, pickMode, undoApplyWorktree, useStore, useWorktree, useWorktreeInfo } from "./store"
@@ -90,13 +90,22 @@ function useCommands(): Command[] {
       })
   }
   if (open) {
-    list.push({
-      id: "terminal",
-      label: "Toggle terminal",
-      icon: <TerminalIcon className={i} strokeWidth={1.75} />,
-      keys: KEYS.terminal,
-      run: () => toggleTerminal(),
-    })
+    list.push(
+      {
+        id: "terminal",
+        label: "Toggle terminal",
+        icon: <TerminalIcon className={i} strokeWidth={1.75} />,
+        keys: KEYS.terminal,
+        run: () => toggleTerminal(),
+      },
+      {
+        id: "preview",
+        label: "Toggle preview",
+        icon: <Globe className={i} strokeWidth={1.75} />,
+        keys: KEYS.preview,
+        run: () => togglePreview(),
+      }
+    )
     const shown = open.info?.agent === "plan" ? "plan" : mode
     const hasPlan = open.info?.agents.some((a) => a.id === "plan") ?? false
     for (const m of modes)

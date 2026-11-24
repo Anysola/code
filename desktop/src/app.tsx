@@ -13,6 +13,7 @@ import { ShortcutsSheet, useShortcuts } from "./shortcuts"
 import { Sidebar } from "./sidebar"
 import { closePeek, dismissNotice, openSettings, start, useStore, type Open, type Peek } from "./store"
 import { Palette } from "./palette"
+import { PreviewPanel } from "./preview"
 import { TerminalDrawer } from "./terminal"
 import { Transcript } from "./transcript"
 import { btn, cn, folderKey, sameFolder, Spinner, TitleBar, Tooltip, useEscape } from "./ui"
@@ -91,21 +92,26 @@ function Main() {
       {open ? (
         <>
           <SessionHeader open={open} />
-          <Conversation open={open} />
-          <div className="mx-auto w-full max-w-(--conversation-width) px-8 pb-5">
-            <BackgroundRow open={open} />
-            <Tasks todos={open.todos} />
-            <Banner open={open} />
-            <WorktreeStrip open={open} />
-            <ForkNote open={open} />
-            <QueueChips open={open} />
-            <Composer open={open} />
-            <div className="mt-2 flex items-center gap-3 px-2">
-              <Place open={open} />
-              <ContextMeter open={open} />
+          <div className="flex min-h-0 flex-1">
+            <div className="flex min-w-0 flex-1 flex-col">
+              <Conversation open={open} />
+              <div className="mx-auto w-full max-w-(--conversation-width) px-8 pb-5">
+                <BackgroundRow open={open} />
+                <Tasks todos={open.todos} />
+                <Banner open={open} />
+                <WorktreeStrip open={open} />
+                <ForkNote open={open} />
+                <QueueChips open={open} />
+                <Composer open={open} />
+                <div className="mt-2 flex items-center gap-3 px-2">
+                  <Place open={open} />
+                  <ContextMeter open={open} />
+                </div>
+              </div>
+              <TerminalDrawer open={open} />
             </div>
+            <PreviewPanel />
           </div>
-          <TerminalDrawer open={open} />
           {reviewing && <Review open={open} onClose={() => setReviewing(false)} />}
           {discarding && <DiscardConfirm open={open} />}
           <PeekSheet />
