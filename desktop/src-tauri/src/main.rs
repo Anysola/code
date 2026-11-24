@@ -761,7 +761,13 @@ pub(crate) fn spawn_turn(handle: AppHandle, core: Core, session: String, prompt:
         match core.prompt(&session, prompt, TurnOptions::default()).await {
             // Queued for a running turn, or what the turn left in the inbox: the window re-reads it.
             Ok(_) => changed(&handle, &session),
-            Err(error) => refused_by(&handle, &session, &error),
+            Err(error) => {
+                refused_by(&handle, &session, &error);
+                // A worktree found gone at the turn's start: the window shows it now.
+                if let Ok(db) = handle.state::<App>().db() {
+                    worktree::emit(&handle, db, &session);
+                }
+            }
         }
     });
 }

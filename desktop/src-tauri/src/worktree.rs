@@ -1160,8 +1160,13 @@ pub(crate) async fn changes(
 /// A ready worktree whose folder was deleted while the app runs becomes `missing` now (the
 /// window shows Recreate); true when that is the case.
 fn noticed_missing(handle: &AppHandle, db: &Db, row: &SessionWorktreeRow) -> bool {
+    if row.state == WorktreeState::Missing {
+        // Found gone elsewhere (a turn's start): the window may not know yet.
+        emit(handle, db, &row.session_id);
+        return true;
+    }
     if row.state != WorktreeState::Ready || Path::new(&row.directory).is_dir() {
-        return row.state == WorktreeState::Missing;
+        return false;
     }
     // Looked at again a moment later: a busy disk or a network drive can miss once.
     std::thread::sleep(Duration::from_millis(30));
