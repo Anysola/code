@@ -129,20 +129,12 @@ fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
-/// [`std::fs::canonicalize`] without the Windows verbatim prefix (`\\?\C:\…`), which git,
-/// shells and users do not expect; a path that needs the prefix (UNC, over-long) keeps it.
+/// [`std::fs::canonicalize`] without the Windows verbatim prefix (`\\?\C:\…` → `C:\…`,
+/// `\\?\UNC\h\s` → `\\h\s`), whatever its length: git can't take verbatim paths (`worktree add`
+/// fails on them), nor can shells and users read them. Rust's own file calls put the prefix
+/// back for an over-long path, and git runs with `core.longpaths` for the worktrees.
 pub fn canonicalize(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
-    let real = std::fs::canonicalize(path)?;
-    if cfg!(windows) {
-        let text = real.to_string_lossy();
-        if let Some(rest) = text.strip_prefix(r"\\?\")
-            && rest.as_bytes().get(1) == Some(&b':')
-            && rest.len() < 260
-        {
-            return Ok(PathBuf::from(rest));
-        }
-    }
-    Ok(real)
+    Ok(plain(&std::fs::canonicalize(path)?))
 }
 
 /// A path without Windows' verbatim prefix (`\\?\C:\x` → `C:\x`, `\\?\UNC\h\s` → `\\h\s`),

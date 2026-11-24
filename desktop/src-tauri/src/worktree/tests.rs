@@ -32,7 +32,8 @@ impl Sandbox {
                 ("GIT_AUTHOR_DATE".into(), "2026-01-01T00:00:00Z".into()),
             ]
         });
-        Sandbox(std::fs::canonicalize(root).unwrap())
+        // Without Windows' verbatim prefix, which git can't take (as the app's own paths).
+        Sandbox(anysola_core::paths::canonicalize(root).unwrap())
     }
 
     fn git(&self, dir: &Path, args: &[&str]) -> String {
