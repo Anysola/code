@@ -416,7 +416,8 @@ function Chip({ q, live, waiting }: { q: Queued; live: boolean; waiting: boolean
       setBusy(false)
     }
   }
-  const steering = q.delivery === "steer"
+  // A message waiting for its worktree is held as a steer by the core; it is still the user's to edit.
+  const steering = q.delivery === "steer" && !waiting
   return (
     <li className="text-dense flex h-9 shrink-0 items-center gap-2.5 rounded-xl bg-surface/70 pr-1 pl-3.5">
       <span className="shrink-0 text-2xs text-muted">{steering ? "Next step" : waiting ? "Waiting" : live ? "Queued" : "Not sent"}</span>

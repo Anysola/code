@@ -241,6 +241,9 @@ pub struct CommandRequest {
     model: Option<String>,
     variant: Option<String>,
     agent: Option<String>,
+    /// A new session in a git folder: its own worktree (default) or the main folder.
+    #[serde(default)]
+    place: Option<String>,
 }
 
 /// Runs `/<name> <arguments>` in the session (a new one when there is none); the turn's events
@@ -260,12 +263,21 @@ pub async fn run_command(
         model,
         variant,
         agent,
+        place,
     } = request;
     let core = core_for(&handle, &app, &directory).await?;
     if core.commands().get(&name).is_none() {
         return Err(format!("There’s no /{name} command here."));
     }
+    let new = session_id.is_none();
     let id = prepare(&core, session_id, &mode, model, variant, agent)?;
+    // As a first message: a new session in a git folder works in its own worktree.
+    if new
+        && place.as_deref() != Some("folder")
+        && crate::worktree::available(&app, &directory).await
+    {
+        crate::worktree::start_new(&handle, &core, app.db()?, &id).await;
+    }
     if core.is_busy(&id) {
         return Err(
             "Wait for the current turn to end, or stop it, before running a command.".into(),

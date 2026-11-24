@@ -120,7 +120,7 @@ pub(crate) fn cleanup_at_start(db: Option<Arc<Db>>) {
 
 /// Waits (a while at most) for the start-up cleanup, which must not see a worktree being made
 /// as one cut off.
-async fn cleaned() {
+pub(crate) async fn cleaned() {
     let start = Instant::now();
     while !CLEANED.load(Ordering::SeqCst) && start.elapsed() < Duration::from_secs(60) {
         tokio::time::sleep(Duration::from_millis(25)).await;
@@ -155,13 +155,16 @@ fn can_apply(directory: &Path) -> bool {
 /// A git call for the worktree work: on Windows with long paths on (worktrees sit deep under
 /// the home folder), as the core's `worktree add` has them.
 fn wgit<'a>(directory: &'a Path, args: &'a [&'a str]) -> Call<'a> {
-    let call = git::git(directory, args);
+    // File names as they are (`şema.txt`, not `"\305\237ema.txt"`), so lists compare and read.
+    let call = git::git(directory, args)
+        .env("GIT_CONFIG_KEY_0", "core.quotePath")
+        .env("GIT_CONFIG_VALUE_0", "false");
     if cfg!(windows) {
-        call.env("GIT_CONFIG_COUNT", "1")
-            .env("GIT_CONFIG_KEY_0", "core.longpaths")
-            .env("GIT_CONFIG_VALUE_0", "true")
+        call.env("GIT_CONFIG_COUNT", "2")
+            .env("GIT_CONFIG_KEY_1", "core.longpaths")
+            .env("GIT_CONFIG_VALUE_1", "true")
     } else {
-        call
+        call.env("GIT_CONFIG_COUNT", "1")
     }
 }
 
@@ -310,6 +313,8 @@ struct Slot {
     stop: AtomicBool,
     /// While preparing: don't run (or wait for) the setup command ("Start now").
     skip: AtomicBool,
+    /// `git worktree add` of a new session runs: nothing may remove the worktree meanwhile.
+    isolating: AtomicBool,
 }
 
 fn slots() -> &'static Mutex<HashMap<String, Arc<Slot>>> {
@@ -354,6 +359,18 @@ fn stop_setup(session_id: &str) -> bool {
         std::thread::sleep(Duration::from_millis(20));
     }
     true
+}
+
+/// Waits until a new session's `git worktree add` is over, so going back to the main folder,
+/// discarding or deleting never removes a worktree git is still writing (and the core doesn't
+/// move the session into it afterwards).
+async fn isolate_done(session_id: &str) {
+    let Some(slot) = existing_slot(session_id) else {
+        return;
+    };
+    while slot.isolating.load(Ordering::SeqCst) {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 /// Every setup command stops (the app is closing).
@@ -738,7 +755,9 @@ async fn prepare(handle: AppHandle, core: Core, db: Arc<Db>, id: String, made: M
     let started = Instant::now();
     if let Made::New = made {
         out.info("Making the worktree");
+        out.slot.isolating.store(true, Ordering::SeqCst);
         let made = core.isolate(&id).await;
+        out.slot.isolating.store(false, Ordering::SeqCst);
         emit(&handle, &db, &id);
         match made {
             Ok(row) => out.info(&format!(
@@ -1725,6 +1744,7 @@ pub async fn worktree_discard(
     let db = app.db()?.clone();
     let id = session_id.clone();
     git::blocking(move || Ok(stop_setup(&id))).await?;
+    isolate_done(&session_id).await;
     let result = core.release_worktree(&session_id, Release::Discarded).await;
     emit(&handle, &db, &session_id);
     result.map_err(plain_error)?;
@@ -1758,6 +1778,7 @@ pub async fn worktree_to_folder(
     let core = core_for(&handle, &app, &directory).await?;
     let id = session_id.clone();
     git::blocking(move || Ok(stop_setup(&id))).await?;
+    isolate_done(&session_id).await;
     let row = core.unisolate(&session_id).await.map_err(plain_error)?;
     crate::changed(&handle, &session_id);
     Ok(crate::session_json(&row, None))
@@ -1782,6 +1803,7 @@ pub(crate) async fn before_delete(
     }
     let id = session_id.to_string();
     let _ = git::blocking(move || Ok(stop_setup(&id))).await;
+    isolate_done(session_id).await;
     if let Some(core) = core
         && !row.state.released()
     {

@@ -1585,6 +1585,8 @@ export async function runCommand(name: string, args: string) {
       model: first ? (open.info?.modelId ?? null) : null,
       variant: first ? (open.info?.variant ?? null) : null,
       agent: first ? (open.info?.agent ?? null) : null,
+      // `/review` looks at the main folder's uncommitted changes, which a worktree doesn't have.
+      ...(first ? (name === "review" ? { place: "folder" as Place } : placeOf(open)) : {}),
     })
     sent.resolved = true
     if (first) target = adopt(target, sessionId, open.directory)

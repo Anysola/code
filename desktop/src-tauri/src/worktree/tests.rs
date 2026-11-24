@@ -305,6 +305,35 @@ fn a_stash_that_cannot_come_back_cleanly_is_kept() {
     );
 }
 
+/// Names git would quote (`core.quotePath`) still match the main folder's edits.
+#[test]
+fn file_names_beyond_ascii_compare() {
+    let sandbox = Sandbox::new("names");
+    let (main, row) = sandbox.session();
+    write(&main, "şema.txt", "bir\n");
+    sandbox.git(&main, &["add", "-A"]);
+    sandbox.git(&main, &["commit", "-qm", "şema"]);
+    // The session starts from before it: bring main in, then change it on both sides.
+    let (_, tip) = bring_base(&row).unwrap();
+    let row = SessionWorktreeRow {
+        base_commit: tip,
+        ..row
+    };
+    write(&w(&row), "şema.txt", "bir\niki\n");
+    write(&main, "şema.txt", "sıfır\nbir\n");
+    let plan = plan(&row).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(plan.dirty, ["şema.txt"]);
+    let files: Vec<String> = worktree_changes(&row)
+        .unwrap()
+        .iter()
+        .map(|d| d["file"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(files, ["şema.txt"]);
+    let (_, left) = apply(&always, &row, "Şema", "main", true).unwrap();
+    assert_eq!(left, None);
+    assert_eq!(read(&main, "şema.txt"), "sıfır\nbir\niki\n");
+}
+
 #[test]
 fn staged_detached_and_nothing_to_apply_are_refused() {
     let sandbox = Sandbox::new("refusals");
@@ -422,6 +451,7 @@ fn ignored_env_files_are_copied_and_nothing_else() {
     assert_eq!(read(&wt, ".env"), "SECRET=1\n");
 }
 
+#[cfg(unix)]
 fn quiet_out(id: &str) -> Out {
     Out {
         handle: None,
@@ -431,6 +461,7 @@ fn quiet_out(id: &str) -> Out {
     }
 }
 
+#[cfg(unix)]
 fn lines(out: &Out) -> Vec<(String, String)> {
     out.slot
         .run

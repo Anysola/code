@@ -693,6 +693,8 @@ export type CommandRequest = {
   model: string | null
   variant: string | null
   agent: string | null
+  /** As `SendRequest.place`: a new session's own worktree (default in a git folder) or the main folder. */
+  place?: Place
 }
 
 /**

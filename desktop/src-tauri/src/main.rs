@@ -574,6 +574,8 @@ async fn session_row(app: State<'_, App>, session_id: String) -> Answer {
 
 #[tauri::command]
 async fn sessions(app: State<'_, App>) -> Answer {
+    // Worktrees left from the last run are settled first, so none lists as still being made.
+    worktree::cleaned().await;
     let db = app.db()?;
     let rows = db.list_sessions(None, None, SESSION_LIST).map_err(text)?;
     let worktrees: HashMap<String, SessionWorktreeRow> = db
@@ -596,6 +598,7 @@ async fn open_session(
     directory: String,
     session_id: String,
 ) -> Answer {
+    worktree::cleaned().await;
     let core = core_for(&handle, &app, &directory).await?;
     // `open` would start an empty session under the id of one deleted elsewhere.
     let row = core
