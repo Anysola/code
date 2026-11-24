@@ -241,6 +241,10 @@ async fn ask(
 /// Names the session (or renames it, when it already has a title) unless its title changes
 /// meanwhile.
 pub(crate) async fn generate(shared: Arc<Shared>, session: SessionRow) {
+    // Naming the session is a model call: a spent budget keeps the title it has.
+    if shared.budget_spent(&session.id) {
+        return;
+    }
     let messages: Vec<Message> = shared
         .db
         .messages(&session.id)

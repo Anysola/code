@@ -523,11 +523,13 @@ fn compaction_nudges_once_then_fails() {
     assert_eq!(summaries, 2, "the prompt, then one nudge");
 }
 
-/// A core told to stop at budgets (the desktop app) ends a turn whose session spent its budget
-/// before any model call, with reason `budget`; a session without one never stops, and a raised
-/// budget lets the next prompt run. Each fake model call takes 1% of the 5-hour window.
+/// A core told to stop at budgets (the desktop app) makes no model call for a session whose
+/// budget is spent: no turn step, no title, no `/compact`; the turn ends with reason `budget`.
+/// A session without one never stops, a raised budget lets the next prompt run, and a
+/// subagent's calls count toward its root's budget and stop with it. Each fake model call
+/// (title calls included) takes 1% of the 5-hour window.
 #[test]
-fn a_spent_budget_stops_the_next_turn_until_it_is_raised() {
+fn a_spent_budget_stops_every_model_call_until_it_is_raised() {
     use anysola_core::events::InterruptReason;
     let gateway = FakeGateway::start(|request, _| text(request, "ok"));
     let env = env(&gateway.url);
@@ -539,7 +541,8 @@ fn a_spent_budget_stops_the_next_turn_until_it_is_raised() {
             .block_on(core.prompt(id, prompt(text), TurnOptions::default()))
             .unwrap()
     };
-    let calls = || gateway.messages().iter().filter(|r| !r.is_title()).count();
+    let calls = || gateway.messages().len();
+    let budget = Outcome::Interrupted(InterruptReason::Budget);
 
     let (free, _) = core.open(&Target::New, false).unwrap();
     for n in 0..3 {
@@ -553,9 +556,11 @@ fn a_spent_budget_stops_the_next_turn_until_it_is_raised() {
     assert_eq!(run(&capped.id, "one"), Outcome::Succeeded);
     assert!(core.usage(&capped.id).total >= 1.0);
     let before = calls();
+    assert_eq!(run(&capped.id, "two"), budget);
     assert_eq!(
-        run(&capped.id, "two"),
-        Outcome::Interrupted(InterruptReason::Budget)
+        runtime.block_on(core.compact(&capped.id)).unwrap(),
+        budget,
+        "/compact waits for the budget too"
     );
     assert_eq!(calls(), before, "no model call once the budget is spent");
 
@@ -563,5 +568,19 @@ fn a_spent_budget_stops_the_next_turn_until_it_is_raised() {
     core.set_budget(&capped.id, Some(total.floor() as u64 + 2))
         .unwrap();
     assert_eq!(run(&capped.id, "three"), Outcome::Succeeded);
-    assert_eq!(calls(), before + 1);
+    assert!(calls() > before);
+
+    // A subagent spends its root's budget, and stops once it is spent.
+    let (root, _) = core.open(&Target::New, false).unwrap();
+    core.set_budget(&root.id, Some(1)).unwrap();
+    let child = core.create_child(&root.id, None).unwrap();
+    assert_eq!(run(&child.id, "child one"), Outcome::Succeeded);
+    assert!(
+        core.usage(&root.id).total >= 1.0,
+        "the child's call counts for the root"
+    );
+    let before = calls();
+    assert_eq!(run(&child.id, "child two"), budget);
+    assert_eq!(run(&root.id, "root"), budget);
+    assert_eq!(calls(), before);
 }

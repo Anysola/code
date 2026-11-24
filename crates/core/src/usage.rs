@@ -3,8 +3,13 @@
 //! the session budget in percent of the 5-hour window. Totals survive restarts in KV
 //! `anysola:usage:<id>` as `{used, turns, budget}`.
 //!
+//! A subagent's calls count twice: under its own session, and toward its root session's total,
+//! which its budget limits (the root is the session the user drives).
+//!
 //! Credit budgets and totals from 0.5.x and the 1.0 previews (`anysola:session:<id>`,
 //! `anysola:budget:default`) are not read: a credit count is no percentage, so they are dropped.
+//! Neither is the CLI's default budget (`anysola:budget:five-hour`): a session without a stored
+//! row starts with no budget. The key is left where it is.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -29,6 +34,8 @@ struct State {
     turns: u64,
     open: bool,
     budget: Option<u64>,
+    /// A stop at this budget has been noted in the session already (not stored).
+    noted: bool,
 }
 
 pub struct Usage {
@@ -78,10 +85,7 @@ impl Usage {
                 budget: budget_of(saved.get("budget")),
                 ..State::default()
             },
-            None => State {
-                budget: self.default_budget(),
-                ..State::default()
-            },
+            None => State::default(),
         }
     }
 
@@ -93,11 +97,48 @@ impl Usage {
         let _ = self.db.kv_set(&Self::key(session_id), &Self::stored(state));
     }
 
+    /// The session whose budget limits this one: itself, or the root of a subagent's chain.
+    pub fn root(&self, session_id: &str) -> String {
+        let mut id = session_id.to_string();
+        // A chain is a few levels deep; the cap only guards against a cycle in damaged data.
+        for _ in 0..32 {
+            match self
+                .db
+                .session(&id)
+                .ok()
+                .flatten()
+                .and_then(|r| r.parent_id)
+            {
+                Some(parent) => id = parent,
+                None => break,
+            }
+        }
+        id
+    }
+
+    /// The root's budget is set and what it and its subagents used has reached it.
+    pub fn spent(&self, session_id: &str) -> bool {
+        let root = self.root(session_id);
+        self.with(&root, |state| {
+            state
+                .budget
+                .is_some_and(|budget| state.total >= budget as f64)
+        })
+    }
+
+    /// Whether a stop at the budget should leave its note: the first stop at a budget does, the
+    /// ones after it (a woken turn, a prompt sent anyway) do not, until the budget changes.
+    pub fn note_budget_stop(&self, session_id: &str) -> bool {
+        self.with(session_id, |state| {
+            !std::mem::replace(&mut state.noted, true)
+        })
+    }
+
     fn publish(&self, session_id: &str, state: &State) {
         let _ = self.events.send(Event::Usage(snapshot(session_id, state)));
     }
 
-    /// The budget new sessions start with.
+    /// The CLI's budget for new sessions; read for it alone, never applied (see the module doc).
     pub fn default_budget(&self) -> Option<u64> {
         budget_of(self.db.kv_get(DEFAULT_KEY).ok().flatten().as_ref())
     }
@@ -110,21 +151,36 @@ impl Usage {
         self.with(session_id, |state| snapshot(session_id, state))
     }
 
-    /// Records a model call's usage event.
+    /// Records a model call's usage event: for the session, and for its root when it is a
+    /// subagent's (into the root's running turn when it has one).
     pub fn record(&self, session_id: &str, event: &UsageEvent) {
+        self.charge(session_id, event, true);
+        let root = self.root(session_id);
+        if root != session_id {
+            self.charge(&root, event, false);
+        }
+    }
+
+    fn charge(&self, session_id: &str, event: &UsageEvent, own: bool) {
+        let used = event.five_hour_percent_used;
         let state = self.with(session_id, |state| {
-            if !state.open {
-                state.turn = 0.0;
+            if own {
+                if !state.open {
+                    state.turn = 0.0;
+                }
+                state.open = true;
             }
-            state.open = true;
-            state.turn += event.five_hour_percent_used;
-            state.total += event.five_hour_percent_used;
+            if state.open {
+                state.turn += used;
+            }
+            state.total += used;
             state.latest = Some(*event);
+            // Saved under the lock, so two calls never store their totals out of order.
+            if used > 0.0 {
+                self.save(session_id, state);
+            }
             state.clone()
         });
-        if event.five_hour_percent_used > 0.0 {
-            self.save(session_id, &state);
-        }
         self.publish(session_id, &state);
     }
 
@@ -137,13 +193,11 @@ impl Usage {
             state.open = false;
             if state.turn > 0.0 {
                 state.turns += 1;
+                self.save(session_id, state);
             }
             Some(state.clone())
         });
         if let Some(state) = closed {
-            if state.turn > 0.0 {
-                self.save(session_id, &state);
-            }
             self.publish(session_id, &state);
         }
     }
@@ -155,14 +209,17 @@ impl Usage {
         session_id: &str,
         budget: Option<u64>,
     ) -> Result<UsageSnapshot, StorageError> {
-        let mut state = self.with(session_id, |state| state.clone());
-        state.budget = budget.filter(|b| (1..=MAX_BUDGET).contains(b));
-        self.db
-            .kv_set(&Self::key(session_id), &Self::stored(&state))?;
-        let state = self.with(session_id, |current| {
-            current.budget = state.budget;
-            current.clone()
-        });
+        let budget = budget.filter(|b| (1..=MAX_BUDGET).contains(b));
+        // Stored and applied under the lock: a call's usage landing meanwhile is not lost.
+        let state = self.with(session_id, |state| {
+            let mut next = state.clone();
+            next.budget = budget;
+            self.db
+                .kv_set(&Self::key(session_id), &Self::stored(&next))?;
+            state.budget = budget;
+            state.noted = false;
+            Ok::<_, StorageError>(state.clone())
+        })?;
         self.publish(session_id, &state);
         Ok(snapshot(session_id, &state))
     }
@@ -265,6 +322,74 @@ mod tests {
         )
         .unwrap();
         assert_eq!(usage.snapshot("t").budget, None, "over 100% is no budget");
+    }
+
+    #[test]
+    fn the_clis_default_budget_is_not_applied() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Db::open(&dir.path().join("a.db")).unwrap());
+        db.kv_set(DEFAULT_KEY, &json!(5)).unwrap();
+        let usage = Usage::new(db.clone(), broadcast::channel(1).0);
+        assert_eq!(usage.snapshot("new").budget, None);
+        assert!(!usage.spent("new"));
+        assert_eq!(
+            db.kv_get(DEFAULT_KEY).unwrap(),
+            Some(json!(5)),
+            "left in place"
+        );
+    }
+
+    #[test]
+    fn subagents_count_toward_their_roots_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Db::open(&dir.path().join("a.db")).unwrap());
+        let row = |id: &str, parent: Option<&str>| crate::storage::SessionRow {
+            id: id.into(),
+            project_id: "global".into(),
+            parent_id: parent.map(Into::into),
+            fork_session_id: None,
+            fork_boundary: None,
+            slug: "s".into(),
+            directory: "/w".into(),
+            title: "t".into(),
+            version: "v".into(),
+            agent: None,
+            model: None,
+            time_created: 1,
+            time_updated: 1,
+        };
+        db.create_session(&row("root", None)).unwrap();
+        db.create_session(&row("child", Some("root"))).unwrap();
+        db.create_session(&row("grandchild", Some("child")))
+            .unwrap();
+        let usage = Usage::new(db, broadcast::channel(16).0);
+        assert_eq!(usage.root("grandchild"), "root");
+        usage.set_budget("root", Some(2)).unwrap();
+        usage.record("root", &event(1.0, 40));
+        usage.record("grandchild", &event(0.5, 40));
+        assert_eq!(usage.snapshot("root").total, 1.5);
+        assert_eq!(
+            usage.snapshot("root").turn,
+            1.5,
+            "inside the root's running turn"
+        );
+        assert_eq!(usage.snapshot("grandchild").total, 0.5);
+        assert!(!usage.spent("child"));
+        usage.close_turn("root");
+        // A background subagent still running after the root's turn ended.
+        usage.record("child", &event(0.75, 40));
+        assert_eq!(usage.snapshot("root").total, 2.25);
+        assert_eq!(
+            usage.snapshot("root").turn,
+            1.5,
+            "no turn of its own reopened"
+        );
+        assert!(usage.spent("grandchild") && usage.spent("root"));
+        assert!(usage.note_budget_stop("root"));
+        assert!(!usage.note_budget_stop("root"), "one note per budget");
+        usage.set_budget("root", Some(3)).unwrap();
+        assert!(!usage.spent("child"));
+        assert!(usage.note_budget_stop("root"), "a new budget notes again");
     }
 
     #[test]

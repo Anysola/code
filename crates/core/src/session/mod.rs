@@ -310,7 +310,14 @@ fn finish(shared: &Arc<Shared>, session_id: &str, outcome: &Outcome, unsent: boo
     let mut idle = json!({"time": {"created": now_ms()}, "outcome": outcome_label});
     match outcome {
         Outcome::Failed(error) => idle["error"] = encode(error),
-        Outcome::Interrupted(reason) => idle["reason"] = json!(interrupt_label(*reason)),
+        Outcome::Interrupted(reason) => {
+            idle["reason"] = json!(interrupt_label(*reason));
+            // One note per budget: the stops after the first (woken turns, prompts sent anyway)
+            // are marked so a front end can leave them out.
+            if *reason == InterruptReason::Budget && !shared.usage.note_budget_stop(session_id) {
+                idle["repeat"] = json!(true);
+            }
+        }
         Outcome::Succeeded => {}
     }
     let _ = shared
@@ -579,6 +586,12 @@ pub(crate) async fn drain(
         };
         if next.kind == "compaction" {
             let _ = shared.db.inbox_remove(&next.id);
+            // `/compact` is a model call too: a spent budget stops it like a turn.
+            if shared.budget_spent(session_id) {
+                let outcome = Outcome::Interrupted(InterruptReason::Budget);
+                finish(&shared, session_id, &outcome, false);
+                return outcome;
+            }
             outcome = match manual_compaction(&shared, &session, &cancel).await {
                 compaction::Outcome::Failed(error) => Outcome::Failed(error),
                 _ => Outcome::Succeeded,

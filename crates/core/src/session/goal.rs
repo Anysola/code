@@ -543,6 +543,10 @@ fn used_tools(shared: &Shared, session_id: &str, goal_id: &str) -> bool {
 /// The session would go idle with nothing pending. Returns whether input was admitted, which
 /// continues the same execution.
 pub(crate) async fn idle(shared: &Arc<Shared>, session_id: &str) -> bool {
+    // The reviewer is a model call: with the budget spent the goal waits for the user.
+    if shared.budget_spent(session_id) {
+        return false;
+    }
     let (db, events) = (&shared.db, &shared.events);
     let Some(goal) = read(db, events, session_id) else {
         return false;

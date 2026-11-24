@@ -987,7 +987,7 @@ pub(crate) fn precompute(
     estimate: Estimate,
 ) {
     let settings = Settings::from_config(&selection.sources.config);
-    if !settings.precompute || !settings.auto {
+    if !settings.precompute || !settings.auto || shared.budget_spent(&session.id) {
         return;
     }
     let Some(ceiling) = ceiling(selection.model.context, settings.buffer.as_ref()) else {

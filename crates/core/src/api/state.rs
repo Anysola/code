@@ -123,6 +123,12 @@ impl Loaded {
 }
 
 impl Shared {
+    /// A spent budget stops this session's model calls: the front end asked for budgets to
+    /// stop turns ([`crate::api::Core::stop_at_budget`]) and its root's budget is used up.
+    pub(crate) fn budget_spent(&self, session_id: &str) -> bool {
+        self.budget_stops.load(std::sync::atomic::Ordering::Relaxed) && self.usage.spent(session_id)
+    }
+
     /// The current config and what was built from it.
     pub fn loaded(&self) -> Arc<Loaded> {
         self.loaded

@@ -242,18 +242,11 @@ pub(crate) async fn drive(
         if cancel.is_cancelled() {
             return Outcome::Interrupted(InterruptReason::User);
         }
-        if options.stop_at_budget
-            || shared
-                .budget_stops
-                .load(std::sync::atomic::Ordering::Relaxed)
+        // The root's budget, which a subagent's calls count toward too.
+        if (options.stop_at_budget && shared.usage.spent(&session.id))
+            || shared.budget_spent(&session.id)
         {
-            let usage = shared.usage.snapshot(&session.id);
-            if usage
-                .budget
-                .is_some_and(|budget| usage.total >= budget as f64)
-            {
-                return Outcome::Interrupted(InterruptReason::Budget);
-            }
+            return Outcome::Interrupted(InterruptReason::Budget);
         }
         shared.refresh().await;
         // A tool may have moved the session; the next step runs in its new directory.
@@ -292,6 +285,10 @@ pub(crate) async fn drive(
                 continue;
             }
             // One overflow compaction per step; a second rejection surfaces.
+            // The step that crossed the budget does not buy a compaction to go on.
+            StepEnd::Overflow(_) if shared.budget_spent(&session.id) => {
+                return Outcome::Interrupted(InterruptReason::Budget);
+            }
             StepEnd::Overflow(error) if !overflowed => {
                 match overflow(shared, session, selection, cancel).await {
                     compaction::Outcome::Completed => {
@@ -466,6 +463,13 @@ pub(crate) async fn generate(
     session: &SessionRow,
     prompt: &str,
 ) -> Result<String, GenerateError> {
+    // The goal reviewer and cache warming spend the budget like a turn.
+    if shared.budget_spent(&session.id) {
+        return Err(GenerateError::Failed(SessionError::new(
+            "budget",
+            "The session’s budget is spent.",
+        )));
+    }
     let selection = super::select(shared, session)?;
     super::warming::context(
         shared,
