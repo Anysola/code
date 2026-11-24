@@ -98,6 +98,20 @@ export function sessionOrder(sessions: SessionRow[], pinned: Set<string>) {
   return [...pins, ...[...by.values()].flat()]
 }
 
+/** Keys a shortcut names, by physical key when the layout types no Latin character there. */
+const CODES: Record<string, string> = { Slash: "/", Comma: ",", Period: "." }
+
+/**
+ * The key of a shortcut press: the character on Latin layouts (Ctrl / is Ctrl / wherever a layout
+ * puts it), and the US key at that position on others, where `e.key` is Cyrillic, Greek…
+ */
+export function shortcutKey(e: Pick<KeyboardEvent, "key" | "code">) {
+  const key = e.key.toLowerCase()
+  if (key.length !== 1 || /[\x20-\x7e]/.test(key)) return key
+  if (/^Key[A-Z]$/.test(e.code)) return e.code.slice(3).toLowerCase()
+  return CODES[e.code] ?? key
+}
+
 /** The window-wide keys. Ctrl Alt is AltGr on Windows (typing @ or [), so it is never a shortcut. */
 export function useShortcuts() {
   const sessions = useStore((s) => s.sessions)
@@ -118,7 +132,7 @@ export function useShortcuts() {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented) return
       const ctrl = (e.ctrlKey || e.metaKey) && !e.altKey
-      const key = e.key.toLowerCase()
+      const key = shortcutKey(e)
       const inSettings = !!document.querySelector("[data-settings]")
       const { sessions, pinned, open, busy, deleting, ready, sheet } = now.current
       const run = (f: () => void) => {

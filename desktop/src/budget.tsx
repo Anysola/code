@@ -34,6 +34,8 @@ const PRESETS = [5, 10, 25, 50]
 
 function BudgetEditor({ open, usage, onDone }: { open: Open; usage: SessionUsage | null; onDone: () => void }) {
   const [value, setValue] = useState(String(usage?.budget ?? 10))
+  /** What is typed in Other, kept as typed: 5 then 0 makes 50, not a preset that empties it. */
+  const [other, setOther] = useState(() => (PRESETS.includes(usage?.budget ?? 10) ? "" : String(usage?.budget)))
   const [saving, setSaving] = useState(false)
   const n = Number(value)
   const valid = value !== "" && Number.isInteger(n) && n >= 1 && n <= MAX_BUDGET
@@ -55,7 +57,8 @@ function BudgetEditor({ open, usage, onDone }: { open: Open; usage: SessionUsage
       <div className="flex flex-col gap-0.5">
         <span className="text-sm font-medium">Session budget</span>
         <span className="text-2xs text-muted">
-          Share of the 5-hour window this session may use; turns stop there. Used so far: {pct(usage?.total ?? 0)}%
+          Share of the 5-hour window this session and its subagents may use; work stops there. Used so far:{" "}
+          {pct(usage?.total ?? 0)}%
         </span>
       </div>
       <div className="flex items-center gap-1">
@@ -63,11 +66,14 @@ function BudgetEditor({ open, usage, onDone }: { open: Open; usage: SessionUsage
           <button
             key={p}
             type="button"
-            onClick={() => setValue(String(p))}
-            aria-pressed={n === p}
+            onClick={() => {
+              setValue(String(p))
+              setOther("")
+            }}
+            aria-pressed={n === p && other === ""}
             className={cn(
               "text-dense h-8 flex-1 rounded-lg tabular-nums transition-colors focus-visible:status-focused-field",
-              n === p ? "bg-default-hover text-foreground" : "bg-default/50 text-muted hover:text-foreground"
+              n === p && other === "" ? "bg-default-hover text-foreground" : "bg-default/50 text-muted hover:text-foreground"
             )}
           >
             {p}%
@@ -75,10 +81,14 @@ function BudgetEditor({ open, usage, onDone }: { open: Open; usage: SessionUsage
         ))}
         <label className="text-dense flex h-8 w-16 items-center rounded-lg bg-default/50 px-2 focus-within:bg-default-hover">
           <input
-            value={PRESETS.includes(n) ? "" : value}
+            value={other}
             placeholder="Other"
             inputMode="numeric"
-            onChange={(e) => setValue(e.target.value.replace(/[^0-9]/g, "").slice(0, 3))}
+            onChange={(e) => {
+              const typed = e.target.value.replace(/[^0-9]/g, "").slice(0, 3)
+              setOther(typed)
+              setValue(typed)
+            }}
             aria-label="Budget, percent of the 5-hour window"
             className="w-full min-w-0 bg-transparent text-right tabular-nums outline-none placeholder:text-muted"
           />

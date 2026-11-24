@@ -88,7 +88,8 @@ export function Palette() {
 
 function Panel() {
   const [q, setQ] = useState("")
-  const [at, setAt] = useState(0)
+  /** The highlighted row by key: it stays on the same item when the rows change under it. */
+  const [picked, setPicked] = useState<string | null>(null)
   const panel = useRef<HTMLDivElement>(null)
   const list = useRef<HTMLDivElement>(null)
   const close = () => showPalette(false)
@@ -134,8 +135,8 @@ function Panel() {
         })),
     ]
   }, [q, all, deleting, commands, openId])
-  useEffect(() => setAt(0), [q])
-  const current = Math.min(at, rows.length - 1)
+  useEffect(() => setPicked(null), [q])
+  const current = Math.max(0, rows.findIndex((r) => r.key === picked))
   useEffect(() => {
     list.current?.querySelector<HTMLElement>(`[data-row="${current}"]`)?.scrollIntoView({ block: "nearest" })
   }, [current])
@@ -143,7 +144,7 @@ function Panel() {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault()
       const step = e.key === "ArrowDown" ? 1 : -1
-      setAt((a) => (rows.length ? (Math.min(a, rows.length - 1) + step + rows.length) % rows.length : 0))
+      if (rows.length) setPicked(rows[(current + step + rows.length) % rows.length].key)
     } else if (e.key === "Enter" && !e.nativeEvent.isComposing) {
       e.preventDefault()
       rows[current]?.run()
@@ -190,7 +191,7 @@ function Panel() {
                     data-row={i}
                     aria-selected={i === current}
                     tabIndex={-1}
-                    onMouseMove={() => setAt(i)}
+                    onMouseMove={() => setPicked(r.key)}
                     onClick={r.run}
                     className={cn(
                       "text-dense flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left outline-none",

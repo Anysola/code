@@ -358,7 +358,8 @@ export function Composer({ open }: { open: Open }) {
     setRecall(null)
     setProblem(null)
   }, [key])
-  // When the ask in front of Enter appeared.
+  // When the ask in front of Enter appeared, or the box got focus back with it waiting (from the
+  // palette, a menu): an Enter held or meant for there must not allow it.
   const askedAt = useRef(0)
   useEffect(() => {
     askedAt.current = Date.now()
@@ -452,6 +453,8 @@ export function Composer({ open }: { open: Open }) {
       ...filter(found, typed.query, (r) => r.label, 40),
     ]
   }, [typed?.kind, typed?.query, menuOpen, pal, paths, open])
+  // The menu on screen: `/` shows only when something matches, `@` also to say nothing does.
+  const menuShown = menuOpen && (rows.length > 0 || typed?.kind === "@")
   // A bare `/` has no row picked: Enter there must not run whatever comes first.
   useEffect(() => setActive(typed?.kind === "/" && !typed.query ? -1 : 0), [typed?.kind, typed?.query])
 
@@ -547,7 +550,7 @@ export function Composer({ open }: { open: Open }) {
 
   return (
     <div className="relative">
-      {menuOpen && (rows.length > 0 || typed?.kind === "@") && (
+      {menuShown && (
         <Menu
           rows={rows}
           active={Math.min(active, rows.length - 1)}
@@ -622,6 +625,9 @@ export function Composer({ open }: { open: Open }) {
           ref={area}
           value={text}
           rows={2}
+          onFocus={() => {
+            askedAt.current = Date.now()
+          }}
           onChange={(e) => {
             setText(e.target.value)
             setCaret(e.target.selectionStart)
@@ -662,7 +668,8 @@ export function Composer({ open }: { open: Open }) {
                 return
               }
             }
-            if (menuOpen && e.key === "Escape" && typed) {
+            // Only a menu that shows takes Escape: an unmatched `/foo` has none to close.
+            if (menuShown && e.key === "Escape" && typed) {
               e.preventDefault()
               setDismissed(typed.start)
               return
@@ -682,6 +689,8 @@ export function Composer({ open }: { open: Open }) {
             }
             if (isSendKey(e, sendKey)) {
               e.preventDefault()
+              // A held Enter sends once and allows nothing: its repeats are not presses.
+              if (e.repeat) return
               if (empty && asking) {
                 if (Date.now() - askedAt.current >= ASK_SETTLE) void reply(asking, "once")
               } else submit()

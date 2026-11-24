@@ -890,6 +890,8 @@ export function mockBridge(): Bridge {
   let forms: FormRequest[] = state === "form" ? [form] : state === "form-url" ? [formUrl] : []
   let signedIn = state !== "signed-out"
   let revert: Revert | null = state === "rewound" ? rewound : null
+  /** The user message a staged rewind starts at (the fixture's has none to name). */
+  let revertAt: string | null = null
   const params = new URLSearchParams(location.search)
   const failing = new Set((params.get("fail") ?? "").split(",").filter(Boolean))
   const delay = Number(params.get("delay")) || 0
@@ -1238,6 +1240,20 @@ export function mockBridge(): Bridge {
     spent.set(sessionId, { turn: 1.2, total: Math.round((was.total + 1.2) * 10) / 10, turns: was.turns + 1 })
     emit({ type: "usage", ...usageOf(sessionId) })
   }
+  /** Sessions whose stop at the current budget is noted already: later stops add no note. */
+  const noted = new Set<string>()
+  /** As the core: a turn (a prompt, a wake, `/compact`) starts and ends before any model call,
+   * noting the first stop at a budget only. */
+  const budgetStop = async (id: string) => {
+    emit({ type: "started", sessionId: id })
+    await wait(150)
+    if (!noted.has(id)) {
+      noted.add(id)
+      const after = transcripts.get(id) ?? []
+      transcripts.set(id, [...after, { kind: "note", id: `n${after.length}`, text: "Stopped at the session’s budget.", failed: false }])
+    }
+    emit({ type: "interrupted", sessionId: id, reason: "budget" })
+  }
   const overBudget = (sessionId: string) => {
     const u = usageOf(sessionId)
     return u.budget !== null && u.total >= u.budget
@@ -1478,15 +1494,18 @@ export function mockBridge(): Bridge {
       const items = transcripts.get(sessionId) ?? []
       const text = items.find((i) => i.id === messageId)
       revert = state === "long" ? longRevert : rewound
+      revertAt = messageId
       // Only the web folder is a git repository here (see gitStatus).
       return { text: text?.kind === "user" ? text.text : "", view: view(sessionId), filesKept: directory !== WEB }
     },
     async unrevert(_directory, sessionId) {
       revert = null
+      revertAt = null
       return view(sessionId)
     },
     async resend(_directory, sessionId) {
       revert = null
+      revertAt = null
       running.add(sessionId)
       emit({ type: "started", sessionId })
       void reply(sessionId, "Trying that again from the top.")
@@ -1513,7 +1532,9 @@ export function mockBridge(): Bridge {
       void reply(id, "Reviewing the uncommitted changes.")
       return { sessionId: id }
     },
-    async compact() {},
+    async compact(_directory, sessionId) {
+      if (overBudget(sessionId)) await budgetStop(sessionId)
+    },
     async selectAgent(_directory, _sessionId, agent) {
       return { ...info, agent }
     },
@@ -1683,13 +1704,8 @@ export function mockBridge(): Bridge {
       const list = transcripts.get(id) ?? []
       transcripts.set(id, [...list, { kind: "user", id: `u${list.length}`, text, images: files.length, time: Date.now() }])
       if (overBudget(id)) {
-        // As the core: the turn starts and ends at its first step, before any model call.
         emit({ type: "changed", sessionId: id })
-        emit({ type: "started", sessionId: id })
-        await wait(150)
-        const after = transcripts.get(id) ?? []
-        transcripts.set(id, [...after, { kind: "note", id: `n${after.length}`, text: "Stopped at the session’s budget.", failed: false }])
-        emit({ type: "interrupted", sessionId: id, reason: "budget" })
+        await budgetStop(id)
         return { sessionId: id, queued: false }
       }
       running.add(id)
@@ -1779,6 +1795,7 @@ export function mockBridge(): Bridge {
         ...list,
         ...waiting.map((q, i) => ({ kind: "user" as const, id: `uq${list.length + i}`, text: q.text, images: q.images, time: Date.now() })),
       ])
+      if (overBudget(sessionId)) return void (await budgetStop(sessionId))
       running.add(sessionId)
       emit({ type: "started", sessionId })
       emit({ type: "changed", sessionId })
@@ -1813,17 +1830,29 @@ export function mockBridge(): Bridge {
       const row = rows.find((r) => r.id === sessionId)
       if (row) row.title = title
     },
+    async sessionRow(sessionId) {
+      const row = rows.find((r) => r.id === sessionId)
+      return row ? { ...row } : null
+    },
     async forkSession(directory, sessionId, before) {
+      // As the shell (branch.rs): roots only, not while running, through what the window shows.
       const source = rows.find((r) => r.id === sessionId)
-      if (!source) throw new Error("This session no longer exists.")
+      if (!source)
+        throw new Error(transcripts.has(sessionId) ? "A subagent’s session can’t be changed on its own." : "This session no longer exists.")
+      if (running.has(sessionId)) throw new Error("Wait for the current turn to end, or stop it, before branching.")
       const items = transcripts.get(sessionId) ?? []
-      let copied = items
+      const users = items.filter((i) => i.kind === "user").map((i) => i.id)
+      const shown = revertAt === null ? users.length : users.indexOf(revertAt)
+      if (shown < 0) throw new Error("Redo the rewind or send a message before branching.")
+      const end = before ?? (revertAt !== null ? revertAt : null)
       if (before !== null) {
-        const at = items.findIndex((i) => i.id === before && i.kind === "user")
-        if (at < 0) throw new Error("That message is no longer in the session.")
-        copied = items.slice(0, at)
+        const at = users.indexOf(before)
+        if (at === 0) throw new Error("There is nothing before the first message to fork.")
+        if (at < 0 || at >= shown) throw new Error("That message is no longer in the session.")
       }
+      const copied = end === null ? items : items.slice(0, items.findIndex((i) => i.id === end))
       if (copied.length === 0) throw new Error("There is nothing before that message to fork.")
+      // The core numbers a source's forks by how many it has: `(fork #n)` on the source's title.
       const forks = rows.filter((r) => r.forkOf === source.id).length
       const id = `ses_${Math.random().toString(36).slice(2, 10)}`
       const row = { id, title: `${source.title} (fork #${forks + 1})`, directory: source.directory, updated: Date.now(), forkOf: source.id }
@@ -1833,8 +1862,10 @@ export function mockBridge(): Bridge {
       return { ...row }
     },
     async setBudget(_directory, sessionId, budget) {
+      if (!rows.some((r) => r.id === sessionId)) throw new Error("A subagent’s session can’t be changed on its own.")
       if (budget !== null && !(Number.isInteger(budget) && budget >= 1 && budget <= MAX_BUDGET))
-        throw new Error(`A budget is 1 to ${MAX_BUDGET}% of the 5-hour window.`)
+        throw new Error(`A budget is a whole percent, 1 to ${MAX_BUDGET}, of the 5-hour window.`)
+      noted.delete(sessionId)
       const u = { ...usageOf(sessionId), budget }
       budgets.set(sessionId, budget)
       emit({ type: "usage", ...u })

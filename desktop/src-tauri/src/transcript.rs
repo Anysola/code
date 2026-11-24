@@ -236,7 +236,8 @@ fn turn_ends(entries: &[Entry]) -> Vec<Option<u64>> {
 
 /// The note an interrupted turn leaves, by the reason its `idle` row keeps.
 fn interrupted_note(idle: &Value) -> Option<&'static str> {
-    if idle["outcome"] != "interrupted" {
+    // A budget stop after the first one at the same budget: the first note said it.
+    if idle["outcome"] != "interrupted" || idle["repeat"] == true {
         return None;
     }
     Some(match idle["reason"].as_str() {
@@ -544,6 +545,17 @@ fn clip(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_budget_stop_is_noted_once() {
+        let first = json!({"outcome": "interrupted", "reason": "budget"});
+        let again = json!({"outcome": "interrupted", "reason": "budget", "repeat": true});
+        assert_eq!(
+            interrupted_note(&first),
+            Some("Stopped at the session’s budget.")
+        );
+        assert_eq!(interrupted_note(&again), None);
+    }
 
     #[test]
     fn targets_are_relative_to_the_project() {

@@ -19,7 +19,7 @@ import {
 } from "lucide-react"
 import { useEffect, useRef, useState, type ReactNode } from "react"
 
-import type { Account, Queued } from "./bridge"
+import type { Account, Queued, SessionRow } from "./bridge"
 import { atBudget, raiseTo, useUsage } from "./budget"
 import { dismissForkNote, useChrome } from "./chrome"
 import {
@@ -218,9 +218,30 @@ export function Banner({ open }: { open: Open }) {
 /** A fork's note until put away: where it came from, and that files were not rewound. */
 export function ForkNote({ open }: { open: Open }) {
   const row = useStore((s) => s.sessions.find((r) => r.id === open.sessionId) ?? null)
-  const source = useStore((s) => (row?.forkOf ? (s.sessions.find((r) => r.id === row.forkOf) ?? null) : null))
+  const forkOf = row?.forkOf ?? null
+  const listed = useStore((s) => (forkOf ? (s.sessions.find((r) => r.id === forkOf) ?? null) : null))
+  // The list holds the latest sessions only: an older source is read on its own.
+  const [read, setRead] = useState<{ id: string; row: SessionRow | null } | null>(null)
+  useEffect(() => {
+    if (!forkOf || listed) return
+    let live = true
+    currentBridge()
+      .sessionRow(forkOf)
+      .then(
+        (r) => live && setRead({ id: forkOf, row: r }),
+        () => live && setRead({ id: forkOf, row: null })
+      )
+    return () => {
+      live = false
+    }
+  }, [forkOf, listed])
+  // One waiting behind Undo is gone as far as the window goes.
+  const deleting = useChrome((c) => (forkOf ? !!c.deleting?.ids.has(forkOf) : false))
+  const source = deleting ? null : (listed ?? (read?.id === forkOf ? read.row : null))
   const gone = useChrome((c) => !!open.sessionId && c.forkNotes.has(open.sessionId))
   if (!row?.forkOf || gone) return null
+  // Not known yet: nothing rather than a wrong "deleted".
+  if (!source && !deleting && !listed && read?.id !== forkOf) return null
   return (
     <Strip
       icon={<GitBranch className="size-3.5" />}

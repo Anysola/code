@@ -15,7 +15,7 @@ export type SessionRow = { id: string; title: string; directory: string; updated
 /**
  * A session's share of the account's 5-hour window, as `sessionUsage` and `setBudget` return it
  * and the `usage` event carries it. Percents of the 5-hour window: `turn` the running (or last)
- * turn, `total` every turn of the session, `budget` its limit (1 to `MAX_BUDGET`, null for none).
+ * turn, `total` every turn of the session and of its subagents (a root's total includes them), `budget` its limit (1 to `MAX_BUDGET`, null for none).
  * `turns`: turns that used any. `fiveHour` and `weekly`: the account's windows after the last
  * model call this run of the app saw, null before one. A fork starts at zero with the default
  * budget, not its source's numbers. Subagents' model calls count in their own sessions, not in
@@ -672,6 +672,9 @@ export type Bridge = {
   loginWait(): Promise<{ signedIn: boolean }>
   loginCancel(): Promise<void>
   sessions(): Promise<SessionRow[]>
+  /** One root session by id, listed or not (`sessions` holds the latest 200); null when it is
+   * gone or a subagent's. */
+  sessionRow(sessionId: string): Promise<SessionRow | null>
   openSession(directory: string, sessionId: string): Promise<Opened>
   transcript(directory: string, sessionId: string): Promise<View>
   account(): Promise<Account>
@@ -707,9 +710,12 @@ export type Bridge = {
    * and `resend` take; that message and everything after it are left out). The new session is a
    * root session, listed like any other, with `forkOf` set to the source; its first title is
    * the source's with ` (fork #n)`, which a rename drops (tell a fork by `forkOf`, never by
-   * its title). Use the returned row; the `created` event that also comes only refreshes the list. Refused for a
-   * subagent's session, for a `before` that is not a user message of the session, and when
-   * nothing comes before `before`.
+   * its title). Use the returned row; the `created` event that also comes only refreshes the
+   * list. With a rewind staged it copies what the window shows: up to the rewind's message, as
+   * if it were final (`before` must come before it). Refused for a subagent's session, while a
+   * turn runs, for a `before` that is not a shown user message of the session, for the first
+   * message (nothing comes before it), and with a rewind staged somewhere other than a user
+   * message.
    *
    * IMPORTANT: a fork works in the same folder as its source, and nothing rewinds files. Forking
    * from an earlier message gives the conversation as it was then, but the files stay as they
@@ -718,12 +724,15 @@ export type Bridge = {
   forkSession(directory: string, sessionId: string, before: string | null): Promise<SessionRow>
   /**
    * Sets the session's budget, a whole percent of the 5-hour window from 1 to `MAX_BUDGET`, or
-   * clears it (`null`); anything else is refused. A `usage` event carries the change too.
-   * Every turn of the app stops at the budget: once `total` reaches it, the next model call
-   * does not start and the turn ends with `interrupted`, reason `budget` (a prompt sent then
-   * ends the same way at once). The check runs before each model call, so `total` can end a
-   * little over the budget. Raising it above `total` or clearing it lets the next prompt run;
-   * nothing is resent by itself. A session without a budget never stops for one.
+   * clears it (`null`); anything else is refused (a fraction, out of range). NaN would arrive
+   * as `null` and clear it: check the number before sending. A `usage` event carries the change too.
+   * Every model call of the session stops at the budget: turns (also the ones a background
+   * command or a schedule wakes), `/compact`, the goal reviewer, titles, its subagents' calls.
+   * Once `total` reaches it the next call does not start; a turn or `/compact` ends with
+   * `interrupted`, reason `budget` (a prompt sent then ends the same way at once). The transcript
+   * notes the first stop at a budget only. The check runs before each call, so `total` can end
+   * a little over. Raising it above `total` or clearing it lets the next prompt run; nothing is
+   * resent by itself. A session without a budget never stops for one; none starts with one.
    */
   setBudget(directory: string, sessionId: string, budget: number | null): Promise<SessionUsage>
   /** What the session has used of the 5-hour window, and its budget. */
@@ -876,6 +885,7 @@ function tauriBridge(): Bridge {
     messageImages: (directory, sessionId, messageId) => invoke("message_images", { directory, sessionId, messageId }),
     renameSession: (sessionId, title) => invoke("rename_session", { sessionId, title }),
     deleteSession: (directory, sessionId) => invoke("delete_session", { directory, sessionId }),
+    sessionRow: (sessionId) => invoke("session_row", { sessionId }),
     forkSession: (directory, sessionId, before) => invoke("fork_session", { directory, sessionId, before }),
     setBudget: (directory, sessionId, budget) => invoke("set_budget", { directory, sessionId, budget }),
     sessionUsage: (directory, sessionId) => invoke("session_usage", { directory, sessionId }),

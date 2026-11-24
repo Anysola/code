@@ -3,7 +3,8 @@
 //! 5-hour window the session may use, read back with what it has used so far.
 //!
 //! A fork works in the same folder as its source: no file is put back to how it was at the
-//! message it was forked from.
+//! message it was forked from. It copies what the window shows: with a rewind staged, the
+//! conversation up to the rewind's message, as if the rewind were final.
 
 use anysola_core::api::{Core, CoreError};
 use anysola_core::events::UsageSnapshot;
@@ -29,14 +30,20 @@ pub(crate) fn usage_json(snapshot: &UsageSnapshot) -> Value {
     })
 }
 
-/// A budget the core would take: a whole percent from 1 to [`MAX_BUDGET`], or none. The core
-/// clears a budget out of range; here it is refused, so a slip never removes the limit.
-fn budget_arg(budget: Option<u64>) -> Result<Option<u64>, String> {
+/// A budget the core would take: a whole percent from 1 to [`MAX_BUDGET`], or `null` for none.
+/// The core clears a budget out of range; here anything else is refused (a fraction, a string,
+/// a number out of range), so a slip never removes the limit. NaN arrives as `null` from
+/// JavaScript: the window checks its number before sending it.
+fn budget_arg(budget: &Value) -> Result<Option<u64>, String> {
+    let refused =
+        || format!("A budget is a whole percent, 1 to {MAX_BUDGET}, of the 5-hour window.");
     match budget {
-        Some(b) if !(1..=MAX_BUDGET).contains(&b) => Err(format!(
-            "A budget is 1 to {MAX_BUDGET}% of the 5-hour window."
-        )),
-        other => Ok(other),
+        Value::Null => Ok(None),
+        Value::Number(n) => match n.as_u64() {
+            Some(b) if (1..=MAX_BUDGET).contains(&b) => Ok(Some(b)),
+            _ => Err(refused()),
+        },
+        _ => Err(refused()),
     }
 }
 
@@ -52,14 +59,28 @@ fn root(core: &Core, session_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Checks `before` names a message the user sent in the session (a `user` item of the
-/// transcript, as `revert` and `resend` take): the core would fork all of it otherwise.
-fn check_before(ids: &[String], before: Option<&str>) -> Result<(), String> {
+/// Where the fork ends: before `before`, a message the user sent that the window shows (a
+/// `user` item of the transcript, as `revert` and `resend` take), never the first one (nothing
+/// comes before it); with a rewind staged at `staged`, no later than it. `ids`: the session's
+/// user messages, oldest first. The core would fork all of it for an id it doesn't know.
+fn fork_point(
+    ids: &[String],
+    before: Option<&str>,
+    staged: Option<&str>,
+) -> Result<Option<String>, String> {
+    let at = |id: &str| ids.iter().position(|x| x == id);
+    let shown = match staged {
+        // Rewinds start at a user message; one elsewhere is not cut here, and not guessed at.
+        Some(staged) => at(staged).ok_or("Redo the rewind or send a message before branching.")?,
+        None => ids.len(),
+    };
     match before {
-        Some(before) if !ids.iter().any(|id| id == before) => {
-            Err("That message is no longer in the session.".into())
-        }
-        _ => Ok(()),
+        None => Ok(staged.map(str::to_string)),
+        Some(before) => match at(before) {
+            Some(0) => Err("There is nothing before the first message to fork.".into()),
+            Some(i) if i < shown => Ok(Some(before.to_string())),
+            _ => Err("That message is no longer in the session.".into()),
+        },
     }
 }
 
@@ -71,8 +92,10 @@ fn fork_error(error: CoreError) -> String {
     }
 }
 
-/// Forks the session into a new one, whole or up to (not including) the user message `before`.
-/// Returns the new session's row; the core's `created` event only refreshes the list.
+/// Forks the session into a new one, whole or up to (not including) the user message `before`;
+/// with a rewind staged, only what it leaves (see [`fork_point`]). Refused while a turn runs:
+/// its reply is half written. Returns the new session's row; the core's `created` event only
+/// refreshes the list.
 #[tauri::command]
 pub async fn fork_session(
     handle: AppHandle,
@@ -83,6 +106,9 @@ pub async fn fork_session(
 ) -> Answer {
     let core = core_for(&handle, &app, &directory).await?;
     root(&core, &session_id)?;
+    if core.is_busy(&session_id) {
+        return Err("Wait for the current turn to end, or stop it, before branching.".into());
+    }
     let ids: Vec<String> = core
         .messages(&session_id)
         .map_err(text)?
@@ -90,7 +116,8 @@ pub async fn fork_session(
         .filter(|(_, m)| matches!(m, Message::User(_)))
         .map(|(id, _)| id)
         .collect();
-    check_before(&ids, before.as_deref())?;
+    let staged = core.revert_boundary(&session_id).map_err(text)?;
+    let before = fork_point(&ids, before.as_deref(), staged.as_deref())?;
     let row = core
         .fork_session(&session_id, before.as_deref())
         .map_err(fork_error)?;
@@ -105,9 +132,9 @@ pub async fn set_budget(
     app: State<'_, App>,
     directory: String,
     session_id: String,
-    budget: Option<u64>,
+    budget: Value,
 ) -> Answer {
-    let budget = budget_arg(budget)?;
+    let budget = budget_arg(&budget)?;
     let core = core_for(&handle, &app, &directory).await?;
     root(&core, &session_id)?;
     let snapshot = core.set_budget(&session_id, budget).map_err(text)?;
@@ -133,23 +160,52 @@ mod tests {
     use anysola_core::gateway::limits::{UsageEvent, Window};
 
     #[test]
-    fn budgets_out_of_range_are_refused_not_cleared() {
-        assert_eq!(budget_arg(None), Ok(None));
-        assert_eq!(budget_arg(Some(1)), Ok(Some(1)));
-        assert_eq!(budget_arg(Some(MAX_BUDGET)), Ok(Some(MAX_BUDGET)));
-        assert!(budget_arg(Some(0)).is_err());
-        assert!(budget_arg(Some(MAX_BUDGET + 1)).is_err());
+    fn budgets_out_of_range_or_not_numbers_are_refused_not_cleared() {
+        assert_eq!(budget_arg(&Value::Null), Ok(None));
+        assert_eq!(budget_arg(&json!(1)), Ok(Some(1)));
+        assert_eq!(budget_arg(&json!(MAX_BUDGET)), Ok(Some(MAX_BUDGET)));
+        for bad in [
+            json!(0),
+            json!(MAX_BUDGET + 1),
+            json!(-5),
+            json!(2.5),
+            json!("10"),
+            json!([]),
+        ] {
+            assert!(budget_arg(&bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
-    fn a_fork_point_must_be_a_message_of_the_session() {
-        let ids = vec!["msg_a".to_string(), "msg_b".to_string()];
-        assert!(check_before(&ids, None).is_ok());
-        assert!(check_before(&ids, Some("msg_b")).is_ok());
+    fn a_fork_point_is_a_shown_message_after_the_first() {
+        let ids: Vec<String> = ["msg_a", "msg_b", "msg_c"].map(String::from).into();
+        assert_eq!(fork_point(&ids, None, None), Ok(None));
         assert_eq!(
-            check_before(&ids, Some("msg_gone")),
+            fork_point(&ids, Some("msg_b"), None),
+            Ok(Some("msg_b".into()))
+        );
+        assert_eq!(
+            fork_point(&ids, Some("msg_a"), None),
+            Err("There is nothing before the first message to fork.".into())
+        );
+        assert_eq!(
+            fork_point(&ids, Some("msg_gone"), None),
             Err("That message is no longer in the session.".into())
         );
+        // Rewound to msg_c: the whole fork stops there, and msg_c and after can't be picked.
+        assert_eq!(
+            fork_point(&ids, None, Some("msg_c")),
+            Ok(Some("msg_c".into()))
+        );
+        assert_eq!(
+            fork_point(&ids, Some("msg_b"), Some("msg_c")),
+            Ok(Some("msg_b".into()))
+        );
+        assert_eq!(
+            fork_point(&ids, Some("msg_c"), Some("msg_c")),
+            Err("That message is no longer in the session.".into())
+        );
+        assert!(fork_point(&ids, None, Some("msg_x")).is_err());
     }
 
     #[test]

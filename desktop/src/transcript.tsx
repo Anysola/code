@@ -241,6 +241,8 @@ function TurnEnd({ elapsed, text }: { elapsed: number | null; text: string | nul
 /** A message the user sent: copy it, edit and send it again, or rewind to before it. */
 function UserMessage({ item, actions, forkable }: { item: UserItem; actions: boolean; forkable: boolean }) {
   const { directory, sessionId } = useContext(WhereContext)
+  // A running turn is half written: branching waits for it (the app refuses it too).
+  const running = useStore((s) => (!!sessionId && s.busy.has(sessionId)) || (s.open?.sessionId === sessionId && !!s.open && isRunning(s.open)))
   const [editing, setEditing] = useState(false)
   const [copied, setCopied] = useState(false)
   const [draft, setDraft] = useState(item.text)
@@ -366,7 +368,7 @@ function UserMessage({ item, actions, forkable }: { item: UserItem; actions: boo
           <IconAction label="Rewind to before this message" onClick={() => void rewind(item.id)}>
             <Undo2 className="size-3.5" />
           </IconAction>
-          {forkable && sessionId && (
+          {forkable && sessionId && !running && (
             <Tooltip
               label="Branch from here"
               note="A new session with the conversation before this message. Files stay as they are now; nothing is rewound."

@@ -548,6 +548,16 @@ pub(crate) fn info(core: &Core, row: Option<&SessionRow>) -> Value {
     })
 }
 
+/// One session the list may not hold (it shows the latest [`SESSION_LIST`]): a fork's source.
+/// Null when it is gone or a subagent's.
+#[tauri::command]
+async fn session_row(app: State<'_, App>, session_id: String) -> Answer {
+    let row = app.db()?.session(&session_id).map_err(text)?;
+    Ok(row
+        .filter(|r| r.parent_id.is_none())
+        .map_or(Value::Null, |r| session_json(&r)))
+}
+
 #[tauri::command]
 async fn sessions(app: State<'_, App>) -> Answer {
     let rows = app
@@ -1236,6 +1246,7 @@ fn main() {
             actions::scratch_folder,
             actions::changes,
             actions::restore_file,
+            session_row,
             branch::fork_session,
             branch::set_budget,
             branch::session_usage,
