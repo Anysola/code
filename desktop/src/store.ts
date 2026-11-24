@@ -2042,7 +2042,13 @@ export async function loadWorktreeInfo(directory: string) {
 async function loadSetup(directory: string, sessionId: string) {
   try {
     const run = await bridge.setupOutput(directory, sessionId)
-    if (run) set((s) => ({ setups: { ...s.setups, [sessionId]: run } }))
+    // Lines that came while it was read are newer than the copy: keep them, take its command.
+    if (run)
+      set((s) => {
+        const here = s.setups[sessionId]
+        const keep = here && here.ended === null && here.lines.length > run.lines.length
+        return { setups: { ...s.setups, [sessionId]: keep ? { ...here, command: run.command } : run } }
+      })
   } catch {
     // The output shows from the next line on.
   }
