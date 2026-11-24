@@ -16,6 +16,7 @@ pub mod ids;
 pub mod instructions;
 pub mod json;
 pub mod log;
+pub mod lsp;
 pub mod markdown;
 pub mod mcp;
 pub mod media;

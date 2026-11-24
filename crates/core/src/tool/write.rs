@@ -120,10 +120,12 @@ async fn write(input: &Input, ctx: &ToolContext) -> ToolResult {
         after,
         status,
     );
-    Ok(
-        ToolOutput::text(format!("{verb} file successfully: {}", target.resource))
-            .with_metadata("files", json!([file.to_value()])),
-    )
+    let mut message = format!("{verb} file successfully: {}", target.resource);
+    if let Some(diag) = mutation::diagnose(ctx, &target.absolute, &target.resource, after).await {
+        message.push_str("\n\n");
+        message.push_str(&diag);
+    }
+    Ok(ToolOutput::text(message).with_metadata("files", json!([file.to_value()])))
 }
 
 /// Whether the file starts with a UTF-8 BOM, or `None` when it does not exist.

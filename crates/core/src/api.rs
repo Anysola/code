@@ -180,6 +180,7 @@ pub(crate) struct Shared {
     /// or a schedule wakes included (see [`Core::stop_at_budget`]).
     pub budget_stops: std::sync::atomic::AtomicBool,
     pub hooks: crate::hooks::fire::State,
+    pub lsp: Arc<crate::lsp::LspManager>,
     /// The runtime the core started on: work a synchronous call starts runs there.
     pub runtime: tokio::runtime::Handle,
 }
@@ -199,6 +200,10 @@ impl crate::codemode::Host for Shared {
 
     fn formatters(&self) -> Option<Arc<crate::formatter::Formatters>> {
         self.loaded().formatters.clone()
+    }
+
+    fn lsp(&self) -> Option<Arc<crate::lsp::LspManager>> {
+        Some(self.lsp.clone())
     }
 
     fn mcp(&self) -> Option<Arc<dyn crate::mcp::Mcp>> {
@@ -354,6 +359,7 @@ impl Core {
             closing: Default::default(),
             budget_stops: Default::default(),
             hooks: Default::default(),
+            lsp: Arc::new(crate::lsp::LspManager::new()),
             runtime: tokio::runtime::Handle::current(),
         });
         shared.arm_watch(&shared.loaded());
@@ -1194,6 +1200,7 @@ impl Core {
             token.cancel();
         }
         self.shared.asks.close();
+        self.shared.lsp.shutdown();
         crate::tool::shell::kill_background_shells();
         // The firing loop sees `closing` and releases its lease now rather than after a sleep.
         crate::schedule::ring();

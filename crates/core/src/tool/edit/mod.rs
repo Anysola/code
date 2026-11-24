@@ -140,11 +140,12 @@ async fn edit(input: &Input, ctx: &ToolContext) -> ToolResult {
     let after = formatted.as_deref().unwrap_or(after);
     let file = FileDiff::new(&target.resource, source, after, Status::Modified);
     let plural = if count == 1 { "" } else { "s" };
-    Ok(ToolOutput::text(format!(
-        "Edited {} ({count} replacement{plural})",
-        target.resource
-    ))
-    .with_metadata("files", json!([file.to_value()])))
+    let mut message = format!("Edited {} ({count} replacement{plural})", target.resource);
+    if let Some(diag) = mutation::diagnose(ctx, &target.absolute, &target.resource, after).await {
+        message.push_str("\n\n");
+        message.push_str(&diag);
+    }
+    Ok(ToolOutput::text(message).with_metadata("files", json!([file.to_value()])))
 }
 
 #[cfg(test)]

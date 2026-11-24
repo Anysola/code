@@ -86,6 +86,11 @@ pub trait Host: Send + Sync {
         None
     }
 
+    /// Lazily spawned language servers for post-edit diagnostics.
+    fn lsp(&self) -> Option<std::sync::Arc<crate::lsp::LspManager>> {
+        None
+    }
+
     fn mcp(&self) -> Option<std::sync::Arc<dyn crate::mcp::Mcp>> {
         None
     }

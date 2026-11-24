@@ -4,6 +4,13 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.4.0 (2026-11-24)
+
+- Post-edit LSP diagnostics: after `edit` or `write`, Anysola Code checks the changed file with an installed
+  language server (`typescript-language-server`, `rust-analyzer`, `basedpyright`/`pyright`/`pylsp`, `gopls`,
+  or `clangd`) and appends errors and warnings directly to the tool output so the agent catches mistakes
+  immediately. Set `"lsp": false` in config to disable it; servers are started lazily and stopped on exit.
+
 ## 1.3.0 (2026-11-24)
 
 - Embedded interactive terminal drawer at the bottom of a session (`Ctrl \``, the header button, or the Ctrl K

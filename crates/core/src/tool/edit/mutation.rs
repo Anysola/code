@@ -135,6 +135,25 @@ pub(crate) async fn format(
     Some(file.text)
 }
 
+/// Runs LSP diagnostics on a written file if a matching language server is installed and config
+/// does not set `"lsp": false`.
+pub(crate) async fn diagnose(
+    ctx: &super::super::ToolContext,
+    path: &Path,
+    resource: &str,
+    text: &str,
+) -> Option<String> {
+    let lsp = ctx.host.lsp()?;
+    let enabled = ctx
+        .host
+        .config()
+        .get("lsp")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
+    let diags = lsp.diagnose(&ctx.worktree, path, text, enabled).await;
+    crate::lsp::format_diagnostics(resource, &diags)
+}
+
 /// Mutations of one file serialize on its canonical path (the path itself when it does not exist).
 pub(crate) async fn lock_key(path: &Path) -> PathBuf {
     tokio::fs::canonicalize(path)
