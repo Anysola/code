@@ -7,6 +7,7 @@
 
 use anysola_core::api::{Core, CoreError};
 use anysola_core::events::UsageSnapshot;
+use anysola_core::session::message::Message;
 use anysola_core::usage::MAX_BUDGET;
 use serde_json::{Value, json};
 use tauri::{AppHandle, State};
@@ -51,7 +52,8 @@ fn root(core: &Core, session_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Checks `before` names a message of the session: the core would fork all of it otherwise.
+/// Checks `before` names a message the user sent in the session (a `user` item of the
+/// transcript, as `revert` and `resend` take): the core would fork all of it otherwise.
 fn check_before(ids: &[String], before: Option<&str>) -> Result<(), String> {
     match before {
         Some(before) if !ids.iter().any(|id| id == before) => {
@@ -69,8 +71,8 @@ fn fork_error(error: CoreError) -> String {
     }
 }
 
-/// Forks the session into a new one, whole or up to (not including) `before`. Returns the new
-/// session's row; its `created` event reaches the window before this returns.
+/// Forks the session into a new one, whole or up to (not including) the user message `before`.
+/// Returns the new session's row; the core's `created` event only refreshes the list.
 #[tauri::command]
 pub async fn fork_session(
     handle: AppHandle,
@@ -85,6 +87,7 @@ pub async fn fork_session(
         .messages(&session_id)
         .map_err(text)?
         .into_iter()
+        .filter(|(_, m)| matches!(m, Message::User(_)))
         .map(|(id, _)| id)
         .collect();
     check_before(&ids, before.as_deref())?;

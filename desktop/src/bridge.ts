@@ -13,7 +13,8 @@ export type SessionRow = { id: string; title: string; directory: string; updated
  * turn, `total` every turn of the session, `budget` its limit (1 to `MAX_BUDGET`, null for none).
  * `turns`: turns that used any. `fiveHour` and `weekly`: the account's windows after the last
  * model call this run of the app saw, null before one. A fork starts at zero with the default
- * budget, not its source's numbers.
+ * budget, not its source's numbers. Subagents' model calls count in their own sessions, not in
+ * `total` of the session that started them.
  */
 export type SessionUsage = {
   sessionId: string
@@ -697,10 +698,12 @@ export type Bridge = {
   deleteSession(directory: string, sessionId: string): Promise<boolean>
   /**
    * Copies the session into a new one: the whole conversation, or only what came before
-   * `before` (a message id from the transcript; that message and everything after it are left
-   * out). The new session is a root session, listed like any other (its `created` event arrives
-   * before this resolves); its title is the source's with ` (fork #n)`. Refused for a subagent's
-   * session, for a `before` no longer in the session, and when nothing comes before `before`.
+   * `before`, the id of a message the user sent (a `user` item of the transcript, as `revert`
+   * and `resend` take; that message and everything after it are left out). The new session is a
+   * root session, listed like any other; its title is the source's with ` (fork #n)`. Use the
+   * returned row; the `created` event that also comes only refreshes the list. Refused for a
+   * subagent's session, for a `before` that is not a user message of the session, and when
+   * nothing comes before `before`.
    *
    * IMPORTANT: a fork works in the same folder as its source, and nothing rewinds files. Forking
    * from an earlier message gives the conversation as it was then, but the files stay as they

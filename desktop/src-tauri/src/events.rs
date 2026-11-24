@@ -304,6 +304,23 @@ mod tests {
     }
 
     #[test]
+    fn usage_reaches_the_window_with_totals_and_budget() {
+        let event = Event::Usage(anysola_core::events::UsageSnapshot {
+            session_id: "ses_1".into(),
+            latest: None,
+            turn: 0.5,
+            total: 3.0,
+            turns: 2,
+            budget: Some(10),
+        });
+        assert_eq!(
+            to_json(&event, "/p").unwrap(),
+            json!({"type": "usage", "sessionId": "ses_1", "turn": 0.5, "total": 3.0, "turns": 2,
+                   "budget": 10, "fiveHour": null, "weekly": null})
+        );
+    }
+
+    #[test]
     fn errors_carry_a_kind_and_plain_words() {
         assert_eq!(
             failed(

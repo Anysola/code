@@ -1791,7 +1791,7 @@ export function mockBridge(): Bridge {
       const items = transcripts.get(sessionId) ?? []
       let copied = items
       if (before !== null) {
-        const at = items.findIndex((i) => i.id === before)
+        const at = items.findIndex((i) => i.id === before && i.kind === "user")
         if (at < 0) throw new Error("That message is no longer in the session.")
         copied = items.slice(0, at)
       }
@@ -1801,9 +1801,7 @@ export function mockBridge(): Bridge {
       const row = { id, title: `${source.title} (fork #${forks + 1})`, directory: source.directory, updated: Date.now() }
       rows.unshift(row)
       transcripts.set(id, structuredClone(copied))
-      // As the core: the window hears of the fork before the call returns.
       emit({ type: "created", sessionId: id, title: row.title, directory })
-      await wait(1)
       return { ...row }
     },
     async setBudget(_directory, sessionId, budget) {
@@ -1812,7 +1810,6 @@ export function mockBridge(): Bridge {
       const u = { ...usageOf(sessionId), budget }
       budgets.set(sessionId, budget)
       emit({ type: "usage", ...u })
-      await wait(1)
       return u
     },
     async sessionUsage(_directory, sessionId) {
