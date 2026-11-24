@@ -358,6 +358,22 @@ fn a_session_forks_more_than_once() {
     assert!(!core.settle_interrupted(&open.id).unwrap());
     let twice = core.fork_session(&open.id, None).unwrap();
     assert!(!core.settle_interrupted(&twice.id).unwrap());
+
+    // Forks are listed like any session (the window's list), unlike a subagent's session; they
+    // start with no usage of their own.
+    let child = core.create_child(&session.id, None).unwrap();
+    let listed: Vec<String> = db
+        .list_sessions(None, None, 100)
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    for fork in [&first, &second, &before, &nested, &again, &open, &twice] {
+        assert!(listed.contains(&fork.id), "{} is not listed", fork.id);
+    }
+    assert!(!listed.contains(&child.id));
+    let usage = core.usage(&first.id);
+    assert_eq!((usage.total, usage.turns), (0.0, 0));
 }
 
 #[test]

@@ -69,11 +69,13 @@ import type {
   Revert,
   SavedPermission,
   SessionRow,
+  SessionUsage,
   Sources,
   Todo,
   Usage,
   View,
 } from "./bridge"
+import { MAX_BUDGET } from "./bridge"
 import { DEFAULT_PREFS } from "./prefs"
 
 const WEB = "/home/alex/code/anysola-web"
@@ -1216,6 +1218,12 @@ export function mockBridge(): Bridge {
     emit({ type: "done", sessionId: id })
   }
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  /** Budgets set in this run; a session without one has none. */
+  const budgets = new Map<string, number | null>()
+  const usageOf = (sessionId: string): SessionUsage => {
+    const used = sessionId === "ses_pricing" ? { turn: 1.2, total: 6.4, turns: 5 } : { turn: 0, total: 0, turns: 0 }
+    return { sessionId, ...used, budget: budgets.get(sessionId) ?? null, fiveHour: info.fiveHour ?? null, weekly: null }
+  }
   /**
    * `?state=live`: a turn whose tool calls stream their input, in the app's order: the row is
    * stored as the call starts (`changed`), snapshots of its input follow, and `changed` again
@@ -1776,6 +1784,39 @@ export function mockBridge(): Bridge {
     async renameSession(sessionId, title) {
       const row = rows.find((r) => r.id === sessionId)
       if (row) row.title = title
+    },
+    async forkSession(directory, sessionId, before) {
+      const source = rows.find((r) => r.id === sessionId)
+      if (!source) throw new Error("This session no longer exists.")
+      const items = transcripts.get(sessionId) ?? []
+      let copied = items
+      if (before !== null) {
+        const at = items.findIndex((i) => i.id === before)
+        if (at < 0) throw new Error("That message is no longer in the session.")
+        copied = items.slice(0, at)
+      }
+      if (copied.length === 0) throw new Error("There is nothing before that message to fork.")
+      const forks = rows.filter((r) => r.title.startsWith(`${source.title} (fork #`)).length
+      const id = `ses_${Math.random().toString(36).slice(2, 10)}`
+      const row = { id, title: `${source.title} (fork #${forks + 1})`, directory: source.directory, updated: Date.now() }
+      rows.unshift(row)
+      transcripts.set(id, structuredClone(copied))
+      // As the core: the window hears of the fork before the call returns.
+      emit({ type: "created", sessionId: id, title: row.title, directory })
+      await wait(1)
+      return { ...row }
+    },
+    async setBudget(_directory, sessionId, budget) {
+      if (budget !== null && !(Number.isInteger(budget) && budget >= 1 && budget <= MAX_BUDGET))
+        throw new Error(`A budget is 1 to ${MAX_BUDGET}% of the 5-hour window.`)
+      const u = { ...usageOf(sessionId), budget }
+      budgets.set(sessionId, budget)
+      emit({ type: "usage", ...u })
+      await wait(1)
+      return u
+    },
+    async sessionUsage(_directory, sessionId) {
+      return usageOf(sessionId)
     },
     async deleteSession(_directory, sessionId) {
       const at = rows.findIndex((r) => r.id === sessionId)

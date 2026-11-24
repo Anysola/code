@@ -6,6 +6,7 @@
 
 mod account;
 mod actions;
+mod branch;
 mod config;
 mod data;
 mod discord;
@@ -1232,6 +1233,9 @@ fn main() {
             actions::scratch_folder,
             actions::changes,
             actions::restore_file,
+            branch::fork_session,
+            branch::set_budget,
+            branch::session_usage,
             git::git_status,
             git::git_branch,
             git::git_commit,

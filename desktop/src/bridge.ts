@@ -7,6 +7,27 @@ import { listen } from "@tauri-apps/api/event"
 
 export type SessionRow = { id: string; title: string; directory: string; updated: number }
 
+/**
+ * A session's share of the account's 5-hour window, as `sessionUsage` and `setBudget` return it
+ * and the `usage` event carries it. Percents of the 5-hour window: `turn` the running (or last)
+ * turn, `total` every turn of the session, `budget` its limit (1 to `MAX_BUDGET`, null for none).
+ * `turns`: turns that used any. `fiveHour` and `weekly`: the account's windows after the last
+ * model call this run of the app saw, null before one. A fork starts at zero with the default
+ * budget, not its source's numbers.
+ */
+export type SessionUsage = {
+  sessionId: string
+  turn: number
+  total: number
+  turns: number
+  budget: number | null
+  fiveHour: number | null
+  weekly: number | null
+}
+
+/** The highest budget: the whole 5-hour window (core `usage::MAX_BUDGET`). */
+export const MAX_BUDGET = 100
+
 export type FileDiff = {
   file: string
   patch: string
@@ -593,7 +614,8 @@ export type CoreEvent =
   /** A command or compaction ended with no turn left running. */
   | { type: "settled"; sessionId: string }
   | { type: "interrupted"; sessionId: string; reason: "user" | "budget" | "declined" }
-  | { type: "usage"; sessionId: string; fiveHour: number | null; weekly: number | null }
+  /** After each model call, at a turn's end, and when the budget is set or cleared. */
+  | ({ type: "usage" } & SessionUsage)
   | { type: "created"; sessionId: string; title: string; directory: string }
   | { type: "lagged"; directory: string }
   /** A folder's MCP server changed state (connected, failed, signed in). */
@@ -673,6 +695,27 @@ export type Bridge = {
   messageImages(directory: string, sessionId: string, messageId: string): Promise<string[]>
   renameSession(sessionId: string, title: string): Promise<void>
   deleteSession(directory: string, sessionId: string): Promise<boolean>
+  /**
+   * Copies the session into a new one: the whole conversation, or only what came before
+   * `before` (a message id from the transcript; that message and everything after it are left
+   * out). The new session is a root session, listed like any other (its `created` event arrives
+   * before this resolves); its title is the source's with ` (fork #n)`. Refused for a subagent's
+   * session, for a `before` no longer in the session, and when nothing comes before `before`.
+   *
+   * IMPORTANT: a fork works in the same folder as its source, and nothing rewinds files. Forking
+   * from an earlier message gives the conversation as it was then, but the files stay as they
+   * are now, edits of the later turns included; both sessions then change the same files.
+   */
+  forkSession(directory: string, sessionId: string, before: string | null): Promise<SessionRow>
+  /**
+   * Sets the session's budget, a whole percent of the 5-hour window from 1 to `MAX_BUDGET`, or
+   * clears it (`null`); anything else is refused. A `usage` event carries the change too.
+   * Note: the app's turns run with the core's `stop_at_budget` off today, so a budget is stored
+   * and reported but does not stop a turn yet.
+   */
+  setBudget(directory: string, sessionId: string, budget: number | null): Promise<SessionUsage>
+  /** What the session has used of the 5-hour window, and its budget. */
+  sessionUsage(directory: string, sessionId: string): Promise<SessionUsage>
   /** `filesKept`: the folder keeps no snapshots (not git), so the turns' edits stay. */
   revert(
     directory: string,
@@ -821,6 +864,9 @@ function tauriBridge(): Bridge {
     messageImages: (directory, sessionId, messageId) => invoke("message_images", { directory, sessionId, messageId }),
     renameSession: (sessionId, title) => invoke("rename_session", { sessionId, title }),
     deleteSession: (directory, sessionId) => invoke("delete_session", { directory, sessionId }),
+    forkSession: (directory, sessionId, before) => invoke("fork_session", { directory, sessionId, before }),
+    setBudget: (directory, sessionId, budget) => invoke("set_budget", { directory, sessionId, budget }),
+    sessionUsage: (directory, sessionId) => invoke("session_usage", { directory, sessionId }),
     setMode: (directory, sessionId, mode) => invoke("set_mode", { directory, sessionId, mode }),
     interrupt: (directory, sessionId) => invoke("interrupt", { directory, sessionId }),
     replyPermission: (directory, requestId, reply) =>

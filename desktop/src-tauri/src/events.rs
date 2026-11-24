@@ -121,12 +121,11 @@ pub fn to_json(event: &Event, directory: &str) -> Option<Value> {
                 InterruptReason::Declined => "declined",
             },
         }),
-        Event::Usage(snapshot) => json!({
-            "type": "usage",
-            "sessionId": snapshot.session_id,
-            "fiveHour": snapshot.latest.as_ref().map(|u| u.five_hour.percent),
-            "weekly": snapshot.latest.as_ref().map(|u| u.weekly.percent),
-        }),
+        Event::Usage(snapshot) => {
+            let mut v = crate::branch::usage_json(snapshot);
+            v["type"] = json!("usage");
+            v
+        }
         Event::SessionCreated {
             session_id,
             parent_id: None,
