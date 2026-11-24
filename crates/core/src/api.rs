@@ -162,6 +162,9 @@ pub(crate) struct Shared {
     pub precomputed: Mutex<std::collections::HashMap<String, crate::session::compaction::Held>>,
     /// Set once the front end shuts down: background completions no longer wake sessions.
     pub closing: std::sync::atomic::AtomicBool,
+    /// Every turn of this core stops at the session's budget, the ones a background completion
+    /// or a schedule wakes included (see [`Core::stop_at_budget`]).
+    pub budget_stops: std::sync::atomic::AtomicBool,
     pub hooks: crate::hooks::fire::State,
     /// The runtime the core started on: work a synchronous call starts runs there.
     pub runtime: tokio::runtime::Handle,
@@ -332,6 +335,7 @@ impl Core {
             goals: Default::default(),
             precomputed: Mutex::default(),
             closing: Default::default(),
+            budget_stops: Default::default(),
             hooks: Default::default(),
             runtime: tokio::runtime::Handle::current(),
         });
@@ -427,6 +431,15 @@ impl Core {
 
     pub fn mcp(&self) -> Option<Arc<dyn crate::mcp::Mcp>> {
         self.shared.mcp.get().cloned()
+    }
+
+    /// Makes every turn of this core stop at the session's budget, as
+    /// [`TurnOptions::stop_at_budget`] does for one: also the turns no caller starts (a background
+    /// command's completion, a scheduled prompt), which run with the default options.
+    pub fn stop_at_budget(&self) {
+        self.shared
+            .budget_stops
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Adds or replaces a Code Mode namespace (an MCP server's tools).

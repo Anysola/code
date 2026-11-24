@@ -5,6 +5,7 @@ import {
   Ellipsis,
   FilePlus2,
   FileText,
+  GitBranch,
   Globe,
   ListTodo,
   MessageCircleQuestion,
@@ -36,6 +37,7 @@ import { revealing } from "./reveal"
 import {
   answer,
   buildPlan,
+  forkSession,
   isRunning,
   messageImages,
   notify,
@@ -54,8 +56,7 @@ import {
   type Permission,
   type Status,
 } from "./store"
-import { btn, cn, Counts, DiffView, Kbd, MenuItem, Popover, Spinner, useEscape } from "./ui"
-import { OptUserAction } from "./options"
+import { btn, cn, Counts, DiffView, Kbd, MenuItem, Popover, Spinner, Tooltip, useEscape } from "./ui"
 
 type Tool = Extract<Item, { kind: "tool" }>
 type UserItem = Extract<Item, { kind: "user" }>
@@ -128,6 +129,8 @@ export function Transcript({
     [open.directory, open.sessionId, live]
   )
   const shown = useMemo(() => turns(blocks(open.items), live), [open.items, live])
+  // Nothing comes before the first message: there is no branching from it.
+  const first = useMemo(() => open.items.find((i) => i.kind === "user")?.id, [open.items])
   return (
     <WhereContext.Provider value={where}>
       <div className="flex flex-col gap-5">
@@ -137,7 +140,7 @@ export function Transcript({
           ) : b.kind === "explore" ? (
             <Explored key={b.id} tools={b.tools} />
           ) : b.item.kind === "user" ? (
-            <UserMessage key={b.item.id} item={b.item} actions={!readOnly} />
+            <UserMessage key={b.item.id} item={b.item} actions={!readOnly} forkable={b.item.id !== first} />
           ) : (
             <Entry key={b.item.id} item={b.item} directory={open.directory} />
           )
@@ -236,7 +239,8 @@ function TurnEnd({ elapsed, text }: { elapsed: number | null; text: string | nul
 }
 
 /** A message the user sent: copy it, edit and send it again, or rewind to before it. */
-function UserMessage({ item, actions }: { item: UserItem; actions: boolean }) {
+function UserMessage({ item, actions, forkable }: { item: UserItem; actions: boolean; forkable: boolean }) {
+  const { directory, sessionId } = useContext(WhereContext)
   const [editing, setEditing] = useState(false)
   const [copied, setCopied] = useState(false)
   const [draft, setDraft] = useState(item.text)
@@ -362,7 +366,21 @@ function UserMessage({ item, actions }: { item: UserItem; actions: boolean }) {
           <IconAction label="Rewind to before this message" onClick={() => void rewind(item.id)}>
             <Undo2 className="size-3.5" />
           </IconAction>
-          <OptUserAction id={item.id} />
+          {forkable && sessionId && (
+            <Tooltip
+              label="Branch from here"
+              note="A new session with the conversation before this message. Files stay as they are now; nothing is rewound."
+              side="top"
+            >
+              <button
+                onClick={() => void forkSession(directory, sessionId, item.id)}
+                aria-label="Branch from here"
+                className="flex size-7 items-center justify-center rounded-md text-muted hover:bg-default/60 hover:text-foreground focus-visible:status-focused-field"
+              >
+                <GitBranch className="size-3.5" />
+              </button>
+            </Tooltip>
+          )}
         </div>
       )}
     </div>

@@ -52,7 +52,7 @@ fn plan_enter_before_1_1_1(directory: &str) -> String {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TurnOptions {
     /// Stop inside the turn, at the next step start, once the session's budget is spent
-    /// (`anysola run --budget`).
+    /// (`anysola run --budget`). `Core::stop_at_budget` turns it on for every turn of a core.
     pub stop_at_budget: bool,
 }
 

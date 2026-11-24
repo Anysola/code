@@ -546,11 +546,14 @@ let warmUntil = 0
 export function Tooltip({
   label,
   keys,
+  note,
   side = "bottom",
   children,
 }: {
   label: string
   keys?: string | null
+  /** A second, quieter line: what the control does that its name doesn't say. */
+  note?: string
   side?: "top" | "bottom"
   children: ReactNode
 }) {
@@ -610,10 +613,14 @@ export function Tooltip({
           ref={tip}
           aria-hidden
           style={place}
-          className="text-2xs pointer-events-none fixed z-[60] flex items-center gap-1.5 rounded-md bg-popover px-2 py-1 whitespace-nowrap text-foreground"
+          className={cn(
+            "text-2xs pointer-events-none fixed z-[60] rounded-md bg-popover px-2 py-1 text-foreground",
+            note ? "flex w-max max-w-64 flex-col gap-0.5" : "flex items-center gap-1.5 whitespace-nowrap"
+          )}
         >
           {label}
           {keys && <span className="text-muted">{keys}</span>}
+          {note && <span className="text-muted">{note}</span>}
         </span>
       )}
     </span>

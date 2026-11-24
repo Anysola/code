@@ -31,6 +31,7 @@ import {
   type Question,
   type Revert,
   type SessionRow,
+  type SessionUsage,
   type Todo,
   type ToolInput,
   type ToolOutput,
@@ -229,6 +230,8 @@ export type State = {
   inputs: Record<string, ToolInput>
   /** Running commands' output so far, by call id (any session). */
   outputs: Record<string, ToolOutput>
+  /** Each session's share of the 5-hour window and its budget, as last read or sent. */
+  usage: Record<string, SessionUsage>
 }
 
 function readMode(): Mode {
@@ -294,6 +297,7 @@ let state: State = {
   scratch: null,
   inputs: {},
   outputs: {},
+  usage: {},
   pinned: readSet("anysola.pinned"),
   // Folded projects by folder key; older entries were stored as spelled.
   collapsed: new Set([...readSet("anysola.collapsed")].map(folderKey)),
@@ -749,6 +753,7 @@ function turnStart(items: Item[]): number | null {
 export async function openSession(row: SessionRow) {
   void refreshGit(row.directory)
   set({ open: blankView(row.directory, row.id, row.title) })
+  void loadUsage(row.directory, row.id)
   const n = ++reads
   const since = asks
   try {
@@ -1737,6 +1742,42 @@ export async function renameSession(row: SessionRow, title: string) {
   }
 }
 
+/** The session's usage and budget, for the header's meter and the budget's stop. */
+async function loadUsage(directory: string, sessionId: string) {
+  try {
+    const usage = await bridge.sessionUsage(directory, sessionId)
+    set((s) => ({ usage: { ...s.usage, [sessionId]: usage } }))
+  } catch {
+    // No meter until the next usage event; the session works as before.
+  }
+}
+
+/** Sets or clears the session's budget (whole percent of the 5-hour window). */
+export async function setBudget(directory: string, sessionId: string, budget: number | null) {
+  try {
+    const usage = await bridge.setBudget(directory, sessionId, budget)
+    set((s) => ({ usage: { ...s.usage, [sessionId]: usage } }))
+    return true
+  } catch (e) {
+    set({ notice: `The budget didn’t change. ${message(e)}` })
+    return false
+  }
+}
+
+/**
+ * Branches the session into a new one and opens it: the whole conversation, or what came
+ * before the user message `before`. Files are shared, not rewound.
+ */
+export async function forkSession(directory: string, sessionId: string, before: string | null) {
+  try {
+    const row = await bridge.forkSession(directory, sessionId, before)
+    set((s) => ({ sessions: [row, ...s.sessions.filter((r) => r.id !== row.id)] }))
+    await openSession(row)
+  } catch (e) {
+    set({ notice: `The session couldn’t be branched. ${message(e)}` })
+  }
+}
+
 export async function deleteSession(row: SessionRow) {
   await deleteSessions([row])
 }
@@ -1983,6 +2024,15 @@ function stopSession(directory: string, sessionId: string) {
       set({ notice: message(e) })
     }
   )
+}
+
+/** A mode chosen in the composer or the palette: Plan is an agent, the others the session's
+ * floor (leaving Plan goes back to Build). */
+export function pickMode(id: Mode | "plan") {
+  if (id === "plan") return void chooseAgent("plan")
+  const planning = state.open?.info?.agent === "plan"
+  setMode(id)
+  if (planning) void chooseAgent("build")
 }
 
 export function setMode(mode: Mode) {
@@ -2305,9 +2355,12 @@ function onEvent(e: CoreEvent) {
       void loadSessions()
       turnEnded()
       break
-    case "usage":
+    case "usage": {
+      const { type: _, ...usage } = e
+      set((s) => ({ usage: { ...s.usage, [id]: usage } }))
       if (here && e.fiveHour !== null) setOpen((o) => ({ info: o.info && { ...o.info, fiveHour: e.fiveHour } }), id)
       break
+    }
     case "created":
       void loadSessions()
       break

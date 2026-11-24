@@ -1,6 +1,6 @@
 /**
  * What sits around the conversation: the banners over the composer (a full limit, no
- * connection, a lost sign-in, a missing model), the queued messages, the commands left running
+ * connection, a lost sign-in, a spent budget, a missing model), a fork's note, the queued messages, the commands left running
  * in the background, the context meter, the close confirm and the screen for data that can't be
  * opened.
  */
@@ -9,21 +9,26 @@ import {
   ChevronUp,
   CircleAlert,
   Clock,
+  GitBranch,
   Image as ImageIcon,
   Pencil,
   SquareTerminal,
+  Wallet,
   WifiOff,
   X,
 } from "lucide-react"
 import { useEffect, useRef, useState, type ReactNode } from "react"
 
 import type { Account, Queued } from "./bridge"
+import { atBudget, raiseTo, useUsage } from "./budget"
+import { dismissForkNote, useChrome } from "./chrome"
 import {
   backgroundStop,
   compact,
   currentBridge,
   isRunning,
   keepWorking,
+  openSession,
   openModelPicker,
   openSettings,
   queueEdit,
@@ -35,6 +40,7 @@ import {
   retryConnection,
   revealFault,
   setAccount,
+  setBudget,
   useStore,
   type Open,
 } from "./store"
@@ -98,6 +104,7 @@ export function Banner({ open }: { open: Open }) {
   const account = useStore((s) => (s.account && !s.account.expired ? (s.account as Signed) : null))
   const [redeeming, setRedeeming] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
+  const usage = useUsage(open.sessionId)
   const status = open.status
   if (blocked) {
     const saved = account?.bank.find((r) => r.scope === "both" || (r.scope === "five_hour" && blocked.scope === "five_hour"))
@@ -166,6 +173,32 @@ export function Banner({ open }: { open: Open }) {
         Your sign-in has ended. Your sessions are kept.
       </Strip>
     )
+  if (atBudget(usage) && open.sessionId) {
+    const { directory, sessionId } = open
+    const raise = raiseTo(usage)
+    return (
+      <Strip
+        icon={<Wallet className="size-3.5 text-warning" />}
+        actions={
+          <>
+            {raise !== null && (
+              <button onClick={() => void setBudget(directory, sessionId, raise)} className={btn("secondary", "sm")}>
+                Raise to {raise}%
+              </button>
+            )}
+            <button onClick={() => void setBudget(directory, sessionId, null)} className={btn("ghost", "sm", "text-muted")}>
+              Remove budget
+            </button>
+          </>
+        }
+      >
+        <span className="block">
+          Budget reached <span className="text-muted">· {usage.budget}% of the 5-hour window</span>
+        </span>
+        <span className="text-2xs block text-muted">Raise it or remove it to keep going.</span>
+      </Strip>
+    )
+  }
   if (status.kind === "failed" && status.errorKind === "model")
     return (
       <Strip
@@ -180,6 +213,44 @@ export function Banner({ open }: { open: Open }) {
       </Strip>
     )
   return null
+}
+
+/** A fork's note until put away: where it came from, and that files were not rewound. */
+export function ForkNote({ open }: { open: Open }) {
+  const row = useStore((s) => s.sessions.find((r) => r.id === open.sessionId) ?? null)
+  const source = useStore((s) => (row?.forkOf ? (s.sessions.find((r) => r.id === row.forkOf) ?? null) : null))
+  const gone = useChrome((c) => !!open.sessionId && c.forkNotes.has(open.sessionId))
+  if (!row?.forkOf || gone) return null
+  return (
+    <Strip
+      icon={<GitBranch className="size-3.5" />}
+      actions={
+        <>
+          {source && (
+            <button onClick={() => void openSession(source)} className={btn("ghost", "sm", "text-muted")}>
+              Open original
+            </button>
+          )}
+          <Tooltip label="Dismiss" side="top">
+            <button onClick={() => dismissForkNote(row.id)} aria-label="Dismiss" className={btn("ghost", "sm", "text-muted", true)}>
+              <X className="size-3.5" />
+            </button>
+          </Tooltip>
+        </>
+      }
+    >
+      <span className="block truncate">
+        {source ? (
+          <>
+            Branched from <span className="text-foreground">{source.title}</span>
+          </>
+        ) : (
+          "Branched from a session that was deleted"
+        )}
+      </span>
+      <span className="text-2xs block text-muted">Same folder. Files stay as they are now; nothing is rewound.</span>
+    </Strip>
+  )
 }
 
 // ---------------------------------------------------------------------------

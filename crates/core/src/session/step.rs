@@ -242,7 +242,11 @@ pub(crate) async fn drive(
         if cancel.is_cancelled() {
             return Outcome::Interrupted(InterruptReason::User);
         }
-        if options.stop_at_budget {
+        if options.stop_at_budget
+            || shared
+                .budget_stops
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
             let usage = shared.usage.snapshot(&session.id);
             if usage
                 .budget

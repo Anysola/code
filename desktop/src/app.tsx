@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 
 import { checkUpdated, resumeDeletes, setReviewing, useChrome } from "./chrome"
 import { Composer, Tasks } from "./composer"
-import { BackgroundRow, Banner, CloseConfirm, ContextMeter, FaultScreen, QueueChips } from "./conversation"
+import { BackgroundRow, Banner, CloseConfirm, ContextMeter, FaultScreen, ForkNote, QueueChips } from "./conversation"
 import { FormCard } from "./form-card"
 import { TrustCards } from "./hooks-card"
 import { SessionHeader, SidebarToggle, Toasts } from "./header"
@@ -12,10 +12,10 @@ import { Settings, sectionLabel } from "./settings"
 import { ShortcutsSheet, useShortcuts } from "./shortcuts"
 import { Sidebar } from "./sidebar"
 import { closePeek, dismissNotice, openSettings, start, useStore, type Open, type Peek } from "./store"
+import { Palette } from "./palette"
 import { Transcript } from "./transcript"
 import { btn, cn, folderKey, sameFolder, Spinner, TitleBar, Tooltip, useEscape } from "./ui"
 import { Home, NewSessionStart, SignIn } from "./welcome"
-import { OptBanner, OptFooter, OptPalette, OptTranscriptTop } from "./options"
 
 export function App() {
   const auth = useStore((s) => s.auth)
@@ -59,7 +59,7 @@ export function App() {
         <Toasts />
       </div>
       <ShortcutsSheet />
-      <OptPalette />
+      <Palette />
       <CloseConfirm />
     </div>
   )
@@ -89,7 +89,7 @@ function Main() {
             <BackgroundRow open={open} />
             <Tasks todos={open.todos} />
             <Banner open={open} />
-            <OptBanner open={open} />
+            <ForkNote open={open} />
             <QueueChips open={open} />
             <Composer open={open} />
             <div className="mt-2 flex items-center gap-3 px-2">
@@ -100,7 +100,6 @@ function Main() {
                 </span>
               </span>
               <ContextMeter open={open} />
-              <OptFooter open={open} />
             </div>
           </div>
           {reviewing && <Review open={open} onClose={() => setReviewing(false)} />}
@@ -207,10 +206,7 @@ function Conversation({ open }: { open: Open }) {
               )}
             </>
           ) : (
-            <>
-              <OptTranscriptTop open={open} />
-              <Transcript open={open} permissions={permissions} questions={questions} forms={forms} />
-            </>
+            <Transcript open={open} permissions={permissions} questions={questions} forms={forms} />
           )}
         </div>
       </div>

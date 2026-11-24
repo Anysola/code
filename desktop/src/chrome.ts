@@ -1,7 +1,7 @@
 /**
  * The window's own state around the conversation: the sidebar folded away, the shortcuts sheet,
- * Review, the editors found on this computer, the "updated" notice, and deletes that wait
- * behind an Undo.
+ * the palette, Review, the budget editor, fork notes put away, the editors found on this
+ * computer, the "updated" notice, and deletes that wait behind an Undo.
  */
 import { useSyncExternalStore } from "react"
 
@@ -14,7 +14,13 @@ type Chrome = {
   /** The sidebar folded away (remembered). */
   sidebarHidden: boolean
   shortcuts: boolean
+  /** The palette (Ctrl K): sessions and commands. */
+  palette: boolean
   reviewing: boolean
+  /** The open session's budget editor, under the header's budget. */
+  budgeting: boolean
+  /** Forks whose "Branched from" note was put away (remembered). */
+  forkNotes: Set<string>
   /** Sessions deleted from the window but not yet from the computer. */
   deleting: { ids: Set<string>; rows: SessionRow[]; wasOpen: string | null } | null
   /** The editors found, the preferred first; null until read. */
@@ -30,6 +36,9 @@ const HIDDEN_KEY = "anysola.sidebarHidden"
  * time (Alt F4, a crash, the updater's restart) carries them out at the next start. */
 const DELETES_KEY = "anysola.pendingDeletes"
 const VERSION_KEY = "anysola.version"
+const FORK_NOTES_KEY = "anysola.forkNotesDismissed"
+/** Fork notes remembered as put away; the oldest go first. */
+const FORK_NOTES_KEPT = 300
 
 function readHidden() {
   try {
@@ -39,10 +48,22 @@ function readHidden() {
   }
 }
 
+function readForkNotes(): Set<string> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(FORK_NOTES_KEY) ?? "[]")
+    return new Set(Array.isArray(raw) ? raw.filter((x) => typeof x === "string") : [])
+  } catch {
+    return new Set()
+  }
+}
+
 let chrome: Chrome = {
   sidebarHidden: readHidden(),
   shortcuts: false,
+  palette: false,
   reviewing: false,
+  budgeting: false,
+  forkNotes: readForkNotes(),
   deleting: null,
   editors: null,
   updated: null,
@@ -90,6 +111,25 @@ export function flash(text: string) {
 
 export function setReviewing(on: boolean) {
   if (chrome.reviewing !== on) set({ reviewing: on })
+}
+
+export function showPalette(on: boolean) {
+  if (chrome.palette !== on) set({ palette: on })
+}
+
+export function editBudget(on: boolean) {
+  if (chrome.budgeting !== on) set({ budgeting: on })
+}
+
+/** Puts a fork's "Branched from" note away for good. */
+export function dismissForkNote(sessionId: string) {
+  const ids = [...chrome.forkNotes, sessionId].slice(-FORK_NOTES_KEPT)
+  try {
+    localStorage.setItem(FORK_NOTES_KEY, JSON.stringify(ids))
+  } catch {
+    // Kept for this window only.
+  }
+  set({ forkNotes: new Set(ids) })
 }
 
 // ---------------------------------------------------------------------------

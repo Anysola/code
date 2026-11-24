@@ -522,3 +522,46 @@ fn compaction_nudges_once_then_fails() {
         .count();
     assert_eq!(summaries, 2, "the prompt, then one nudge");
 }
+
+/// A core told to stop at budgets (the desktop app) ends a turn whose session spent its budget
+/// before any model call, with reason `budget`; a session without one never stops, and a raised
+/// budget lets the next prompt run. Each fake model call takes 1% of the 5-hour window.
+#[test]
+fn a_spent_budget_stops_the_next_turn_until_it_is_raised() {
+    use anysola_core::events::InterruptReason;
+    let gateway = FakeGateway::start(|request, _| text(request, "ok"));
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    core.stop_at_budget();
+    let run = |id: &str, text: &str| {
+        runtime
+            .block_on(core.prompt(id, prompt(text), TurnOptions::default()))
+            .unwrap()
+    };
+    let calls = || gateway.messages().iter().filter(|r| !r.is_title()).count();
+
+    let (free, _) = core.open(&Target::New, false).unwrap();
+    for n in 0..3 {
+        assert_eq!(run(&free.id, &format!("free {n}")), Outcome::Succeeded);
+    }
+    assert!(core.usage(&free.id).total >= 3.0);
+    assert_eq!(core.usage(&free.id).budget, None);
+
+    let (capped, _) = core.open(&Target::New, false).unwrap();
+    core.set_budget(&capped.id, Some(1)).unwrap();
+    assert_eq!(run(&capped.id, "one"), Outcome::Succeeded);
+    assert!(core.usage(&capped.id).total >= 1.0);
+    let before = calls();
+    assert_eq!(
+        run(&capped.id, "two"),
+        Outcome::Interrupted(InterruptReason::Budget)
+    );
+    assert_eq!(calls(), before, "no model call once the budget is spent");
+
+    let total = core.usage(&capped.id).total;
+    core.set_budget(&capped.id, Some(total.floor() as u64 + 2))
+        .unwrap();
+    assert_eq!(run(&capped.id, "three"), Outcome::Succeeded);
+    assert_eq!(calls(), before + 1);
+}

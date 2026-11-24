@@ -221,6 +221,8 @@ pub(crate) async fn mcp_for(
                 return Err(format!("{directory} is not a folder on this computer."));
             }
             let core = Core::start(Path::new(directory)).await.map_err(text)?;
+            // A session's budget stops its turns here, woken ones included.
+            core.stop_at_budget();
             let runtime = anysola_mcp::Runtime::attach(&core);
             let forward = forward(handle.clone(), &core, directory.to_string());
             Ok(Running {
@@ -490,7 +492,8 @@ fn notify(handle: &AppHandle, event: &Event) {
 }
 
 fn session_json(row: &SessionRow) -> Value {
-    json!({"id": row.id, "title": row.title, "directory": row.directory, "updated": row.time_updated})
+    json!({"id": row.id, "title": row.title, "directory": row.directory, "updated": row.time_updated,
+           "forkOf": row.fork_session_id})
 }
 
 /// The session's model, its effort and every model to pick from, with the 5-hour window when
@@ -1310,6 +1313,31 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fork_names_its_source_in_the_list() {
+        let mut row = SessionRow {
+            id: "ses_2".into(),
+            project_id: "p".into(),
+            parent_id: None,
+            fork_session_id: None,
+            fork_boundary: None,
+            slug: "s".into(),
+            directory: "/work".into(),
+            title: "Renamed".into(),
+            version: "1".into(),
+            agent: None,
+            model: None,
+            time_created: 1,
+            time_updated: 2,
+        };
+        assert_eq!(session_json(&row)["forkOf"], Value::Null);
+        row.fork_session_id = Some("ses_1".into());
+        assert_eq!(
+            session_json(&row),
+            json!({"id": "ses_2", "title": "Renamed", "directory": "/work", "updated": 2, "forkOf": "ses_1"})
+        );
+    }
 
     #[test]
     fn one_key_per_folder() {

@@ -1,9 +1,8 @@
 /**
- * The sidebar: new session, search, pinned sessions, sessions by project (each project folds
+ * The sidebar: new session, Search (the palette), pinned sessions, sessions by project (each project folds
  * shut and has its own menu), selecting several to delete at once, updates and the account.
  */
 import {
-  CornerDownRight,
   ArrowDownToLine,
   ArrowUpRight,
   Check,
@@ -15,6 +14,7 @@ import {
   FileDown,
   FolderClosed,
   FolderOpen,
+  GitBranch,
   Gauge,
   Keyboard,
   ListChecks,
@@ -25,7 +25,6 @@ import {
   Pin,
   PinOff,
   Plus,
-  Search,
   Settings as SettingsIcon,
   Trash2,
   UserRound,
@@ -36,6 +35,7 @@ import type { SessionRow, Window as AccountWindow } from "./bridge"
 import { deleteLater, FEEDBACK, flushDeletes, HELP, RELEASES, showShortcuts, useChrome } from "./chrome"
 import { capitalize } from "./composer"
 import { exportSession, SidebarToggle } from "./header"
+import { SearchButton } from "./palette"
 import { KEYS } from "./shortcuts"
 import { usePrefs } from "./prefs"
 import {
@@ -71,7 +71,6 @@ import {
   TitleBar,
   Tooltip,
 } from "./ui"
-import { OPT, OptRowTitle, OptSearchRow, optNest } from "./options"
 
 /** A session's folder as the window names it: the app's own folder is "No project". */
 function usePlace(directory: string) {
@@ -172,32 +171,25 @@ export function Sidebar() {
   const sessions = useMemo(() => (deleting ? all.filter((s) => !deleting.ids.has(s.id)) : all), [all, deleting])
   const pinned = useStore((s) => s.pinned)
   const collapsed = useStore((s) => s.collapsed)
-  const [query, setQuery] = useState("")
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const anchor = useRef<string | null>(null)
-  const search = useRef<HTMLInputElement>(null)
-  const q = query.trim().toLowerCase()
-  const matches = useCallback(
-    (s: SessionRow) => !q || s.title.toLowerCase().includes(q) || s.directory.toLowerCase().includes(q),
-    [q]
-  )
-  const pins = useMemo(() => sessions.filter((s) => pinned.has(s.id) && matches(s)), [sessions, pinned, matches])
+  const pins = useMemo(() => sessions.filter((s) => pinned.has(s.id)), [sessions, pinned])
   const groups = useMemo(() => {
     // By folder however spelled; the group shows the first spelling.
     const by = new Map<string, [string, SessionRow[]]>()
     for (const s of sessions) {
-      if (pinned.has(s.id) || !matches(s)) continue
+      if (pinned.has(s.id)) continue
       const key = folderKey(s.directory)
       const group = by.get(key)
       if (group) group[1].push(s)
       else by.set(key, [s.directory, [s]])
     }
     return [...by.values()]
-  }, [sessions, pinned, matches])
+  }, [sessions, pinned])
   // The rows in the order they show, for Shift ranges (folded projects show none).
   const order = useMemo(
-    () => [...pins, ...groups.flatMap(([d, rows]) => (collapsed.has(folderKey(d)) && !q ? [] : rows))],
-    [pins, groups, collapsed, q]
+    () => [...pins, ...groups.flatMap(([d, rows]) => (collapsed.has(folderKey(d)) ? [] : rows))],
+    [pins, groups, collapsed]
   )
   // A deleted or vanished session leaves the selection.
   useEffect(() => {
@@ -207,7 +199,6 @@ export function Sidebar() {
     })
   }, [sessions])
   useEffect(() => {
-    // Ctrl K (focus the search) is in shortcuts.tsx, which also unfolds the sidebar for it.
     const onKey = (e: KeyboardEvent) => {
       // Under Settings, a panel or a menu, Escape is theirs. Taken (marked) before the window
       // hears it, where two presses stop a running turn: this one only clears the selection.
@@ -261,36 +252,10 @@ export function Sidebar() {
       </TitleBar>
       <div className="px-2 pt-2 pb-4">
         <NewSessionButton />
-        {sessions.length > 0 && OPT && OPT !== "b" ? (
-          <OptSearchRow />
-        ) : sessions.length > 0 && (
-          <label className="mt-1 flex h-9 items-center gap-2 rounded-lg px-3 text-muted focus-within:bg-default/60 hover:bg-default/60">
-            <Search className="size-4 shrink-0" strokeWidth={1.75} />
-            <input
-              ref={search}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  // Leaves the field only: no press toward stopping a turn.
-                  e.preventDefault()
-                  setQuery("")
-                  e.currentTarget.blur()
-                }
-              }}
-              placeholder="Search"
-              aria-label="Search sessions"
-              className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted"
-            />
-            {!query && !OPT && <Kbd>Ctrl K</Kbd>}
-          </label>
-        )}
+        {sessions.length > 0 && <SearchButton />}
       </div>
       <nav className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-2 pb-3" aria-label="Sessions">
         {sessions.length === 0 && <p className="text-dense px-2 text-muted">No sessions yet.</p>}
-        {sessions.length > 0 && pins.length === 0 && groups.length === 0 && (
-          <p className="text-dense px-2 text-muted">No session matches “{query.trim()}”.</p>
-        )}
         {pins.length > 0 && (
           <div>
             <div className="text-2xs flex h-7 items-center gap-1.5 px-2 font-medium tracking-wide text-muted">
@@ -309,8 +274,7 @@ export function Sidebar() {
             key={folderKey(directory)}
             directory={directory}
             rows={rows}
-            // A search shows every match, folded or not.
-            folded={collapsed.has(folderKey(directory)) && !q}
+            folded={collapsed.has(folderKey(directory))}
             selecting={selecting}
           />
         ))}
@@ -416,8 +380,8 @@ function Project({
       </div>
       {!folded && (
         <ul className="flex flex-col">
-          {optNest(rows).map((r) => (
-            <SessionLink key={r.id} row={r} selecting={selecting} nested={"nested" in r && !!r.nested} />
+          {rows.map((r) => (
+            <SessionLink key={r.id} row={r} selecting={selecting} />
           ))}
         </ul>
       )}
@@ -476,11 +440,9 @@ function SessionLink({
   row,
   selecting,
   showPlace = false,
-  nested = false,
 }: {
   row: SessionRow
   selecting: Selecting
-  nested?: boolean
   /** Pinned rows name their project, which no group header does for them. */
   showPlace?: boolean
 }) {
@@ -541,8 +503,7 @@ function SessionLink({
         aria-pressed={choosing ? checked : undefined}
         className={cn(
           "flex w-full items-center gap-2 rounded-lg px-2 text-left transition-colors focus-visible:status-focused-field",
-          showPlace ? "min-h-11 py-1.5" : OPT === "c" ? "min-h-9 py-1.5" : "h-9",
-          nested && "pl-4",
+          showPlace ? "min-h-11 py-1.5" : "h-9",
           checked ? "bg-default" : active && !choosing ? "bg-default" : "hover:bg-default/60"
         )}
       >
@@ -556,9 +517,13 @@ function SessionLink({
             {checked && <Check className="size-3" strokeWidth={3} />}
           </span>
         )}
-        {nested && <CornerDownRight className="size-3.5 shrink-0 text-muted" strokeWidth={1.75} />}
         <span className="min-w-0 flex-1">
-          {OPT ? <OptRowTitle row={row} active={active} /> : <span className={cn("block truncate text-sm", !active && "text-foreground/85")}>{row.title}</span>}
+          <span className={cn("flex min-w-0 items-center gap-1.5 text-sm", !active && "text-foreground/85")}>
+            {row.forkOf && (
+              <GitBranch className="size-3.5 shrink-0 text-muted" strokeWidth={1.75} aria-label="Branched from another session" />
+            )}
+            <span className="min-w-0 truncate">{row.title}</span>
+          </span>
           {showPlace && (
             <span className="text-2xs block truncate text-muted">
               <PlaceLabel directory={row.directory} />

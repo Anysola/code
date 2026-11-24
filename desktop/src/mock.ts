@@ -84,12 +84,12 @@ const MAIL = "/home/alex/code/mailwick"
 const now = Date.now()
 
 const rows: SessionRow[] = [
-  { id: "ses_pricing", title: "Yearly price on /pricing", directory: WEB, updated: now - 20_000 },
-  { id: "ses_alerts", title: "Gateway health alerts", directory: CODE, updated: now - 60_000 },
-  { id: "ses_search", title: "News search ranking", directory: WEB, updated: now - 2 * 3_600_000 },
-  { id: "ses_footer", title: "Footer links on mobile", directory: WEB, updated: now - 26 * 3_600_000 },
-  { id: "ses_load", title: "Load test for streams", directory: CODE, updated: now - 30 * 3_600_000 },
-  { id: "ses_imap", title: "IMAP idle reconnect", directory: MAIL, updated: now - 3 * 86_400_000 },
+  { id: "ses_pricing", title: "Yearly price on /pricing", directory: WEB, updated: now - 20_000, forkOf: null },
+  { id: "ses_alerts", title: "Gateway health alerts", directory: CODE, updated: now - 60_000, forkOf: null },
+  { id: "ses_search", title: "News search ranking", directory: WEB, updated: now - 2 * 3_600_000, forkOf: null },
+  { id: "ses_footer", title: "Footer links on mobile", directory: WEB, updated: now - 26 * 3_600_000, forkOf: null },
+  { id: "ses_load", title: "Load test for streams", directory: CODE, updated: now - 30 * 3_600_000, forkOf: null },
+  { id: "ses_imap", title: "IMAP idle reconnect", directory: MAIL, updated: now - 3 * 86_400_000, forkOf: null },
 ]
 
 const planCard: FileDiff = {
@@ -1203,6 +1203,7 @@ export function mockBridge(): Bridge {
     if (!end || !running.has(id)) return
     const list = transcripts.get(id) ?? []
     transcripts.set(id, [...list, { kind: "text", id: `r${list.length}`, text }])
+    spend(id)
     await wait(300)
     // The queue runs next, as the core does it.
     const waiting = queues.get(id) ?? []
@@ -1221,13 +1222,25 @@ export function mockBridge(): Bridge {
     emit({ type: "done", sessionId: id })
   }
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
-  /** Budgets set in this run; a session without one has none. */
-  // `?budget=10` gives the open session a budget, `?spent=5` its use (options round, paket1).
+  /** Budgets set in this run; a session without one has none. `?budget=10` gives ses_pricing
+   * one, `?spent=5` what it used (6.4 by default). Each mock turn takes 1.2. */
   const budgets = new Map<string, number | null>(params.get("budget") ? [["ses_pricing", Number(params.get("budget"))]] : [])
-  const spent = Number(params.get("spent")) || 6.4
+  const spent = new Map<string, { turn: number; total: number; turns: number }>([
+    ["ses_pricing", { turn: 1.2, total: Number(params.get("spent")) || 6.4, turns: 5 }],
+  ])
   const usageOf = (sessionId: string): SessionUsage => {
-    const used = sessionId === "ses_pricing" ? { turn: 1.2, total: spent, turns: 5 } : { turn: 0, total: 0, turns: 0 }
+    const used = spent.get(sessionId) ?? { turn: 0, total: 0, turns: 0 }
     return { sessionId, ...used, budget: budgets.get(sessionId) ?? null, fiveHour: info.fiveHour ?? null, weekly: null }
+  }
+  /** As the core: a turn takes its share, and the window hears of it. */
+  const spend = (sessionId: string) => {
+    const was = spent.get(sessionId) ?? { turn: 0, total: 0, turns: 0 }
+    spent.set(sessionId, { turn: 1.2, total: Math.round((was.total + 1.2) * 10) / 10, turns: was.turns + 1 })
+    emit({ type: "usage", ...usageOf(sessionId) })
+  }
+  const overBudget = (sessionId: string) => {
+    const u = usageOf(sessionId)
+    return u.budget !== null && u.total >= u.budget
   }
   /**
    * `?state=live`: a turn whose tool calls stream their input, in the app's order: the row is
@@ -1602,7 +1615,7 @@ export function mockBridge(): Bridge {
       if (!sessionId && params.get("slow")) await wait(Number(params.get("slow")))
       const id = sessionId ?? `ses_${Math.random().toString(36).slice(2, 10)}`
       if (!sessionId) {
-        rows.unshift({ id, title: "New session", directory, updated: Date.now() })
+        rows.unshift({ id, title: "New session", directory, updated: Date.now(), forkOf: null })
         emit({ type: "created", sessionId: id, title: "New session", directory })
       }
       if (state === "refused") {
@@ -1669,6 +1682,16 @@ export function mockBridge(): Bridge {
       }
       const list = transcripts.get(id) ?? []
       transcripts.set(id, [...list, { kind: "user", id: `u${list.length}`, text, images: files.length, time: Date.now() }])
+      if (overBudget(id)) {
+        // As the core: the turn starts and ends at its first step, before any model call.
+        emit({ type: "changed", sessionId: id })
+        emit({ type: "started", sessionId: id })
+        await wait(150)
+        const after = transcripts.get(id) ?? []
+        transcripts.set(id, [...after, { kind: "note", id: `n${after.length}`, text: "Stopped at the session’s budget.", failed: false }])
+        emit({ type: "interrupted", sessionId: id, reason: "budget" })
+        return { sessionId: id, queued: false }
+      }
       running.add(id)
       emit({ type: "changed", sessionId: id })
       emit({ type: "started", sessionId: id })
@@ -1801,9 +1824,9 @@ export function mockBridge(): Bridge {
         copied = items.slice(0, at)
       }
       if (copied.length === 0) throw new Error("There is nothing before that message to fork.")
-      const forks = rows.filter((r) => r.title.startsWith(`${source.title} (fork #`)).length
+      const forks = rows.filter((r) => r.forkOf === source.id).length
       const id = `ses_${Math.random().toString(36).slice(2, 10)}`
-      const row = { id, title: `${source.title} (fork #${forks + 1})`, directory: source.directory, updated: Date.now() }
+      const row = { id, title: `${source.title} (fork #${forks + 1})`, directory: source.directory, updated: Date.now(), forkOf: source.id }
       rows.unshift(row)
       transcripts.set(id, structuredClone(copied))
       emit({ type: "created", sessionId: id, title: row.title, directory })

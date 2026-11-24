@@ -5,7 +5,12 @@
 import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
 
-export type SessionRow = { id: string; title: string; directory: string; updated: number }
+/**
+ * A root session as the list shows it. `forkOf`: the session it was forked from (`forkSession`),
+ * kept through renames and restarts; null for any other session. The source may since be
+ * deleted, so look it up rather than assume it is listed.
+ */
+export type SessionRow = { id: string; title: string; directory: string; updated: number; forkOf: string | null }
 
 /**
  * A session's share of the account's 5-hour window, as `sessionUsage` and `setBudget` return it
@@ -700,8 +705,9 @@ export type Bridge = {
    * Copies the session into a new one: the whole conversation, or only what came before
    * `before`, the id of a message the user sent (a `user` item of the transcript, as `revert`
    * and `resend` take; that message and everything after it are left out). The new session is a
-   * root session, listed like any other; its title is the source's with ` (fork #n)`. Use the
-   * returned row; the `created` event that also comes only refreshes the list. Refused for a
+   * root session, listed like any other, with `forkOf` set to the source; its first title is
+   * the source's with ` (fork #n)`, which a rename drops (tell a fork by `forkOf`, never by
+   * its title). Use the returned row; the `created` event that also comes only refreshes the list. Refused for a
    * subagent's session, for a `before` that is not a user message of the session, and when
    * nothing comes before `before`.
    *
@@ -713,8 +719,11 @@ export type Bridge = {
   /**
    * Sets the session's budget, a whole percent of the 5-hour window from 1 to `MAX_BUDGET`, or
    * clears it (`null`); anything else is refused. A `usage` event carries the change too.
-   * Note: the app's turns run with the core's `stop_at_budget` off today, so a budget is stored
-   * and reported but does not stop a turn yet.
+   * Every turn of the app stops at the budget: once `total` reaches it, the next model call
+   * does not start and the turn ends with `interrupted`, reason `budget` (a prompt sent then
+   * ends the same way at once). The check runs before each model call, so `total` can end a
+   * little over the budget. Raising it above `total` or clearing it lets the next prompt run;
+   * nothing is resent by itself. A session without a budget never stops for one.
    */
   setBudget(directory: string, sessionId: string, budget: number | null): Promise<SessionUsage>
   /** What the session has used of the 5-hour window, and its budget. */

@@ -41,7 +41,7 @@ import {
   retry,
   runCommand,
   send,
-  setMode,
+  pickMode,
   stop,
   STOP_AGAIN,
   undo,
@@ -747,11 +747,7 @@ export function Composer({ open }: { open: Open }) {
                   role="radio"
                   aria-checked={shown === m.id}
                   title={m.hint}
-                  onClick={() => {
-                    if (m.id === "plan") return void chooseAgent("plan")
-                    setMode(m.id)
-                    if (planning) void chooseAgent("build")
-                  }}
+                  onClick={() => pickMode(m.id)}
                   className={cn(
                     "text-dense h-7 rounded-full px-3 transition-colors focus-visible:status-focused-field",
                     shown === m.id ? "bg-default-hover text-foreground" : "text-muted hover:text-foreground"

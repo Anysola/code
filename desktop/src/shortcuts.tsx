@@ -5,11 +5,10 @@
 import { useEffect, useRef } from "react"
 
 import type { SessionRow } from "./bridge"
-import { setReviewing, showShortcuts, toggleSidebar, useChrome } from "./chrome"
+import { setReviewing, showPalette, showShortcuts, toggleSidebar, useChrome } from "./chrome"
 import { usePrefs } from "./prefs"
 import { closeSettings, isRunning, newSession, openSession, openSettings, stop, useStore } from "./store"
 import { btn, folderKey, Kbd, useEscape } from "./ui"
-import { OPT, openPalette } from "./options"
 
 export type Shortcut = { label: string; keys: string[] }
 
@@ -23,7 +22,7 @@ export function useShortcutList(): { label: string; rows: Shortcut[] }[] {
       rows: [
         { label: "New session", keys: ["Ctrl N"] },
         { label: "New session in this folder", keys: ["Ctrl Shift N"] },
-        { label: "Search sessions", keys: ["Ctrl K"] },
+        { label: "Search sessions and commands", keys: ["Ctrl K"] },
         { label: "Previous or next session", keys: ["Alt ↑", "Alt ↓"] },
         { label: "Show or hide the sidebar", keys: ["Ctrl B"] },
         { label: "Go to the message box", keys: ["Ctrl L"] },
@@ -79,6 +78,7 @@ export function useShortcutList(): { label: string; rows: Shortcut[] }[] {
 /** The key a control's tooltip names, from the same list. */
 export const KEYS = {
   newSession: "Ctrl N",
+  palette: "Ctrl K",
   sidebar: "Ctrl B",
   stop: "Ctrl .",
   review: "Ctrl Shift D",
@@ -111,8 +111,9 @@ export function useShortcuts() {
   // The sheet itself shows on the sign-in screen too, not while starting or at the fault screen.
   const sheet = useStore((s) => s.auth !== "checking" && !s.fault)
   const shown = useChrome((c) => c.shortcuts)
-  const now = useRef({ sessions, pinned, open, busy, deleting, ready, sheet, shown })
-  now.current = { sessions, pinned, open, busy, deleting, ready, sheet, shown }
+  const palette = useChrome((c) => c.palette)
+  const now = useRef({ sessions, pinned, open, busy, deleting, ready, sheet, shown, palette })
+  now.current = { sessions, pinned, open, busy, deleting, ready, sheet, shown, palette }
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented) return
@@ -124,6 +125,8 @@ export function useShortcuts() {
         e.preventDefault()
         // The sheet is modal: another shortcut closes it rather than acting unseen behind it.
         if (key !== "/" && now.current.shown) showShortcuts(false)
+        // So is the palette; Ctrl K itself toggles it.
+        if (key !== "k" && now.current.palette) showPalette(false)
         f()
       }
       if (ctrl && key === "/") return sheet ? run(() => showShortcuts()) : undefined
@@ -134,12 +137,11 @@ export function useShortcuts() {
           closeSettings()
           void newSession(e.shiftKey ? open?.directory : undefined)
         })
-      if (ctrl && key === "k" && OPT) return run(() => openPalette())
       if (ctrl && key === "k")
         return run(() => {
+          if (now.current.palette) return showPalette(false)
           closeSettings()
-          toggleSidebar(true)
-          requestAnimationFrame(() => document.querySelector<HTMLInputElement>('input[aria-label="Search sessions"]')?.focus())
+          showPalette(true)
         })
       if (ctrl && key === "b") return run(() => toggleSidebar())
       if (ctrl && key === "l")
