@@ -47,6 +47,7 @@ import {
   type Open,
 } from "./store"
 import { btn, cn, Counts, MenuItem, MenuSeparator, Popover, sameFolder, TitleBar, Tooltip } from "./ui"
+import { forkTitle, OPT, OptHeader, OptHeaderNote, OptMenuItem } from "./options"
 
 /** A home folder as `~`. */
 function tilde(path: string) {
@@ -147,9 +148,10 @@ export function SessionHeader({ open }: { open: Open }) {
               className="min-w-28 truncate text-sm font-medium"
               title={open.title}
             >
-              {open.title}
+              {OPT ? forkTitle(open.title).base : open.title}
             </h1>
           )}
+          <OptHeaderNote open={open} />
           {wide && (
             <span className="text-2xs flex min-w-0 shrink-[2] items-center gap-1 text-muted" title={open.directory}>
               <FolderClosed className="size-3 shrink-0" strokeWidth={1.75} />
@@ -160,6 +162,7 @@ export function SessionHeader({ open }: { open: Open }) {
           )}
         </div>
         <div className="mr-2 ml-3 flex shrink-0 items-center gap-1">
+          <OptHeader open={open} />
           <EditorButton directory={open.directory} compact={width < ROOMY} />
           <GitMenu open={open} compact={narrow} />
           {files > 0 &&
@@ -288,6 +291,7 @@ function SessionMenu({ open, onRename }: { open: Open; onRename: () => void }) {
             <FileDown className="size-3.5 text-muted" /> Export…
           </MenuItem>
         )}
+        {open.sessionId && <OptMenuItem close={close} />}
         {row && (
           <>
             <MenuSeparator />

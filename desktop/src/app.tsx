@@ -15,6 +15,7 @@ import { closePeek, dismissNotice, openSettings, start, useStore, type Open, typ
 import { Transcript } from "./transcript"
 import { btn, cn, folderKey, sameFolder, Spinner, TitleBar, Tooltip, useEscape } from "./ui"
 import { Home, NewSessionStart, SignIn } from "./welcome"
+import { OptBanner, OptFooter, OptPalette, OptTranscriptTop } from "./options"
 
 export function App() {
   const auth = useStore((s) => s.auth)
@@ -58,6 +59,7 @@ export function App() {
         <Toasts />
       </div>
       <ShortcutsSheet />
+      <OptPalette />
       <CloseConfirm />
     </div>
   )
@@ -87,6 +89,7 @@ function Main() {
             <BackgroundRow open={open} />
             <Tasks todos={open.todos} />
             <Banner open={open} />
+            <OptBanner open={open} />
             <QueueChips open={open} />
             <Composer open={open} />
             <div className="mt-2 flex items-center gap-3 px-2">
@@ -97,6 +100,7 @@ function Main() {
                 </span>
               </span>
               <ContextMeter open={open} />
+              <OptFooter open={open} />
             </div>
           </div>
           {reviewing && <Review open={open} onClose={() => setReviewing(false)} />}
@@ -203,7 +207,10 @@ function Conversation({ open }: { open: Open }) {
               )}
             </>
           ) : (
-            <Transcript open={open} permissions={permissions} questions={questions} forms={forms} />
+            <>
+              <OptTranscriptTop open={open} />
+              <Transcript open={open} permissions={permissions} questions={questions} forms={forms} />
+            </>
           )}
         </div>
       </div>

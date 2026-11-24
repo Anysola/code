@@ -55,6 +55,7 @@ import {
   type Status,
 } from "./store"
 import { btn, cn, Counts, DiffView, Kbd, MenuItem, Popover, Spinner, useEscape } from "./ui"
+import { OptUserAction } from "./options"
 
 type Tool = Extract<Item, { kind: "tool" }>
 type UserItem = Extract<Item, { kind: "user" }>
@@ -361,6 +362,7 @@ function UserMessage({ item, actions }: { item: UserItem; actions: boolean }) {
           <IconAction label="Rewind to before this message" onClick={() => void rewind(item.id)}>
             <Undo2 className="size-3.5" />
           </IconAction>
+          <OptUserAction id={item.id} />
         </div>
       )}
     </div>

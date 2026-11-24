@@ -9,6 +9,7 @@ import { setReviewing, showShortcuts, toggleSidebar, useChrome } from "./chrome"
 import { usePrefs } from "./prefs"
 import { closeSettings, isRunning, newSession, openSession, openSettings, stop, useStore } from "./store"
 import { btn, folderKey, Kbd, useEscape } from "./ui"
+import { OPT, openPalette } from "./options"
 
 export type Shortcut = { label: string; keys: string[] }
 
@@ -133,6 +134,7 @@ export function useShortcuts() {
           closeSettings()
           void newSession(e.shiftKey ? open?.directory : undefined)
         })
+      if (ctrl && key === "k" && OPT) return run(() => openPalette())
       if (ctrl && key === "k")
         return run(() => {
           closeSettings()

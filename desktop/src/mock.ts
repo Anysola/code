@@ -861,6 +861,9 @@ export function mockBridge(): Bridge {
       ...transcripts.get("ses_pricing")!,
       ...longReview.map((f, i) => tool(`rl${i}`, "edit", f.file, { files: [f] })),
     ])
+  // `?stopped=budget`: the last turn ended at the session's budget, with the core's note.
+  if (new URLSearchParams(location.search).get("stopped") === "budget")
+    transcripts.set("ses_pricing", [...transcripts.get("ses_pricing")!, { kind: "note", id: "nb", text: "Stopped at the session’s budget.", failed: false }])
   if (state === "done")
     transcripts.set(
       "ses_pricing",
@@ -1219,9 +1222,11 @@ export function mockBridge(): Bridge {
   }
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
   /** Budgets set in this run; a session without one has none. */
-  const budgets = new Map<string, number | null>()
+  // `?budget=10` gives the open session a budget, `?spent=5` its use (options round, paket1).
+  const budgets = new Map<string, number | null>(params.get("budget") ? [["ses_pricing", Number(params.get("budget"))]] : [])
+  const spent = Number(params.get("spent")) || 6.4
   const usageOf = (sessionId: string): SessionUsage => {
-    const used = sessionId === "ses_pricing" ? { turn: 1.2, total: 6.4, turns: 5 } : { turn: 0, total: 0, turns: 0 }
+    const used = sessionId === "ses_pricing" ? { turn: 1.2, total: spent, turns: 5 } : { turn: 0, total: 0, turns: 0 }
     return { sessionId, ...used, budget: budgets.get(sessionId) ?? null, fiveHour: info.fiveHour ?? null, weekly: null }
   }
   /**

@@ -3,6 +3,7 @@
  * shut and has its own menu), selecting several to delete at once, updates and the account.
  */
 import {
+  CornerDownRight,
   ArrowDownToLine,
   ArrowUpRight,
   Check,
@@ -70,6 +71,7 @@ import {
   TitleBar,
   Tooltip,
 } from "./ui"
+import { OPT, OptRowTitle, OptSearchRow, optNest } from "./options"
 
 /** A session's folder as the window names it: the app's own folder is "No project". */
 function usePlace(directory: string) {
@@ -259,7 +261,9 @@ export function Sidebar() {
       </TitleBar>
       <div className="px-2 pt-2 pb-4">
         <NewSessionButton />
-        {sessions.length > 0 && (
+        {sessions.length > 0 && OPT && OPT !== "b" ? (
+          <OptSearchRow />
+        ) : sessions.length > 0 && (
           <label className="mt-1 flex h-9 items-center gap-2 rounded-lg px-3 text-muted focus-within:bg-default/60 hover:bg-default/60">
             <Search className="size-4 shrink-0" strokeWidth={1.75} />
             <input
@@ -278,7 +282,7 @@ export function Sidebar() {
               aria-label="Search sessions"
               className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted"
             />
-            {!query && <Kbd>Ctrl K</Kbd>}
+            {!query && !OPT && <Kbd>Ctrl K</Kbd>}
           </label>
         )}
       </div>
@@ -412,8 +416,8 @@ function Project({
       </div>
       {!folded && (
         <ul className="flex flex-col">
-          {rows.map((r) => (
-            <SessionLink key={r.id} row={r} selecting={selecting} />
+          {optNest(rows).map((r) => (
+            <SessionLink key={r.id} row={r} selecting={selecting} nested={"nested" in r && !!r.nested} />
           ))}
         </ul>
       )}
@@ -472,9 +476,11 @@ function SessionLink({
   row,
   selecting,
   showPlace = false,
+  nested = false,
 }: {
   row: SessionRow
   selecting: Selecting
+  nested?: boolean
   /** Pinned rows name their project, which no group header does for them. */
   showPlace?: boolean
 }) {
@@ -535,7 +541,8 @@ function SessionLink({
         aria-pressed={choosing ? checked : undefined}
         className={cn(
           "flex w-full items-center gap-2 rounded-lg px-2 text-left transition-colors focus-visible:status-focused-field",
-          showPlace ? "min-h-11 py-1.5" : "h-9",
+          showPlace ? "min-h-11 py-1.5" : OPT === "c" ? "min-h-9 py-1.5" : "h-9",
+          nested && "pl-4",
           checked ? "bg-default" : active && !choosing ? "bg-default" : "hover:bg-default/60"
         )}
       >
@@ -549,8 +556,9 @@ function SessionLink({
             {checked && <Check className="size-3" strokeWidth={3} />}
           </span>
         )}
+        {nested && <CornerDownRight className="size-3.5 shrink-0 text-muted" strokeWidth={1.75} />}
         <span className="min-w-0 flex-1">
-          <span className={cn("block truncate text-sm", !active && "text-foreground/85")}>{row.title}</span>
+          {OPT ? <OptRowTitle row={row} active={active} /> : <span className={cn("block truncate text-sm", !active && "text-foreground/85")}>{row.title}</span>}
           {showPlace && (
             <span className="text-2xs block truncate text-muted">
               <PlaceLabel directory={row.directory} />
