@@ -940,8 +940,39 @@ fn copy_local_files(out: &Out, folder: &Path, worktree: &Path, go: &dyn Fn() -> 
     }
 }
 
-/// The copy itself; returns the copied files' paths (relative, `/`-separated).
+/// The copy itself; returns the copied files' paths (relative, `/`-separated). Only files the
+/// main folder's Git ignores: an untracked one that isn't ignored would read as the session's
+/// own addition and be applied. A `.claude` or `.anysola` that is a link (or junction) is
+/// skipped: it may lead to the home folder's credentials.
 fn copy_local(top: &Path, worktree: &Path, go: &dyn Fn() -> bool) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for folder in LOCAL_FOLDERS {
+        let root = top.join(folder);
+        let plain_folder = std::fs::symlink_metadata(&root)
+            .is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink() && !reparse_point(&m));
+        if plain_folder {
+            find_local(top, &root, &mut found);
+        }
+    }
+    if found.is_empty() {
+        return Vec::new();
+    }
+    // Ignored by the main folder's rules and by the worktree's own (its committed .gitignore can
+    // differ from the main folder's edited one): a copy never shows as the session's change.
+    let ignored_in = |dir: &Path| -> std::collections::HashSet<String> {
+        wgit(dir, &["check-ignore", "--no-index", "--stdin", "-z"])
+            .input(found.join("\0").into_bytes())
+            .run()
+            .map(|o| {
+                o.stdout
+                    .split('\0')
+                    .filter(|p| !p.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    // Tracked files aren't candidates (`--no-index` would call a tracked file ignored too).
     let tracked: std::collections::HashSet<String> =
         wgit(top, &["ls-files", "-z", "--", ".claude", ".anysola"])
             .run()
@@ -953,16 +984,19 @@ fn copy_local(top: &Path, worktree: &Path, go: &dyn Fn() -> bool) -> Vec<String>
                     .collect()
             })
             .unwrap_or_default();
-    let mut found: Vec<String> = Vec::new();
-    for folder in LOCAL_FOLDERS {
-        find_local(top, &top.join(folder), &mut found);
-    }
+    let in_main = ignored_in(top);
+    let in_worktree = ignored_in(worktree);
+    let ignored: std::collections::HashSet<&str> = in_main
+        .iter()
+        .filter(|p| in_worktree.contains(*p) && !tracked.contains(*p))
+        .map(String::as_str)
+        .collect();
     let mut copied = Vec::new();
     for relative in found {
         if copied.len() >= LOCAL_FILES || !go() || !worktree.is_dir() {
             break;
         }
-        if tracked.contains(&relative) {
+        if !ignored.contains(relative.as_str()) {
             continue;
         }
         let from = top.join(&relative);
@@ -982,13 +1016,29 @@ fn copy_local(top: &Path, worktree: &Path, go: &dyn Fn() -> bool) -> Vec<String>
     copied
 }
 
+/// A Windows reparse point (a junction or a link `symlink_metadata` doesn't call one).
+fn reparse_point(meta: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = meta;
+        false
+    }
+}
+
 /// Files under `dir` (any depth, `node_modules` skipped, links not followed), relative to `top`.
 fn find_local(top: &Path, dir: &Path, found: &mut Vec<String>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
-        if found.len() >= LOCAL_FILES * 4 {
+        // A bound on the walk; only ignored files count toward the copy's own limit.
+        if found.len() >= 20_000 {
             return;
         }
         let Ok(kind) = entry.file_type() else {

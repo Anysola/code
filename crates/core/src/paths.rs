@@ -153,6 +153,19 @@ pub(crate) fn plain_text(text: &str) -> String {
     }
 }
 
+/// A stored path key (a saved answer's resource, a trust decision's document) without the
+/// verbatim prefix, in either separator form (`\\?\C:\x`, `//?/C:/x` → `C:\x`, `C:/x`;
+/// `…?\UNC\h\s` → `\\h\s`): keys recorded before paths lost the prefix match the paths of now.
+pub fn plain_key(text: &str) -> String {
+    if let Some(rest) = text.strip_prefix("//?/UNC/") {
+        return format!("//{rest}");
+    }
+    match text.strip_prefix("//?/") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.to_string(),
+        _ => plain_text(text),
+    }
+}
+
 /// The most read from a markdown or instruction file (agents, commands, skills, `AGENTS.md`).
 pub const TEXT_CAP: u64 = 4 << 20;
 /// The most read from a project's config document.
@@ -280,5 +293,9 @@ mod tests {
         assert_eq!(plain_text(r"\\?\UNC\host\share\x"), r"\\host\share\x");
         assert_eq!(plain_text(r"\\?\Volume{abc}\x"), r"\\?\Volume{abc}\x");
         assert_eq!(plain_text("/home/u/x"), "/home/u/x");
+        assert_eq!(plain_key(r"\\?\C:\p\*"), r"C:\p\*");
+        assert_eq!(plain_key("//?/C:/p/*"), "C:/p/*");
+        assert_eq!(plain_key("//?/UNC/host/share/*"), "//host/share/*");
+        assert_eq!(plain_key("/home/u/*"), "/home/u/*");
     }
 }

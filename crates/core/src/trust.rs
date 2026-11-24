@@ -93,8 +93,9 @@ impl Decisions {
                 else {
                     continue;
                 };
+                // Recorded before paths lost Windows' verbatim prefix: keyed as paths are now.
                 map.insert(
-                    (key[prefix.len()..].to_string(), kind),
+                    (crate::paths::plain_key(&key[prefix.len()..]), kind),
                     (digest.to_string(), allow),
                 );
             }
@@ -104,14 +105,16 @@ impl Decisions {
 
     #[cfg(test)]
     pub(crate) fn allow(&mut self, path: &str, kind: TrustKind, digest: &str) {
-        self.0
-            .insert((path.to_string(), kind), (digest.to_string(), true));
+        self.0.insert(
+            (crate::paths::plain_key(path), kind),
+            (digest.to_string(), true),
+        );
     }
 
     /// The decision on `path`'s `kind` made for this `digest`.
     pub fn of(&self, path: &str, kind: TrustKind, digest: &str) -> Option<bool> {
         self.0
-            .get(&(path.to_string(), kind))
+            .get(&(crate::paths::plain_key(path), kind))
             .filter(|(d, _)| d == digest)
             .map(|(_, allow)| *allow)
     }
@@ -657,6 +660,31 @@ mod tests {
 
     fn map(value: Value) -> Map<String, Value> {
         value.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn a_decision_recorded_under_a_verbatim_path_still_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("a.db")).unwrap();
+        record(&db, r"\\?\C:\p\anysola.json", TrustKind::Hooks, "d1", false).unwrap();
+        record(
+            &db,
+            r"\\?\UNC\host\share\p\anysola.json",
+            TrustKind::Mcp,
+            "d2",
+            true,
+        )
+        .unwrap();
+        let decisions = Decisions::read(&db);
+        // A refusal keeps refusing.
+        assert_eq!(
+            decisions.of(r"C:\p\anysola.json", TrustKind::Hooks, "d1"),
+            Some(false)
+        );
+        assert_eq!(
+            decisions.of(r"\\host\share\p\anysola.json", TrustKind::Mcp, "d2"),
+            Some(true)
+        );
     }
 
     #[test]

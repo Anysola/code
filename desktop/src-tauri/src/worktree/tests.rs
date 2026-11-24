@@ -782,25 +782,56 @@ fn markers_of_an_open_merge_are_never_applied_anyway() {
     assert_eq!(state(&sandbox, &main), before);
 }
 
-/// Local hook and config files under `.claude/` and `.anysola/` that Git doesn't track come
-/// along; tracked ones (already there) and `node_modules` don't.
+/// Local hook and config files under `.claude/` and `.anysola/` that Git ignores (in the main
+/// folder and in the worktree) come along and never show as the session's change; untracked
+/// files that aren't ignored, tracked ones and `node_modules` don't.
 #[test]
-fn local_hook_files_are_copied() {
+fn ignored_local_hook_files_are_copied() {
     let sandbox = Sandbox::new("local");
     let (main, row) = sandbox.session();
+    write(
+        &main,
+        ".git/info/exclude",
+        ".claude/settings.local.json\n.claude/hooks/\n.anysola/node_modules/\n",
+    );
     write(&main, ".claude/settings.json", "{}\n");
-    sandbox.git(&main, &["add", "-f", ".claude/settings.json"]);
+    sandbox.git(&main, &["add", ".claude/settings.json"]);
     sandbox.git(&main, &["commit", "-qm", "settings"]);
-    write(&main, ".claude/hooks/x.sh", "#!/bin/sh\nexit 0\n");
-    write(&main, ".anysola/local.json", "{\"a\": 1}\n");
-    write(&main, ".anysola/node_modules/pkg/index.js", "x\n");
     write(&main, ".claude/settings.json", "{\"changed\": true}\n");
+    write(&main, ".claude/settings.local.json", "{\"local\": true}\n");
+    write(&main, ".claude/hooks/x.sh", "#!/bin/sh\nexit 0\n");
+    write(&main, ".anysola/notes.json", "{\"not ignored\": 1}\n");
+    write(&main, ".anysola/node_modules/pkg/index.js", "x\n");
     let mut copied = copy_local(&main, &w(&row), &|| true);
     copied.sort();
-    assert_eq!(copied, [".anysola/local.json", ".claude/hooks/x.sh"]);
-    assert_eq!(read(&w(&row), ".claude/hooks/x.sh"), "#!/bin/sh\nexit 0\n");
+    assert_eq!(
+        copied,
+        [".claude/hooks/x.sh", ".claude/settings.local.json"]
+    );
+    assert!(
+        !w(&row).join(".anysola/notes.json").exists(),
+        "untracked, not ignored"
+    );
     assert!(!w(&row).join(".anysola/node_modules").exists());
-    // Already there: left alone.
+    assert!(
+        worktree_changes(&row).unwrap().is_empty(),
+        "never the session's change"
+    );
+    // Already there, or let go: nothing.
     assert!(copy_local(&main, &w(&row), &|| true).is_empty());
     assert!(copy_local(&main, &w(&row), &|| false).is_empty());
+}
+
+/// A `.claude` that is a link (to the home folder's, say) is never copied from.
+#[cfg(unix)]
+#[test]
+fn a_linked_local_folder_is_skipped() {
+    let sandbox = Sandbox::new("linked");
+    let (main, row) = sandbox.session();
+    let home_claude = sandbox.0.join("home/.claude");
+    write(&home_claude, ".credentials.json", "secret\n");
+    std::os::unix::fs::symlink(&home_claude, main.join(".claude")).unwrap();
+    write(&main, ".git/info/exclude", ".claude\n");
+    assert!(copy_local(&main, &w(&row), &|| true).is_empty());
+    assert!(!w(&row).join(".claude").exists());
 }

@@ -71,7 +71,8 @@ impl Db {
             let rows = statement.query_map([project_id], |r| {
                 Ok(Rule {
                     action: r.get(0)?,
-                    resource: r.get(1)?,
+                    // Saved before paths lost Windows' verbatim prefix: matched as written now.
+                    resource: crate::paths::plain_key(&r.get::<_, String>(1)?),
                     effect: Effect::Allow,
                     project: false,
                 })
@@ -171,6 +172,25 @@ mod tests {
             ]
         );
         assert!(db.session_permissions("ses_missing").unwrap().is_empty());
+    }
+
+    #[test]
+    fn answers_saved_under_a_verbatim_path_still_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("a.db")).unwrap();
+        db.save_permissions(
+            "p1",
+            "external_directory",
+            &["//?/C:/work/*".into(), "//?/UNC/host/share/*".into()],
+        )
+        .unwrap();
+        let saved: Vec<String> = db
+            .saved_permissions("p1")
+            .unwrap()
+            .into_iter()
+            .map(|r| r.resource)
+            .collect();
+        assert_eq!(saved, ["C:/work/*", "//host/share/*"]);
     }
 
     #[test]
