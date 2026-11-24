@@ -217,7 +217,7 @@ pub(crate) fn turn_gate(shared: &Shared, session_id: &str) -> Result<TurnGate, C
     };
     match row.state {
         // A folder deleted while the app runs is found here, not only at the next start.
-        WorktreeState::Ready if !Path::new(&row.directory).is_dir() => {
+        WorktreeState::Ready if gone_for_sure(Path::new(&row.directory)) => {
             let _ = shared.db.cas_session_worktree(
                 &root,
                 WorktreeState::Ready,
@@ -232,12 +232,23 @@ pub(crate) fn turn_gate(shared: &Shared, session_id: &str) -> Result<TurnGate, C
     }
 }
 
+/// A folder not there on two looks a moment apart (a network drive or a busy disk can miss one).
+pub(crate) fn gone_for_sure(dir: &Path) -> bool {
+    if dir.is_dir() {
+        return false;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    !dir.is_dir()
+}
+
 /// Refuses changing the session's files from outside a turn (rewind, redo, put back) unless its
 /// own worktree, if it has one, is ready: not while an apply or a merge of the base reads it.
 pub(crate) fn files_gate(shared: &Shared, session_id: &str) -> Result<(), CoreError> {
     let root = crate::session::gate::root(&shared.db, session_id);
     match shared.db.session_worktree(&root)?.map(|r| r.state) {
         None | Some(WorktreeState::Ready) => Ok(()),
+        // Its folder is gone for good: a rewind hides turns, no file is put back.
+        Some(WorktreeState::Discarded) => Ok(()),
         Some(state) => Err(worktree_error(match blocked(state) {
             "" => "This session's worktree is being made. Try again in a moment.",
             text => text,
@@ -491,6 +502,8 @@ impl Core {
             leftover: false,
             time_created: now,
             time_updated: now,
+            base_pending: None,
+            apply_stash: None,
         };
         shared.db.insert_session_worktree(&row)?;
         let added = crate::worktree::git(
@@ -634,6 +647,49 @@ impl Core {
         )?)
     }
 
+    /// The base tip a merge with conflicts brings in (`None`: no merge open). `base_commit`
+    /// stays until [`Core::conclude_base`] once the merge commit exists.
+    pub fn set_worktree_pending(
+        &self,
+        session_id: &str,
+        state: WorktreeState,
+        pending: Option<&str>,
+    ) -> Result<bool, CoreError> {
+        let value = pending.map_or(rusqlite::types::Value::Null, |p| p.to_string().into());
+        Ok(self
+            .shared
+            .db
+            .update_session_worktree(session_id, state, &[("base_pending", value)])?)
+    }
+
+    /// The merge of the base is committed: its tip becomes the base.
+    pub fn conclude_base(&self, session_id: &str, state: WorktreeState) -> Result<bool, CoreError> {
+        let Some(row) = self.shared.db.session_worktree(session_id)? else {
+            return Ok(false);
+        };
+        let Some(pending) = row.base_pending else {
+            return Ok(false);
+        };
+        Ok(self.shared.db.update_session_worktree(
+            session_id,
+            state,
+            &[
+                ("base_commit", pending.into()),
+                ("base_pending", rusqlite::types::Value::Null),
+            ],
+        )?)
+    }
+
+    /// Records the stash an apply set the main folder's edits aside in (while `applying`), so a
+    /// crash can put them back by its id.
+    pub fn set_apply_stash(&self, session_id: &str, oid: &str) -> Result<bool, CoreError> {
+        Ok(self.shared.db.update_session_worktree(
+            session_id,
+            WorktreeState::Applying,
+            &[("apply_stash", oid.to_string().into())],
+        )?)
+    }
+
     /// Records where an apply starts (the main folder's `HEAD`) and the tree it puts there, while
     /// `applying`, so an apply cut off by a crash can be told finished or not.
     pub fn mark_apply(&self, session_id: &str, from: &str, tree: &str) -> Result<bool, CoreError> {
@@ -671,17 +727,21 @@ impl Core {
 
     /// Stops the background commands of the session and its subagents (they may run in the
     /// worktree about to go, or write it while an apply reads it).
-    pub fn stop_background(&self, session_id: &str) {
+    /// Returns the commands stopped, to tell the user.
+    pub fn stop_background(&self, session_id: &str) -> Vec<String> {
         let tree = self
             .shared
             .db
             .session_tree(session_id)
             .unwrap_or_else(|_| vec![session_id.to_string()]);
+        let mut stopped = Vec::new();
         for id in tree {
             for shell in self.background_shells(&id) {
                 self.kill_shell(&shell.id);
+                stopped.push(shell.command);
             }
         }
+        stopped
     }
 
     /// After a successful apply (`applying`) the session goes on: the old branch tip is pinned,
@@ -714,11 +774,15 @@ impl Core {
         if let Ok(tip) = git_sync(Path::new(&row.directory), &["rev-parse", "HEAD"], &[]) {
             pin(&top, session_id, &tip);
         }
-        let reset = git_sync(
-            Path::new(&row.directory),
-            &["reset", "--hard", "--quiet", &commit],
-            &[],
-        );
+        // Never git in a worktree whose `.git` leads elsewhere.
+        let reset =
+            crate::worktree::verify_checkout(&top, Path::new(&row.directory)).and_then(|_| {
+                git_sync(
+                    Path::new(&row.directory),
+                    &["reset", "--hard", "--quiet", &commit],
+                    &[],
+                )
+            });
         let moved = match &reset {
             Ok(_) => shared.db.update_session_worktree(
                 session_id,
@@ -729,6 +793,8 @@ impl Core {
                     ("applied_commit", commit.clone().into()),
                     ("apply_from", rusqlite::types::Value::Null),
                     ("apply_tree", rusqlite::types::Value::Null),
+                    ("apply_stash", rusqlite::types::Value::Null),
+                    ("base_pending", rusqlite::types::Value::Null),
                     ("error", rusqlite::types::Value::Null),
                 ],
             )?,
@@ -849,6 +915,30 @@ impl Core {
         if !matches!(row.state, WorktreeState::Missing | WorktreeState::Failed) {
             return Err(worktree_error("This session's worktree is there."));
         }
+        // A missing folder that is back (a drive reconnected, a folder restored): it is used as
+        // it is, never deleted. Something else in its place is refused.
+        let directory = PathBuf::from(&row.directory);
+        if row.state == WorktreeState::Missing && directory.symlink_metadata().is_ok() {
+            let top = shared.top();
+            crate::worktree::verify_checkout(&top, &directory).map_err(|_| {
+                worktree_error(format!(
+                    "Something else is in this session's folder now ({}). Move it away, then recreate.",
+                    row.directory
+                ))
+            })?;
+            if !shared.db.cas_session_worktree(
+                session_id,
+                WorktreeState::Missing,
+                WorktreeState::Ready,
+                None,
+            )? {
+                return Err(worktree_error("This session's worktree changed meanwhile."));
+            }
+            return shared
+                .db
+                .session_worktree(session_id)?
+                .ok_or_else(|| worktree_error("This session has no worktree."));
+        }
         if !shared
             .db
             .cas_session_worktree(session_id, row.state, WorktreeState::Preparing, None)?
@@ -908,10 +998,11 @@ impl Core {
             .ok_or(CoreError::SessionNotFound)?;
         let _ = std::fs::create_dir_all(&session.directory);
         shared.forget_store(&session.directory);
-        // The uncommitted work up to the last step comes back from its snapshot, but only when
-        // that step ran on the commit the branch is at now. After an apply or a merge of the base
-        // the branch moved on and holds that work already; laying the older files over it would
-        // undo the main folder's commits that came in.
+        // The uncommitted work up to the last step comes back from its snapshot. On the commit
+        // that step ran on, the files are laid over as they were. When the branch moved on since
+        // (an agent's commit, an apply, a merge of the base), only what that step had changed
+        // since its commit is merged onto the branch's tip, three-way: commits that came in are
+        // never undone, and on a conflict nothing is laid over (the branch has the committed work).
         let last = steps(&shared.db.messages(session_id)?)
             .into_iter()
             .rev()
@@ -922,13 +1013,38 @@ impl Core {
             &[],
         )
         .ok();
-        if let (Some((tree, Some(head))), Some(store)) = (last, shared.store_for(&session))
-            && tip.as_deref() == Some(head.as_str())
+        if let (Some((tree, Some(head))), Some(store), Some(tip)) =
+            (last, shared.store_for(&session), tip)
             && store.has(&format!("{tree}^{{tree}}"))
         {
-            store
-                .overlay(&tree, &directory)
-                .map_err(|m| fail(format!("Could not put the files back: {m}")))?;
+            let onto = if tip == head {
+                Some(tree)
+            } else if git_sync(&top, &["merge-base", "--is-ancestor", &head, &tip], &[]).is_ok() {
+                store.merge_onto(&head, &tree, &tip)
+            } else {
+                None
+            };
+            if let Some(files) = onto {
+                store
+                    .overlay(&files, &directory)
+                    .map_err(|m| fail(format!("Could not put the files back: {m}")))?;
+            }
+        }
+        // A merge of the base that was open (conflicts being resolved) is open again, so the
+        // session's changes are still measured from the base it brings in.
+        if let Some(pending) = &row.base_pending
+            && crate::worktree::verify_checkout(&top, &directory).is_ok()
+            && git_sync(
+                &directory,
+                &["merge-base", "--is-ancestor", pending, "HEAD"],
+                &[],
+            )
+            .is_err()
+        {
+            let _ = git_sync(&directory, &["update-ref", "MERGE_HEAD", pending], &[]);
+            if let Ok(path) = git_sync(&directory, &["rev-parse", "--git-path", "MERGE_MSG"], &[]) {
+                let _ = std::fs::write(directory.join(path), "Bring the base in\n");
+            }
         }
         shared
             .db
@@ -1305,44 +1421,71 @@ pub fn apply_stash_message(session_id: &str) -> String {
     format!("Anysola Code: set aside to apply {session_id}")
 }
 
-/// The `stash@{n}` holding the session's apply stash, if one is left.
-fn find_stash(top: &Path, session_id: &str) -> Option<String> {
+/// The `stash@{n}` holding the stash `oid` (or, without one, the session's apply stash by its
+/// message), if it is still there.
+fn find_stash(top: &Path, oid: Option<&str>, session_id: &str) -> Option<String> {
     let wanted = apply_stash_message(session_id);
-    git_sync(top, &["stash", "list", "--format=%gd%x00%s"], &[])
+    git_sync(top, &["stash", "list", "--format=%gd%x00%H%x00%s"], &[])
         .ok()?
         .lines()
         .find_map(|line| {
-            let (name, subject) = line.split_once('\0')?;
-            subject.ends_with(&wanted).then(|| name.to_string())
+            let mut parts = line.split('\0');
+            let (name, commit, subject) = (parts.next()?, parts.next()?, parts.next()?);
+            let hit = match oid {
+                Some(oid) => commit == oid,
+                None => subject.ends_with(&wanted),
+            };
+            hit.then(|| name.to_string())
         })
 }
 
-/// Puts an apply's stash back after its commit landed; on a conflict the main folder's touched
-/// files stay as committed and the stash is kept. The sentence to show when it is kept.
-fn pop_apply_stash(top: &Path, session_id: &str) -> Option<String> {
-    let name = find_stash(top, session_id)?;
-    let files: Vec<String> = git_sync(
+/// Puts the stash `oid` back in the main folder only when that can't conflict: its tracked
+/// changes merge cleanly onto `HEAD` (worked out without touching the folder) and none of its
+/// untracked files is in the way. `Ok` when put back (or gone already); otherwise the stash is
+/// left as it is and `Err` names it (`stash@{n}`). The user's files are never reset here.
+pub fn pop_stash_if_clean(top: &Path, oid: &str) -> Result<(), String> {
+    let Some(name) = find_stash(top, Some(oid), "") else {
+        return Ok(());
+    };
+    let clean = git_sync(
         top,
-        &["stash", "show", "--name-only", "--include-untracked", &name],
+        &[
+            "merge-tree",
+            "--write-tree",
+            &format!("--merge-base={oid}^1"),
+            "HEAD",
+            oid,
+        ],
         &[],
     )
-    .unwrap_or_default()
-    .lines()
-    .filter(|l| !l.is_empty())
-    .map(str::to_string)
-    .collect();
-    if git_sync(top, &["stash", "pop", "--quiet", &name], &[]).is_ok() {
-        return None;
+    .is_ok();
+    let untracked = git_sync(
+        top,
+        &["rev-parse", "--verify", "--quiet", &format!("{oid}^3")],
+        &[],
+    )
+    .is_ok();
+    let in_the_way = untracked
+        && git_sync(
+            top,
+            &["ls-tree", "-r", "-z", "--name-only", &format!("{oid}^3")],
+            &[],
+        )
+        .unwrap_or_default()
+        .split('\0')
+        .filter(|p| !p.is_empty())
+        .any(|p| top.join(p).symlink_metadata().is_ok());
+    if clean && !in_the_way && git_sync(top, &["stash", "pop", "--quiet", &name], &[]).is_ok() {
+        return Ok(());
     }
-    for file in &files {
-        let spec = format!(":(literal){file}");
-        let _ = git_sync(top, &["reset", "-q", "--", &spec], &[]);
-        let _ = git_sync(top, &["checkout", "HEAD", "--", &spec], &[]);
-    }
-    let name = find_stash(top, session_id).unwrap_or(name);
-    Some(format!(
+    Err(find_stash(top, Some(oid), "").unwrap_or(name))
+}
+
+/// The cleanup's sentence for an apply stash that stays.
+fn kept_stash(name: &str) -> String {
+    format!(
         "Your main-folder edits set aside for an apply are kept in the stash: {name} in git stash list."
-    ))
+    )
 }
 
 /// A deleted session's worktree: its folder, branch and hidden refs, and its rows.
@@ -1448,7 +1591,7 @@ pub fn cleanup(db: &Db) -> Vec<Cleaned> {
                     cleaned.notice = Some(notice.into());
                 }
             }
-            WorktreeState::Ready if !directory.is_dir() => {
+            WorktreeState::Ready if gone_for_sure(directory) => {
                 if set(WorktreeState::Missing, &[]) {
                     cleaned.state = Some(WorktreeState::Missing);
                     cleaned.notice = Some("This session's folder is gone.".into());
@@ -1473,7 +1616,9 @@ pub fn cleanup(db: &Db) -> Vec<Cleaned> {
                     if let Ok(tip) = git_sync(directory, &["rev-parse", "HEAD"], &[]) {
                         pin(&top, &row.session_id, &tip);
                     }
-                    let reset = git_sync(directory, &["reset", "--hard", "--quiet", &head], &[]);
+                    let reset = crate::worktree::verify_checkout(&top, directory).and_then(|_| {
+                        git_sync(directory, &["reset", "--hard", "--quiet", &head], &[])
+                    });
                     let mut extra: Vec<(&str, rusqlite::types::Value)> = vec![
                         ("applied_commit", head.clone().into()),
                         ("apply_from", rusqlite::types::Value::Null),
@@ -1482,7 +1627,14 @@ pub fn cleanup(db: &Db) -> Vec<Cleaned> {
                     if reset.is_ok() {
                         extra.push(("base_commit", head.into()));
                     }
-                    let kept = pop_apply_stash(&top, &row.session_id);
+                    let oid = row.apply_stash.clone().or_else(|| {
+                        let name = find_stash(&top, None, &row.session_id)?;
+                        git_sync(&top, &["rev-parse", &name], &[]).ok()
+                    });
+                    let kept = oid
+                        .and_then(|oid| pop_stash_if_clean(&top, &oid).err())
+                        .map(|name| kept_stash(&name));
+                    extra.push(("apply_stash", rusqlite::types::Value::Null));
                     if let Some(kept) = &kept {
                         extra.push(("error", kept.clone().into()));
                     }
@@ -1491,7 +1643,9 @@ pub fn cleanup(db: &Db) -> Vec<Cleaned> {
                         cleaned.notice = kept;
                     }
                 } else {
-                    let notice = match find_stash(&top, &row.session_id) {
+                    let notice = match find_stash(&top, row.apply_stash.as_deref(), &row.session_id)
+                        .or_else(|| find_stash(&top, None, &row.session_id))
+                    {
                         Some(name) => format!(
                             "An apply was cut off. Check the main folder's changes before applying again; your edits set aside for it are in the stash: {name} in git stash list."
                         ),
@@ -1504,6 +1658,7 @@ pub fn cleanup(db: &Db) -> Vec<Cleaned> {
                             ("error", notice.to_string().into()),
                             ("apply_from", rusqlite::types::Value::Null),
                             ("apply_tree", rusqlite::types::Value::Null),
+                            ("apply_stash", rusqlite::types::Value::Null),
                         ],
                     ) {
                         cleaned.state = Some(WorktreeState::Ready);

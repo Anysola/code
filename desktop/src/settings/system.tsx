@@ -329,7 +329,7 @@ function DeleteAll({ count, onDone }: { count: number; onDone: () => void }) {
                     {w.title}
                   </span>
                   <span className="text-2xs shrink-0 text-muted tabular-nums">
-                    {w.files} file{w.files === 1 ? "" : "s"} not applied
+                    {w.files === null ? "Changes not counted" : `${w.files} file${w.files === 1 ? "" : "s"} not applied`}
                   </span>
                 </li>
               ))}

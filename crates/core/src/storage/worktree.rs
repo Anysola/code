@@ -81,11 +81,16 @@ pub struct SessionWorktreeRow {
     pub leftover: bool,
     pub time_created: u64,
     pub time_updated: u64,
+    /// The base tip a merge brings in while its commit doesn't exist yet (conflicts open):
+    /// `base_commit` moves to it only once the merge is committed.
+    pub base_pending: Option<String>,
+    /// The stash (its commit id) an apply set main-folder edits aside in, while it runs.
+    pub apply_stash: Option<String>,
 }
 
 const COLUMNS: &str = "session_id, project_id, folder, directory, branch, base_branch, base_commit,
     snapshot_dir, state, error, applied_commit, apply_from, apply_tree, restored, leftover,
-    time_created, time_updated";
+    time_created, time_updated, base_pending, apply_stash";
 
 fn row(r: &Row) -> rusqlite::Result<SessionWorktreeRow> {
     let state: String = r.get(8)?;
@@ -108,6 +113,8 @@ fn row(r: &Row) -> rusqlite::Result<SessionWorktreeRow> {
         leftover: r.get::<_, i64>(14)? != 0,
         time_created: r.get::<_, i64>(15)? as u64,
         time_updated: r.get::<_, i64>(16)? as u64,
+        base_pending: r.get(17)?,
+        apply_stash: r.get(18)?,
     })
 }
 
@@ -117,7 +124,7 @@ impl Db {
             c.execute(
                 &format!(
                     "INSERT INTO session_worktree ({COLUMNS})
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)"
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)"
                 ),
                 params![
                     w.session_id,
@@ -137,6 +144,8 @@ impl Db {
                     w.leftover as i64,
                     w.time_created as i64,
                     w.time_updated as i64,
+                    w.base_pending,
+                    w.apply_stash,
                 ],
             )
             .map(drop)
@@ -209,6 +218,8 @@ impl Db {
             "apply_tree",
             "restored",
             "leftover",
+            "base_pending",
+            "apply_stash",
         ];
         let mut sql = String::from("UPDATE session_worktree SET time_updated = ?1");
         let mut values: Vec<rusqlite::types::Value> = vec![(now_ms() as i64).into()];
@@ -272,6 +283,8 @@ mod tests {
             leftover: false,
             time_created: 1,
             time_updated: 1,
+            base_pending: None,
+            apply_stash: None,
         }
     }
 

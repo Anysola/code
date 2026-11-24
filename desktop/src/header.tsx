@@ -330,8 +330,8 @@ function SessionMenu({ open, onRename }: { open: Open; onRename: () => void }) {
 // Deleting a worktree's work
 // ---------------------------------------------------------------------------
 
-function files(n: number | null) {
-  return n === null ? "changes" : `${n} changed file${n === 1 ? "" : "s"}`
+function files(n: number) {
+  return `${n} changed file${n === 1 ? "" : "s"}`
 }
 
 /**
@@ -366,8 +366,10 @@ function DeleteAsking({ ask }: { ask: DeleteAsk }) {
         </h2>
         {one ? (
           <p id="delete-detail" className="text-dense mt-1.5 text-muted">
-            Deletes the worktree and branch <span className="font-mono [overflow-wrap:anywhere] text-foreground/85">{one.row.worktree?.branch}</span>{" "}
-            with {files(one.files)} that {one.files === 1 ? "isn’t" : "aren’t"} applied.
+            Deletes the worktree and branch <span className="font-mono [overflow-wrap:anywhere] text-foreground/85">{one.row.worktree?.branch}</span>
+            {one.files === null
+              ? ". Its changes couldn’t be counted, so some may not be applied."
+              : ` with ${files(one.files)} that ${one.files === 1 ? "isn’t" : "aren’t"} applied.`}
           </p>
         ) : (
           <>
@@ -382,7 +384,7 @@ function DeleteAsking({ ask }: { ask: DeleteAsk }) {
                     {row.title}
                   </span>
                   <span className="text-2xs shrink-0 text-muted tabular-nums">
-                    {count === null ? "Not applied" : `${count} file${count === 1 ? "" : "s"} not applied`}
+                    {count === null ? "Changes not counted" : `${count} file${count === 1 ? "" : "s"} not applied`}
                   </span>
                 </li>
               ))}

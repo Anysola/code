@@ -356,7 +356,7 @@ export function WorktreeStrip({ open }: { open: Open }) {
           }
         >
           <span className="block">This session’s folder is gone.</span>
-          <span className="text-2xs block text-muted">Recreate brings its work back as of its last step.</span>
+          <span className="text-2xs block text-muted">Recreate makes it again from its branch; uncommitted work comes back when it can be.</span>
         </Strip>
       )
     case "discarded":

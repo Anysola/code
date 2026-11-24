@@ -52,6 +52,7 @@ import {
   useWorktreeInfo,
   type Here,
   type Open,
+  currentBridge,
 } from "./store"
 import { EditCard } from "./transcript"
 import { btn, cn, Counts, DiffView, Popover, sameFolder, Spinner, Tooltip, useEscape } from "./ui"
@@ -739,7 +740,7 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
                   <CircleAlert className="size-3.5 shrink-0 text-warning" />
                   This session’s folder is gone, so its changes can’t be shown.
                 </p>
-                <p className="text-2xs pl-5.5 text-muted">Recreate brings its work back as of its last step.</p>
+                <p className="text-2xs pl-5.5 text-muted">Recreate makes it again from its branch; uncommitted work comes back when it can be.</p>
               </div>
               <button
                 disabled={recreating}
@@ -760,6 +761,7 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
               worktree={worktree}
               directory={open.directory}
               files={net?.length ?? 0}
+              ignored={check && "ok" in check && check.ok ? check.ignored : []}
               onClose={() => {
                 setApplying(false)
                 // The palette's Apply opens it again from here.
@@ -821,6 +823,8 @@ type Phase =
   | { kind: "message" }
   | { kind: "checking" }
   | { kind: "confirm"; onto: string; stash: boolean }
+  /** "Apply anyway" past conflict markers: the files listed, confirmed before the commit. */
+  | { kind: "markers"; files: string[]; onto: string; stash: boolean }
   | { kind: "refused"; check: Exclude<ApplyCheck, { ok: true }> | { reason: "error"; message: string } }
   | { kind: "merged"; conflicts: string[]; onto: string }
   | { kind: "applying"; stash: boolean }
@@ -835,6 +839,7 @@ function ApplyBox({
   worktree,
   directory,
   files,
+  ignored,
   onClose,
   onChecked,
   onResolve,
@@ -843,6 +848,8 @@ function ApplyBox({
   worktree: SessionWorktree
   directory: string
   files: number
+  /** From the last check: files the commit would carry that the main folder ignores (warned, not blocked). */
+  ignored: string[]
   onClose: () => void
   onChecked: (c: ApplyCheck | { error: string }) => void
   onResolve: () => void
@@ -871,10 +878,14 @@ function ApplyBox({
     }
   }, [])
   const base = worktree.baseBranch
+  // Choices made in this box hold for its later tries: edits set aside, markers confirmed.
+  const stashed = useRef(false)
+  const marked = useRef(false)
   const apply = async (onto: string, stash: boolean) => {
+    if (stash) stashed.current = true
     setPhase({ kind: "applying", stash })
     setError(null)
-    const done = await applyWorktree(here, text.trim(), onto, stash)
+    const done = await applyWorktree(here, text.trim(), onto, stash || stashed.current, marked.current)
     if ("error" in done) {
       setError(done.error)
       setPhase({ kind: "message" })
@@ -890,7 +901,22 @@ function ApplyBox({
     if ("error" in c) return setPhase({ kind: "refused", check: { reason: "error", message: c.error } })
     if (!c.ok) return setPhase({ kind: "refused", check: c })
     if (base !== c.onto) return setPhase({ kind: "confirm", onto: c.onto, stash: false })
+    // Ignored files not warned about yet: stop once so the warning is read; Apply again goes on.
+    if (c.ignored.some((f) => !ignored.includes(f))) return setPhase({ kind: "message" })
     await apply(c.onto, false)
+  }
+  // The unresolved refusal names no branch: read where the main folder is now.
+  const anyway = async (list: string[]) => {
+    setPhase({ kind: "checking" })
+    let onto: string | null = null
+    try {
+      const now = await currentBridge().worktreeInfo(directory)
+      onto = now.available ? now.branch : null
+    } catch (e) {
+      return setPhase({ kind: "refused", check: { reason: "error", message: e instanceof Error ? e.message : String(e) } })
+    }
+    if (!onto) return setPhase({ kind: "refused", check: { ok: false, reason: "detached" } })
+    setPhase({ kind: "markers", files: list, onto, stash: stashed.current })
   }
   const bring = async () => {
     setPhase({ kind: "checking" })
@@ -967,6 +993,27 @@ function ApplyBox({
           </button>
         </Refusal>
       )}
+      {phase.kind === "markers" && (
+        <Refusal
+          text={`${base && phase.onto !== base ? `The main folder is on ${phase.onto}, not ${base}. ` : ""}${phase.files.length === 1 ? "This file has" : "These files have"} conflict markers and will be committed as ${phase.files.length === 1 ? "it is" : "they are"}:`}
+          files={phase.files}
+          directory={worktree.path}
+        >
+          <button onClick={() => setPhase({ kind: "refused", check: { ok: false, reason: "unresolved", files: phase.files } })} className={btn("ghost", "sm")}>
+            Back
+          </button>
+          <button
+            disabled={!text.trim()}
+            onClick={() => {
+              marked.current = true
+              void apply(phase.onto, phase.stash)
+            }}
+            className={btn("primary", "sm")}
+          >
+            {base && phase.onto !== base ? `Apply to ${phase.onto}` : "Apply with markers"}
+          </button>
+        </Refusal>
+      )}
       {phase.kind === "merged" && (
         <Refusal text={`Brought ${phase.onto} in. ${phase.conflicts.length === 1 ? "1 file has conflicts: fix it" : `${phase.conflicts.length} files have conflicts: fix them`}, then apply.`} files={phase.conflicts} directory={worktree.path}>
           <button onClick={() => ask(phase.conflicts, true)} className={btn("secondary", "sm")}>
@@ -974,13 +1021,22 @@ function ApplyBox({
           </button>
         </Refusal>
       )}
-      {refusal && <Refused check={refusal} worktree={worktree} main={directory} canApply={info?.available ? info.canApply : true} onBring={() => void bring()} onStash={(onto) => (base !== onto ? setPhase({ kind: "confirm", onto, stash: true }) : void apply(onto, true))} onAsk={(files) => ask(files, false)} onAgain={() => void run()} />}
+      {refusal && <Refused check={refusal} worktree={worktree} main={directory} canApply={info?.available ? info.canApply : true} onBring={() => void bring()} onStash={(onto) => (base !== onto ? setPhase({ kind: "confirm", onto, stash: true }) : void apply(onto, true))} onAsk={(files) => ask(files, false)} onAnyway={text.trim() ? (files) => void anyway(files) : null} onAgain={() => void run()} />}
+      {ignored.length > 0 && phase.kind !== "refused" && phase.kind !== "markers" && (
+        <p className="text-2xs flex items-start gap-2 px-1 text-warning">
+          <TriangleAlert className="mt-px size-3.5 shrink-0" />
+          <span className="min-w-0 [overflow-wrap:anywhere]">
+            {ignored.length === 1 ? "This file is" : "These files are"} ignored in the main folder but would be committed:{" "}
+            <span className="font-mono">{ignored.join(", ")}</span>
+          </span>
+        </p>
+      )}
       {error && <p className="text-dense max-h-32 overflow-y-auto px-1 whitespace-pre-wrap text-danger select-text">{error}</p>}
       <div className="flex items-center justify-end gap-2">
         <button onClick={onClose} disabled={phase.kind === "applying"} className={btn("ghost", "sm")}>
           Cancel
         </button>
-        {phase.kind !== "confirm" && !old && (
+        {phase.kind !== "confirm" && phase.kind !== "markers" && !old && (
           <button disabled={!text.trim() || busy || (suggesting && !typed.current)} onClick={() => void run()} className={btn("primary", "sm", "gap-1.5")}>
             {busy && <Spinner className="size-3.5 text-accent-foreground" />}
             {phase.kind === "applying" ? "Applying…" : phase.kind === "checking" ? "Checking…" : refusal ? "Check again" : "Apply"}
@@ -1000,6 +1056,7 @@ function Refused({
   onBring,
   onStash,
   onAsk,
+  onAnyway,
   onAgain: _again,
 }: {
   check: Exclude<ApplyCheck, { ok: true }> | { reason: "error"; message: string }
@@ -1010,6 +1067,8 @@ function Refused({
   onBring: () => void
   onStash: (onto: string) => void
   onAsk: (files: string[]) => void
+  /** Apply past the markers after a confirm; null while there's no commit message. */
+  onAnyway: ((files: string[]) => void) | null
   onAgain: () => void
 }) {
   const base = worktree.baseBranch ?? "the base"
@@ -1038,6 +1097,13 @@ function Refused({
           <button onClick={() => onAsk(check.files)} className={btn("secondary", "sm")}>
             Ask the agent to resolve
           </button>
+          {onAnyway && (
+            <Tooltip label="For markers that are meant to be there, as in docs or test fixtures" side="top">
+              <button onClick={() => onAnyway(check.files)} className={btn("ghost", "sm", "text-muted")}>
+                Apply anyway
+              </button>
+            </Tooltip>
+          )}
         </Refusal>
       )
     case "dirty":

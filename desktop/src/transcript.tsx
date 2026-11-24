@@ -46,7 +46,6 @@ import {
   openInEditor,
   peekAt,
   redo,
-  rewindCrossesApply,
   reply,
   resend,
   retry,
@@ -153,7 +152,7 @@ export function Transcript({
             <Entry key={b.item.id} item={b.item} directory={open.directory} />
           )
         )}
-        {open.revert && !readOnly && <Rewound revert={open.revert} crossesApply={rewindCrossesApply(open.sessionId)} />}
+        {open.revert && !readOnly && <Rewound revert={open.revert} />}
         {/* Reasoning isn't shown: the gateway sends it summarized or empty, so a "Thought" row
             opened onto nothing. The status line says the model is at work meanwhile. */}
         {open.live.map((l) => l.kind === "text" && <Prose key={l.key} text={l.text} live={l.key} />)}
@@ -512,7 +511,7 @@ function IconAction({ label, onClick, children }: { label: string; onClick: () =
 const MARK = { added: "Added", modified: "Edited", deleted: "Deleted" } as const
 
 /** A staged rewind: what it hid and put back, until the next message makes it final. */
-function Rewound({ revert, crossesApply }: { revert: NonNullable<Open["revert"]>; crossesApply: boolean }) {
+function Rewound({ revert }: { revert: NonNullable<Open["revert"]> }) {
   const [all, setAll] = useState(false)
   const files = all ? revert.files : revert.files.slice(0, 5)
   const more = revert.files.length - files.length
@@ -551,7 +550,7 @@ function Rewound({ revert, crossesApply }: { revert: NonNullable<Open["revert"]>
           )}
         </ul>
       )}
-      {crossesApply && (
+      {revert.crossesApply && (
         <p className="text-2xs flex items-start gap-3 text-warning">
           <TriangleAlert className="size-3.5 shrink-0" />
           <span>This goes back past changes already applied to the main folder; Review will show undoing them.</span>

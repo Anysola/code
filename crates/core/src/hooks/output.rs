@@ -99,18 +99,53 @@ pub fn unrunnable(event: Event, command: &str, ran: &Ran) -> Option<String> {
     let detail = match ran {
         Ran::NotStarted(error) => error.clone(),
         Ran::Exited {
-            code: Some(code @ (126 | 127)),
+            code: Some(code @ (126 | 127 | 9009)),
             stderr,
             ..
         } => match first_line(stderr) {
             "" => format!("exit code {code}"),
             line => format!("exit code {code}: {line}"),
         },
+        // An interpreter that couldn't find the script it was given (`node x.mjs`, `python
+        // x.py`, `pwsh -File x.ps1`, `cmd` on a missing program) exits 1 or 2, not 127.
+        Ran::Exited {
+            code: Some(code),
+            stderr,
+            ..
+        } if *code != 0 && names_missing(stderr) => {
+            format!("exit code {code}: {}", first_line(stderr))
+        }
         _ => return None,
     };
     Some(cap(&format!(
         "The PreToolUse hook \"{command}\" could not be run ({detail}), so the call was blocked."
     )))
+}
+
+/// Whether a failed command's error output says the program or script itself wasn't found.
+fn names_missing(stderr: &str) -> bool {
+    let text: String = stderr
+        .lines()
+        .take(6)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase();
+    [
+        "no such file or directory",
+        "cannot find module",
+        "can't open file",
+        "could not open input file",
+        "is not recognized as",
+        "command not found",
+        ": not found",
+        "cannot find the path specified",
+        "cannot find the file specified",
+        "the system cannot find the",
+        "does not exist",
+        "enoent",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
 }
 
 pub fn interpret(event: Event, ran: &Ran) -> Verdict {
@@ -384,6 +419,22 @@ mod tests {
         assert!(unrunnable(Event::PreToolUse, "x", &exited(126, "", "")).is_some());
         assert!(unrunnable(Event::PreToolUse, "x", &Ran::NotStarted("no shell".into())).is_some());
         assert!(unrunnable(Event::PreToolUse, "x", &exited(1, "", "")).is_none());
+        // An interpreter that couldn't find its script, on each system.
+        for stderr in [
+            "node:internal/modules/cjs/loader:1228\n  throw err;\nError: Cannot find module '/p/hooks/g.mjs'",
+            "python3: can't open file '/p/hooks/g.py': [Errno 2] No such file or directory",
+            "'node' is not recognized as an internal or external command,",
+            "The argument 'C:\\Users\\First Last\\g.ps1' to the -File parameter does not exist.",
+            "bash: ./g.sh: No such file or directory",
+        ] {
+            let ran = exited(1, "", stderr);
+            assert!(
+                unrunnable(Event::PreToolUse, "g", &ran).is_some(),
+                "{stderr}"
+            );
+        }
+        assert!(unrunnable(Event::PreToolUse, "x", &exited(9009, "", "")).is_some());
+        assert!(unrunnable(Event::PreToolUse, "x", &exited(1, "", "lint: 3 problems")).is_none());
         assert!(unrunnable(Event::PreToolUse, "x", &Ran::TimedOut { seconds: 1 }).is_none());
         assert!(unrunnable(Event::PostToolUse, "x", &missing).is_none());
         assert!(unrunnable(Event::Stop, "x", &Ran::NotStarted("e".into())).is_none());

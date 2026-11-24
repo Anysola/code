@@ -1428,6 +1428,8 @@ mod tests {
             leftover: false,
             time_created: 1,
             time_updated: 2,
+            base_pending: None,
+            apply_stash: None,
         };
         assert_eq!(
             session_json(&row, Some(&worktree)),

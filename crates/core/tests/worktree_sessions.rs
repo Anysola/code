@@ -174,8 +174,18 @@ fn isolated(runtime: &tokio::runtime::Runtime, core: &Core) -> (String, PathBuf)
     (session.id, PathBuf::from(row.directory))
 }
 
+/// A file's text with line endings as written: Git for Windows checks files out with CRLF
+/// (`core.autocrlf`), which is not what these tests are about.
 fn read(path: &Path) -> Option<String> {
-    std::fs::read_to_string(path).ok()
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|text| text.replace("\r\n", "\n"))
+}
+
+/// The path as the file system spells it (8.3 short names and symlinks resolved), so two
+/// spellings of one folder compare equal.
+fn real(path: &Path) -> PathBuf {
+    anysola_core::config::real_path(path)
 }
 
 fn user_messages(env: &Env, session: &str) -> Vec<String> {
@@ -206,7 +216,7 @@ fn a_session_gets_its_own_worktree_and_branch() {
         row.branch
     );
     assert!(
-        top.starts_with(env.home.home().join(".anysola/worktrees")),
+        real(&top).starts_with(real(&env.home.home().join(".anysola/worktrees"))),
         "{top:?}"
     );
     assert!(top.join("README.md").exists());
@@ -215,11 +225,11 @@ fn a_session_gets_its_own_worktree_and_branch() {
         "main-folder edits stay out"
     );
     let session = core.session(&id).unwrap().unwrap();
-    assert_eq!(PathBuf::from(&session.directory), top);
+    assert_eq!(real(Path::new(&session.directory)), real(&top));
     let checkout = core.checkout(&id).unwrap();
     assert!(checkout.pinned);
-    assert_eq!(checkout.root, top);
-    assert_eq!(checkout.main, project);
+    assert_eq!(real(&checkout.root), real(&top));
+    assert_eq!(real(&checkout.main), real(&project));
     // Its subagents' sessions work there too, pinned by their root.
     let child = core.create_child(&id, None).unwrap();
     assert_eq!(core.checkout(&child.id).unwrap(), checkout);
@@ -230,7 +240,8 @@ fn a_session_gets_its_own_worktree_and_branch() {
     assert!(
         core.worktrees()
             .iter()
-            .any(|w| Path::new(&w.directory) == top && w.strategy.as_deref() == Some("session"))
+            .any(|w| real(Path::new(&w.directory)) == real(&top)
+                && w.strategy.as_deref() == Some("session"))
     );
     // Twice, or after it ran: refused.
     assert!(runtime.block_on(core.isolate(&id)).is_err());
@@ -387,6 +398,47 @@ fn a_pinned_session_never_writes_the_main_folder_in_auto_mode() {
     assert!(
         !asked.lock().unwrap().iter().any(|(a, _, _)| a == "edit"),
         "refused before any ask"
+    );
+}
+
+/// A main-folder session in Auto mode: writing the repository's own data (`.git/hooks`,
+/// `.git/config`) always asks; refused, nothing is written.
+#[test]
+fn writing_git_data_always_asks() {
+    let gateway = turns(vec![vec![
+        (
+            "write",
+            json!({"path": ".git/hooks/pre-commit", "content": "#!/bin/sh\nexit 0\n"}),
+        ),
+        (
+            "edit",
+            json!({"path": ".git/config", "oldString": "[core]", "newString": "[core]\n\tfsmonitor = x"}),
+        ),
+    ]]);
+    let env = env(&gateway.url);
+    let project = project(&env, &[]);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let asked = answering(&runtime, &core, |_, _| Answer::Reject(Some("no".into())));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    assert!(
+        !project.join(".git/hooks/pre-commit").exists(),
+        "BREAK: wrote a git hook"
+    );
+    assert!(
+        !read(&project.join(".git/config"))
+            .unwrap()
+            .contains("fsmonitor"),
+        "BREAK: edited git config"
+    );
+    let asked = asked.lock().unwrap();
+    assert_eq!(
+        asked.iter().filter(|(a, _, _)| a == "edit").count(),
+        2,
+        "{asked:?}"
     );
 }
 
@@ -745,7 +797,7 @@ fn unisolate_moves_a_waiting_session_back() {
         .unwrap();
     let mut events = core.subscribe();
     let moved = runtime.block_on(core.unisolate(&session.id)).unwrap();
-    assert_eq!(moved.directory, project.display().to_string());
+    assert_eq!(real(Path::new(&moved.directory)), real(&project));
     assert!(!Path::new(&row.directory).exists());
     assert!(!git_ok(
         &project,
@@ -1155,6 +1207,101 @@ fn a_recreate_after_main_came_in_keeps_mains_commits() {
         read(&top.join("b.txt")).as_deref(),
         Some("b-main"),
         "BREAK: main's commit was undone"
+    );
+}
+
+/// A missing folder that comes back is used as it is (never deleted); something else in its
+/// place is refused and left alone.
+#[test]
+fn a_folder_that_came_back_is_reused_and_a_stranger_is_refused() {
+    let gateway = turns(vec![vec![(
+        "write",
+        json!({"path": "a.txt", "content": "a1"}),
+    )]]);
+    let env = env(&gateway.url);
+    project(&env, &[("a.txt", "a0")]);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    answering(&runtime, &core, |_, _| Answer::Once);
+    let (id, top) = isolated(&runtime, &core);
+    runtime
+        .block_on(core.prompt(&id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    std::fs::write(top.join("later.txt"), "uncommitted, after the last step").unwrap();
+    let away = top.with_extension("away");
+    std::fs::rename(&top, &away).unwrap();
+    // Found at the next turn's start, not only at the next app start.
+    assert!(
+        runtime
+            .block_on(core.prompt(&id, prompt("again"), TurnOptions::default()))
+            .is_err()
+    );
+    assert_eq!(
+        core.session_worktree(&id).unwrap().unwrap().state,
+        WorktreeState::Missing
+    );
+    std::fs::rename(&away, &top).unwrap();
+    let row = runtime.block_on(core.recreate_worktree(&id)).unwrap();
+    assert_eq!(row.state, WorktreeState::Ready);
+    assert_eq!(
+        read(&top.join("later.txt")).as_deref(),
+        Some("uncommitted, after the last step"),
+        "BREAK: the folder that came back was replaced"
+    );
+    // Something else in its place.
+    let other = top.with_extension("other");
+    std::fs::rename(&top, &other).unwrap();
+    assert!(
+        runtime
+            .block_on(core.prompt(&id, prompt("third"), TurnOptions::default()))
+            .is_err()
+    );
+    std::fs::create_dir_all(&top).unwrap();
+    std::fs::write(top.join("mine.txt"), "not a worktree").unwrap();
+    let refused = runtime.block_on(core.recreate_worktree(&id));
+    assert!(refused.is_err());
+    assert_eq!(
+        read(&top.join("mine.txt")).as_deref(),
+        Some("not a worktree")
+    );
+}
+
+/// A merge of the base with its conflicts open when the folder went: recreated, the merge is
+/// open again on the base it was bringing in.
+#[test]
+fn a_recreate_reopens_a_merge_of_the_base() {
+    let gateway = turns(vec![vec![(
+        "write",
+        json!({"path": "a.txt", "content": "session"}),
+    )]]);
+    let env = env(&gateway.url);
+    let project = project(&env, &[("a.txt", "a0")]);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    answering(&runtime, &core, |_, _| Answer::Once);
+    let (id, top) = isolated(&runtime, &core);
+    std::fs::write(project.join("a.txt"), "main").unwrap();
+    git(&project, &["commit", "-qam", "main edits a"]);
+    let tip = git(&project, &["rev-parse", "HEAD"]);
+    std::fs::write(top.join("a.txt"), "session").unwrap();
+    git(&top, &["commit", "-qam", "session work"]);
+    assert!(!git_ok(&top, &["merge", "-q", "--no-edit", "main"]));
+    assert!(
+        core.set_worktree_pending(&id, WorktreeState::Ready, Some(&tip))
+            .unwrap()
+    );
+    std::fs::write(top.join("a.txt"), "resolved").unwrap();
+    runtime
+        .block_on(core.prompt(&id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    std::fs::remove_dir_all(&top).unwrap();
+    anysola_core::api::cleanup_worktrees(&db(&env));
+    runtime.block_on(core.recreate_worktree(&id)).unwrap();
+    assert_eq!(git(&top, &["rev-parse", "MERGE_HEAD"]), tip);
+    let row = core.session_worktree(&id).unwrap().unwrap();
+    assert_ne!(
+        row.base_commit, tip,
+        "the base moves only once the merge is committed"
     );
 }
 

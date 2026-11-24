@@ -53,36 +53,90 @@ pub(crate) struct Context {
     pub approved: Arc<super::Approved>,
 }
 
-/// For a session in its own worktree: the command with the project folder variables
-/// (`$CLAUDE_PROJECT_DIR`, `$ANYSOLA_PROJECT_DIR` in every spelling) written out as the main
-/// folder, so the script that runs is the main folder's, while the hook still gets the worktree
-/// as its project folder and runs there. A main folder whose path a shell would split or expand
-/// is left to the variable (the worktree's copy, whose writes always ask).
-fn scripts_from_main(
+/// The variable a worktree session's hooks get the main folder in, besides the project folder
+/// variables (which name the worktree).
+pub const MAIN_PROJECT_DIR: &str = "ANYSOLA_MAIN_PROJECT_DIR";
+
+/// For a session in its own worktree: the command with each script it names by the project
+/// folder taken from the main folder (the approved copy, not the worktree's the agent can edit),
+/// while the hook still gets the worktree as its project folder and runs there.
+///
+/// A project folder variable (`$CLAUDE_PROJECT_DIR`, `$ANYSOLA_PROJECT_DIR`, in every spelling)
+/// followed by the path of a file the main folder has becomes [`MAIN_PROJECT_DIR`] in the same
+/// spelling, so the shell expands and quotes it exactly as the user wrote it (paths with spaces
+/// included). A relative word naming a file of the main folder (`./hooks/x.sh`,
+/// `.anysola/hooks/x.mjs`) is written as that variable joined with it, quoted for `shell`.
+pub(crate) fn scripts_from_main(
     command: &str,
     project_dir: &std::path::Path,
     main_dir: &std::path::Path,
+    shell: &str,
 ) -> String {
     if project_dir == main_dir {
         return command.to_string();
     }
-    let main = main_dir.display().to_string();
-    if main
-        .chars()
-        .any(|c| c.is_whitespace() || "'\"$`%;&|<>()".contains(c))
-    {
-        return command.to_string();
-    }
+    let in_main = |rest: &str| {
+        let rest = rest.trim_start_matches(['/', '\\']);
+        !rest.is_empty() && main_dir.join(rest).is_file()
+    };
     let mut out = command.to_string();
     for name in ["CLAUDE_PROJECT_DIR", "ANYSOLA_PROJECT_DIR"] {
-        out = out
-            .replace(&format!("${{env:{name}}}"), &main)
-            .replace(&format!("$env:{name}"), &main)
-            .replace(&format!("%{name}%"), &main)
-            .replace(&format!("${{{name}}}"), &main)
-            .replace(&format!("${name}"), &main);
+        for (spelled, open_ended) in [
+            (format!("${{env:{name}}}"), false),
+            (format!("$env:{name}"), true),
+            (format!("%{name}%"), false),
+            (format!("${{{name}}}"), false),
+            (format!("${name}"), true),
+        ] {
+            let replacement = spelled.replace(name, MAIN_PROJECT_DIR);
+            let mut at = 0;
+            while let Some(found) = out[at..].find(&spelled) {
+                let start = at + found;
+                let after = start + spelled.len();
+                let tail = &out[after..];
+                // `$CLAUDE_PROJECT_DIR_X` is another variable.
+                if open_ended && tail.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+                    at = after;
+                    continue;
+                }
+                let rest: String = tail
+                    .chars()
+                    .take_while(|c| !c.is_whitespace() && !"\"';|&<>()`".contains(*c))
+                    .collect();
+                if in_main(&rest) {
+                    out.replace_range(start..after, &replacement);
+                    at = start + replacement.len();
+                } else {
+                    at = after;
+                }
+            }
+        }
     }
-    out
+    let kind = crate::tool::shell::select::name(shell);
+    let mut first = true;
+    let mut words: Vec<String> = Vec::new();
+    for word in out.split(' ') {
+        let plain = !word.is_empty()
+            && !word.starts_with(['-', '/', '\\', '$', '%', '~', '"', '\''])
+            && !word.contains(['"', '\'', '$', '%', '`'])
+            && !(word.len() > 1 && word.as_bytes()[1] == b':');
+        let named = plain && (word.contains(['/', '\\']) || word.contains('.')) && in_main(word);
+        words.push(if named {
+            let path = word.trim_start_matches("./").trim_start_matches(".\\");
+            match kind.as_str() {
+                "cmd" => format!("\"%{MAIN_PROJECT_DIR}%\\{}\"", path.replace('/', "\\")),
+                "pwsh" | "powershell" if first => format!("& \"$env:{MAIN_PROJECT_DIR}/{path}\""),
+                "pwsh" | "powershell" => format!("\"$env:{MAIN_PROJECT_DIR}/{path}\""),
+                _ => format!("\"${MAIN_PROJECT_DIR}\"/{path}"),
+            }
+        } else {
+            word.to_string()
+        });
+        if !word.is_empty() {
+            first = matches!(word, "&&" | "||" | ";" | "|" | "&");
+        }
+    }
+    words.join(" ")
 }
 
 impl Context {
@@ -150,6 +204,12 @@ impl Context {
         for name in names {
             env.push((name.into(), self.project_dir.clone().into_os_string()));
         }
+        // A worktree session's hooks reach the main folder's scripts through this one.
+        env.retain(|(k, _)| k != MAIN_PROJECT_DIR);
+        env.push((
+            MAIN_PROJECT_DIR.into(),
+            self.main_dir.clone().into_os_string(),
+        ));
         env
     }
 
@@ -191,7 +251,9 @@ impl Context {
         let cwd = working_dir(&[&self.cwd, &self.project_dir, &self.home]);
         let commands: Vec<String> = handlers
             .iter()
-            .map(|handler| scripts_from_main(&handler.command, &self.project_dir, &self.main_dir))
+            .map(|handler| {
+                scripts_from_main(&handler.command, &self.project_dir, &self.main_dir, &shell)
+            })
             .collect();
         let runs = handlers.iter().zip(&commands).map(|(handler, command)| {
             run(
@@ -735,28 +797,54 @@ mod tests {
     #[test]
     fn a_worktree_sessions_hooks_run_the_main_folders_scripts() {
         use std::path::Path;
-        let (w, f) = (Path::new("/data/worktrees/p/s"), Path::new("/code/proj"));
+        let root = tempfile::tempdir().unwrap();
+        let main = root.path().join("First Last/proj");
+        let w = root.path().join("worktrees/p/s");
+        std::fs::create_dir_all(main.join("hooks")).unwrap();
+        std::fs::create_dir_all(main.join(".anysola/hooks")).unwrap();
+        std::fs::create_dir_all(&w).unwrap();
+        for file in ["hooks/guard.mjs", "hooks/a.sh", ".anysola/hooks/x.mjs"] {
+            std::fs::write(main.join(file), "").unwrap();
+        }
+        let f = main.as_path();
+        let sh = |c: &str| scripts_from_main(c, &w, f, "/bin/bash");
+        // The variable becomes the main folder's, in the user's own spelling and quoting.
         assert_eq!(
-            scripts_from_main(r#"node "$CLAUDE_PROJECT_DIR/hooks/guard.mjs""#, w, f),
-            r#"node "/code/proj/hooks/guard.mjs""#
+            sh(r#"node "$CLAUDE_PROJECT_DIR/hooks/guard.mjs" --x"#),
+            r#"node "$ANYSOLA_MAIN_PROJECT_DIR/hooks/guard.mjs" --x"#
         );
         assert_eq!(
-            scripts_from_main(
-                "sh ${ANYSOLA_PROJECT_DIR}/a.sh && pwsh $env:CLAUDE_PROJECT_DIR/b.ps1",
-                w,
-                f
-            ),
-            "sh /code/proj/a.sh && pwsh /code/proj/b.ps1"
+            sh("sh ${ANYSOLA_PROJECT_DIR}/hooks/a.sh && echo $CLAUDE_PROJECT_DIR"),
+            "sh ${ANYSOLA_MAIN_PROJECT_DIR}/hooks/a.sh && echo $CLAUDE_PROJECT_DIR",
+            "only a path to a script of the main folder changes"
         );
-        // The main folder session: as written.
         assert_eq!(
-            scripts_from_main("sh $CLAUDE_PROJECT_DIR/a.sh", f, f),
-            "sh $CLAUDE_PROJECT_DIR/a.sh"
+            sh("x $CLAUDE_PROJECT_DIR_OTHER/hooks/a.sh"),
+            "x $CLAUDE_PROJECT_DIR_OTHER/hooks/a.sh"
         );
-        // A main folder a shell would split: left to the variable.
+        // Relative script words, quoted for the shell.
         assert_eq!(
-            scripts_from_main("sh $CLAUDE_PROJECT_DIR/a.sh", w, Path::new("/code/my proj")),
-            "sh $CLAUDE_PROJECT_DIR/a.sh"
+            sh("./hooks/a.sh --strict"),
+            r#""$ANYSOLA_MAIN_PROJECT_DIR"/hooks/a.sh --strict"#
         );
+        assert_eq!(
+            sh("node .anysola/hooks/x.mjs"),
+            r#"node "$ANYSOLA_MAIN_PROJECT_DIR"/.anysola/hooks/x.mjs"#
+        );
+        assert_eq!(
+            scripts_from_main("node .anysola/hooks/x.mjs", &w, f, "cmd"),
+            r#"node "%ANYSOLA_MAIN_PROJECT_DIR%\.anysola\hooks\x.mjs""#
+        );
+        assert_eq!(
+            scripts_from_main("./hooks/a.sh", &w, f, "pwsh"),
+            r#"& "$env:ANYSOLA_MAIN_PROJECT_DIR/hooks/a.sh""#
+        );
+        assert_eq!(sh("npm test"), "npm test");
+        // A main-folder session: as written.
+        assert_eq!(
+            scripts_from_main("./hooks/a.sh", f, f, "/bin/bash"),
+            "./hooks/a.sh"
+        );
+        let _ = Path::new("");
     }
 }

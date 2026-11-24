@@ -1502,7 +1502,7 @@ fn handle(
 }
 
 /// The tool a call names (`bash` runs as `shell`): our name and the one hooks match.
-const GLOBAL_CONFIG: &str = "This call changes Anysola Code's own configuration, data or hook scripts, which needs the user's approval, and nobody can approve it here.";
+const GLOBAL_CONFIG: &str = "This call changes Anysola Code's own configuration, data or hook scripts, or Git's data, which needs the user's approval, and nobody can approve it here.";
 
 /// An `edit` or `write` of a file that changes what runs without asking: a global or user config
 /// document, the database ([`crate::config::Config::protects`]), or a script a hook runs.
@@ -1514,7 +1514,28 @@ fn writes_global_config(anysola: &str, input: &Value, ctx: &ToolContext) -> bool
         return false;
     };
     let target = crate::tool::access::resolve_path(ctx, path);
-    ctx.host.config().protects(&ctx.paths, &target) || ctx.hooks.guards(&target)
+    ctx.host.config().protects(&ctx.paths, &target)
+        || ctx.hooks.guards(&target)
+        || in_git_data(&target)
+}
+
+/// A path in a repository's own data (`.git/config`, `.git/hooks/…`, a worktree's `.git` file):
+/// what Git runs and trusts, so a file tool writing there always asks.
+pub(crate) fn in_git_data(path: &std::path::Path) -> bool {
+    let named = |path: &std::path::Path| {
+        path.components().any(|c| match c {
+            std::path::Component::Normal(name) => {
+                let name = name.to_string_lossy();
+                if cfg!(windows) {
+                    name.eq_ignore_ascii_case(".git")
+                } else {
+                    name == ".git"
+                }
+            }
+            _ => false,
+        })
+    };
+    named(path) || named(&crate::config::real_path(path))
 }
 
 fn hook_identity(tools: &[Arc<dyn Tool>], name: &str) -> Option<(String, String)> {

@@ -1468,10 +1468,8 @@ export async function rewind(messageId: string) {
   const sessionId = open.sessionId
   const n = ++reads
   try {
-    const { text, view, filesKept, crossesApply } = await bridge.revert(open.directory, sessionId, messageId)
+    const { text, view, filesKept } = await bridge.revert(open.directory, sessionId, messageId)
     latest(n)
-    if (crossesApply) crossing.add(sessionId)
-    else crossing.delete(sessionId)
     setOpen((o) => ({ ...viewPatch(view, o), live: [], status: { kind: "idle" } }), sessionId)
     // The message returns to the composer, in front of what was being typed there (kept, as are
     // folded pastes); Redo takes it out again.
@@ -1503,7 +1501,6 @@ export async function redo() {
   try {
     const view = await bridge.unrevert(open.directory, sessionId)
     latest(n)
-    crossing.delete(sessionId)
     setOpen((o) => viewPatch(view, o), sessionId)
     // The rewound message leaves the composer unless the user changed it; what they had typed stays.
     const text = rewound.get(sessionId)
@@ -1516,14 +1513,6 @@ export async function redo() {
   }
 }
 
-/** Sessions whose staged rewind goes back past changes already applied to the main folder.
- * Known only from the rewind's own answer: a staged rewind read again (after a restart) says nothing. */
-const crossing = new Set<string>()
-
-/** Whether the session's staged rewind goes back past an apply (or a base brought in). */
-export function rewindCrossesApply(sessionId: string | null) {
-  return !!sessionId && crossing.has(sessionId)
-}
 
 /** The text a rewind put in a session's composer, so Redo can take it out again. */
 const rewound = new Map<string, string>()
@@ -1833,7 +1822,7 @@ export async function unappliedOf(rows: SessionRow[]): Promise<{ row: SessionRow
   const read = await Promise.all(
     asked.map((row) =>
       bridge.worktreeUnapplied(row.directory, row.id).then(
-        (files) => ({ row, files: files as number | null }),
+        (files) => ({ row, files }),
         () => ({ row, files: null })
       )
     )
@@ -2153,10 +2142,11 @@ export async function applyWorktree(
   h: Here,
   text: string,
   onto: string,
-  stash: boolean
+  stash: boolean,
+  markers = false
 ): Promise<{ commit: string; stashLeft: string | null } | { error: string }> {
   try {
-    return await bridge.worktreeApply(h.directory, h.sessionId, text, onto, stash)
+    return await bridge.worktreeApply(h.directory, h.sessionId, text, onto, stash, markers)
   } catch (e) {
     return { error: message(e) }
   } finally {

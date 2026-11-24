@@ -50,12 +50,13 @@ pub fn view(core: &Core, session_id: &str, directory: &str) -> Result<Value, Str
         },
         None => (messages, Vec::new()),
     };
-    let revert = boundary.map(|_| {
+    let revert = boundary.as_ref().map(|at| {
         let turns = hidden
             .iter()
             .filter(|e| matches!(e.message, Message::User(_)))
             .count();
-        json!({"turns": turns, "files": core.revert_files(session_id).unwrap_or_default()})
+        json!({"turns": turns, "files": core.revert_files(session_id).unwrap_or_default(),
+               "crossesApply": crate::worktree::crosses_apply(core, session_id, at)})
     });
     // The agent of the last shown reply: a plan offers to be built only when Plan wrote it.
     let agent = shown.iter().rev().find_map(|e| match &e.message {

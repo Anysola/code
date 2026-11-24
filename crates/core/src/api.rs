@@ -40,7 +40,7 @@ pub use crate::hooks::{HookDocument, HookInfo, HookScope};
 pub use crate::trust::{ConfiguredRule, TrustEntry, TrustItem, TrustKind};
 pub use isolate::{
     Checkout, Cleaned, Fallback, ForkRestore, Release, apply_stash_message,
-    cleanup as cleanup_worktrees, forget_deleted as forget_deleted_worktree,
+    cleanup as cleanup_worktrees, forget_deleted as forget_deleted_worktree, pop_stash_if_clean,
 };
 pub(crate) use isolate::{TurnGate, turn_gate};
 pub use revert::file_diff_value;

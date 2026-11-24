@@ -328,6 +328,37 @@ impl Store {
         }
     }
 
+    /// What changed between commit `from` and `tree` (captured on `from`), merged three-way onto
+    /// commit `onto`: the resulting tree, or `None` on a conflict or when it can't be worked out.
+    pub fn merge_onto(&self, from: &str, tree: &str, onto: &str) -> Option<String> {
+        let output = self
+            .command(&["commit-tree", tree, "-p", from, "-m", "step"])
+            .env("GIT_AUTHOR_NAME", "Anysola Code")
+            .env("GIT_AUTHOR_EMAIL", "code@anysola.invalid")
+            .env("GIT_COMMITTER_NAME", "Anysola Code")
+            .env("GIT_COMMITTER_EMAIL", "code@anysola.invalid")
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let step = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let merged = self.run(&[
+            "merge-tree",
+            "--write-tree",
+            &format!("--merge-base={from}"),
+            onto,
+            &step,
+        ])?;
+        let merged = String::from_utf8_lossy(&merged);
+        merged
+            .lines()
+            .next()
+            .map(str::to_string)
+            .filter(|t| !t.is_empty())
+    }
+
     /// Puts the scope's files in `target` (another checkout of the same repository) as `tree`
     /// has them; see [`overlay`].
     pub fn overlay(&self, tree: &str, target: &Path) -> Result<Vec<String>, String> {

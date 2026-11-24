@@ -108,7 +108,11 @@ export type WorktreeInfo =
  * the base (the apply still lands on its tip).
  */
 export type ApplyCheck =
-  | { ok: true; onto: string; files: number; add: number; del: number; behind: number }
+  /**
+   * `ignored`: files the commit would carry that the main folder's `.gitignore` ignores (a
+   * force-added `.env`, say). Warn before applying; it doesn't stop the apply.
+   */
+  | { ok: true; onto: string; files: number; add: number; del: number; behind: number; ignored: string[] }
   /** Nothing to apply. */
   | { ok: false; reason: "empty" }
   /** A turn, a subagent or the setup command runs. */
@@ -116,6 +120,8 @@ export type ApplyCheck =
   /**
    * Conflict markers or unmerged files left in the worktree: after bringing the base in, or
    * markers found in any changed file with no merge in progress. Say neither cause; list the files.
+   * The user may apply anyway (`worktreeApply` with `markers`) after a confirm that lists them:
+   * markers can be meant (docs, test fixtures).
    */
   | { ok: false; reason: "unresolved"; files: string[] }
   /** The changes conflict with `onto`: bring the base in, open the files, or discard. */
@@ -130,8 +136,8 @@ export type ApplyCheck =
   /** Git failed, or is older than 2.40 ("Update Git to 2.40 or later to apply"); `message` says it. */
   | { ok: false; reason: "git"; message: string }
 
-/** A session whose worktree holds changes not applied to the main folder (`files` of them). */
-export type WorktreeWithWork = { sessionId: string; title: string; directory: string; files: number }
+/** A session whose worktree holds changes not applied to the main folder (`files` of them; null: they couldn't be counted). */
+export type WorktreeWithWork = { sessionId: string; title: string; directory: string; files: number | null }
 
 /** The setup command's last run in a session's worktree. */
 export type SetupRun = {
@@ -590,6 +596,8 @@ export type SendRequest = {
 /** A staged rewind: the turns it hides and the files it put back. */
 export type Revert = {
   turns: number
+  /** As `revert`'s result: the rewind goes back past an apply or a "Bring main in" (kept across restarts). */
+  crossesApply: boolean
   files: { file: string; status: "added" | "modified" | "deleted"; additions: number; deletions: number }[]
 }
 
@@ -890,7 +898,7 @@ export type Bridge = {
    * `filesKept`: the folder keeps no snapshots (not git), so the turns' edits stay.
    * `crossesApply`: a worktree session's rewind goes back past an apply or a "Bring main in", so
    * its files go back to before changes already on the main folder (Review then shows them as
-   * undoing those changes). Only in this result: not on `View.revert`.
+   * undoing those changes). Also on `View.revert`, so it holds after a restart.
    */
   revert(
     directory: string,
@@ -939,29 +947,33 @@ export type Bridge = {
    * One commit with `message` on the main folder's branch `onto` (must equal the check's; the
    * user's hooks and identity apply), main folder untouched until the check passes. `stash`:
    * set main-folder edits of touched files aside and put them back after; `stashLeft` names the
-   * stash when putting back conflicted ("Your edits to X are kept in the stash"). After it the
-   * session goes on: its worktree and branch move to `commit`, which becomes `baseCommit`.
+   * stash when putting back conflicted ("Your edits to X are kept in the stash"). `markers`: apply
+   * even though files have conflict markers (only after the user confirmed the list). After it the
+   * session goes on: its worktree and branch move to `commit`, which becomes `baseCommit`. Any
+   * background commands of the session stopped for it are named in a `notice` event.
    */
   worktreeApply(
     directory: string,
     sessionId: string,
     message: string,
     onto: string,
-    stash: boolean
+    stash: boolean,
+    markers?: boolean
   ): Promise<{ commit: string; stashLeft: string | null }>
   /** Deletes the worktree and its branch (irreversible: confirm first). The session stays readable. */
   worktreeDiscard(directory: string, sessionId: string): Promise<void>
   /** Merges the base branch into the session's branch; conflicts stay in the worktree as markers. */
   worktreeBringBase(directory: string, sessionId: string): Promise<{ conflicts: string[] }>
-  /** For `missing` or `failed`: makes the worktree again (uncommitted work up to the last step comes back); `preparing` again. */
+  /** For `missing` or `failed`: makes the worktree again from its branch; uncommitted work comes back when it can; `preparing` again. */
   worktreeRecreate(directory: string, sessionId: string): Promise<SessionWorktree>
   /** Only while preparing or failed, before anything ran there: the session moves to the main folder (a waiting message then runs there). */
   worktreeToFolder(directory: string, sessionId: string): Promise<SessionRow>
   /**
    * Files the session changed that aren't applied to the main folder; 0 for none, for a
-   * main-folder session, or a released (discarded) worktree. Asked before a delete.
+   * main-folder session, or a released (discarded) worktree; null when Git couldn't tell (treat
+   * as maybe work: still confirm). Asked before a delete.
    */
-  worktreeUnapplied(directory: string, sessionId: string): Promise<number>
+  worktreeUnapplied(directory: string, sessionId: string): Promise<number | null>
   /** Every root session whose worktree has changes not applied to the main folder. */
   worktreesWithWork(): Promise<WorktreeWithWork[]>
   setupOutput(directory: string, sessionId: string): Promise<SetupRun | null>
@@ -1103,8 +1115,8 @@ function tauriBridge(): Bridge {
     restoreFile: (directory, sessionId, file) => invoke("restore_file", { directory, sessionId, file }),
     worktreeInfo: (directory) => invoke("worktree_info", { directory }),
     worktreeApplyCheck: (directory, sessionId) => invoke("worktree_apply_check", { directory, sessionId }),
-    worktreeApply: (directory, sessionId, message, onto, stash) =>
-      invoke("worktree_apply", { directory, sessionId, message, onto, stash }),
+    worktreeApply: (directory, sessionId, message, onto, stash, markers) =>
+      invoke("worktree_apply", { directory, sessionId, message, onto, stash, markers: markers ?? false }),
     worktreeDiscard: (directory, sessionId) => invoke("worktree_discard", { directory, sessionId }),
     worktreeBringBase: (directory, sessionId) => invoke("worktree_bring_base", { directory, sessionId }),
     worktreeRecreate: (directory, sessionId) => invoke("worktree_recreate", { directory, sessionId }),

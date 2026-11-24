@@ -53,7 +53,11 @@
  * changes can't be read after).
  * `?review=apply-conflict|apply-dirty|apply-staged|apply-detached|apply-operation|apply-empty|
  * apply-busy|apply-git|apply-onto` makes the apply check answer so (`apply-onto`: the main folder is on
- * another branch; `apply-stash-left` with `apply-dirty`: the edits set aside don't go back).
+ * another branch; `apply-stash-left` with `apply-dirty`: the edits set aside don't go back;
+ * `apply-ignored`: the commit would carry two files the main folder ignores; `apply-bg`: the apply
+ * stops two background commands and says so in a notice). `?worktree=uncounted`: the open
+ * session's unapplied files can't be counted (a delete still asks). `&rewound` with
+ * `state=worktree-applied`: opens already rewound past the apply.
  * `?worktree=old-git` makes the folder's Git too old to apply; `?worktree=no-commits` hides the
  * choice. `?setup=hold` keeps a `pnpm install` setup running (preparing stays), `?setup=fail` makes
  * it exit 1 (with a ready scene: a failed run already there). New sessions there start in a worktree
@@ -430,6 +434,7 @@ const longItems: Item[] = [
 
 const longRevert: Revert = {
   turns: 3,
+  crossesApply: false,
   files: reviewFiles.concat(bigPatch("apps/web/src/lib/format.ts", 4)).map((f) => ({
     file: f.file,
     status: f.status,
@@ -866,6 +871,7 @@ const todos: Todo[] = [
 
 const rewound: Revert = {
   turns: 1,
+  crossesApply: false,
   files: [
     { file: planCard.file, status: "modified", additions: 2, deletions: 2 },
     { file: pricing.file, status: "modified", additions: 1, deletions: 1 },
@@ -968,6 +974,8 @@ export function mockBridge(): Bridge {
     }
   }
   const worktreeParam = params.get("worktree")
+  // `worktree-applied&rewound`: opens already rewound past that apply (as after a restart).
+  if (worktreeScene === "applied" && params.has("rewound")) revert = { ...rewound, crossesApply: true }
   // `?worktree=long-branch`: branch names too long for the header and the sidebar.
   if (worktreeParam === "long-branch")
     for (const [id, branch] of [
@@ -1081,10 +1089,19 @@ export function mockBridge(): Bridge {
     if (review.has("apply-empty")) return { ok: false, reason: "empty" }
     if (review.has("apply-busy")) return { ok: false, reason: "busy" }
     if (review.has("apply-git")) return { ok: false, reason: "git", message: "git merge-tree failed: fatal: unable to read tree 9c1e2a7f3b" }
-    return { ok: true, onto: review.has("apply-onto") ? "release/1.4" : (row.worktree!.baseBranch ?? "main"), files: 3, add: 42, del: 9, behind: 2 }
+    return {
+      ok: true,
+      onto: review.has("apply-onto") ? "release/1.4" : (row.worktree!.baseBranch ?? "main"),
+      files: 3,
+      add: 42,
+      del: 9,
+      behind: 2,
+      ignored: review.has("apply-ignored") ? [".env", "apps/web/.env.local"] : [],
+    }
   }
   /** Files a worktree session changed that aren't on the main folder (see the scenes above). */
-  const unapplied = (sessionId: string) => {
+  const unapplied = (sessionId: string): number | null => {
+    if (worktreeParam === "uncounted" && sessionId === "ses_pricing") return null
     const w = rows.find((r) => r.id === sessionId)?.worktree
     if (!w || w.state === "discarded" || w.state === "preparing" || w.state === "failed") return 0
     if (sessionId === "ses_pricing") return w.appliedCommit && w.appliedCommit === w.baseCommit ? 0 : 3
@@ -1706,15 +1723,16 @@ export function mockBridge(): Bridge {
     async revert(directory, sessionId, messageId) {
       const items = transcripts.get(sessionId) ?? []
       const text = items.find((i) => i.id === messageId)
-      revert = state === "long" ? longRevert : rewound
+      // `worktree-applied`: the rewind goes back past that apply.
+      const crossesApply = worktreeScene === "applied" && sessionId === "ses_pricing"
+      revert = { ...(state === "long" ? longRevert : rewound), crossesApply }
       revertAt = messageId
       // Only the web folder is a git repository here (see gitStatus).
       return {
         text: text?.kind === "user" ? text.text : "",
         view: view(sessionId),
         filesKept: directory !== WEB,
-        // `worktree-applied`: the rewind goes back past that apply.
-        crossesApply: worktreeScene === "applied" && sessionId === "ses_pricing",
+        crossesApply,
       }
     },
     async unrevert(_directory, sessionId) {
@@ -1801,13 +1819,13 @@ export function mockBridge(): Bridge {
     async worktreesWithWork() {
       await wait(150)
       return rows
-        .filter((r) => unapplied(r.id) > 0)
+        .filter((r) => unapplied(r.id) !== 0)
         .map((r) => ({ sessionId: r.id, title: r.title, directory: r.directory, files: unapplied(r.id) }))
     },
-    async worktreeApply(_directory, sessionId, _message, onto, stash) {
+    async worktreeApply(_directory, sessionId, _message, onto, stash, markers) {
       const row = worktreeRow(sessionId)
       const check = await applyCheck(sessionId)
-      if (check.ok ? check.onto !== onto : !(check.reason === "dirty" && stash))
+      if (check.ok ? check.onto !== onto : !((check.reason === "dirty" && stash) || (check.reason === "unresolved" && markers)))
         throw new Error("The main folder changed since the check. Check again.")
       row.worktree!.state = "applying"
       worktreeChanged(row)
@@ -1816,6 +1834,8 @@ export function mockBridge(): Bridge {
       Object.assign(row.worktree!, { state: "ready", baseCommit: commit, appliedCommit: commit })
       worktreeChanged(row)
       if (stash) stashed.add(sessionId)
+      if (review.has("apply-bg"))
+        emit({ type: "notice", message: "Stopped 2 background commands for the apply: pnpm dev, pnpm vitest --watch pricing" })
       return { commit, stashLeft: stash && review.has("apply-stash-left") ? "stash@{0}" : null }
     },
     async worktreeDiscard(_directory, sessionId) {

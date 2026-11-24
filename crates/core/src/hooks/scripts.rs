@@ -90,9 +90,15 @@ fn expand(word: &str, places: &Places<'_>) -> String {
 /// as an escape and as a path separator; a file either reading names is protected.
 pub fn files(command: &str, places: &Places<'_>) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let mut read = words(command, true);
-    read.extend(words(command, false));
-    for word in read {
+    // A word read POSIX-style from a line with backslashes may have lost them (`C:\Users\…`
+    // read as `C:Users…`): from that reading only files that exist are taken.
+    let backslashes = command.contains('\\');
+    let mut read: Vec<(String, bool)> = words(command, true)
+        .into_iter()
+        .map(|w| (w, !backslashes))
+        .collect();
+    read.extend(words(command, false).into_iter().map(|w| (w, true)));
+    for (word, may_be_new) in read {
         let word = expand(&word, places);
         if word.is_empty() {
             continue;
@@ -108,7 +114,7 @@ pub fn files(command: &str, places: &Places<'_>) -> Vec<PathBuf> {
         let existing: Vec<PathBuf> = candidates.iter().filter(|c| c.is_file()).cloned().collect();
         let named = if !existing.is_empty() {
             existing
-        } else if pathlike {
+        } else if pathlike && may_be_new {
             candidates.into_iter().filter(|c| !c.exists()).collect()
         } else {
             Vec::new()
@@ -209,6 +215,9 @@ mod tests {
             "quotes around a variable are only stripped"
         );
         assert_eq!(files("./local.sh"), [session.join("./local.sh")]);
+        // A bare name that is a file of the project is that file.
+        write(&project.join("guard"));
+        assert_eq!(files("sh guard"), [project.join("guard")]);
         assert!(files("npm test --silent").is_empty());
         // A script the command names that isn't there yet: creating it is guarded too.
         assert_eq!(

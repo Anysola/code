@@ -200,4 +200,10 @@ CREATE TABLE session_worktree (
 );
 CREATE INDEX session_worktree_folder_idx ON session_worktree(folder);
 "#,
+    // 1.1.9: the base a merge brings in, until its commit exists; the stash an apply set the main
+    // folder's edits aside in, so a crash can put them back by its id.
+    r#"
+ALTER TABLE session_worktree ADD COLUMN base_pending TEXT;
+ALTER TABLE session_worktree ADD COLUMN apply_stash TEXT;
+"#,
 ];

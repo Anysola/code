@@ -75,6 +75,8 @@ impl Sandbox {
             leftover: false,
             time_created: 1,
             time_updated: 1,
+            base_pending: None,
+            apply_stash: None,
         };
         (main, row)
     }
@@ -102,6 +104,26 @@ fn w(row: &SessionWorktreeRow) -> PathBuf {
 
 fn always(_: &str, _: &str) -> bool {
     true
+}
+
+fn never(_: &str, _: &str) -> bool {
+    false
+}
+
+fn nothing(_: &str) {}
+
+fn marks() -> Marks<'static> {
+    Marks {
+        start: &always,
+        stashed: &nothing,
+    }
+}
+
+fn never_marks() -> Marks<'static> {
+    Marks {
+        start: &never,
+        stashed: &nothing,
+    }
 }
 
 /// The main folder's `HEAD` and status, to compare before and after.
@@ -148,14 +170,22 @@ fn the_diff_is_the_sessions_own_and_applies_as_one_commit_again_and_again() {
     assert_eq!(diffs[1]["status"], "added");
     // The worktree's own index is not touched by reading it.
     assert_eq!(sandbox.git(&wt, &["diff", "--cached", "--name-only"]), "");
-    let plan = plan(&row).unwrap_or_else(|r| panic!("{r}"));
+    let plan = plan(&row, false).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!(
         (plan.onto.as_str(), plan.files, plan.behind),
         ("main", 2, 1)
     );
     assert!(plan.dirty.is_empty());
     let before = sandbox.git(&main, &["rev-parse", "HEAD"]);
-    let (commit, left) = apply(&always, &row, "Session work\n\nDetails", "main", false).unwrap();
+    let (commit, left) = apply(
+        &marks(),
+        &row,
+        "Session work\n\nDetails",
+        "main",
+        false,
+        false,
+    )
+    .unwrap();
     assert_eq!(left, None);
     assert_eq!(sandbox.git(&main, &["rev-parse", "HEAD"]), commit);
     assert_eq!(sandbox.git(&main, &["rev-parse", "HEAD^"]), before);
@@ -176,14 +206,14 @@ fn the_diff_is_the_sessions_own_and_applies_as_one_commit_again_and_again() {
     assert!(worktree_changes(&row).unwrap().is_empty());
     assert_eq!(reason(&plan_err(&row)), "empty");
     write(&wt, "c.txt", "new\nagain\n");
-    let (second, _) = apply(&always, &row, "More", "main", false).unwrap();
+    let (second, _) = apply(&marks(), &row, "More", "main", false, false).unwrap();
     assert_eq!(sandbox.git(&main, &["rev-parse", "HEAD^"]), commit);
     assert_eq!(sandbox.git(&main, &["rev-parse", "HEAD"]), second);
     assert_eq!(read(&main, "c.txt"), "new\nagain\n");
 }
 
 fn plan_err(row: &SessionWorktreeRow) -> Value {
-    match plan(row) {
+    match plan(row, false) {
         Ok(_) => panic!("the apply would go"),
         Err(refusal) => refusal,
     }
@@ -202,7 +232,7 @@ fn a_conflict_leaves_the_main_folder_alone_until_main_is_brought_in() {
     let refusal = plan_err(&row);
     assert_eq!(reason(&refusal), "conflict");
     assert_eq!(refusal["files"], json!(["a.txt"]));
-    assert!(apply(&always, &row, "x", "main", false).is_err());
+    assert!(apply(&marks(), &row, "x", "main", false, false).is_err());
     assert_eq!(
         state(&sandbox, &main),
         before,
@@ -212,7 +242,8 @@ fn a_conflict_leaves_the_main_folder_alone_until_main_is_brought_in() {
     let (conflicts, tip) = bring_base(&row).unwrap();
     assert_eq!(conflicts, ["a.txt"]);
     assert_eq!(tip, sandbox.git(&main, &["rev-parse", "main"]));
-    row.base_commit = tip;
+    // The base moves only once the merge is committed.
+    row.base_pending = Some(tip);
     assert!(read(&wt, "a.txt").contains("<<<<<<<"));
     let refusal = plan_err(&row);
     assert_eq!(reason(&refusal), "unresolved");
@@ -226,7 +257,7 @@ fn a_conflict_leaves_the_main_folder_alone_until_main_is_brought_in() {
     assert_eq!(files, ["a.txt"]);
     // Resolved (by the agent): the apply finishes the merge and lands on main's tip.
     write(&wt, "a.txt", "one\nmain and session\nthree\n");
-    let (commit, _) = apply(&always, &row, "Resolved", "main", true).unwrap();
+    let (commit, _) = apply(&marks(), &row, "Resolved", "main", true, false).unwrap();
     assert_eq!(read(&main, "a.txt"), "one\nmain and session\nthree\n");
     assert_eq!(
         read(&main, "b.txt"),
@@ -259,7 +290,7 @@ fn a_clean_merge_of_main_moves_the_base() {
         .map(|d| d["file"].as_str().unwrap().to_string())
         .collect();
     assert_eq!(files, ["a.txt"], "main's change is not the session's");
-    let plan = plan(&row).unwrap_or_else(|r| panic!("{r}"));
+    let plan = plan(&row, false).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!((plan.files, plan.behind), (1, 0));
 }
 
@@ -271,11 +302,11 @@ fn main_folder_edits_in_touched_files_are_set_aside_and_back() {
     write(&wt, "a.txt", "one\ntwo\nthree\nsession\n");
     write(&main, "a.txt", "user\none\ntwo\nthree\n");
     write(&main, "b.txt", "untouched edit\n");
-    let plan = plan(&row).unwrap_or_else(|r| panic!("{r}"));
+    let plan = plan(&row, false).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!(plan.dirty, ["a.txt"]);
-    assert!(apply(&always, &row, "x", "main", false).is_err());
+    assert!(apply(&marks(), &row, "x", "main", false, false).is_err());
     assert_eq!(read(&main, "a.txt"), "user\none\ntwo\nthree\n");
-    let (_, left) = apply(&always, &row, "With stash", "main", true).unwrap();
+    let (_, left) = apply(&marks(), &row, "With stash", "main", true, false).unwrap();
     assert_eq!(left, None);
     assert_eq!(read(&main, "a.txt"), "user\none\ntwo\nthree\nsession\n");
     assert_eq!(read(&main, "b.txt"), "untouched edit\n");
@@ -292,7 +323,7 @@ fn a_stash_that_cannot_come_back_cleanly_is_kept() {
     let (main, row) = sandbox.session();
     write(&w(&row), "a.txt", "one\nsession\nthree\n");
     write(&main, "a.txt", "one\nuser\nthree\n");
-    let (commit, left) = apply(&always, &row, "Overlap", "main", true).unwrap();
+    let (commit, left) = apply(&marks(), &row, "Overlap", "main", true, false).unwrap();
     assert_eq!(left.as_deref(), Some("stash@{0}"));
     assert_eq!(sandbox.git(&main, &["rev-parse", "HEAD"]), commit);
     // No markers in the main folder; the user's edit is in the stash.
@@ -321,7 +352,7 @@ fn file_names_beyond_ascii_compare() {
     };
     write(&w(&row), "şema.txt", "bir\niki\n");
     write(&main, "şema.txt", "sıfır\nbir\n");
-    let plan = plan(&row).unwrap_or_else(|r| panic!("{r}"));
+    let plan = plan(&row, false).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!(plan.dirty, ["şema.txt"]);
     let files: Vec<String> = worktree_changes(&row)
         .unwrap()
@@ -329,7 +360,7 @@ fn file_names_beyond_ascii_compare() {
         .map(|d| d["file"].as_str().unwrap().to_string())
         .collect();
     assert_eq!(files, ["şema.txt"]);
-    let (_, left) = apply(&always, &row, "Şema", "main", true).unwrap();
+    let (_, left) = apply(&marks(), &row, "Şema", "main", true, false).unwrap();
     assert_eq!(left, None);
     assert_eq!(read(&main, "şema.txt"), "sıfır\nbir\niki\n");
 }
@@ -349,10 +380,10 @@ fn staged_detached_and_nothing_to_apply_are_refused() {
     sandbox.git(&main, &["checkout", "-q", "main"]);
     // The main folder on another branch: the apply names it, and must be asked for by name.
     sandbox.git(&main, &["checkout", "-q", "-b", "other"]);
-    let plan = plan(&row).unwrap_or_else(|r| panic!("{r}"));
+    let plan = plan(&row, false).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!(plan.onto, "other");
     assert!(
-        apply(&always, &row, "x", "main", false)
+        apply(&marks(), &row, "x", "main", false, false)
             .unwrap_err()
             .contains("is on other now")
     );
@@ -381,7 +412,7 @@ fn a_failing_commit_hook_puts_the_main_folder_back() {
         .unwrap();
     }
     let before = state(&sandbox, &main);
-    let error = apply(&always, &row, "Blocked", "main", false).unwrap_err();
+    let error = apply(&marks(), &row, "Blocked", "main", false, false).unwrap_err();
     assert!(error.contains("lint failed"), "{error}");
     assert_eq!(
         state(&sandbox, &main),
@@ -400,8 +431,7 @@ fn an_apply_refused_by_the_core_leaves_everything() {
     write(&w(&row), "a.txt", "session\n");
     write(&main, "a.txt", "one\ntwo\nthree\nuser\n");
     let before = state(&sandbox, &main);
-    let never = |_: &str, _: &str| false;
-    assert!(apply(&never, &row, "x", "main", true).is_err());
+    assert!(apply(&never_marks(), &row, "x", "main", true, false).is_err());
     assert_eq!(state(&sandbox, &main), before);
     assert_eq!(
         sandbox.git(&main, &["stash", "list"]),
@@ -558,9 +588,9 @@ fn an_ignored_main_folder_file_is_never_overwritten_or_lost() {
     write(&main, ".env", "MAIN=1\n");
     write(&wt, ".env", "SESSION=1\n");
     sandbox.git(&wt, &["add", "-f", ".env"]);
-    let plan = plan(&row).unwrap_or_else(|r| panic!("{r}"));
+    let plan = plan(&row, false).unwrap_or_else(|r| panic!("{r}"));
     assert_eq!(plan.dirty, [".env"]);
-    assert!(apply(&always, &row, "x", "main", false).is_err());
+    assert!(apply(&marks(), &row, "x", "main", false, false).is_err());
     assert_eq!(
         read(&main, ".env"),
         "MAIN=1\n",
@@ -569,7 +599,7 @@ fn an_ignored_main_folder_file_is_never_overwritten_or_lost() {
     // A failing hook: everything goes back, the user's .env included.
     hook_fails(&main);
     let before = state(&sandbox, &main);
-    assert!(apply(&always, &row, "x", "main", true).is_err());
+    assert!(apply(&marks(), &row, "x", "main", true, false).is_err());
     assert_eq!(
         read(&main, ".env"),
         "MAIN=1\n",
@@ -579,7 +609,7 @@ fn an_ignored_main_folder_file_is_never_overwritten_or_lost() {
     assert_eq!(sandbox.git(&main, &["stash", "list"]), "");
     // Applied with it set aside: the commit has the session's .env, the user's is kept.
     std::fs::remove_file(main.join(".git/hooks/pre-commit")).unwrap();
-    let (_, left) = apply(&always, &row, "With env", "main", true).unwrap();
+    let (_, left) = apply(&marks(), &row, "With env", "main", true, false).unwrap();
     assert_eq!(sandbox.git(&main, &["show", "HEAD:.env"]), "SESSION=1");
     let left = left.expect("the user's .env is kept in the stash");
     let kept = sandbox.git(&main, &["show", &format!("{left}^3:.env")]);
@@ -601,7 +631,7 @@ fn conflict_markers_are_never_applied() {
     assert_eq!(refusal["files"], json!(["a.txt"]));
     // Lines that only start alike are not markers.
     write(&w(&row), "a.txt", "<<<<<<<<<< title\n>>>>>>>>>>\n");
-    assert!(plan(&row).is_ok());
+    assert!(plan(&row, false).is_ok());
 }
 
 /// A worktree whose `.git` was pointed elsewhere is not run git in.
@@ -637,4 +667,99 @@ fn a_cancelled_preparation_copies_nothing() {
     write(&main, ".env", "SECRET=1\n");
     assert!(copy_env(&main, &w(&row), &|| false).is_empty());
     assert!(!w(&row).join(".env").exists());
+}
+
+/// A merge of main with conflicts, then the worktree made again from its files without the
+/// merge state (the folder was deleted): Review and Apply never undo main's commit.
+#[test]
+fn an_unfinished_merge_made_again_never_undoes_main() {
+    let sandbox = Sandbox::new("unfinished");
+    let (main, row) = sandbox.session();
+    let wt = w(&row);
+    write(&wt, "a.txt", "one\nsession\nthree\n");
+    write(&main, "a.txt", "one\nmain\nthree\n");
+    write(&main, "new.txt", "main's new file\n");
+    sandbox.git(&main, &["add", "-A"]);
+    sandbox.git(&main, &["commit", "-qm", "main moves on"]);
+    let (conflicts, _) = bring_base(&row).unwrap();
+    assert_eq!(conflicts, ["a.txt"]);
+    // Resolved in the folder, not committed; then the folder goes and is made again from the
+    // branch (the wip commit) with the last files laid over, merge state lost.
+    write(&wt, "a.txt", "one\nmain and session\nthree\n");
+    let saved: Vec<(String, String)> = ["a.txt", "b.txt", "new.txt"]
+        .iter()
+        .map(|f| (f.to_string(), read(&wt, f)))
+        .collect();
+    let wt_text = row.directory.clone();
+    sandbox.git(
+        &main,
+        &["worktree", "remove", "--force", "--force", &wt_text],
+    );
+    sandbox.git(&main, &["worktree", "add", "-q", &wt_text, &row.branch]);
+    for (file, text) in &saved {
+        write(&wt, file, text);
+    }
+    let before = state(&sandbox, &main);
+    // Review: never main's own change read backwards.
+    for diff in worktree_changes(&row).unwrap() {
+        assert!(
+            !diff["patch"].as_str().unwrap().contains("-main's new file"),
+            "BREAK: Review undoes main's file: {diff}"
+        );
+        assert!(
+            !(diff["file"] == "a.txt" && diff["patch"].as_str().unwrap().contains("-one\nmain")),
+            "{diff}"
+        );
+    }
+    // Apply: whatever it decides, main's file and change stay.
+    let _ = apply(&marks(), &row, "x", "main", true, false);
+    assert_eq!(
+        read(&main, "new.txt"),
+        "main's new file\n",
+        "BREAK: main's file undone"
+    );
+    assert!(
+        read(&main, "a.txt").contains("main"),
+        "BREAK: main's change undone"
+    );
+    let _ = before;
+}
+
+/// An ignored file of the main folder where the session has a folder (`cache` vs
+/// `cache/data`) is in the way like any other.
+#[test]
+fn an_ignored_file_in_place_of_a_folder_is_in_the_way() {
+    let sandbox = Sandbox::new("clash");
+    let (main, row) = sandbox.session();
+    write(
+        &main,
+        ".gitignore",
+        ".env*\n!.env.example\nnode_modules/\ncache\n",
+    );
+    sandbox.git(&main, &["commit", "-qam", "ignore cache"]);
+    sandbox.git(&w(&row), &["merge", "-q", "main"]);
+    let row = SessionWorktreeRow {
+        base_commit: sandbox.git(&main, &["rev-parse", "HEAD"]),
+        ..row
+    };
+    write(&main, "cache", "user's cache file\n");
+    write(&w(&row), "cache/data", "session data\n");
+    sandbox.git(&w(&row), &["add", "-f", "cache/data"]);
+    let plan = plan(&row, false).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(plan.dirty, ["cache"]);
+    assert_eq!(plan.ignored, ["cache/data"]);
+    assert!(apply(&marks(), &row, "x", "main", false, false).is_err());
+    assert_eq!(read(&main, "cache"), "user's cache file\n");
+}
+
+/// "Apply anyway": conflict markers committed as they are, once asked for.
+#[test]
+fn markers_apply_only_when_asked() {
+    let sandbox = Sandbox::new("anyway");
+    let (main, row) = sandbox.session();
+    let text = "<<<<<<< HEAD\nexample\n=======\nfixture\n>>>>>>> other\n";
+    write(&w(&row), "docs/merge.md", text);
+    assert!(apply(&marks(), &row, "x", "main", false, false).is_err());
+    apply(&marks(), &row, "Docs", "main", false, true).unwrap();
+    assert_eq!(read(&main, "docs/merge.md"), text);
 }

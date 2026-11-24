@@ -345,6 +345,44 @@ pub async fn remove(
         .map_err(|e| RemoveError::Failed(e.to_string()))
 }
 
+/// Checks, without running git in it, that the worktree `dir` still leads to its own
+/// administrative folder in the repository whose top is `main_top`: git run in a worktree reads
+/// its config and hooks from wherever its `.git` points, and that file is in a folder the agent
+/// writes. Relative pointers (git's `worktree.useRelativePaths`) are read as git reads them.
+pub fn verify_checkout(main_top: &Path, dir: &Path) -> Result<(), String> {
+    let changed = || {
+        "This session's worktree no longer points to its repository (its .git was changed). \
+         Discard it, or recreate it."
+            .to_string()
+    };
+    let real = crate::config::real_path;
+    let dot_git = dir.join(".git");
+    let meta = std::fs::symlink_metadata(&dot_git).map_err(|_| changed())?;
+    if !meta.is_file() {
+        return Err(changed());
+    }
+    let text = std::fs::read_to_string(&dot_git).map_err(|_| changed())?;
+    let admin = text
+        .lines()
+        .next()
+        .and_then(|l| l.strip_prefix("gitdir:"))
+        .map(str::trim)
+        .ok_or_else(changed)?;
+    let admin = real(&dir.join(admin));
+    let common =
+        git_sync(main_top, &["rev-parse", "--git-common-dir"], &[]).map_err(|_| changed())?;
+    let common = real(&main_top.join(common));
+    if admin.parent() != Some(common.join("worktrees").as_path()) {
+        return Err(changed());
+    }
+    // The admin folder names this worktree back (absolute, or relative to the admin folder).
+    let back = std::fs::read_to_string(admin.join("gitdir")).map_err(|_| changed())?;
+    if real(&admin.join(back.trim())) != real(&dot_git) {
+        return Err(changed());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

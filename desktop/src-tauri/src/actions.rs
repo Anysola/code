@@ -80,7 +80,7 @@ pub async fn revert(
         // Outside git nothing was snapshotted: the turns hide but their edits stay.
         "filesKept": !core.restores_files(&session_id),
         // Back past an apply or a merge of the base: Review will show undoing those changes.
-        "crossesApply": crate::worktree::crosses_apply(&core, app.db()?, &session_id, &message_id),
+        "crossesApply": crate::worktree::crosses_apply(&core, &session_id, &message_id),
     }))
 }
 

@@ -335,7 +335,7 @@ pub fn refuse_foreign_write(ctx: &ToolContext, target: &Target) -> Result<(), To
     if target.external.is_none() {
         return Ok(());
     }
-    if foreign_spelling(&target.absolute) {
+    if foreign_spelling(&target.absolute) || foreign_spelling(&real(&target.absolute)) {
         return Err(blocked(FOREIGN_WRITE));
     }
     let mains = [written.main.clone(), places.main.clone()];
