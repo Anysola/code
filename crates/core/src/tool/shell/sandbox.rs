@@ -8,7 +8,10 @@
 //! and off in the main folder unless `"sandbox": true` or `{"enabled": true, "network": false}`
 //! is set in config. Set `"sandbox": false` to disable everywhere.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
+#[cfg(target_os = "linux")]
 use std::sync::OnceLock;
 
 use serde_json::Value;
