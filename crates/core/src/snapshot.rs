@@ -235,8 +235,28 @@ impl Store {
         self.run(&["cat-file", "blob", &format!("{tree}:{path}")])
     }
 
-    /// Puts each path back as its tree has it; a path the tree lacks is removed.
+    /// Every tree of `files` is readable here; an unreadable one (pruned, or another store's)
+    /// would read as "the tree lacks the file" and delete it.
+    fn readable(&self, files: &[(String, String)]) -> Result<(), String> {
+        let mut seen: Vec<&str> = Vec::new();
+        for (path, tree) in files {
+            if seen.contains(&tree.as_str()) {
+                continue;
+            }
+            if !self.has(&format!("{tree}^{{tree}}")) {
+                return Err(format!(
+                    "The earlier copy of {path} is no longer kept, so it can't be put back"
+                ));
+            }
+            seen.push(tree);
+        }
+        Ok(())
+    }
+
+    /// Puts each path back as its tree has it; a path the tree lacks is removed. Nothing is
+    /// touched when a tree can't be read.
     pub fn restore(&self, files: &[(String, String)]) -> Result<(), String> {
+        self.readable(files)?;
         for (path, tree) in files {
             let present = !self
                 .list(&["ls-tree", "-z", "--name-only", tree, "--", path])
@@ -312,8 +332,9 @@ impl Store {
     }
 
     /// Puts each path in `target` back as its tree has it (a path the tree lacks is removed),
-    /// like [`Store::restore`] does in the store's own checkout.
+    /// like [`Store::restore`] does in the store's own checkout; nothing when a tree can't be read.
     pub fn restore_into(&self, files: &[(String, String)], target: &Path) -> Result<(), String> {
+        self.readable(files)?;
         for (path, tree) in files {
             let file = target.join(path);
             match self.read(tree, path) {

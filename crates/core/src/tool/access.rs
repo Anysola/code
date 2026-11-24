@@ -315,6 +315,18 @@ pub async fn authorize_external(ctx: &ToolContext, targets: &[&Target]) -> Resul
     if resources.is_empty() {
         return Ok(());
     }
+    // A session in its own worktree asks each time for the main folder: an "always" saved for
+    // the project would let every such session write there unasked from then on.
+    if ctx.pinned() {
+        let main = crate::config::real_path(&ctx.main);
+        let in_main = targets.iter().filter_map(|t| t.external.as_ref()).any(|e| {
+            e.directory.starts_with(&ctx.main)
+                || crate::config::real_path(&e.directory).starts_with(&main)
+        });
+        if in_main {
+            save.clear();
+        }
+    }
     ctx.ask(PermissionRequest {
         action: "external_directory".into(),
         resources,

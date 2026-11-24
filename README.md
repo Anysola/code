@@ -70,7 +70,8 @@ the worktree and the branch. A branch made from an earlier message gets its own 
 were then.
 
 The session's file tools treat only its worktree as inside: the main folder and other sessions' worktrees are
-outside and ask first, and your rules still name their files as they would in the main folder. The project's
+outside, so in Ask and Edits modes they ask first (Auto mode doesn't ask about outside folders, here as
+anywhere), and your rules still name their files as they would in the main folder. The project's
 config, hooks and MCP servers are the main folder's; an edit to the worktree's `anysola.json` counts once
 applied. A worktree is not a sandbox: shell commands run as anywhere else, and Git in a worktree shares the
 repository's branches and objects (it can move or push them).

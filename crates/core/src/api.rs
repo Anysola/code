@@ -1000,9 +1000,7 @@ impl Core {
         {
             return Ok(Outcome::Succeeded);
         }
-        if isolate::turn_gate(shared, session_id)? == isolate::TurnGate::Wait {
-            return Ok(Outcome::Succeeded);
-        }
+
         let Some(held) = Held::acquire(shared, session_id, CancellationToken::new(), None)? else {
             return Ok(Outcome::Succeeded);
         };
@@ -1234,12 +1232,6 @@ pub(crate) async fn prompt_session(
         .session(session_id)?
         .ok_or(CoreError::SessionNotFound)?;
     let prompt = normalize(shared, prompt)?;
-    // A session whose own worktree is still being made keeps the prompt for when it is ready.
-    if isolate::turn_gate(shared, session_id)? == isolate::TurnGate::Wait {
-        crate::session::inbox::enqueue(&shared.db, session_id, &prompt, Delivery::Steer)?;
-        // Ready meanwhile: its wake may have found the inbox still empty.
-        return drain_session(shared, session_id, options, cancel).await;
-    }
     // The session is taken before the prompt is admitted: enqueued first, a prompt refused
     // with `Busy` would still go out later from the process that drives the session. When a
     // turn of this process already drives it, the prompt is queued for that turn instead, as
@@ -1276,7 +1268,8 @@ struct Held<'a> {
 
 impl<'a> Held<'a> {
     /// Takes the session for this process; `None` when a turn of this process already holds it,
-    /// after queueing `queue` for that turn.
+    /// after queueing `queue` for that turn, or while its own worktree is being made (`queue`
+    /// then waits for it).
     fn acquire(
         shared: &'a Arc<Shared>,
         session_id: &str,
@@ -1287,6 +1280,15 @@ impl<'a> Held<'a> {
         if turns.contains_key(session_id) {
             if let Some(prompt) = queue {
                 crate::session::inbox::enqueue(&shared.db, session_id, prompt, Delivery::Queue)?;
+            }
+            return Ok(None);
+        }
+        // A session in its own worktree runs only once that is ready; while it is being made the
+        // prompt waits in the inbox, and marking it ready (under this lock too) wakes it. Other
+        // states refuse with a plain sentence.
+        if isolate::turn_gate(shared, session_id)? == isolate::TurnGate::Wait {
+            if let Some(prompt) = queue {
+                crate::session::inbox::enqueue(&shared.db, session_id, prompt, Delivery::Steer)?;
             }
             return Ok(None);
         }
@@ -1392,10 +1394,6 @@ async fn drain_session(
     options: TurnOptions,
     cancel: CancellationToken,
 ) -> Result<Outcome, CoreError> {
-    // Input waits while the session's own worktree is being made; ready, it wakes the session.
-    if isolate::turn_gate(shared, session_id)? == isolate::TurnGate::Wait {
-        return Ok(Outcome::Succeeded);
-    }
     match Held::acquire(shared, session_id, cancel, None)? {
         Some(held) => Ok(held.drain(options).await),
         // The turn that holds the session takes its inbox.

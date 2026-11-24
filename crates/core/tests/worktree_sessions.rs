@@ -131,7 +131,8 @@ fn db(env: &Env) -> Db {
 }
 
 /// Answers every permission ask with `answer(action, resources)`, recording the asks.
-type Asked = Arc<Mutex<Vec<(String, Vec<String>)>>>;
+/// `(action, resources, save)` of each ask.
+type Asked = Arc<Mutex<Vec<(String, Vec<String>, Vec<String>)>>>;
 fn answering(
     runtime: &tokio::runtime::Runtime,
     core: &Core,
@@ -146,13 +147,14 @@ fn answering(
                 request_id,
                 action,
                 resources,
+                save,
                 ..
             } = event
             {
                 record
                     .lock()
                     .unwrap()
-                    .push((action.clone(), resources.clone()));
+                    .push((action.clone(), resources.clone(), save));
                 core.reply_permission(&request_id, answer(&action, &resources));
             }
         }
@@ -282,12 +284,14 @@ fn a_pinned_session_writes_in_its_worktree_only() {
     let asked = asked.lock().unwrap();
     let external = asked
         .iter()
-        .find(|(a, _)| a == "external_directory")
+        .find(|(a, _, _)| a == "external_directory")
         .expect("the main folder is outside");
     assert!(
         external.1.iter().any(|r| r.contains("/proj/")),
         "{external:?}"
     );
+    // No "always" for the main folder: one would open it to every worktree session.
+    assert!(external.2.is_empty(), "{external:?}");
     assert_eq!(git(&project, &["status", "--porcelain"]), "");
 }
 
@@ -367,7 +371,7 @@ fn another_sessions_worktree_is_outside_and_its_files_keep_their_names() {
     assert!(!text.contains("OTHER-SECRET"), "BREAK: {text}");
     let asked = asked.lock().unwrap();
     assert!(
-        asked.iter().any(|(a, _)| a == "external_directory"),
+        asked.iter().any(|(a, _, _)| a == "external_directory"),
         "{asked:?}"
     );
 }
@@ -495,14 +499,19 @@ fn snapshots_are_the_worktrees() {
 #[test]
 fn a_session_moved_into_a_worktree_snapshots_that_worktree() {
     let gateway = turns(vec![
-        vec![(
-            "execute",
-            json!({"code": "const w = await tools.opencode.worktree_create({name: 'side'}); return await tools.opencode.session_move({directory: w.directory})"}),
-        )],
+        vec![
+            ("write", json!({"path": "a.txt", "content": "a1"})),
+            (
+                "execute",
+                json!({"code": "const w = await tools.opencode.worktree_create({name: 'side'}); return await tools.opencode.session_move({directory: w.directory})"}),
+            ),
+        ],
         vec![("write", json!({"path": "moved.txt", "content": "x"}))],
     ]);
     let env = env(&gateway.url);
-    let project = project(&env, &[]);
+    let project = project(&env, &[("a.txt", "a0"), ("keep.txt", "k")]);
+    // The main folder's files differ from the worktree's, so their snapshot trees do too.
+    env.home.write("proj/only-main.txt", "m");
     let runtime = runtime();
     let core = runtime.block_on(common::core(&env));
     answering(&runtime, &core, |_, _| Answer::Once);
@@ -520,11 +529,16 @@ fn a_session_moved_into_a_worktree_snapshots_that_worktree() {
         "{changes:?}"
     );
     let user = user_messages(&env, &session.id)[0].clone();
+    // The rewind reads trees of both stores, and deletes nothing it can't read.
     core.revert(&session.id, &user).unwrap();
     assert!(
         !side.join("moved.txt").exists(),
         "rewind acts on the worktree"
     );
+    assert_eq!(read(&side.join("a.txt")).as_deref(), Some("a0"));
+    assert_eq!(read(&side.join("keep.txt")).as_deref(), Some("k"));
+    assert_eq!(read(&project.join("a.txt")).as_deref(), Some("a1"));
+    assert!(project.join("only-main.txt").exists());
 }
 
 /// Nothing above the worktree is read as project instructions; the worktree's own AGENTS.md
@@ -1096,4 +1110,128 @@ fn a_project_opened_under_another_spelling_isolates() {
     assert!(!project.join("a.txt").exists());
     let changes = core.session_changes(&id).unwrap().unwrap();
     assert_eq!(changes.len(), 1, "{changes:?}");
+}
+
+/// A fork point whose snapshot is gone (pruned) falls back to the files as they are now; an
+/// unreadable tree is never taken for "the file was not there".
+#[test]
+fn a_fork_point_that_is_gone_falls_back_to_now() {
+    let gateway = turns(vec![
+        vec![("write", json!({"path": "a.txt", "content": "a1"}))],
+        vec![("write", json!({"path": "b.txt", "content": "b2"}))],
+    ]);
+    let env = env(&gateway.url);
+    project(&env, &[("a.txt", "a0"), ("b.txt", "b0")]);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    answering(&runtime, &core, |_, _| Answer::Once);
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    for text in ["one", "two"] {
+        runtime
+            .block_on(core.prompt(&session.id, prompt(text), TurnOptions::default()))
+            .unwrap();
+    }
+    let gone = "0123456789abcdef0123456789abcdef01234567";
+    let db = db(&env);
+    // With the recorded head (exact path), then as old history (the "edits" path).
+    for strip_head in [false, true] {
+        for row in db.messages(&session.id).unwrap() {
+            if row.data["snapshot"].is_object() {
+                let mut data = row.data.clone();
+                data["snapshot"]["start"] = json!(gone);
+                data["snapshot"]["end"] = json!(gone);
+                if strip_head {
+                    data["snapshot"].as_object_mut().unwrap().remove("head");
+                }
+                db.update_message(&row.id, &data).unwrap();
+            }
+        }
+        let second = user_messages(&env, &session.id)[1].clone();
+        let (fork, restored) = runtime
+            .block_on(core.fork_into_worktree(&session.id, Some(&second)))
+            .unwrap();
+        assert_eq!(restored.fallback, Some(Fallback::Now), "{restored:?}");
+        assert!(!restored.exact);
+        let top = PathBuf::from(core.session_worktree(&fork.id).unwrap().unwrap().directory);
+        assert_eq!(read(&top.join("a.txt")).as_deref(), Some("a1"));
+        assert_eq!(
+            read(&top.join("b.txt")).as_deref(),
+            Some("b2"),
+            "never deleted"
+        );
+    }
+    // A rewind onto a tree that is gone refuses instead of deleting.
+    let first = user_messages(&env, &session.id)[0].clone();
+    assert!(core.revert(&session.id, &first).is_err());
+    assert!(env.home.project().join("b.txt").exists());
+}
+
+/// A worktree being made again (after it went missing) that the app loses mid-way keeps its
+/// branch and the session's hidden refs: the work committed there stays reachable.
+#[test]
+fn cleanup_keeps_a_branch_that_holds_work() {
+    let gateway = turns(vec![]);
+    let env = env(&gateway.url);
+    let project = project(&env, &[("a.txt", "a0")]);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (id, top) = isolated(&runtime, &core);
+    std::fs::write(top.join("a.txt"), "work").unwrap();
+    git(&top, &["commit", "-qam", "work"]);
+    let work = git(&top, &["rev-parse", "HEAD"]);
+    let branch = core.session_worktree(&id).unwrap().unwrap().branch;
+    std::fs::remove_dir_all(&top).unwrap();
+    anysola_core::api::cleanup_worktrees(&db(&env));
+    runtime.block_on(core.recreate_worktree(&id)).unwrap();
+    // The app dies while it is `preparing` again.
+    drop(core);
+    let cleaned = anysola_core::api::cleanup_worktrees(&db(&env));
+    assert_eq!(cleaned[0].state, Some(WorktreeState::Failed));
+    assert!(!top.exists());
+    assert_eq!(
+        git(&project, &["rev-parse", &format!("refs/heads/{branch}")]),
+        work
+    );
+    let core = runtime.block_on(common::core(&env));
+    let row = runtime.block_on(core.recreate_worktree(&id)).unwrap();
+    assert_eq!(row.state, WorktreeState::Preparing);
+    assert_eq!(read(&top.join("a.txt")).as_deref(), Some("work"));
+}
+
+/// A worktree folder that can't be removed yet is left over and removed at the next start.
+#[cfg(unix)]
+#[test]
+fn a_leftover_is_removed_at_the_next_start() {
+    use std::os::unix::fs::PermissionsExt;
+    let gateway = turns(vec![]);
+    let env = env(&gateway.url);
+    let project = project(&env, &[]);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (id, top) = isolated(&runtime, &core);
+    let parent = top.parent().unwrap().to_path_buf();
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let row = runtime
+        .block_on(core.release_worktree(&id, Release::Discarded))
+        .unwrap();
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if !row.leftover {
+        // A user the folder's permissions don't stop (root): nothing to retry.
+        assert!(!top.exists());
+        return;
+    }
+    assert!(top.exists());
+    let cleaned = anysola_core::api::cleanup_worktrees(&db(&env));
+    assert_eq!(cleaned.len(), 1, "{cleaned:?}");
+    assert!(!top.exists());
+    assert!(!git_ok(
+        &project,
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{}", row.branch)
+        ]
+    ));
+    assert!(!db(&env).session_worktree(&id).unwrap().unwrap().leftover);
 }

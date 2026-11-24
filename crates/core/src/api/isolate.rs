@@ -70,6 +70,10 @@ fn worktree_error(text: impl Into<String>) -> CoreError {
     CoreError::Worktree(text.into())
 }
 
+fn busy() -> CoreError {
+    worktree_error("This session is working. Stop it first.")
+}
+
 /// The plain sentence for a state a turn cannot start in.
 fn blocked(state: WorktreeState) -> &'static str {
     match state {
@@ -182,6 +186,10 @@ impl Shared {
         }
         // A miss is not remembered: a worktree being made has no folder yet.
         let store = Arc::new(Store::open(&self.paths.data, &self.project.id, &directory)?);
+        // A session that moved here (or a fork) names trees of the main folder's store too.
+        if let Some(main) = &self.snapshots {
+            store.borrow_objects(main.git_dir());
+        }
         stores.insert(directory, store.clone());
         Some(store)
     }
@@ -261,7 +269,13 @@ fn branch_exists(top: &Path, branch: &str) -> bool {
 /// Removes a session's worktree folder and branch (the tip pinned first). Each part that is
 /// already gone counts as removed; returns whether both are gone now.
 fn remove_checkout(top: &Path, row: &SessionWorktreeRow) -> bool {
-    if let Ok(tip) = git_sync(
+    remove_checkout_keeping(top, row, false)
+}
+
+/// [`remove_checkout`]; with `keep_moved`, a branch that moved past `base_commit` (work was
+/// committed on it) is kept.
+fn remove_checkout_keeping(top: &Path, row: &SessionWorktreeRow, keep_moved: bool) -> bool {
+    let tip = git_sync(
         top,
         &[
             "rev-parse",
@@ -270,8 +284,10 @@ fn remove_checkout(top: &Path, row: &SessionWorktreeRow) -> bool {
             &format!("refs/heads/{}", row.branch),
         ],
         &[],
-    ) {
-        pin(top, &row.session_id, &tip);
+    )
+    .ok();
+    if let Some(tip) = &tip {
+        pin(top, &row.session_id, tip);
     }
     let directory = Path::new(&row.directory);
     if directory.exists() {
@@ -286,6 +302,10 @@ fn remove_checkout(top: &Path, row: &SessionWorktreeRow) -> bool {
         }
     }
     let _ = git_sync(top, &["worktree", "prune"], &[]);
+    let moved = tip.as_deref().is_some_and(|t| t != row.base_commit);
+    if keep_moved && moved {
+        return !directory.exists();
+    }
     if branch_exists(top, &row.branch) {
         let _ = git_sync(top, &["branch", "-D", "--", &row.branch], &[]);
     }
@@ -515,14 +535,7 @@ impl Core {
         from: WorktreeState,
         to: WorktreeState,
     ) -> Result<bool, CoreError> {
-        let moved = self
-            .shared
-            .db
-            .cas_session_worktree(session_id, from, to, None)?;
-        if moved && to == WorktreeState::Ready {
-            self.wake_waiting(session_id)?;
-        }
-        Ok(moved)
+        self.change_state(session_id, from, to, None)
     }
 
     /// Like [`Core::set_worktree_state`], recording why (a failure, a notice).
@@ -533,10 +546,53 @@ impl Core {
         to: WorktreeState,
         error: &str,
     ) -> Result<bool, CoreError> {
-        Ok(self
-            .shared
+        self.change_state(session_id, from, to, Some(error))
+    }
+
+    /// A state change made under the `turns` lock, so a turn either started before it (and
+    /// leaving `ready` is refused while it runs) or sees the new state: a prompt held while
+    /// `preparing` is either queued before `ready` (and woken by it) or finds it ready.
+    fn change_state(
+        &self,
+        session_id: &str,
+        from: WorktreeState,
+        to: WorktreeState,
+        error: Option<&str>,
+    ) -> Result<bool, CoreError> {
+        let idle = from == WorktreeState::Ready && to == WorktreeState::Applying;
+        let moved = self.cas_locked(session_id, from, to, error, idle)?;
+        if moved && to == WorktreeState::Ready {
+            self.wake_waiting(session_id)?;
+        }
+        Ok(moved)
+    }
+
+    /// The compare-and-set under the `turns` lock; with `idle`, refused while a turn or a
+    /// subagent of the session runs.
+    fn cas_locked(
+        &self,
+        session_id: &str,
+        from: WorktreeState,
+        to: WorktreeState,
+        error: Option<&str>,
+        idle: bool,
+    ) -> Result<bool, CoreError> {
+        let shared = &self.shared;
+        let turns = shared.turns.lock().unwrap_or_else(|e| e.into_inner());
+        if idle && (turns.contains_key(session_id) || self.working(session_id)) {
+            return Err(busy());
+        }
+        let moved = shared
             .db
-            .cas_session_worktree(session_id, from, to, Some(error))?)
+            .cas_session_worktree(session_id, from, to, error)?;
+        drop(turns);
+        Ok(moved)
+    }
+
+    /// A subagent of the session (or the session as one) runs in this process.
+    fn working(&self, session_id: &str) -> bool {
+        crate::session::subagent::is_running(&self.shared, session_id)
+            || crate::session::subagent::has_running_child(&self.shared, session_id)
     }
 
     /// Records where an apply starts (the main folder's `HEAD`) and the tree it puts there, while
@@ -568,8 +624,8 @@ impl Core {
 
     /// Refuses while a turn or a subagent of the session runs.
     fn ensure_idle(&self, session_id: &str) -> Result<(), CoreError> {
-        if self.is_busy(session_id) || self.child_running(session_id) {
-            return Err(worktree_error("This session is working. Stop it first."));
+        if self.is_busy(session_id) || self.working(session_id) {
+            return Err(busy());
         }
         Ok(())
     }
@@ -699,10 +755,17 @@ impl Core {
         };
         let mut set = set;
         set.push(("state", to.as_str().to_string().into()));
-        if !shared
-            .db
-            .update_session_worktree(session_id, row.state, &set)?
-        {
+        // Under the `turns` lock: no turn starts between the idle check and the change.
+        let changed = {
+            let turns = shared.turns.lock().unwrap_or_else(|e| e.into_inner());
+            if turns.contains_key(session_id) || self.working(session_id) {
+                return Err(busy());
+            }
+            shared
+                .db
+                .update_session_worktree(session_id, row.state, &set)?
+        };
+        if !changed {
             return Err(worktree_error("This session's worktree changed meanwhile."));
         }
         self.stop_background(session_id);
@@ -855,11 +918,10 @@ impl Core {
         let top = shared.top();
         let gone = tokio::task::spawn_blocking({
             let (top, row) = (top.clone(), row.clone());
-            move || remove_checkout(&top, &row)
+            move || remove_checkout_keeping(&top, &row, true)
         })
         .await
         .unwrap_or(false);
-        unpin(&top, session_id);
         let _ = shared
             .db
             .delete_worktree(&shared.project.id, &row.directory);
@@ -1095,8 +1157,18 @@ impl Core {
                                     }
                                 }
                             }
-                            current(Some(Fallback::Edits), undo)
-                                .unwrap_or_else(|| last_recorded(Some(Fallback::Now)))
+                            // An undo tree that is gone would read as "delete the file".
+                            let readable = undo.iter().all(|(_, tree)| {
+                                store
+                                    .as_ref()
+                                    .is_some_and(|s| s.has(&format!("{tree}^{{tree}}")))
+                            });
+                            if readable {
+                                current(Some(Fallback::Edits), undo)
+                                    .unwrap_or_else(|| last_recorded(Some(Fallback::Now)))
+                            } else {
+                                now_or_last(Some(Fallback::Now))
+                            }
                         }
                         _ => now_or_last(Some(Fallback::Now)),
                     }
@@ -1234,9 +1306,10 @@ pub fn cleanup(db: &Db) -> Vec<Cleaned> {
                 }
             }
             WorktreeState::Preparing => {
-                // Nothing ran there yet: the partial folder and its branch go.
-                remove_checkout(&top, &row);
-                unpin(&top, &row.session_id);
+                // The partial folder goes. Its branch too, unless work was committed on it (a
+                // worktree being made again after it went missing): "Try again" uses it then. The
+                // hidden refs stay: the session's recorded steps may name them.
+                remove_checkout_keeping(&top, &row, true);
                 let notice = "Making the worktree was cut off.";
                 if set(
                     WorktreeState::Failed,
