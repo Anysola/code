@@ -740,7 +740,10 @@ export function Review({ open, onClose }: { open: Open; onClose: () => void }) {
                   <CircleAlert className="size-3.5 shrink-0 text-warning" />
                   This session’s folder is gone, so its changes can’t be shown.
                 </p>
-                <p className="text-2xs pl-5.5 text-muted">Recreate makes it again from its branch; uncommitted work comes back when it can be.</p>
+                <p className="text-2xs pl-5.5 text-muted">
+                  Recreate makes it again from its branch; uncommitted work comes back when it can be.
+                  {worktree?.bringing && " Bringing main in wasn’t finished: it’s dropped, so bring main in again after recreating."}
+                </p>
               </div>
               <button
                 disabled={recreating}
@@ -1097,7 +1100,7 @@ function Refused({
           <button onClick={() => onAsk(check.files)} className={btn("secondary", "sm")}>
             Ask the agent to resolve
           </button>
-          {onAnyway && (
+          {onAnyway && check.anyway !== false && (
             <Tooltip label="For markers that are meant to be there, as in docs or test fixtures" side="top">
               <button onClick={() => onAnyway(check.files)} className={btn("ghost", "sm", "text-muted")}>
                 Apply anyway

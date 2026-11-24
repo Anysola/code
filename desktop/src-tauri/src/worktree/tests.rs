@@ -763,3 +763,20 @@ fn markers_apply_only_when_asked() {
     apply(&marks(), &row, "Docs", "main", false, true).unwrap();
     assert_eq!(read(&main, "docs/merge.md"), text);
 }
+
+/// "Apply anyway" never commits the markers of an open merge: that merge must be finished.
+#[test]
+fn markers_of_an_open_merge_are_never_applied_anyway() {
+    let sandbox = Sandbox::new("anyway-merge");
+    let (main, row) = sandbox.session();
+    write(&w(&row), "a.txt", "one\nsession\nthree\n");
+    write(&main, "a.txt", "one\nmain\nthree\n");
+    sandbox.git(&main, &["commit", "-qam", "main edits a"]);
+    let (conflicts, _) = bring_base(&row).unwrap();
+    assert_eq!(conflicts, ["a.txt"]);
+    let refusal = plan_err(&row);
+    assert_eq!(refusal["anyway"], false);
+    let before = state(&sandbox, &main);
+    assert!(apply(&marks(), &row, "x", "main", false, true).is_err());
+    assert_eq!(state(&sandbox, &main), before);
+}

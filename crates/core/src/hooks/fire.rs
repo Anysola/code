@@ -57,15 +57,143 @@ pub(crate) struct Context {
 /// variables (which name the worktree).
 pub const MAIN_PROJECT_DIR: &str = "ANYSOLA_MAIN_PROJECT_DIR";
 
-/// For a session in its own worktree: the command with each script it names by the project
-/// folder taken from the main folder (the approved copy, not the worktree's the agent can edit),
-/// while the hook still gets the worktree as its project folder and runs there.
-///
-/// A project folder variable (`$CLAUDE_PROJECT_DIR`, `$ANYSOLA_PROJECT_DIR`, in every spelling)
-/// followed by the path of a file the main folder has becomes [`MAIN_PROJECT_DIR`] in the same
-/// spelling, so the shell expands and quotes it exactly as the user wrote it (paths with spaces
-/// included). A relative word naming a file of the main folder (`./hooks/x.sh`,
-/// `.anysola/hooks/x.mjs`) is written as that variable joined with it, quoted for `shell`.
+/// A command line's words as written (quotes kept), with their byte ranges, split into the
+/// commands `&&`, `||`, `;`, `|` and `&` chain.
+fn command_words(command: &str) -> Vec<Vec<(usize, usize)>> {
+    let mut segments = vec![Vec::new()];
+    let mut quote: Option<char> = None;
+    let mut word: Option<usize> = None;
+    let bytes: Vec<(usize, char)> = command.char_indices().collect();
+    let mut k = 0;
+    while k < bytes.len() {
+        let (at, c) = bytes[k];
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if c == '\'' || c == '"' => {
+                quote = Some(c);
+                word.get_or_insert(at);
+            }
+            None if c.is_whitespace() || ";|&".contains(c) => {
+                if let Some(from) = word.take() {
+                    segments.last_mut().expect("one").push((from, at));
+                }
+                if ";|&".contains(c) {
+                    // `&&`, `||`: one separator.
+                    if k + 1 < bytes.len() && bytes[k + 1].1 == c {
+                        k += 1;
+                    }
+                    segments.push(Vec::new());
+                }
+            }
+            None => {
+                word.get_or_insert(at);
+            }
+        }
+        k += 1;
+    }
+    if let Some(from) = word {
+        segments
+            .last_mut()
+            .expect("one")
+            .push((from, command.len()));
+    }
+    segments.retain(|s| !s.is_empty());
+    segments
+}
+
+/// Programs that run the script named by their first argument.
+const INTERPRETERS: [&str; 15] = [
+    "sh",
+    "bash",
+    "zsh",
+    "dash",
+    "node",
+    "python",
+    "python3",
+    "py",
+    "pwsh",
+    "powershell",
+    "cmd",
+    "deno",
+    "bun",
+    "ruby",
+    "perl",
+];
+
+/// The word of one command that names the script it runs: the program itself, or the first
+/// argument of a known interpreter (after its options; `deno run`/`bun run` skipped). `None`
+/// when the interpreter runs inline code (`-c`, `-e`, `-Command`, `/c` with no script).
+fn script_word(command: &str, words: &[(usize, usize)]) -> Option<usize> {
+    let text = |i: usize| command[words[i].0..words[i].1].trim_matches(['"', '\'']);
+    let program = text(0);
+    let name = program
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(program)
+        .to_ascii_lowercase();
+    let name = name.strip_suffix(".exe").unwrap_or(&name).to_string();
+    if !INTERPRETERS.contains(&name.as_str()) {
+        return Some(0);
+    }
+    let mut i = 1;
+    while i < words.len() {
+        let word = text(i).to_ascii_lowercase();
+        match word.as_str() {
+            "-c" | "-e" | "--eval" | "-command" | "-encodedcommand" => return None,
+            "run" if matches!(name.as_str(), "deno" | "bun") => {}
+            "/c" | "/k" if name == "cmd" => {}
+            "-file" | "-f" => {}
+            w if w.starts_with('-') => {}
+            _ => return Some(i),
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The project folder variables' spellings, longest first, with the main folder's in the same
+/// spelling.
+fn project_spellings() -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for name in ["CLAUDE_PROJECT_DIR", "ANYSOLA_PROJECT_DIR"] {
+        for spelled in [
+            format!("${{env:{name}}}"),
+            format!("$env:{name}"),
+            format!("%{name}%"),
+            format!("${{{name}}}"),
+            format!("${name}"),
+        ] {
+            let main = spelled.replace(name, MAIN_PROJECT_DIR);
+            out.push((spelled, main));
+        }
+    }
+    out
+}
+
+/// The path a script word names, read against `project_dir` (the variable's value, or the folder
+/// a relative path is taken from): `(spelling of the variable it starts with, path after it)`.
+fn script_path(word: &str) -> (Option<(String, String)>, String) {
+    let word = word.trim_matches(['"', '\'']);
+    for (spelled, main) in project_spellings() {
+        if let Some(rest) = word.strip_prefix(&spelled)
+            && !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_')
+        {
+            return (
+                Some((spelled, main)),
+                rest.trim_start_matches(['/', '\\']).to_string(),
+            );
+        }
+    }
+    (None, word.to_string())
+}
+
+/// For a session in its own worktree: each command's script word (only that word: arguments
+/// stay the worktree's) taken from the main folder when the worktree has no such file and the
+/// main folder has, so a hook whose script isn't in the worktree (untracked there, or ignored)
+/// runs the user's copy. A project folder variable becomes [`MAIN_PROJECT_DIR`] in the same
+/// spelling (the shell quotes and expands it as written, spaces included); a relative script path
+/// is written as that variable joined with it, quoted for `shell`.
 pub(crate) fn scripts_from_main(
     command: &str,
     project_dir: &std::path::Path,
@@ -75,73 +203,92 @@ pub(crate) fn scripts_from_main(
     if project_dir == main_dir {
         return command.to_string();
     }
-    let in_main = |rest: &str| {
-        let rest = rest.trim_start_matches(['/', '\\']);
-        !rest.is_empty() && main_dir.join(rest).is_file()
-    };
-    let mut out = command.to_string();
-    for name in ["CLAUDE_PROJECT_DIR", "ANYSOLA_PROJECT_DIR"] {
-        for (spelled, open_ended) in [
-            (format!("${{env:{name}}}"), false),
-            (format!("$env:{name}"), true),
-            (format!("%{name}%"), false),
-            (format!("${{{name}}}"), false),
-            (format!("${name}"), true),
-        ] {
-            let replacement = spelled.replace(name, MAIN_PROJECT_DIR);
-            let mut at = 0;
-            while let Some(found) = out[at..].find(&spelled) {
-                let start = at + found;
-                let after = start + spelled.len();
-                let tail = &out[after..];
-                // `$CLAUDE_PROJECT_DIR_X` is another variable.
-                if open_ended && tail.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
-                    at = after;
+    let kind = crate::tool::shell::select::name(shell);
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    for words in command_words(command) {
+        let Some(at) = script_word(command, &words) else {
+            continue;
+        };
+        let (from, to) = words[at];
+        let raw = &command[from..to];
+        let (variable, rest) = script_path(raw);
+        let absolute = std::path::Path::new(&rest).is_absolute() || rest.contains(':');
+        if rest.is_empty()
+            || (variable.is_none() && (absolute || rest.starts_with(['~', '$', '%'])))
+        {
+            continue;
+        }
+        if project_dir.join(&rest).exists() || !main_dir.join(&rest).is_file() {
+            continue;
+        }
+        let replaced = match variable {
+            Some((spelled, main)) => raw.replacen(&spelled, &main, 1),
+            None => {
+                if raw.contains(['"', '\'']) {
                     continue;
                 }
-                // Inside double quotes the path runs to the closing quote (spaces included).
-                let quoted = out[..start].matches('"').count() % 2 == 1;
-                let rest: String = if quoted {
-                    tail.chars().take_while(|c| *c != '"').collect()
-                } else {
-                    tail.chars()
-                        .take_while(|c| !c.is_whitespace() && !"\"';|&<>()`".contains(*c))
-                        .collect()
-                };
-                if in_main(&rest) {
-                    out.replace_range(start..after, &replacement);
-                    at = start + replacement.len();
-                } else {
-                    at = after;
+                let path = rest.trim_start_matches("./").trim_start_matches(".\\");
+                match kind.as_str() {
+                    "cmd" => format!("\"%{MAIN_PROJECT_DIR}%\\{}\"", path.replace('/', "\\")),
+                    "pwsh" | "powershell" if at == 0 => {
+                        format!("& \"$env:{MAIN_PROJECT_DIR}/{path}\"")
+                    }
+                    "pwsh" | "powershell" => format!("\"$env:{MAIN_PROJECT_DIR}/{path}\""),
+                    _ => format!("\"${MAIN_PROJECT_DIR}\"/{path}"),
                 }
             }
-        }
+        };
+        edits.push((from, to, replaced));
     }
-    let kind = crate::tool::shell::select::name(shell);
-    let mut first = true;
-    let mut words: Vec<String> = Vec::new();
-    for word in out.split(' ') {
-        let plain = !word.is_empty()
-            && !word.starts_with(['-', '/', '\\', '$', '%', '~', '"', '\''])
-            && !word.contains(['"', '\'', '$', '%', '`'])
-            && !(word.len() > 1 && word.as_bytes()[1] == b':');
-        let named = plain && (word.contains(['/', '\\']) || word.contains('.')) && in_main(word);
-        words.push(if named {
-            let path = word.trim_start_matches("./").trim_start_matches(".\\");
-            match kind.as_str() {
-                "cmd" => format!("\"%{MAIN_PROJECT_DIR}%\\{}\"", path.replace('/', "\\")),
-                "pwsh" | "powershell" if first => format!("& \"$env:{MAIN_PROJECT_DIR}/{path}\""),
-                "pwsh" | "powershell" => format!("\"$env:{MAIN_PROJECT_DIR}/{path}\""),
-                _ => format!("\"${MAIN_PROJECT_DIR}\"/{path}"),
-            }
+    let mut out = command.to_string();
+    for (from, to, replaced) in edits.into_iter().rev() {
+        out.replace_range(from..to, &replaced);
+    }
+    out
+}
+
+/// Before a PreToolUse hook runs: a script word that is a path (a separator, an extension or a
+/// project folder variable) naming a file neither the session's folder nor the main folder has.
+/// Such a guard can't run, so the call is blocked (a guard must not fail open); the path is named.
+pub(crate) fn missing_script(
+    command: &str,
+    cwd: &std::path::Path,
+    project_dir: &std::path::Path,
+    main_dir: &std::path::Path,
+    home: &std::path::Path,
+) -> Option<String> {
+    for words in command_words(command) {
+        let Some(at) = script_word(command, &words) else {
+            continue;
+        };
+        let raw = &command[words[at].0..words[at].1];
+        let (variable, rest) = script_path(raw);
+        if rest.is_empty() || rest.contains(['$', '%', '`']) {
+            continue;
+        }
+        let pathlike = variable.is_some()
+            || rest.contains(['/', '\\'])
+            || std::path::Path::new(&rest).extension().is_some();
+        if !pathlike {
+            continue;
+        }
+        let rest = match rest.strip_prefix("~/").or_else(|| rest.strip_prefix("~\\")) {
+            Some(tail) => home.join(tail).display().to_string(),
+            None => rest,
+        };
+        let path = std::path::Path::new(&rest);
+        let places: Vec<std::path::PathBuf> = if path.is_absolute() {
+            vec![path.to_path_buf()]
+        } else if variable.is_some() {
+            vec![project_dir.join(path), main_dir.join(path)]
         } else {
-            word.to_string()
-        });
-        if !word.is_empty() {
-            first = matches!(word, "&&" | "||" | ";" | "|" | "&");
+            vec![cwd.join(path), project_dir.join(path), main_dir.join(path)]
+        };
+        if !places.iter().any(|p| p.exists()) {
+            return Some(rest);
         }
     }
-    words.join(" ")
+    None
 }
 
 impl Context {
@@ -260,19 +407,42 @@ impl Context {
                 scripts_from_main(&handler.command, &self.project_dir, &self.main_dir, &shell)
             })
             .collect();
-        let runs = handlers.iter().zip(&commands).map(|(handler, command)| {
-            run(
-                Job {
-                    shell: &shell,
-                    command,
-                    cwd: &cwd,
-                    env: env.clone(),
-                    input: input.clone(),
-                    timeout: handler.timeout,
-                },
-                cancel,
-            )
-        });
+        // A guard whose script isn't there anywhere can't run: not started, the call blocked.
+        let missing: Vec<Option<String>> = handlers
+            .iter()
+            .zip(&commands)
+            .map(|(_, command)| {
+                (event == Event::PreToolUse)
+                    .then(|| {
+                        missing_script(command, &cwd, &self.project_dir, &self.main_dir, &self.home)
+                    })
+                    .flatten()
+            })
+            .collect();
+        let runs =
+            handlers
+                .iter()
+                .zip(&commands)
+                .zip(&missing)
+                .map(|((handler, command), missing)| {
+                    let job = Job {
+                        shell: &shell,
+                        command,
+                        cwd: &cwd,
+                        env: env.clone(),
+                        input: input.clone(),
+                        timeout: handler.timeout,
+                    };
+                    let skip = missing.clone();
+                    async move {
+                        match skip {
+                            Some(path) => {
+                                output::Ran::NotStarted(format!("its script {path} isn't there"))
+                            }
+                            None => run(job, cancel).await,
+                        }
+                    }
+                });
         let ran = futures_util::future::join_all(runs).await;
         let mut fired = notices;
         for (handler, ran) in handlers.iter().zip(ran) {
@@ -801,62 +971,100 @@ mod tests {
 
     #[test]
     fn a_worktree_sessions_hooks_run_the_main_folders_scripts() {
-        use std::path::Path;
         let root = tempfile::tempdir().unwrap();
         let main = root.path().join("First Last/proj");
         let w = root.path().join("worktrees/p/s");
-        std::fs::create_dir_all(main.join("hooks")).unwrap();
-        std::fs::create_dir_all(main.join(".anysola/hooks")).unwrap();
-        std::fs::create_dir_all(&w).unwrap();
-        for file in ["hooks/guard.mjs", "hooks/a.sh", ".anysola/hooks/x.mjs"] {
+        for dir in ["hooks dir", ".anysola/hooks", "src"] {
+            std::fs::create_dir_all(main.join(dir)).unwrap();
+        }
+        std::fs::create_dir_all(w.join("src")).unwrap();
+        for file in [
+            "hooks dir/guard.sh",
+            ".anysola/hooks/x.mjs",
+            "src/app.ts",
+            "README.md",
+            "Cargo.toml",
+            "run.sh",
+        ] {
             std::fs::write(main.join(file), "").unwrap();
+        }
+        // The worktree has the project's files (tracked); the hook scripts are the main
+        // folder's only (untracked, ignored).
+        for file in ["src/app.ts", "README.md", "Cargo.toml"] {
+            std::fs::write(w.join(file), "").unwrap();
         }
         let f = main.as_path();
         let sh = |c: &str| scripts_from_main(c, &w, f, "/bin/bash");
-        // The variable becomes the main folder's, in the user's own spelling and quoting.
+        // The script word, in the user's own spelling and quoting (a space in the path).
         assert_eq!(
-            sh(r#"node "$CLAUDE_PROJECT_DIR/hooks/guard.mjs" --x"#),
-            r#"node "$ANYSOLA_MAIN_PROJECT_DIR/hooks/guard.mjs" --x"#
-        );
-        assert_eq!(
-            sh("sh ${ANYSOLA_PROJECT_DIR}/hooks/a.sh && echo $CLAUDE_PROJECT_DIR"),
-            "sh ${ANYSOLA_MAIN_PROJECT_DIR}/hooks/a.sh && echo $CLAUDE_PROJECT_DIR",
-            "only a path to a script of the main folder changes"
-        );
-        assert_eq!(
-            sh("x $CLAUDE_PROJECT_DIR_OTHER/hooks/a.sh"),
-            "x $CLAUDE_PROJECT_DIR_OTHER/hooks/a.sh"
-        );
-        // Relative script words, quoted for the shell.
-        assert_eq!(
-            sh("./hooks/a.sh --strict"),
-            r#""$ANYSOLA_MAIN_PROJECT_DIR"/hooks/a.sh --strict"#
+            sh(r#"sh "$CLAUDE_PROJECT_DIR/hooks dir/guard.sh" --x"#),
+            r#"sh "$ANYSOLA_MAIN_PROJECT_DIR/hooks dir/guard.sh" --x"#
         );
         assert_eq!(
             sh("node .anysola/hooks/x.mjs"),
             r#"node "$ANYSOLA_MAIN_PROJECT_DIR"/.anysola/hooks/x.mjs"#
         );
         assert_eq!(
+            sh("./run.sh --strict && echo done"),
+            r#""$ANYSOLA_MAIN_PROJECT_DIR"/run.sh --strict && echo done"#
+        );
+        assert_eq!(
             scripts_from_main("node .anysola/hooks/x.mjs", &w, f, "cmd"),
             r#"node "%ANYSOLA_MAIN_PROJECT_DIR%\.anysola\hooks\x.mjs""#
         );
         assert_eq!(
-            scripts_from_main("./hooks/a.sh", &w, f, "pwsh"),
-            r#"& "$env:ANYSOLA_MAIN_PROJECT_DIR/hooks/a.sh""#
+            scripts_from_main("./run.sh", &w, f, "pwsh"),
+            r#"& "$env:ANYSOLA_MAIN_PROJECT_DIR/run.sh""#
         );
-        std::fs::create_dir_all(main.join("hooks dir")).unwrap();
-        std::fs::write(main.join("hooks dir/guard.sh"), "").unwrap();
-        assert_eq!(
-            sh(r#"sh "$CLAUDE_PROJECT_DIR/hooks dir/guard.sh""#),
-            r#"sh "$ANYSOLA_MAIN_PROJECT_DIR/hooks dir/guard.sh""#,
-            "a quoted path with a space"
-        );
-        assert_eq!(sh("npm test"), "npm test");
+        // Data arguments stay the worktree's: these never touch the main folder.
+        for command in [
+            "eslint --fix src/app.ts",
+            r#"prettier --write "$CLAUDE_PROJECT_DIR/README.md""#,
+            "cargo fmt --manifest-path Cargo.toml",
+            "node -e \"require('./run.sh')\"",
+        ] {
+            assert_eq!(sh(command), command);
+        }
+        // A script the worktree has itself: its own.
+        std::fs::write(w.join("run.sh"), "").unwrap();
+        assert_eq!(sh("./run.sh"), "./run.sh");
         // A main-folder session: as written.
-        assert_eq!(
-            scripts_from_main("./hooks/a.sh", f, f, "/bin/bash"),
-            "./hooks/a.sh"
+        std::fs::remove_file(w.join("run.sh")).unwrap();
+        assert_eq!(scripts_from_main("./run.sh", f, f, "/bin/bash"), "./run.sh");
+    }
+
+    #[test]
+    fn a_guard_whose_script_is_nowhere_is_known_before_it_runs() {
+        let root = tempfile::tempdir().unwrap();
+        let (main, w, home) = (
+            root.path().join("main"),
+            root.path().join("w"),
+            root.path().join("h"),
         );
-        let _ = Path::new("");
+        std::fs::create_dir_all(main.join("hooks")).unwrap();
+        std::fs::create_dir_all(&w).unwrap();
+        std::fs::write(main.join("hooks/guard.sh"), "").unwrap();
+        let missing = |c: &str, w: &std::path::Path| missing_script(c, w, w, &main, &home);
+        assert_eq!(
+            missing(r#"node "$CLAUDE_PROJECT_DIR/hooks/missing.mjs""#, &w).as_deref(),
+            Some("hooks/missing.mjs")
+        );
+        assert_eq!(
+            missing("python3 ./hooks/gone.py", &w).as_deref(),
+            Some("./hooks/gone.py")
+        );
+        assert_eq!(
+            missing("sh hooks/guard.sh", &w),
+            None,
+            "the main folder has it"
+        );
+        // Programs and data arguments are not scripts: a guard that reads a file not there yet
+        // runs (and its own exit decides), in a main-folder session too.
+        assert_eq!(
+            missing(r#"cat "$CLAUDE_PROJECT_DIR/notes.txt""#, &main),
+            None
+        );
+        assert_eq!(missing("jq .tool_name", &main), None);
+        assert_eq!(missing("bash -c 'exit 0'", &main), None);
     }
 }

@@ -1266,45 +1266,6 @@ fn a_folder_that_came_back_is_reused_and_a_stranger_is_refused() {
     );
 }
 
-/// A merge of the base with its conflicts open when the folder went: recreated, the merge is
-/// open again on the base it was bringing in.
-#[test]
-fn a_recreate_reopens_a_merge_of_the_base() {
-    let gateway = turns(vec![vec![(
-        "write",
-        json!({"path": "a.txt", "content": "session"}),
-    )]]);
-    let env = env(&gateway.url);
-    let project = project(&env, &[("a.txt", "a0")]);
-    let runtime = runtime();
-    let core = runtime.block_on(common::core(&env));
-    answering(&runtime, &core, |_, _| Answer::Once);
-    let (id, top) = isolated(&runtime, &core);
-    std::fs::write(project.join("a.txt"), "main").unwrap();
-    git(&project, &["commit", "-qam", "main edits a"]);
-    let tip = git(&project, &["rev-parse", "HEAD"]);
-    std::fs::write(top.join("a.txt"), "session").unwrap();
-    git(&top, &["commit", "-qam", "session work"]);
-    assert!(!git_ok(&top, &["merge", "-q", "--no-edit", "main"]));
-    assert!(
-        core.set_worktree_pending(&id, WorktreeState::Ready, Some(&tip))
-            .unwrap()
-    );
-    std::fs::write(top.join("a.txt"), "resolved").unwrap();
-    runtime
-        .block_on(core.prompt(&id, prompt("go"), TurnOptions::default()))
-        .unwrap();
-    std::fs::remove_dir_all(&top).unwrap();
-    anysola_core::api::cleanup_worktrees(&db(&env));
-    runtime.block_on(core.recreate_worktree(&id)).unwrap();
-    assert_eq!(git(&top, &["rev-parse", "MERGE_HEAD"]), tip);
-    let row = core.session_worktree(&id).unwrap().unwrap();
-    assert_ne!(
-        row.base_commit, tip,
-        "the base moves only once the merge is committed"
-    );
-}
-
 /// A force-added file the ignore rules match is never captured; recreating keeps it.
 #[test]
 fn a_recreate_keeps_force_added_ignored_files() {

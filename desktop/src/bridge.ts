@@ -84,6 +84,8 @@ export type SessionWorktree = {
   restored: ForkRestore | null
   /** The folder or branch couldn't be removed yet (a program may hold it); retried at start. */
   leftover: boolean
+  /** Bringing the base in was started and not finished (conflicts open): a Recreate drops it, and it must be done again. */
+  bringing?: boolean
 }
 
 export type WorktreeInfo =
@@ -123,7 +125,15 @@ export type ApplyCheck =
    * The user may apply anyway (`worktreeApply` with `markers`) after a confirm that lists them:
    * markers can be meant (docs, test fixtures).
    */
-  | { ok: false; reason: "unresolved"; files: string[] }
+  | {
+      ok: false
+      reason: "unresolved"
+      files: string[]
+      /** The main folder's branch now, when on one. */
+      onto?: string | null
+      /** "Apply anyway" is possible: no merge is open in the worktree (its markers are conflicts to finish). */
+      anyway?: boolean
+    }
   /** The changes conflict with `onto`: bring the base in, open the files, or discard. */
   | { ok: false; reason: "conflict"; onto: string; files: string[] }
   /** Main-folder edits in files the apply touches; apply with `stash` to set them aside and back. */

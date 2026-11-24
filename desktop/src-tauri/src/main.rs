@@ -1436,7 +1436,7 @@ mod tests {
             json!({"id": "ses_2", "title": "Renamed", "directory": "/work", "updated": 2, "forkOf": "ses_1",
                    "worktree": {"path": "/data/worktrees/work-abc123/s", "branch": "anysola/s",
                                 "baseBranch": "main", "baseCommit": "abc", "state": "ready", "error": null,
-                                "appliedCommit": null, "restored": null, "leftover": false}})
+                                "appliedCommit": null, "restored": null, "leftover": false, "bringing": false}})
         );
     }
 

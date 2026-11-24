@@ -1030,21 +1030,14 @@ impl Core {
                     .map_err(|m| fail(format!("Could not put the files back: {m}")))?;
             }
         }
-        // A merge of the base that was open (conflicts being resolved) is open again, so the
-        // session's changes are still measured from the base it brings in.
-        if let Some(pending) = &row.base_pending
-            && crate::worktree::verify_checkout(&top, &directory).is_ok()
-            && git_sync(
-                &directory,
-                &["merge-base", "--is-ancestor", pending, "HEAD"],
-                &[],
-            )
-            .is_err()
-        {
-            let _ = git_sync(&directory, &["update-ref", "MERGE_HEAD", pending], &[]);
-            if let Ok(path) = git_sync(&directory, &["rev-parse", "--git-path", "MERGE_MSG"], &[]) {
-                let _ = std::fs::write(directory.join(path), "Bring the base in\n");
-            }
+        // A bring-in of the base that wasn't finished is dropped: its merge state can't be made
+        // again faithfully. The base stays where it was; the window says to bring it in again.
+        if row.base_pending.is_some() {
+            shared.db.update_session_worktree(
+                session_id,
+                WorktreeState::Preparing,
+                &[("base_pending", rusqlite::types::Value::Null)],
+            )?;
         }
         shared
             .db

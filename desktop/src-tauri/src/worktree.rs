@@ -72,6 +72,7 @@ pub(crate) fn json(row: &SessionWorktreeRow) -> Value {
         "appliedCommit": row.applied_commit,
         "restored": row.restored,
         "leftover": row.leftover,
+        "bringing": row.base_pending.is_some(),
     })
 }
 
@@ -1316,6 +1317,13 @@ fn unresolved(worktree: &Path, tree: &str, base: &str) -> Vec<String> {
     files
 }
 
+/// A merge is open in the worktree, or unmerged entries are left.
+fn merge_open(worktree: &Path) -> bool {
+    read_git(worktree, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]).is_some()
+        || read_git(worktree, &["diff", "--name-only", "--diff-filter=U"])
+            .is_some_and(|out| !out.trim().is_empty())
+}
+
 /// The main folder's operation in progress, if any.
 fn operation(top: &Path) -> Option<&'static str> {
     let has = |what: &str| read_git(top, &["rev-parse", "-q", "--verify", what]).is_some();
@@ -1357,7 +1365,12 @@ fn plan(row: &SessionWorktreeRow, markers: bool) -> Result<Plan, Value> {
     if !open.is_empty() && !markers {
         let onto =
             read_git(&top, &["symbolic-ref", "-q", "--short", "HEAD"]).filter(|b| !b.is_empty());
-        return Err(refused("unresolved", json!({"files": open, "onto": onto})));
+        // "Apply anyway" only outside a merge (its markers are its conflicts).
+        let anyway = !merge_open(worktree);
+        return Err(refused(
+            "unresolved",
+            json!({"files": open, "onto": onto, "anyway": anyway}),
+        ));
     }
     let Some(onto) =
         read_git(&top, &["symbolic-ref", "-q", "--short", "HEAD"]).filter(|b| !b.is_empty())
@@ -1711,6 +1724,13 @@ fn apply(
     let row = row.clone();
     verify_worktree(&row)?;
     let worktree = Path::new(&row.directory);
+    // Markers are applied as they are only outside a merge: one that is open must be finished.
+    if markers && merge_open(worktree) {
+        return Err(
+            "Finish bringing main in first: files with conflict markers can’t be applied while its merge is open."
+                .into(),
+        );
+    }
     // A merge of the base that is resolved now: finished on the session's branch first.
     if read_git(worktree, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]).is_some() {
         let tree = session_tree(worktree)?;
@@ -1999,9 +2019,19 @@ pub async fn worktree_recreate(
     cleaned().await;
     let core = core_for(&handle, &app, &directory).await?;
     let db = app.db()?.clone();
+    let pending = row_of(&db, &session_id)
+        .map(|r| r.base_pending.is_some())
+        .unwrap_or(false);
     let row = core.recreate_worktree(&session_id).await;
     emit(&handle, &db, &session_id);
     let row = row.map_err(plain_error)?;
+    if pending {
+        // The bring-in that was open is dropped with the folder: say so.
+        let _ = handle.emit(
+            "core",
+            json!({"type": "notice", "message": "Bringing main in wasn’t finished when the folder went, so it was dropped. Bring main in again before applying."}),
+        );
+    }
     // A folder that came back is used as it is: nothing to prepare.
     if row.state == WorktreeState::Preparing {
         start_made(&handle, &core, &db, &session_id);
