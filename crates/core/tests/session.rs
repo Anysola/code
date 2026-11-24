@@ -552,9 +552,10 @@ fn a_spent_budget_stops_every_model_call_until_it_is_raised() {
     assert_eq!(core.usage(&free.id).budget, None);
 
     let (capped, _) = core.open(&Target::New, false).unwrap();
-    core.set_budget(&capped.id, Some(1)).unwrap();
+    // 2: the first turn's title call (1%) may land before its first step is checked.
+    core.set_budget(&capped.id, Some(2)).unwrap();
     assert_eq!(run(&capped.id, "one"), Outcome::Succeeded);
-    assert!(core.usage(&capped.id).total >= 1.0);
+    assert!(core.usage(&capped.id).total >= 2.0);
     let before = calls();
     assert_eq!(run(&capped.id, "two"), budget);
     assert_eq!(
@@ -563,6 +564,16 @@ fn a_spent_budget_stops_every_model_call_until_it_is_raised() {
         "/compact waits for the budget too"
     );
     assert_eq!(calls(), before, "no model call once the budget is spent");
+    // Each stop the user asked for says why (no `repeat` mark), the second prompt's too.
+    let db = Db::open(&env.home.home().join(".anysola/anysola.db")).unwrap();
+    let idles: Vec<_> = db
+        .messages(&capped.id)
+        .unwrap()
+        .into_iter()
+        .filter(|m| m.kind == "idle" && m.data["reason"] == "budget")
+        .collect();
+    assert_eq!(idles.len(), 2);
+    assert!(idles.iter().all(|m| m.data.get("repeat").is_none()));
 
     let total = core.usage(&capped.id).total;
     core.set_budget(&capped.id, Some(total.floor() as u64 + 2))

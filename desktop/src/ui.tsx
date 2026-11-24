@@ -577,13 +577,9 @@ export function Tooltip({
   useEffect(() => () => clearTimeout(timer.current), [])
   useEffect(() => {
     if (!show) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return
-      close()
-      // Taken: closing a tooltip is no press toward stopping a turn. Over a layer the layer
-      // takes the key itself, and must still hear it.
-      if (!anyLayer()) e.preventDefault()
-    }
+    // Closes the tooltip and is otherwise not there: the press goes on as if none were shown
+    // (two presses stop a turn, one clears the sidebar's selection, a layer closes).
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close()
     document.addEventListener("keydown", onKey, true)
     document.addEventListener("scroll", close, true)
     return () => {

@@ -281,7 +281,9 @@ fn settle_stale(shared: &Shared, session_id: &str) {
     }
 }
 
-fn finish(shared: &Arc<Shared>, session_id: &str, outcome: &Outcome, unsent: bool) {
+/// Ends the session's execution. `asked`: the user started it (a prompt, `/compact`), not a
+/// background completion or a schedule waking the session.
+fn finish(shared: &Arc<Shared>, session_id: &str, outcome: &Outcome, unsent: bool, asked: bool) {
     goal::ended(shared, session_id, outcome);
     shared.usage.close_turn(session_id);
     let (outcome_label, event) = match outcome {
@@ -312,9 +314,12 @@ fn finish(shared: &Arc<Shared>, session_id: &str, outcome: &Outcome, unsent: boo
         Outcome::Failed(error) => idle["error"] = encode(error),
         Outcome::Interrupted(reason) => {
             idle["reason"] = json!(interrupt_label(*reason));
-            // One note per budget: the stops after the first (woken turns, prompts sent anyway)
-            // are marked so a front end can leave them out.
-            if *reason == InterruptReason::Budget && !shared.usage.note_budget_stop(session_id) {
+            // Woken turns note a budget stop once per budget: the ones after the first are
+            // marked so a front end leaves them out. What the user asked for always says why.
+            if *reason == InterruptReason::Budget
+                && !shared.usage.note_budget_stop(session_id)
+                && !asked
+            {
                 idle["repeat"] = json!(true);
             }
         }
@@ -580,7 +585,7 @@ pub(crate) async fn drain(
                 if goal::idle(&shared, session_id).await {
                     continue;
                 }
-                finish(&shared, session_id, &outcome, false);
+                finish(&shared, session_id, &outcome, false, false);
             }
             return outcome;
         };
@@ -589,7 +594,7 @@ pub(crate) async fn drain(
             // `/compact` is a model call too: a spent budget stops it like a turn.
             if shared.budget_spent(session_id) {
                 let outcome = Outcome::Interrupted(InterruptReason::Budget);
-                finish(&shared, session_id, &outcome, false);
+                finish(&shared, session_id, &outcome, false, true);
                 return outcome;
             }
             outcome = match manual_compaction(&shared, &session, &cancel).await {
@@ -597,7 +602,7 @@ pub(crate) async fn drain(
                 _ => Outcome::Succeeded,
             };
             if open && outcome != Outcome::Succeeded {
-                finish(&shared, session_id, &outcome, false);
+                finish(&shared, session_id, &outcome, false, true);
             }
         } else {
             outcome = turn(&shared, &session, options, &cancel, &mut unsent).await;
@@ -607,7 +612,7 @@ pub(crate) async fn drain(
                     Ok(None)
                 );
             if !open {
-                finish(&shared, session_id, &outcome, unsent);
+                finish(&shared, session_id, &outcome, unsent, next.kind == "user");
             }
         }
         if outcome != Outcome::Succeeded {

@@ -98,18 +98,16 @@ export function sessionOrder(sessions: SessionRow[], pinned: Set<string>) {
   return [...pins, ...[...by.values()].flat()]
 }
 
-/** Keys a shortcut names, by physical key when the layout types no Latin character there. */
-const CODES: Record<string, string> = { Slash: "/", Comma: ",", Period: "." }
-
 /**
- * The key of a shortcut press: the character on Latin layouts (Ctrl / is Ctrl / wherever a layout
- * puts it), and the US key at that position on others, where `e.key` is Cyrillic, Greek…
+ * The key of a shortcut press. A layout that types an ASCII character there matches by that
+ * character only (Turkish Q's Ctrl . is the key typing "."); a letter key typing a non-Latin
+ * letter (Cyrillic, Greek…) falls back to its US letter. Punctuation never falls back: on
+ * another layout that position types something else, and the shortcut would fire twice.
  */
 export function shortcutKey(e: Pick<KeyboardEvent, "key" | "code">) {
   const key = e.key.toLowerCase()
-  if (key.length !== 1 || /[\x20-\x7e]/.test(key)) return key
-  if (/^Key[A-Z]$/.test(e.code)) return e.code.slice(3).toLowerCase()
-  return CODES[e.code] ?? key
+  if (key.length === 1 && !/[\x00-\x7f]/.test(key) && /^Key[A-Z]$/.test(e.code)) return e.code.slice(3).toLowerCase()
+  return key
 }
 
 /** The window-wide keys. Ctrl Alt is AltGr on Windows (typing @ or [), so it is never a shortcut. */
