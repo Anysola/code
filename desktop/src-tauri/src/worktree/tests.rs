@@ -78,6 +78,9 @@ impl Sandbox {
             time_updated: 1,
             base_pending: None,
             apply_stash: None,
+            apply_branch: None,
+            undo_from: None,
+            apply_onto: None,
         };
         (main, row)
     }

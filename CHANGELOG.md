@@ -4,6 +4,24 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.4.3 (2026-11-25)
+
+- Hooks can name the shell they run in: `"shell": "powershell"` (or `bash`, `cmd`, a path) next to a hook's
+  `command` in your own config. A project's hooks can't choose one; the field is ignored there with a warning.
+- On Windows, Git Bash installed for one user (under `%LOCALAPPDATA%\Programs\Git`) is found too, and WSL's
+  `bash.exe` is no longer picked as the shell when Git Bash isn't installed.
+- In a worktree session, a `PreToolUse` hook that can't run (exit code 126 or 127) still blocks the call, and now
+  says why that is likely: folders Git ignores, like `.venv` or `node_modules`, aren't copied into the worktree.
+  Create them with a worktree setup command, or use an absolute path in the hook.
+- LSP diagnostics (still off by default) are sturdier when turned on: diagnostics that don't arrive in time are
+  left out instead of showing an earlier version's, a server that stops reading or answering never holds up an
+  edit, edited files are closed again after their diagnostics, a broken server is restarted once and then left
+  to rest, idle servers stop, at most four run at once, and stopping one stops what it started.
+- Undoing an apply: the session remembers which branch the apply went to, a crash in the middle of an undo is
+  no longer reported as an apply cut off, and the note about main-folder edits kept in a stash survives an undo.
+- Recreating a worktree whose "Bring main in" wasn't finished makes that merge again with Git when the session
+  worked during it, so the main folder's files no longer show up in Review as the session's own.
+
 ## 1.4.2 (2026-11-25)
 
 - Security fixes for 1.3.0–1.4.1, and two defaults change:

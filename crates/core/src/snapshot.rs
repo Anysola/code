@@ -365,6 +365,47 @@ impl Store {
         overlay(&self.git_dir, &self.scope, tree, target)
     }
 
+    /// Lays over `target` only what `tree` (captured on commit `from`) changed since `from`, under
+    /// the scope: files it changed or added are written, files it lacks are removed, except, as
+    /// [`overlay`] does, ones it never captures (over 2 MiB, or force-added files the ignore rules
+    /// match), whose absence says nothing. Nothing when a tree can't be read.
+    pub fn overlay_changes(&self, from: &str, tree: &str, target: &Path) -> Result<(), String> {
+        let prefix = format!("{}/", self.scope.trim_end_matches('/'));
+        let changed: Vec<String> = self
+            .files(from, tree)
+            .into_iter()
+            .filter(|p| self.scope == "." || self.scope.is_empty() || p.starts_with(&prefix))
+            .collect();
+        if changed.is_empty() {
+            return Ok(());
+        }
+        let present: std::collections::HashSet<String> = self
+            .list(&["ls-tree", "-r", "-z", "--name-only", tree])
+            .into_iter()
+            .collect();
+        let (write, lacking): (Vec<String>, Vec<String>) =
+            changed.into_iter().partition(|p| present.contains(p));
+        let write: Vec<(String, String)> = write
+            .into_iter()
+            .map(|path| (path, tree.to_string()))
+            .collect();
+        self.restore_into(&write, target)?;
+        for path in lacking {
+            if plain_parents(target, &path).is_err() || ignored_in(target, &path) {
+                continue;
+            }
+            let file = target.join(&path);
+            match std::fs::symlink_metadata(&file) {
+                Ok(meta) if meta.is_file() && meta.len() > MAX_UNTRACKED_BYTES => {}
+                Ok(_) => {
+                    std::fs::remove_file(&file).map_err(|e| format!("Cannot remove {path}: {e}"))?
+                }
+                Err(_) => {}
+            }
+        }
+        Ok(())
+    }
+
     /// Puts each path in `target` back as its tree has it (a path the tree lacks is removed),
     /// like [`Store::restore`] does in the store's own checkout; nothing when a tree can't be read.
     pub fn restore_into(&self, files: &[(String, String)], target: &Path) -> Result<(), String> {
@@ -402,6 +443,18 @@ impl Store {
     pub fn git_dir(&self) -> &Path {
         &self.git_dir
     }
+}
+
+/// Whether the ignore rules of the checkout `target` match `path` (tracked or not).
+fn ignored_in(target: &Path, path: &str) -> bool {
+    crate::console::command("git")
+        .args(["check-ignore", "--no-index", "-q", "--", path])
+        .current_dir(target)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 /// Refuses a path whose folders below `root` are links (or not folders): a file put back or

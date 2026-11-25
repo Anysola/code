@@ -504,6 +504,9 @@ impl Core {
             time_updated: now,
             base_pending: None,
             apply_stash: None,
+            apply_branch: None,
+            undo_from: None,
+            apply_onto: None,
         };
         shared.db.insert_session_worktree(&row)?;
         let added = crate::worktree::git(
@@ -619,9 +622,24 @@ impl Core {
         if idle && (turns.contains_key(session_id) || self.working(session_id)) {
             return Err(busy());
         }
-        let moved = shared
-            .db
-            .cas_session_worktree(session_id, from, to, error)?;
+        // Between ready and applying (an apply or an undo starting, or given up) a note the row
+        // has stays: the cleanup's note about a kept stash is its only trace. What ends an apply
+        // or an undo sets its own.
+        let keep = error.is_none()
+            && matches!(
+                (from, to),
+                (WorktreeState::Ready, WorktreeState::Applying)
+                    | (WorktreeState::Applying, WorktreeState::Ready)
+            );
+        let moved = if keep {
+            shared
+                .db
+                .cas_session_worktree_keeping_error(session_id, from, to)?
+        } else {
+            shared
+                .db
+                .cas_session_worktree(session_id, from, to, error)?
+        };
         drop(turns);
         Ok(moved)
     }
@@ -692,14 +710,36 @@ impl Core {
 
     /// Records where an apply starts (the main folder's `HEAD`) and the tree it puts there, while
     /// `applying`, so an apply cut off by a crash can be told finished or not.
+    /// The branch the main folder's `HEAD` names now (`refs/heads/<name>`) is recorded as this
+    /// apply's (`apply_onto`; `NULL` on a detached `HEAD`); once its commit is recorded it becomes
+    /// `apply_branch`, so an undo rewinds only that branch.
     pub fn mark_apply(&self, session_id: &str, from: &str, tree: &str) -> Result<bool, CoreError> {
+        let branch = git_sync(&self.shared.top(), &["symbolic-ref", "-q", "HEAD"], &[])
+            .ok()
+            .filter(|b| b.starts_with("refs/heads/"));
         Ok(self.shared.db.update_session_worktree(
             session_id,
             WorktreeState::Applying,
             &[
                 ("apply_from", from.to_string().into()),
                 ("apply_tree", tree.to_string().into()),
+                (
+                    "apply_onto",
+                    branch.map_or(rusqlite::types::Value::Null, Into::into),
+                ),
+                ("undo_from", rusqlite::types::Value::Null),
             ],
+        )?)
+    }
+
+    /// Records, while `applying`, that an undo of the applied commit `applied` starts on the main
+    /// folder: set before the main folder is touched, so a crash in the middle is told apart from
+    /// an apply cut off ([`cleanup`]). [`Core::undo_apply`] clears it.
+    pub fn mark_undo(&self, session_id: &str, applied: &str) -> Result<bool, CoreError> {
+        Ok(self.shared.db.update_session_worktree(
+            session_id,
+            WorktreeState::Applying,
+            &[("undo_from", applied.to_string().into())],
         )?)
     }
 
@@ -783,6 +823,12 @@ impl Core {
                     &[],
                 )
             });
+        // The branch this apply went to is now the applied commit's.
+        let onto = || -> rusqlite::types::Value {
+            row.apply_onto
+                .clone()
+                .map_or(rusqlite::types::Value::Null, Into::into)
+        };
         let moved = match &reset {
             Ok(_) => shared.db.update_session_worktree(
                 session_id,
@@ -791,6 +837,8 @@ impl Core {
                     ("state", WorktreeState::Ready.as_str().to_string().into()),
                     ("base_commit", commit.clone().into()),
                     ("applied_commit", commit.clone().into()),
+                    ("apply_branch", onto()),
+                    ("apply_onto", rusqlite::types::Value::Null),
                     ("apply_from", rusqlite::types::Value::Null),
                     ("apply_tree", rusqlite::types::Value::Null),
                     ("apply_stash", rusqlite::types::Value::Null),
@@ -804,6 +852,8 @@ impl Core {
                 &[
                     ("state", WorktreeState::Ready.as_str().to_string().into()),
                     ("applied_commit", commit.clone().into()),
+                    ("apply_branch", onto()),
+                    ("apply_onto", rusqlite::types::Value::Null),
                     (
                         "error",
                         format!(
@@ -853,24 +903,36 @@ impl Core {
             &[],
         )
         .map_err(|_| worktree_error(format!("No commit {new_base}")))?;
-        let moved = shared.db.update_session_worktree(
-            session_id,
-            WorktreeState::Applying,
-            &[
-                ("state", WorktreeState::Ready.as_str().to_string().into()),
-                ("base_commit", new_base.into()),
-                ("applied_commit", rusqlite::types::Value::Null),
-                ("apply_from", rusqlite::types::Value::Null),
-                ("apply_tree", rusqlite::types::Value::Null),
-                ("apply_stash", rusqlite::types::Value::Null),
-                ("base_pending", rusqlite::types::Value::Null),
-                ("error", rusqlite::types::Value::Null),
-            ],
-        )?;
+        let mut set: Vec<(&str, rusqlite::types::Value)> = vec![
+            ("state", WorktreeState::Ready.as_str().to_string().into()),
+            ("base_commit", new_base.into()),
+            ("applied_commit", rusqlite::types::Value::Null),
+            ("apply_from", rusqlite::types::Value::Null),
+            ("apply_tree", rusqlite::types::Value::Null),
+            ("apply_stash", rusqlite::types::Value::Null),
+            ("apply_branch", rusqlite::types::Value::Null),
+            ("apply_onto", rusqlite::types::Value::Null),
+            ("undo_from", rusqlite::types::Value::Null),
+            ("base_pending", rusqlite::types::Value::Null),
+        ];
+        // Only the undo's own notes go: one about a kept stash stays (its only trace).
+        if row.error.as_deref().is_some_and(undo_note) {
+            set.push(("error", rusqlite::types::Value::Null));
+        }
+        let moved = shared
+            .db
+            .update_session_worktree(session_id, WorktreeState::Applying, &set)?;
         if !moved {
             return Err(worktree_error("This session's apply changed meanwhile."));
         }
-        self.wake_waiting(session_id)?;
+        // The undo is done and recorded: input that can't be started now waits for the next turn,
+        // it doesn't make the undo a failure.
+        if let Err(error) = self.wake_waiting(session_id) {
+            crate::log::warn(
+                "waking a session after an undo failed",
+                &[("session", session_id), ("error", &error.to_string())],
+            );
+        }
         shared
             .db
             .session_worktree(session_id)?
@@ -1066,26 +1128,74 @@ impl Core {
             &[],
         )
         .ok();
+        // A bring-in of the base that was open when the folder went (its merge never committed:
+        // the branch is still where it started from).
+        let pending = row.base_pending.clone().filter(|p| {
+            git_sync(
+                &top,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("{p}^{{commit}}"),
+                ],
+                &[],
+            )
+            .is_ok()
+        });
+        // Committed after all (the agent committed the merge): the base moves to it.
+        let merged_in = match (&pending, &tip) {
+            (Some(pending), Some(tip)) => {
+                git_sync(&top, &["merge-base", "--is-ancestor", pending, tip], &[]).is_ok()
+            }
+            _ => false,
+        };
+        let mut remade = false;
         if let (Some((tree, Some(head))), Some(store), Some(tip)) =
             (last, shared.store_for(&session), tip)
             && store.has(&format!("{tree}^{{tree}}"))
         {
-            let onto = if tip == head {
-                Some(tree)
-            } else if git_sync(&top, &["merge-base", "--is-ancestor", &head, &tip], &[]).is_ok() {
-                store.merge_onto(&head, &tree, &tip)
+            if let Some(pending) = pending.as_deref().filter(|_| !merged_in && tip == head) {
+                // The last step ran while that merge was open: its files hold the base's too.
+                // Laid over a branch without the merge, they would read as the session's own
+                // changes. Git makes the merge again (the same tip and base give the same merge
+                // state; MERGE_HEAD is git's own), then only what the step changed on its commit
+                // goes on top: the conflict resolution in progress comes back. When git can't make
+                // it again, nothing is laid over and the bring-in is dropped (bring it in again).
+                if remerge(&directory, pending) {
+                    store
+                        .overlay_changes(&head, &tree, &directory)
+                        .map_err(|m| fail(format!("Could not put the files back: {m}")))?;
+                    remade = true;
+                }
             } else {
-                None
-            };
-            if let Some(files) = onto {
-                store
-                    .overlay(&files, &directory)
-                    .map_err(|m| fail(format!("Could not put the files back: {m}")))?;
+                let onto = if tip == head {
+                    Some(tree)
+                } else if git_sync(&top, &["merge-base", "--is-ancestor", &head, &tip], &[]).is_ok()
+                {
+                    store.merge_onto(&head, &tree, &tip)
+                } else {
+                    None
+                };
+                if let Some(files) = onto {
+                    store
+                        .overlay(&files, &directory)
+                        .map_err(|m| fail(format!("Could not put the files back: {m}")))?;
+                }
             }
         }
-        // A bring-in of the base that wasn't finished is dropped: its merge state can't be made
-        // again faithfully. The base stays where it was; the window says to bring it in again.
-        if row.base_pending.is_some() {
+        if merged_in && let Some(pending) = &pending {
+            shared.db.update_session_worktree(
+                session_id,
+                WorktreeState::Preparing,
+                &[
+                    ("base_commit", pending.clone().into()),
+                    ("base_pending", rusqlite::types::Value::Null),
+                ],
+            )?;
+        } else if row.base_pending.is_some() && !remade {
+            // A bring-in not made again is dropped: the base stays where it was; the window says
+            // to bring it in again.
             shared.db.update_session_worktree(
                 session_id,
                 WorktreeState::Preparing,
@@ -1462,6 +1572,46 @@ impl Core {
     }
 }
 
+/// Makes the merge of `pending` into the worktree `directory` again with git itself, uncommitted
+/// (conflicts are the expected case); true when git left that merge open (`MERGE_HEAD` is
+/// `pending`). A merge git refused to start leaves the folder as it was; anything else it began
+/// is aborted.
+fn remerge(directory: &Path, pending: &str) -> bool {
+    // No commit is made; an identity only keeps git from refusing for want of one.
+    let identity = [
+        ("GIT_AUTHOR_NAME", Path::new("Anysola Code")),
+        ("GIT_AUTHOR_EMAIL", Path::new("code@anysola.invalid")),
+        ("GIT_COMMITTER_NAME", Path::new("Anysola Code")),
+        ("GIT_COMMITTER_EMAIL", Path::new("code@anysola.invalid")),
+    ];
+    let _ = git_sync(
+        directory,
+        &[
+            "merge",
+            "--no-commit",
+            "--no-ff",
+            "--no-verify",
+            "--quiet",
+            pending,
+        ],
+        &identity,
+    );
+    let open = git_sync(
+        directory,
+        &["rev-parse", "--verify", "--quiet", "MERGE_HEAD"],
+        &[],
+    )
+    .ok();
+    let same = git_sync(directory, &["rev-parse", pending], &[]).ok();
+    if open.is_some() && open == same {
+        return true;
+    }
+    if open.is_some() {
+        let _ = git_sync(directory, &["merge", "--abort"], &[]);
+    }
+    false
+}
+
 /// The message an apply's stash of main-folder edits carries, so a crash can't lose track of it.
 pub fn apply_stash_message(session_id: &str) -> String {
     format!("Anysola Code: set aside to apply {session_id}")
@@ -1527,6 +1677,16 @@ pub fn pop_stash_if_clean(top: &Path, oid: &str) -> Result<(), String> {
     Err(find_stash(top, Some(oid), "").unwrap_or(name))
 }
 
+/// The cleanup's sentences for an undo cut off by a crash (the undo's own notes).
+const UNDO_FINISHED: &str = "An undo of the last apply was cut off after the main folder went back to the commit before it; it's recorded as undone now.";
+const UNDO_NOT_FINISHED: &str = "An undo of the last apply was cut off before the main folder's branch went back. Check the main folder's changes before undoing or applying again.";
+const UNDO_MOVED: &str = "An undo of the last apply was cut off, and the main folder has moved on since. Check its changes before applying again.";
+
+/// Whether `error` is one of the undo's own notes (an undo clears only those).
+fn undo_note(error: &str) -> bool {
+    [UNDO_FINISHED, UNDO_NOT_FINISHED, UNDO_MOVED].contains(&error)
+}
+
 /// The cleanup's sentence for an apply stash that stays.
 fn kept_stash(name: &str) -> String {
     format!(
@@ -1573,6 +1733,26 @@ pub struct Cleaned {
     pub state: Option<WorktreeState>,
     /// A sentence for the user, when there is one.
     pub notice: Option<String>,
+    /// An undo of this applied commit was cut off before the main folder's branch went back: the
+    /// branch is still on it, its index and files may be on the parent already. The desktop
+    /// settles the main folder, then calls [`clear_undo_mark`]; until then every start reports it.
+    pub undo: Option<String>,
+}
+
+/// Clears the mark of an undo cut off ([`Cleaned::undo`]) once the main folder is settled. False
+/// when there was none.
+pub fn clear_undo_mark(db: &Db, session_id: &str) -> bool {
+    let Ok(Some(row)) = db.session_worktree(session_id) else {
+        return false;
+    };
+    row.undo_from.is_some()
+        && db
+            .update_session_worktree(
+                session_id,
+                row.state,
+                &[("undo_from", rusqlite::types::Value::Null)],
+            )
+            .unwrap_or(false)
 }
 
 /// Start-up cleanup of sessions' worktrees, before any core runs a turn: rows of deleted
@@ -1596,6 +1776,7 @@ pub fn cleanup(db: &Db) -> Vec<Cleaned> {
             folder: row.folder.clone(),
             state: Some(row.state),
             notice: None,
+            undo: None,
         };
         let set = |to: WorktreeState, extra: &[(&str, rusqlite::types::Value)]| {
             let mut all: Vec<(&str, rusqlite::types::Value)> =
@@ -1643,6 +1824,61 @@ pub fn cleanup(db: &Db) -> Vec<Cleaned> {
                     cleaned.notice = Some("This session's folder is gone.".into());
                 }
             }
+            WorktreeState::Applying if row.undo_from.is_some() => {
+                // An undo, not an apply: told apart, never "an apply was cut off". The main
+                // folder's git state is the desktop's to settle; this records what it can.
+                let applied = row.undo_from.clone().unwrap_or_default();
+                let head = git_sync(&top, &["rev-parse", "--verify", "--quiet", "HEAD"], &[]).ok();
+                let parent = git_sync(
+                    &top,
+                    &["rev-parse", "--verify", "--quiet", &format!("{applied}^")],
+                    &[],
+                )
+                .ok();
+                // Another note (a kept stash) stays: it is its only trace.
+                let keep = row.error.clone().filter(|e| !undo_note(e));
+                let note = |notice: &str| -> rusqlite::types::Value {
+                    keep.clone().unwrap_or_else(|| notice.to_string()).into()
+                };
+                let null = || rusqlite::types::Value::Null;
+                let (notice, extra): (&str, Vec<(&str, rusqlite::types::Value)>) =
+                    if head.is_some() && head == parent {
+                        let parent = parent.clone().unwrap_or_default();
+                        (
+                            UNDO_FINISHED,
+                            vec![
+                                ("base_commit", parent.into()),
+                                ("applied_commit", null()),
+                                ("apply_from", null()),
+                                ("apply_tree", null()),
+                                ("apply_stash", null()),
+                                ("apply_branch", null()),
+                                ("apply_onto", null()),
+                                ("base_pending", null()),
+                                ("undo_from", null()),
+                                ("error", note(UNDO_FINISHED)),
+                            ],
+                        )
+                    } else if head.as_deref() == Some(applied.as_str()) {
+                        cleaned.undo = Some(applied.clone());
+                        (UNDO_NOT_FINISHED, vec![("error", note(UNDO_NOT_FINISHED))])
+                    } else {
+                        (
+                            UNDO_MOVED,
+                            vec![("undo_from", null()), ("error", note(UNDO_MOVED))],
+                        )
+                    };
+                if set(WorktreeState::Ready, &extra) {
+                    cleaned.state = Some(WorktreeState::Ready);
+                    cleaned.notice = Some(notice.into());
+                } else {
+                    cleaned.undo = None;
+                }
+            }
+            // An undo cut off earlier whose main folder the desktop hasn't settled yet.
+            WorktreeState::Ready if row.undo_from.is_some() => {
+                cleaned.undo = row.undo_from.clone();
+            }
             WorktreeState::Applying => {
                 let head = git_sync(&top, &["rev-parse", "--verify", "--quiet", "HEAD"], &[]).ok();
                 let parent =
@@ -1667,6 +1903,13 @@ pub fn cleanup(db: &Db) -> Vec<Cleaned> {
                     });
                     let mut extra: Vec<(&str, rusqlite::types::Value)> = vec![
                         ("applied_commit", head.clone().into()),
+                        (
+                            "apply_branch",
+                            row.apply_onto
+                                .clone()
+                                .map_or(rusqlite::types::Value::Null, Into::into),
+                        ),
+                        ("apply_onto", rusqlite::types::Value::Null),
                         ("apply_from", rusqlite::types::Value::Null),
                         ("apply_tree", rusqlite::types::Value::Null),
                     ];
@@ -1704,6 +1947,7 @@ pub fn cleanup(db: &Db) -> Vec<Cleaned> {
                             ("error", notice.to_string().into()),
                             ("apply_from", rusqlite::types::Value::Null),
                             ("apply_tree", rusqlite::types::Value::Null),
+                            ("apply_onto", rusqlite::types::Value::Null),
                             ("apply_stash", rusqlite::types::Value::Null),
                         ],
                     ) {

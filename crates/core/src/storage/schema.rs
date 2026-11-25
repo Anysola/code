@@ -206,4 +206,12 @@ CREATE INDEX session_worktree_folder_idx ON session_worktree(folder);
 ALTER TABLE session_worktree ADD COLUMN base_pending TEXT;
 ALTER TABLE session_worktree ADD COLUMN apply_stash TEXT;
 "#,
+    // 1.4.3: the branch an apply went to (an undo rewinds only that branch) and the one an apply
+    // under way goes to, and an undo that started on the main folder, so a crash in the middle is
+    // told apart from an apply.
+    r#"
+ALTER TABLE session_worktree ADD COLUMN apply_branch TEXT;
+ALTER TABLE session_worktree ADD COLUMN undo_from TEXT;
+ALTER TABLE session_worktree ADD COLUMN apply_onto TEXT;
+"#,
 ];

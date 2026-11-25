@@ -121,20 +121,8 @@ enum Bring {
     Committed,
 }
 
-/// The desktop's apply, written out (see the file's comment). True when it applied.
-fn apply(main: &Path, row: &SessionWorktreeRow) -> bool {
-    let w = Path::new(&row.directory);
-    // A merge left open is concluded first, as the desktop's apply does.
-    if ok(w, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]) {
-        git(w, &["add", "-A"]);
-        if !ok(
-            w,
-            &["commit", "-q", "--no-verify", "-m", "Bring the base in"],
-        ) {
-            return false;
-        }
-    }
-    // The worktree's files as a tree, its index untouched.
+/// The worktree's files as a tree, its index untouched.
+fn files_tree(w: &Path) -> String {
     let index = std::env::temp_dir().join(format!("matrix-{}", anysola_core::ids::part()));
     let index_name = index.display().to_string();
     let with_index = |args: &[&str]| {
@@ -151,6 +139,39 @@ fn apply(main: &Path, row: &SessionWorktreeRow) -> bool {
         .trim()
         .to_string();
     let _ = std::fs::remove_file(&index);
+    tree
+}
+
+/// What Review measures the session's changes from: the desktop's `diff_base` written out
+/// (`MERGE_HEAD` while a merge is open, else where `HEAD` and the recorded base meet when the base
+/// isn't on the branch, else where `HEAD` and the base branch meet).
+fn review_base(w: &Path, row: &SessionWorktreeRow) -> String {
+    if ok(w, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]) {
+        return git(w, &["rev-parse", "MERGE_HEAD"]);
+    }
+    if !ok(
+        w,
+        &["merge-base", "--is-ancestor", &row.base_commit, "HEAD"],
+    ) {
+        return git(w, &["merge-base", "HEAD", &row.base_commit]);
+    }
+    git(w, &["merge-base", "HEAD", "refs/heads/main"])
+}
+
+/// The desktop's apply, written out (see the file's comment). True when it applied.
+fn apply(main: &Path, row: &SessionWorktreeRow) -> bool {
+    let w = Path::new(&row.directory);
+    // A merge left open is concluded first, as the desktop's apply does.
+    if ok(w, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]) {
+        git(w, &["add", "-A"]);
+        if !ok(
+            w,
+            &["commit", "-q", "--no-verify", "-m", "Bring the base in"],
+        ) {
+            return false;
+        }
+    }
+    let tree = files_tree(w);
     let base = if !ok(
         w,
         &["merge-base", "--is-ancestor", &row.base_commit, "HEAD"],
@@ -275,6 +296,8 @@ fn cell(bring: Bring, turn_after: bool, agent_commit: bool) {
             .block_on(core.prompt(&id, prompt("two"), TurnOptions::default()))
             .unwrap();
     }
+    // Whether the bring-in's merge was still open when the folder went.
+    let open_before = ok(&w, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]);
     std::fs::remove_dir_all(&w).unwrap();
     let db = Db::open(&env.home.home().join(".anysola/anysola.db")).unwrap();
     anysola_core::api::cleanup_worktrees(&db);
@@ -286,14 +309,38 @@ fn cell(bring: Bring, turn_after: bool, agent_commit: bool) {
         );
     }
     let row = core.session_worktree(&id).unwrap().unwrap();
-    assert_eq!(
-        row.base_pending, None,
-        "{label}: an unfinished bring-in is dropped"
+    // An unfinished bring-in is made again by git itself (its MERGE_HEAD is git's own) or
+    // dropped; never kept without its merge.
+    let merging = ok(&w, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]);
+    assert_eq!(row.base_pending.is_some(), merging, "{label}");
+    // The last step ran while the merge was open: git makes it again, the resolution in
+    // progress comes back.
+    let during = open_before && turn_after;
+    assert_eq!(merging, during, "{label}");
+    if bring == Bring::Resolved && during {
+        assert_eq!(
+            read(&w.join("a.txt")).as_deref(),
+            Some("resolved\n"),
+            "{label}"
+        );
+    }
+    if merging {
+        assert_eq!(git(&w, &["rev-parse", "MERGE_HEAD"]), tip, "{label}");
+        assert_eq!(row.base_pending.as_deref(), Some(tip.as_str()), "{label}");
+    }
+    // Review never shows the main folder's own files as the session's (`+m` added, c.txt
+    // changed).
+    let base = review_base(&w, &row);
+    let changed = git(
+        &w,
+        &["diff-tree", "-r", "--name-only", &base, &files_tree(&w)],
     );
-    assert!(
-        !ok(&w, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]),
-        "{label}: no merge state written by hand"
-    );
+    for main_only in ["m.txt", "c.txt"] {
+        assert!(
+            !changed.lines().any(|l| l == main_only),
+            "BREAK ({label}): Review shows main's {main_only} as the session's: {changed:?}"
+        );
+    }
     let before = git(&main, &["rev-parse", "HEAD"]);
     let applied = apply(&main, &row);
     if !applied {

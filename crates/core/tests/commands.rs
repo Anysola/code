@@ -41,10 +41,18 @@ fn markdown_command_with_arguments_and_shell() {
         .unwrap();
     assert_eq!(init, Outcome::Succeeded);
     let texts = user_texts(&gateway);
-    // PowerShell ends `echo` output with CRLF; Git Bash and Unix shells use LF.
+    // PowerShell ends `echo` output with CRLF, POSIX shells (Git Bash too) with LF: the line end
+    // says which shell ran, and it must be the one the tool says it uses.
+    let shell = anysola_core::tool::shell::shell_name(None);
+    let newline = if matches!(shell.as_str(), "pwsh" | "powershell") {
+        "\r\n"
+    } else {
+        "\n"
+    };
     assert_eq!(
-        texts[0].replace("\r\n", "\n"),
-        "user: Say hi there to world\n"
+        texts[0],
+        format!("user: Say hi there to world{newline}"),
+        "{shell}"
     );
     let project = env.home.project().display().to_string();
     assert!(texts[1].starts_with("user: Create or update `AGENTS.md` for this repository."));
@@ -69,6 +77,17 @@ fn markdown_command_with_arguments_and_shell() {
             serde_json::json!("/hello hi there"),
             serde_json::json!("/init be brief")
         ]
+    );
+}
+
+/// The same where `SHELL` isn't set (the app started from the Start menu: PowerShell on Windows)
+/// or names PowerShell.
+#[test]
+fn command_shell_output_without_shell_set() {
+    again_with_shell("markdown_command_with_arguments_and_shell", None);
+    again_with_shell(
+        "markdown_command_with_arguments_and_shell",
+        Some("powershell.exe"),
     );
 }
 

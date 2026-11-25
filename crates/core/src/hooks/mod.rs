@@ -183,7 +183,25 @@ pub struct Configured {
     pub shell: Option<String>,
 }
 
+/// The shell a hook runs in: its own `shell` (`handler`; only user and managed documents keep
+/// one), else the config's `shell`, else the default ([`crate::tool::shell::hook_shell`]: Git
+/// Bash on Windows when installed). Each is chosen as the config's `shell` is (a name or a path;
+/// fish and nu, or one that isn't there, fall back). The one answer the core runs hooks with and
+/// front ends show.
+pub fn shell_for(configured: Option<&str>, handler: Option<&str>) -> String {
+    let chosen = handler
+        .filter(|s| !s.is_empty())
+        .or(configured.filter(|s| !s.is_empty()));
+    crate::tool::shell::hook_shell(chosen)
+}
+
 impl Configured {
+    /// The shell a hook with this own `shell` runs in with this config ([`shell_for`]); `None`:
+    /// where a hook without one runs.
+    pub fn shell_for(&self, handler: Option<&str>) -> String {
+        shell_for(self.shell.as_deref(), handler)
+    }
+
     /// Whether any document configures a handler for `event` (before trust or switches).
     pub fn any(&self, event: Event) -> bool {
         self.documents
@@ -209,6 +227,9 @@ pub struct HookInfo {
     pub command: String,
     /// Seconds.
     pub timeout: u64,
+    /// The hook's own `shell` as configured (never one from a project document); where it runs:
+    /// [`Configured::shell_for`].
+    pub shell: Option<String>,
     /// The document path, or the variable name it came from.
     pub source: String,
     pub scope: HookScope,
@@ -284,6 +305,7 @@ fn info(document: &Document, handler: &Handler, active: bool) -> HookInfo {
         matcher: handler.matcher.clone(),
         command: handler.command.clone(),
         timeout: handler.timeout,
+        shell: handler.shell.clone(),
         source: document.path.clone(),
         scope: document.scope,
         active,
@@ -630,9 +652,22 @@ pub(crate) fn apply(
     let Some(value) = hooks else {
         return;
     };
-    let handlers = config::parse(&value, path, warnings);
+    let mut handlers = config::parse(&value, path, warnings);
     if handlers.is_empty() {
         return;
+    }
+    // A project document can't choose what runs a hook, as it can't choose the config's `shell`:
+    // its hooks run where the user's do.
+    if scope == HookScope::Project {
+        let mut named = false;
+        for handler in &mut handlers {
+            named |= handler.shell.take().is_some();
+        }
+        if named {
+            warnings.push(format!(
+                "Ignoring the \"shell\" of hooks in {path}: a hook's shell only works in your own config (~/.anysola/config.json)."
+            ));
+        }
     }
     configured.documents.push(Document {
         path: path.to_string(),
@@ -727,6 +762,62 @@ mod tests {
         assert!(undecided(&configured, &db).is_empty());
         assert_eq!(unapproved(&configured, &db), 0);
         assert_eq!(commands(&configured), ["user"]);
+    }
+
+    /// A hook's own `shell` counts in the user's and managed documents; in a project document it
+    /// is dropped with a warning (as the config's `shell` is), so it runs where the user's do.
+    #[test]
+    fn only_the_users_documents_choose_a_hooks_shell() {
+        let value =
+            json!({"Stop": [{"hooks": [{"type": "command", "command": "x", "shell": "/bin/sh"}]}]});
+        let data = serde_json::Map::new();
+        let mut configured = Configured::default();
+        let mut warnings = Vec::new();
+        for (path, scope) in [
+            ("/u.json", HookScope::User),
+            ("/m.json", HookScope::Managed),
+            ("/p/anysola.json", HookScope::Project),
+        ] {
+            let hooks = Some(value.clone());
+            apply(
+                &mut configured,
+                &data,
+                hooks,
+                None,
+                path,
+                scope,
+                &mut warnings,
+            );
+        }
+        let shells: Vec<Option<&str>> = configured
+            .documents
+            .iter()
+            .map(|d| d.handlers[0].shell.as_deref())
+            .collect();
+        assert_eq!(shells, [Some("/bin/sh"), Some("/bin/sh"), None]);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("/p/anysola.json"), "{warnings:?}");
+        // The project's copy can't make the guard run elsewhere: the user's copy runs.
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("a.db")).unwrap();
+        let digest = configured.documents[2].digest.clone();
+        trust(&db, "/p/anysola.json", &digest, true).unwrap();
+        let (runs, _) = matching(&configured, &db, None, Event::Stop, &[]);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].shell.as_deref(), Some("/bin/sh"));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_hooks_shell_is_its_own_then_the_configs_then_the_default() {
+        let default = crate::tool::shell::hook_shell(None);
+        assert_eq!(shell_for(None, None), default);
+        assert_eq!(shell_for(Some("/bin/sh"), None), "/bin/sh");
+        assert_eq!(shell_for(Some("/no/such"), Some("/bin/sh")), "/bin/sh");
+        assert_eq!(shell_for(None, Some("")), default);
+        // As the config's `shell`: fish and nu, or one that isn't there, fall back.
+        let fell_back = shell_for(Some("/bin/sh"), Some("fish"));
+        assert_eq!(crate::tool::shell::select::name(&fell_back), "bash");
     }
 
     #[test]

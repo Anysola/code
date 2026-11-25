@@ -84,8 +84,18 @@ export type SessionWorktree = {
   restored: ForkRestore | null
   /** The folder or branch couldn't be removed yet (a program may hold it); retried at start. */
   leftover: boolean
-  /** Bringing the base in was started and not finished (conflicts open): a Recreate drops it, and it must be done again. */
+  /**
+   * Bringing the base in was started and not finished (conflicts open). Since 1.4.3 a Recreate
+   * makes that merge again with Git when the session's last step ran during it (still `bringing`
+   * afterwards); otherwise it is dropped and must be done again (`bringing` false afterwards).
+   */
   bringing?: boolean
+  /**
+   * The main folder's branch the last apply went to (`refs/heads/<name>`, core
+   * `SessionWorktreeRow.apply_branch`); null when unknown (applied before 1.4.3, detached HEAD).
+   * Undo refuses unless the main folder's HEAD is that branch.
+   */
+  applyBranch?: string | null
 }
 
 export type WorktreeInfo =
@@ -377,6 +387,11 @@ export type AgentConfig = {
   shell: string | null
   /** What picking one gives on this computer. */
   shellDetected: string | null
+  /**
+   * Where hooks without a `shell` of their own run with this config: core `Core::hook_shell(None)`,
+   * the same function the core runs them with (the legacy, global and managed files' `shell` all
+   * count; on Windows Git Bash when installed and no `shell` is set).
+   */
   hooksShellDetected?: string | null
   /** Settings another file overrides for the open folder: the key and that file. */
   overridden: { key: string; file: string }[]
@@ -480,10 +495,27 @@ export type Hook = {
   active: boolean
   /** Set for a hook in `~/.anysola/config.json`: it can be changed and removed here by this id. */
   id: string | null
+  /**
+   * The hook's own `shell` as configured (a name like "powershell", "bash", "cmd", or a path);
+   * null: none, it runs where `Hooks.shell` says. Always null for a project file's hook: a project
+   * can't choose a hook's shell (the core drops it with a warning).
+   */
+  shell?: string | null
+  /** The shell it runs in: core `Core::hook_shell(shell)` (its own, else the config's, else the default). */
+  runsIn?: string
 }
 
-/** `matcher` null or empty applies to everything; `timeout` null keeps the default. */
-export type HookDraft = { event: HookEvent; matcher: string | null; command: string; timeout: number | null }
+/**
+ * `matcher` null or empty applies to everything; `timeout` null keeps the default; `shell` null or
+ * absent writes no `shell` field (the hook runs where hooks without one do).
+ */
+export type HookDraft = {
+  event: HookEvent
+  matcher: string | null
+  command: string
+  timeout: number | null
+  shell?: string | null
+}
 
 /**
  * A project file that defines hooks. They run only once the user allowed this content: `digest`
@@ -533,6 +565,8 @@ export type Hooks = {
   files: HookFile[]
   /** The user turned hooks off (managed hooks still run). */
   disabled: boolean
+  /** Where hooks without a `shell` of their own run ("Hooks run in …"): core `Core::hook_shell(None)`. */
+  shell?: string
 }
 
 /** A saved "always allow" answer; they are kept per project. */

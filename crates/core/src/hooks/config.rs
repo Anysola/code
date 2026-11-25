@@ -17,6 +17,9 @@ pub struct Handler {
     pub command: String,
     /// Seconds.
     pub timeout: u64,
+    /// The handler's own `shell` (a name or a path, chosen like the config's `shell`); `None`:
+    /// the config's, else the default. Never kept from a project document.
+    pub shell: Option<String>,
 }
 
 /// The handlers of a document's `hooks` value, in config order. Problems become warnings.
@@ -61,6 +64,7 @@ pub fn parse(value: &Value, source: &str, warnings: &mut Vec<String>) -> Vec<Han
                         event,
                         matcher: matcher.clone(),
                         compiled: compiled.clone(),
+                        shell: shell(handler, &command, source, warnings),
                         command,
                         timeout: timeout(handler, event),
                     });
@@ -112,6 +116,25 @@ fn handler_command(
         return None;
     }
     Some(command.to_string())
+}
+
+fn shell(
+    handler: &Value,
+    command: &str,
+    source: &str,
+    warnings: &mut Vec<String>,
+) -> Option<String> {
+    match handler.get("shell")? {
+        Value::String(shell) if shell.trim().is_empty() => None,
+        Value::String(shell) => Some(shell.trim().to_string()),
+        Value::Null => None,
+        _ => {
+            warnings.push(format!(
+                "Ignoring the \"shell\" of the hook \"{command}\" in {source}: it is not a shell name or path."
+            ));
+            None
+        }
+    }
 }
 
 fn timeout(handler: &Value, event: Event) -> u64 {
@@ -195,6 +218,24 @@ mod tests {
         let mut warnings = Vec::new();
         assert!(parse(&json!([1]), "b.json", &mut warnings).is_empty());
         assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
+    fn a_handler_may_name_its_shell() {
+        let value = json!({"Stop": [{"hooks": [
+            {"type": "command", "command": "a", "shell": "powershell"},
+            {"type": "command", "command": "b", "shell": " "},
+            {"type": "command", "command": "c", "shell": 7},
+            {"type": "command", "command": "d"},
+        ]}]});
+        let mut warnings = Vec::new();
+        let shells: Vec<Option<String>> = parse(&value, "a.json", &mut warnings)
+            .into_iter()
+            .map(|h| h.shell)
+            .collect();
+        assert_eq!(shells, [Some("powershell".into()), None, None, None]);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("\"c\""));
     }
 
     #[test]

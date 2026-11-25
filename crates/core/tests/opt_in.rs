@@ -224,3 +224,252 @@ fn lsp_is_off_unless_the_user_turns_it_on() {
     // The control: the user's own `true` does start it.
     assert!(lsp_starts(Some(r#"{"lsp": true}"#), None, false));
 }
+
+/// A model that makes these calls one after another in one turn, then says done.
+#[cfg(unix)]
+fn calls(script: Vec<(&'static str, Value)>) -> FakeGateway {
+    FakeGateway::start(move |request, _| {
+        let done = results(request).len();
+        if request.is_title() || done >= script.len() {
+            return text(request, "done");
+        }
+        let (name, input) = &script[done];
+        let model = request.json()["model"].as_str().unwrap().to_string();
+        Reply::Sse {
+            body: Stream::new()
+                .tool(&format!("t{done}"), name, input.clone())
+                .finish(&model, Some(1)),
+        }
+    })
+}
+
+/// The fake language server (`tests/fake-lsp/server.py`, run by `python3`) installed first on
+/// `PATH` as `typescript-language-server`, with its `mode` flags; its log tells what it did.
+#[cfg(unix)]
+struct ScriptedServer {
+    log: std::path::PathBuf,
+    old_path: Option<std::ffi::OsString>,
+    /// The log as it was when the run ended (its folder goes with the test's home).
+    kept: String,
+    /// Servers `Core::shutdown_lsp_root` stopped for the project after the turn.
+    stopped: usize,
+}
+
+#[cfg(unix)]
+impl ScriptedServer {
+    fn install(env: &Env, mode: &str) -> ScriptedServer {
+        use std::os::unix::fs::PermissionsExt;
+        let script =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fake-lsp/server.py");
+        let python = anysola_core::which::which("python3").expect("python3 runs the fake server");
+        let bin = env.home.home().join("fake-bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let log = env.home.home().join("lsp.log");
+        let server = bin.join("typescript-language-server");
+        std::fs::write(
+            &server,
+            format!(
+                "#!/bin/sh\nexec '{}' '{}' '{mode}' '{}'\n",
+                python.display(),
+                script.display(),
+                log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let old_path = std::env::var_os("PATH");
+        let mut dirs = vec![bin];
+        dirs.extend(old_path.iter().flat_map(std::env::split_paths));
+        // SAFETY: the test holds the environment lock (`env`) until this is dropped.
+        unsafe { std::env::set_var("PATH", std::env::join_paths(dirs).unwrap()) };
+        env.home.write(".anysola/config.json", r#"{"lsp": true}"#);
+        ScriptedServer {
+            log,
+            old_path,
+            kept: String::new(),
+            stopped: 0,
+        }
+    }
+
+    /// Keeps the log and puts `PATH` back, while the test still holds the environment lock.
+    fn finish(&mut self) {
+        self.kept = std::fs::read_to_string(&self.log).unwrap_or_default();
+        restore_path(self.old_path.take());
+    }
+
+    fn lines(&self, what: &str) -> usize {
+        self.kept.lines().filter(|l| l.starts_with(what)).count()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ScriptedServer {
+    fn drop(&mut self) {
+        // A test that failed before `finish` (dropped before its environment lock).
+        if self.old_path.is_some() {
+            restore_path(self.old_path.take());
+        }
+    }
+}
+
+#[cfg(unix)]
+fn restore_path(old: Option<std::ffi::OsString>) {
+    // SAFETY: called while the test holds the environment lock.
+    unsafe {
+        match old {
+            Some(path) => std::env::set_var("PATH", path),
+            None => std::env::remove_var("PATH"),
+        }
+    }
+}
+
+/// Every tool result of the turn, in order (with a deadline: an edit must never hang).
+#[cfg(unix)]
+fn edit_results(mode: &str, writes: Vec<(&'static str, String)>) -> (Vec<String>, ScriptedServer) {
+    let script = writes
+        .into_iter()
+        .map(|(path, content)| ("write", json!({"path": path, "content": content})))
+        .collect();
+    let gateway = calls(script);
+    let env = env(&gateway.url);
+    let server = ScriptedServer::install(&env, mode);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let mut server = server;
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let turn = {
+        let core = core.clone();
+        let id = session.id.clone();
+        runtime.spawn(async move {
+            let prompt = Prompt {
+                text: "go".into(),
+                ..Default::default()
+            };
+            let _ = core.prompt(&id, prompt, TurnOptions::default()).await;
+            let _ = tx.send(());
+        })
+    };
+    let finished = rx.recv_timeout(std::time::Duration::from_secs(60));
+    if finished.is_err() {
+        turn.abort();
+        panic!("BREAK: an edit hung on the language server");
+    }
+    let results = gateway
+        .messages()
+        .into_iter()
+        .rfind(|r| !r.is_title())
+        .map(|r| results(&r).iter().map(Value::to_string).collect())
+        .unwrap_or_default();
+    server.stopped = runtime.block_on(core.shutdown_lsp_root(&env.home.project()));
+    core.shutdown();
+    drop(core);
+    drop(runtime);
+    server.finish();
+    drop(env);
+    (results, server)
+}
+
+/// Diagnostics that don't arrive in time are not guessed: the second edit fixed the error and
+/// the server says nothing for it, so nothing comes back, never the first edit's error. With and
+/// without versions in the server's reports.
+#[cfg(unix)]
+#[test]
+fn late_diagnostics_never_show_an_earlier_versions() {
+    for mode in ["silent", "silent,versionless"] {
+        let (results, _) = edit_results(
+            mode,
+            vec![
+                ("a.ts", "const broken\n".to_string()),
+                ("a.ts", "const fixed = 1\n".to_string()),
+            ],
+        );
+        assert_eq!(results.len(), 2, "{results:?}");
+        assert!(
+            results[0].contains("text=const broken"),
+            "{mode}: {}",
+            results[0]
+        );
+        assert!(
+            !results[1].contains("diagnostics"),
+            "BREAK ({mode}): the first edit's error shown for the second: {}",
+            results[1]
+        );
+    }
+}
+
+/// Each edited file is closed again after its diagnostics: the server reads every other file
+/// from disk, and open documents don't pile up.
+#[cfg(unix)]
+#[test]
+fn edited_files_are_closed_after_their_diagnostics() {
+    let (results, server) = edit_results(
+        "",
+        vec![
+            ("a.ts", "a\n".to_string()),
+            ("b.ts", "b\n".to_string()),
+            ("c.ts", "c\n".to_string()),
+        ],
+    );
+    assert_eq!(results.len(), 3, "{results:?}");
+    for result in &results {
+        assert!(
+            result.contains("open=1 "),
+            "BREAK: documents left open: {result}"
+        );
+    }
+    assert_eq!(server.lines("close"), 3);
+    // The project's root going stops its server, asked first.
+    assert_eq!(server.stopped, 1);
+    assert_eq!(server.lines("shutdown"), 1);
+    assert_eq!(server.lines("exit"), 1);
+}
+
+/// A server that stops reading its input never holds up an edit (a write bigger than the pipe
+/// holds), and it is dropped.
+#[cfg(unix)]
+#[test]
+fn a_server_that_stops_reading_never_hangs_an_edit() {
+    let big = format!("{}\n", "x".repeat(300_000));
+    let (results, server) = edit_results(
+        "deaf",
+        vec![("a.ts", big.clone()), ("b.ts", big.clone()), ("c.ts", big)],
+    );
+    assert_eq!(results.len(), 3, "{results:?}");
+    assert!(server.lines("deaf") >= 1);
+}
+
+/// A server whose output can't be read is dropped and started again on the next edit; one that
+/// dies on every message rests after two tries instead of restarting for each edit.
+#[cfg(unix)]
+#[test]
+fn a_broken_server_restarts_once_then_rests() {
+    let (results, server) = edit_results(
+        "garbage",
+        vec![
+            ("a.ts", "a\n".to_string()),
+            ("b.ts", "b\n".to_string()),
+            ("c.ts", "c\n".to_string()),
+        ],
+    );
+    assert!(results[0].contains("text=a"), "{}", results[0]);
+    assert!(
+        results[1].contains("text=b"),
+        "BREAK: not started again: {}",
+        results[1]
+    );
+    assert_eq!(
+        server.lines("start"),
+        2,
+        "BREAK: restarted after every report"
+    );
+
+    let writes = (0..4).map(|i| ("a.ts", format!("v{i}\n"))).collect();
+    let (results, server) = edit_results("crash", writes);
+    assert_eq!(results.len(), 4);
+    assert_eq!(
+        server.lines("start"),
+        2,
+        "BREAK: a server that always crashes was restarted for each edit"
+    );
+}

@@ -91,26 +91,44 @@ fn text(map: &Map<String, Value>, key: &str) -> Option<String> {
 /// A PreToolUse hook that could not be run at all (it did not start, or the shell exited 126 or
 /// 127: not executable, not found) blocks the call: the model can cause that (by moving the
 /// project, for one), so a guard must not fail open. The reason names the command, so a user with
-/// a broken hook sees what to fix. `None` for everything else, which [`interpret`] reads.
-pub fn unrunnable(event: Event, command: &str, ran: &Ran) -> Option<String> {
+/// a broken hook sees what to fix. `worktree`: the session works in its own worktree there (a
+/// command that exits 126/127 there likely names a folder Git ignores, which isn't copied in), and
+/// the reason says so. `None` for everything else, which [`interpret`] reads.
+pub fn unrunnable(
+    event: Event,
+    command: &str,
+    ran: &Ran,
+    worktree: Option<&std::path::Path>,
+) -> Option<String> {
     if event != Event::PreToolUse {
         return None;
     }
+    let mut hint = String::new();
     let detail = match ran {
         Ran::NotStarted(error) => error.clone(),
         Ran::Exited {
             code: Some(code @ (126 | 127)),
             stderr,
             ..
-        } => match first_line(stderr) {
-            "" => format!("exit code {code}"),
-            line => format!("exit code {code}: {line}"),
-        },
+        } => {
+            if let Some(worktree) = worktree {
+                hint = format!(
+                    " This session runs in its own worktree ({}): folders Git ignores, like .venv or node_modules, aren't copied there. Create them with a worktree setup command (Settings › Worktree; $ANYSOLA_MAIN_FOLDER is set), or use an absolute path in the hook.",
+                    worktree.display()
+                );
+            }
+            match first_line(stderr) {
+                "" => format!("exit code {code}"),
+                line => format!("exit code {code}: {line}"),
+            }
+        }
         _ => return None,
     };
-    Some(cap(&format!(
+    // The command and the shell's line are cut first, so the hint always gets through.
+    let reason = cap(&format!(
         "The PreToolUse hook \"{command}\" could not be run ({detail}), so the call was blocked."
-    )))
+    ));
+    Some(format!("{reason}{hint}"))
 }
 
 pub fn interpret(event: Event, ran: &Ran) -> Verdict {
@@ -376,17 +394,51 @@ mod tests {
     #[test]
     fn a_guard_that_cannot_run_blocks_only_tool_calls() {
         let missing = exited(127, "", "sh: ./g16.sh: not found\n");
-        let reason = unrunnable(Event::PreToolUse, "./g16.sh", &missing).unwrap();
+        let reason = unrunnable(Event::PreToolUse, "./g16.sh", &missing, None).unwrap();
         assert!(
             reason.contains("\"./g16.sh\"") && reason.contains("not found"),
             "{reason}"
         );
-        assert!(unrunnable(Event::PreToolUse, "x", &exited(126, "", "")).is_some());
-        assert!(unrunnable(Event::PreToolUse, "x", &Ran::NotStarted("no shell".into())).is_some());
-        assert!(unrunnable(Event::PreToolUse, "x", &exited(1, "", "")).is_none());
-        assert!(unrunnable(Event::PreToolUse, "x", &Ran::TimedOut { seconds: 1 }).is_none());
-        assert!(unrunnable(Event::PostToolUse, "x", &missing).is_none());
-        assert!(unrunnable(Event::Stop, "x", &Ran::NotStarted("e".into())).is_none());
+        assert!(!reason.contains("worktree"), "{reason}");
+        let pre = Event::PreToolUse;
+        assert!(unrunnable(pre, "x", &exited(126, "", ""), None).is_some());
+        assert!(unrunnable(pre, "x", &Ran::NotStarted("no shell".into()), None).is_some());
+        assert!(unrunnable(pre, "x", &exited(1, "", ""), None).is_none());
+        assert!(unrunnable(pre, "x", &Ran::TimedOut { seconds: 1 }, None).is_none());
+        assert!(unrunnable(Event::PostToolUse, "x", &missing, None).is_none());
+        assert!(unrunnable(Event::Stop, "x", &Ran::NotStarted("e".into()), None).is_none());
+    }
+
+    /// In a worktree session the reason says why a relative tool may be missing there and what
+    /// to do; the call stays blocked.
+    #[test]
+    fn a_guard_that_cannot_run_in_a_worktree_says_why() {
+        let w = std::path::Path::new("/w/anysola-x");
+        let missing = exited(127, "", "sh: .venv/bin/python: not found\n");
+        let reason = unrunnable(
+            Event::PreToolUse,
+            ".venv/bin/python g.py",
+            &missing,
+            Some(w),
+        );
+        let reason = reason.expect("still blocks");
+        assert!(reason.contains("could not be run"), "{reason}");
+        assert!(reason.contains("own worktree (/w/anysola-x)"), "{reason}");
+        assert!(reason.contains(".venv or node_modules"), "{reason}");
+        assert!(reason.contains("$ANYSOLA_MAIN_FOLDER"), "{reason}");
+        assert!(reason.contains("absolute path"), "{reason}");
+        // A long command is cut, the hint is not.
+        let long = "x".repeat(MAX_CHARS * 2);
+        let reason = unrunnable(Event::PreToolUse, &long, &missing, Some(w)).unwrap();
+        assert!(reason.ends_with("use an absolute path in the hook."), "cut");
+        // Only "can't run" says it: a hook that didn't start (no shell) is another problem.
+        let none = unrunnable(
+            Event::PreToolUse,
+            "x",
+            &Ran::NotStarted("e".into()),
+            Some(w),
+        );
+        assert!(!none.unwrap().contains("worktree"));
     }
 
     #[test]

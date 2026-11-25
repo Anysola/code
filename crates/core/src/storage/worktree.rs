@@ -86,11 +86,20 @@ pub struct SessionWorktreeRow {
     pub base_pending: Option<String>,
     /// The stash (its commit id) an apply set main-folder edits aside in, while it runs.
     pub apply_stash: Option<String>,
+    /// The main folder's branch the last apply went to (`refs/heads/<name>`), as its `HEAD` named
+    /// it when the apply started; `None` when unknown (rows from before 1.4.3, a detached `HEAD`).
+    pub apply_branch: Option<String>,
+    /// An undo of the applied commit (this one) started on the main folder and hasn't been
+    /// recorded as finished: set before the main folder is touched, cleared when the undo is.
+    pub undo_from: Option<String>,
+    /// The branch the apply under way goes to (while `applying`); it becomes `apply_branch` only
+    /// once its commit is recorded, so an apply that doesn't go through leaves that alone.
+    pub apply_onto: Option<String>,
 }
 
 const COLUMNS: &str = "session_id, project_id, folder, directory, branch, base_branch, base_commit,
     snapshot_dir, state, error, applied_commit, apply_from, apply_tree, restored, leftover,
-    time_created, time_updated, base_pending, apply_stash";
+    time_created, time_updated, base_pending, apply_stash, apply_branch, undo_from, apply_onto";
 
 fn row(r: &Row) -> rusqlite::Result<SessionWorktreeRow> {
     let state: String = r.get(8)?;
@@ -115,6 +124,9 @@ fn row(r: &Row) -> rusqlite::Result<SessionWorktreeRow> {
         time_updated: r.get::<_, i64>(16)? as u64,
         base_pending: r.get(17)?,
         apply_stash: r.get(18)?,
+        apply_branch: r.get(19)?,
+        undo_from: r.get(20)?,
+        apply_onto: r.get(21)?,
     })
 }
 
@@ -124,7 +136,7 @@ impl Db {
             c.execute(
                 &format!(
                     "INSERT INTO session_worktree ({COLUMNS})
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)"
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)"
                 ),
                 params![
                     w.session_id,
@@ -146,6 +158,9 @@ impl Db {
                     w.time_updated as i64,
                     w.base_pending,
                     w.apply_stash,
+                    w.apply_branch,
+                    w.undo_from,
+                    w.apply_onto,
                 ],
             )
             .map(drop)
@@ -198,6 +213,23 @@ impl Db {
         })
     }
 
+    /// [`Db::cas_session_worktree`] that leaves `error` as it is.
+    pub fn cas_session_worktree_keeping_error(
+        &self,
+        session_id: &str,
+        from: WorktreeState,
+        to: WorktreeState,
+    ) -> Result<bool> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE session_worktree SET state = ?3, time_updated = ?4
+                 WHERE session_id = ?1 AND state = ?2",
+                params![session_id, from.as_str(), to.as_str(), now_ms() as i64],
+            )
+            .map(|n| n == 1)
+        })
+    }
+
     /// Sets the named columns of a row while it is in `state`; false otherwise.
     pub(crate) fn update_session_worktree(
         &self,
@@ -220,6 +252,9 @@ impl Db {
             "leftover",
             "base_pending",
             "apply_stash",
+            "apply_branch",
+            "undo_from",
+            "apply_onto",
         ];
         let mut sql = String::from("UPDATE session_worktree SET time_updated = ?1");
         let mut values: Vec<rusqlite::types::Value> = vec![(now_ms() as i64).into()];
@@ -285,6 +320,9 @@ mod tests {
             time_updated: 1,
             base_pending: None,
             apply_stash: None,
+            apply_branch: None,
+            undo_from: None,
+            apply_onto: None,
         }
     }
 

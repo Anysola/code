@@ -23,10 +23,45 @@ pub fn env(gateway_url: &str) -> Env {
         // SAFETY: tests in this binary hold `ENV` while they touch the environment.
         unsafe { std::env::set_var(name, value) };
     }
+    shell_as_asked();
     Env {
         home,
         _guard: guard,
     }
+}
+
+/// `SHELL` as [`again_with_shell`] asked for it (`ANYSOLA_TEST_SHELL`; `-`: none at all, as for
+/// the app started from the Start menu or a desktop launcher). Nothing otherwise.
+fn shell_as_asked() {
+    // SAFETY: the callers hold `ENV`.
+    match std::env::var("ANYSOLA_TEST_SHELL").ok().as_deref() {
+        None => {}
+        Some("-") => unsafe { std::env::remove_var("SHELL") },
+        Some(shell) => unsafe { std::env::set_var("SHELL", shell) },
+    }
+}
+
+/// Runs this binary's test `name` again in a process of its own whose `SHELL` is `shell` (`None`:
+/// no `SHELL`). The shell is chosen once per process, so a test that sets `SHELL` in this one
+/// would see the first choice; and CI runs the tests from a shell that sets it, unlike a user
+/// starting the app. Nothing when this process is such a child already.
+pub fn again_with_shell(name: &str, shell: Option<&str>) {
+    if std::env::var_os("ANYSOLA_TEST_SHELL").is_some() {
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args([name, "--exact", "--test-threads=1", "--nocapture"])
+        .env("ANYSOLA_TEST_SHELL", shell.unwrap_or("-"))
+        .env_remove("SHELL")
+        .envs(shell.map(|shell| ("SHELL", shell)))
+        .output()
+        .expect("the test binary runs");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "{name} with SHELL={shell:?}:\n{stdout}\n{stderr}"
+    );
 }
 
 /// A runtime of the test's own; the fake gateway runs on another.

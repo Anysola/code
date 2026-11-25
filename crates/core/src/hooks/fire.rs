@@ -44,6 +44,8 @@ pub(crate) struct Context {
     pub child: bool,
     pub cwd: PathBuf,
     pub project_dir: PathBuf,
+    /// The session's own worktree when it works in one (`project_dir` is then that worktree).
+    pub worktree: Option<PathBuf>,
     pub home: PathBuf,
     pub agent: String,
     pub approved: Arc<super::Approved>,
@@ -55,6 +57,7 @@ impl Context {
             Some(_) => crate::session::gate::root(&shared.db, &session.id),
             None => session.id.clone(),
         };
+        let checkout = shared.checkout_of(session);
         Context {
             shell: config.hooks.shell.clone(),
             config,
@@ -66,7 +69,8 @@ impl Context {
             child: session.parent_id.is_some(),
             cwd: PathBuf::from(&session.directory),
             // The checkout the session works in: a worktree session's hooks run there.
-            project_dir: shared.checkout_of(session).root,
+            worktree: checkout.pinned.then(|| checkout.root.clone()),
+            project_dir: checkout.root,
             home: shared.paths.home.clone(),
             approved: shared.hooks.approved.clone(),
             agent: agent.to_string(),
@@ -151,12 +155,15 @@ impl Context {
         payload.extend(extra);
         let input = serde_json::to_vec(&Value::Object(payload)).unwrap_or_default();
         let env = self.environment();
-        let shell = crate::tool::shell::select::resolve_for_hooks(self.shell.as_deref());
+        let shells: Vec<String> = handlers
+            .iter()
+            .map(|handler| super::shell_for(self.shell.as_deref(), handler.shell.as_deref()))
+            .collect();
         let cwd = working_dir(&[&self.cwd, &self.project_dir, &self.home]);
-        let runs = handlers.iter().map(|handler| {
+        let runs = handlers.iter().zip(&shells).map(|(handler, shell)| {
             run(
                 Job {
-                    shell: &shell,
+                    shell,
                     command: &handler.command,
                     cwd: &cwd,
                     env: env.clone(),
@@ -169,13 +176,14 @@ impl Context {
         let ran = futures_util::future::join_all(runs).await;
         let mut fired = notices;
         for (handler, ran) in handlers.iter().zip(ran) {
-            let verdict = match output::unrunnable(event, &handler.command, &ran) {
-                Some(reason) => Verdict {
-                    block: Some(reason),
-                    ..Verdict::default()
-                },
-                None => output::interpret(event, &ran),
-            };
+            let verdict =
+                match output::unrunnable(event, &handler.command, &ran, self.worktree.as_deref()) {
+                    Some(reason) => Verdict {
+                        block: Some(reason),
+                        ..Verdict::default()
+                    },
+                    None => output::interpret(event, &ran),
+                };
             self.record(event, handler, verdict, &mut fired);
         }
         fired

@@ -1164,8 +1164,11 @@ export function mockBridge(): Bridge {
   let hooksOff = hookScene === "off" || hookScene === "locked"
   let hookIds = 10
   const hooksNow = (): Hooks => {
+    // Where hooks run, as the core answers it (`Core::hook_shell`).
+    const shell = "bash"
     const active = (h: MockHook): Hook => ({
       ...h,
+      runsIn: (h.scope === "project" ? null : h.shell) ?? shell,
       active: h.scope === "managed" || (!hooksOff && (h.scope === "user" || hookFiles.some((f) => f.path === h.source && f.decision === "allowed"))),
     })
     const files = hookFiles.map((f) => ({ ...f, hooks: f.hooks.map(active) }))
@@ -1173,6 +1176,7 @@ export function mockBridge(): Bridge {
       hooks: [...managed, ...userHooks, ...hookFiles.flatMap((f) => f.hooks)].map(active),
       files,
       disabled: hooksOff,
+      shell,
     }
   }
   // A project's MCP servers and formatters, each kind answered on its own (`?trust=`).

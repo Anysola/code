@@ -803,6 +803,7 @@ mod tests {
             matcher: None,
             command: command.into(),
             timeout: 600,
+            shell: None,
             source: source.into(),
             scope,
             active: true,

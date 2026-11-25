@@ -40,7 +40,8 @@ pub use crate::hooks::{HookDocument, HookInfo, HookScope};
 pub use crate::trust::{ConfiguredRule, TrustEntry, TrustItem, TrustKind};
 pub use isolate::{
     Checkout, Cleaned, Fallback, ForkRestore, Release, apply_stash_message,
-    cleanup as cleanup_worktrees, forget_deleted as forget_deleted_worktree, pop_stash_if_clean,
+    cleanup as cleanup_worktrees, clear_undo_mark, forget_deleted as forget_deleted_worktree,
+    pop_stash_if_clean,
 };
 pub(crate) use isolate::{TurnGate, turn_gate};
 pub use revert::file_diff_value;
@@ -560,6 +561,20 @@ impl Core {
     /// Every configured hook, in run order, with its source and whether it runs.
     pub fn hooks(&self) -> Vec<HookInfo> {
         crate::hooks::list(&self.loaded().config.hooks, &self.shared.db)
+    }
+
+    /// Stops the language servers running for `root` or a folder inside it: `shutdown`/`exit`,
+    /// then their process group. For a worktree about to be removed (discard, delete, back to the
+    /// main folder), whose folder a server would otherwise hold. Returns how many stopped.
+    pub async fn shutdown_lsp_root(&self, root: &std::path::Path) -> usize {
+        self.shared.lsp.shutdown_root(root).await
+    }
+
+    /// The shell a hook runs in with the current config: `handler` is the hook's own `shell`
+    /// ([`HookInfo::shell`]), `None` for a hook without one ("Hooks run in …"). The legacy,
+    /// global and managed documents' `shell` all count; the same function runs the hooks.
+    pub fn hook_shell(&self, handler: Option<&str>) -> String {
+        self.loaded().config.hooks.shell_for(handler)
     }
 
     /// The project documents that define hooks, with the user's decision on their current

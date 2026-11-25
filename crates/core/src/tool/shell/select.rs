@@ -135,7 +135,35 @@ fn executable(file: &str) -> Option<String> {
     if Path::new(&shell).is_absolute() {
         return Path::new(&shell).is_file().then_some(shell);
     }
-    crate::which::which(&shell).map(display)
+    which_shell(&shell).map(display)
+}
+
+/// A PATH lookup for a shell, never Windows' WSL launcher: a bare `bash` would find
+/// `System32\bash.exe` (or the Store's `WindowsApps\bash.exe`) when Git Bash isn't installed, and
+/// run commands in Linux with Windows paths. An absolute path the user configured is theirs.
+fn which_shell(name: &str) -> Option<PathBuf> {
+    let found = crate::which::which(name)?;
+    let root = env::var("SystemRoot")
+        .or_else(|_| env::var("windir"))
+        .unwrap_or_default();
+    (!(cfg!(windows) && wsl_launcher(&display(found.clone()), &root))).then_some(found)
+}
+
+/// Whether `path` is the WSL `bash.exe` launcher: in the system folder under `system_root`
+/// (`C:\Windows` when unknown) or an app execution alias under `WindowsApps`.
+fn wsl_launcher(path: &str, system_root: &str) -> bool {
+    let path = path.replace('/', "\\").to_lowercase();
+    let Some(folder) = path.strip_suffix("\\bash.exe") else {
+        return false;
+    };
+    let root = match system_root.trim_end_matches(['\\', '/']) {
+        "" => r"c:\windows".to_string(),
+        root => root.replace('/', "\\").to_lowercase(),
+    };
+    ["system32", "sysnative"]
+        .iter()
+        .any(|name| folder == format!("{root}\\{name}"))
+        || folder.split('\\').any(|part| part == "windowsapps")
 }
 
 /// On Windows: drive-path rewriting, Git Bash for POSIX-style bash paths, PATH lookup of bare
@@ -155,7 +183,7 @@ fn full(file: &str) -> String {
         }
         return shell;
     }
-    let found = || crate::which::which(&shell).map(display);
+    let found = || which_shell(&shell).map(display);
     if is_bash {
         return git_bash().or_else(found).unwrap_or(shell);
     }
@@ -189,7 +217,8 @@ fn git_bash_option() -> Option<String> {
     crate::env::var("GIT_BASH_PATH").filter(|p| !p.is_empty())
 }
 
-/// Git Bash: the option, else `bash.exe` next to Git's `bin`, else standard Git for Windows paths.
+/// Git Bash: the option, else `bash.exe` beside Git's install (from `git` on PATH, `cmd\git.exe`
+/// or `mingw64\bin\git.exe`), else the standard machine-wide and per-user install folders.
 fn git_bash() -> Option<String> {
     if !cfg!(windows) {
         return None;
@@ -199,25 +228,37 @@ fn git_bash() -> Option<String> {
     {
         return Some(opt);
     }
-    if let Some(git) = crate::which::which("git")
-        && let Some(bash) = git
-            .parent()
-            .and_then(Path::parent)
-            .map(|p| p.join("bin").join("bash.exe"))
-        && std::fs::metadata(&bash).ok().is_some_and(|m| m.len() > 0)
-    {
-        return Some(display(bash));
-    }
-    for standard in [
-        r"C:\Program Files\Git\bin\bash.exe",
-        r"C:\Program Files (x86)\Git\bin\bash.exe",
-    ] {
-        let p = Path::new(standard);
-        if std::fs::metadata(p).ok().is_some_and(|m| m.len() > 0) {
-            return Some(standard.to_string());
+    let git = crate::which::which("git");
+    let local = env::var("LOCALAPPDATA").ok();
+    git_bash_candidates(git.as_deref(), local.as_deref())
+        .into_iter()
+        .find(|candidate| {
+            std::fs::metadata(candidate)
+                .ok()
+                .is_some_and(|m| m.is_file() && m.len() > 0)
+        })
+}
+
+/// Where Git Bash may be, in order, for `git` found on PATH and `%LOCALAPPDATA%`.
+fn git_bash_candidates(git: Option<&Path>, local_app_data: Option<&str>) -> Vec<String> {
+    let mut out = Vec::new();
+    // `<git>\cmd\git.exe` and `<git>\bin\git.exe`: two levels up; `<git>\mingw64\bin\git.exe`:
+    // three.
+    let mut dir = git.and_then(Path::parent);
+    for _ in 0..2 {
+        dir = dir.and_then(Path::parent);
+        if let Some(dir) = dir {
+            out.push(display(dir.join("bin").join("bash.exe")));
         }
     }
-    None
+    out.push(r"C:\Program Files\Git\bin\bash.exe".to_string());
+    out.push(r"C:\Program Files (x86)\Git\bin\bash.exe".to_string());
+    if let Some(local) = local_app_data.filter(|l| !l.is_empty()) {
+        // Git for Windows installed for one user ("Only for me").
+        let local = local.trim_end_matches(['\\', '/']);
+        out.push(format!(r"{local}\Programs\Git\bin\bash.exe"));
+    }
+    out
 }
 
 fn display(path: PathBuf) -> String {
@@ -303,6 +344,47 @@ mod tests {
         assert_eq!(resolve(Some("/usr/bin/nu")), fallback);
         assert_eq!(resolve(Some("/no/such/shell")), fallback);
         assert_eq!(name(&fallback), "bash");
+    }
+
+    /// A bare `bash` on PATH may be WSL's launcher: never taken for a shell (Windows only).
+    #[test]
+    fn the_wsl_launcher_is_told_apart() {
+        let root = r"C:\Windows";
+        assert!(wsl_launcher(r"C:\Windows\System32\bash.exe", root));
+        assert!(wsl_launcher(r"c:\windows\system32\BASH.EXE", root));
+        assert!(wsl_launcher(r"C:\Windows\Sysnative\bash.exe", root));
+        assert!(wsl_launcher(r"D:\Win\System32\bash.exe", r"D:\Win\"));
+        assert!(wsl_launcher(r"C:\Windows\System32\bash.exe", ""));
+        assert!(wsl_launcher(
+            r"C:\Users\me\AppData\Local\Microsoft\WindowsApps\bash.exe",
+            root
+        ));
+        assert!(!wsl_launcher(r"C:\Program Files\Git\bin\bash.exe", root));
+        assert!(!wsl_launcher(r"C:\Windows\System32\cmd.exe", root));
+        assert!(!wsl_launcher(r"C:\tools\System32\bash.exe", root));
+        assert!(!wsl_launcher("/usr/bin/bash", root));
+    }
+
+    /// Git Bash beside `git` on PATH (its `cmd`, `bin` or `mingw64\bin`), then the machine-wide
+    /// folders, then a per-user install under `%LOCALAPPDATA%`.
+    #[test]
+    fn git_bash_is_looked_for_where_git_installs_it() {
+        let candidates = git_bash_candidates(None, Some(r"C:\Users\me\AppData\Local\"));
+        assert_eq!(
+            candidates.last().unwrap(),
+            r"C:\Users\me\AppData\Local\Programs\Git\bin\bash.exe"
+        );
+        assert!(candidates.contains(&r"C:\Program Files\Git\bin\bash.exe".to_string()));
+        assert_eq!(git_bash_candidates(None, None).len(), 2);
+        let git = Path::new("/opt/Git/mingw64/bin/git.exe");
+        let found = git_bash_candidates(Some(git), None);
+        assert_eq!(
+            found[..2],
+            [
+                display(Path::new("/opt/Git/mingw64").join("bin").join("bash.exe")),
+                display(Path::new("/opt/Git").join("bin").join("bash.exe")),
+            ]
+        );
     }
 
     #[test]

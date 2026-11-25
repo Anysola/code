@@ -1448,6 +1448,9 @@ mod tests {
             time_updated: 2,
             base_pending: None,
             apply_stash: None,
+            apply_branch: None,
+            undo_from: None,
+            apply_onto: None,
         };
         assert_eq!(
             session_json(&row, Some(&worktree)),

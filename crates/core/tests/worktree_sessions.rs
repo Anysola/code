@@ -471,8 +471,9 @@ fn the_documented_hook_form_runs_in_both_kinds_of_session() {
             ),
         )
     } else if cfg!(windows) {
+        // Exactly the documented form (Git Bash runs a script with a shebang directly).
         (
-            r#"sh "$CLAUDE_PROJECT_DIR/.claude/hooks/x.sh""#.to_string(),
+            r#""$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh"#.to_string(),
             "x.sh",
             format!(
                 "#!/bin/sh\necho \"$(pwd -W)|$CLAUDE_PROJECT_DIR\" >> '{}'\nexit 0\n",
@@ -551,6 +552,78 @@ fn the_documented_hook_form_runs_in_both_kinds_of_session() {
             real(&top.display().to_string())
         )
     );
+}
+
+/// The documented form where `SHELL` isn't set, as for the app started from the Start menu.
+#[test]
+fn the_documented_hook_form_runs_without_shell_set() {
+    again_with_shell(
+        "the_documented_hook_form_runs_in_both_kinds_of_session",
+        None,
+    );
+}
+
+/// A guard whose tool lives in a folder Git ignores (`.venv/bin/python`) can't run in a worktree
+/// session, where that folder isn't copied: the call stays blocked, and the reason says why and
+/// what to do. In the main folder the same guard runs.
+#[test]
+fn a_guard_missing_from_the_worktree_says_why_and_still_blocks() {
+    let hook_shell = anysola_core::tool::shell::hook_shell(None);
+    if matches!(
+        anysola_core::tool::shell::shell_name(Some(&hook_shell)).as_str(),
+        "pwsh" | "powershell" | "cmd"
+    ) {
+        // Only a POSIX shell says 127 for a missing program; Windows CI has Git Bash.
+        if cfg!(windows) {
+            panic!("Windows CI runs hooks in Git Bash");
+        }
+        return;
+    }
+    let gateway = turns(vec![vec![(
+        "write",
+        json!({"path": "one.txt", "content": "1"}),
+    )]]);
+    let env = env(&gateway.url);
+    let config = json!({"hooks": {"PreToolUse": [{"matcher": "Write", "hooks": [{"type": "command",
+        "command": ".venv/bin/guard"}]}]}});
+    env.home.write(".anysola/config.json", &config.to_string());
+    let project = project(&env, &[(".gitignore", ".venv/\n")]);
+    env.home
+        .write("proj/.venv/bin/guard", "#!/bin/sh\nexit 0\n");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            project.join(".venv/bin/guard"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (main_session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&main_session.id, prompt("one"), TurnOptions::default()))
+        .unwrap();
+    assert!(
+        project.join("one.txt").exists(),
+        "the guard runs in the main folder"
+    );
+    let (id, top) = isolated(&runtime, &core);
+    runtime
+        .block_on(core.prompt(&id, prompt("two"), TurnOptions::default()))
+        .unwrap();
+    assert!(
+        !top.join("one.txt").exists(),
+        "a guard that can't run blocks"
+    );
+    let result = last_results(&gateway)
+        .first()
+        .map(Value::to_string)
+        .unwrap_or_default();
+    assert!(result.contains("could not be run"), "{result}");
+    assert!(result.contains("own worktree"), "{result}");
+    assert!(result.contains("Settings › Worktree"), "{result}");
 }
 
 /// A hook that writes its data argument (`prettier --write "$CLAUDE_PROJECT_DIR/README.md"`)
@@ -1446,6 +1519,63 @@ fn a_recreate_keeps_force_added_ignored_files() {
     assert_eq!(read(&top.join("a.txt")).as_deref(), Some("a1"));
 }
 
+/// Recreating while a bring-in was open (the merge is made again) keeps a force-added file the
+/// ignore rules match, which snapshots never capture: its absence from the snapshot says nothing.
+#[test]
+fn a_recreate_during_a_bring_in_keeps_force_added_ignored_files() {
+    let gateway = turns(vec![
+        vec![("write", json!({"path": "a.txt", "content": "session\n"}))],
+        vec![("write", json!({"path": "a.txt", "content": "resolved\n"}))],
+    ]);
+    let env = env(&gateway.url);
+    let project = project(&env, &[("a.txt", "a0\n"), (".gitignore", "cache\n")]);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    answering(&runtime, &core, |_, _| Answer::Once);
+    let (id, top) = isolated(&runtime, &core);
+    std::fs::write(top.join("cache"), "kept").unwrap();
+    git(&top, &["add", "-f", "cache"]);
+    git(&top, &["commit", "-qm", "cache"]);
+    runtime
+        .block_on(core.prompt(&id, prompt("one"), TurnOptions::default()))
+        .unwrap();
+    // Main moves on; bringing it in conflicts and stays open while a turn runs.
+    std::fs::write(project.join("a.txt"), "main\n").unwrap();
+    std::fs::write(project.join("m.txt"), "m\n").unwrap();
+    git(&project, &["add", "-A"]);
+    git(&project, &["commit", "-qm", "main moves on"]);
+    let tip = git(&project, &["rev-parse", "HEAD"]);
+    git(&top, &["add", "-A"]);
+    git(
+        &top,
+        &["commit", "-qm", "Session work before bringing the base in"],
+    );
+    assert!(!git_ok(&top, &["merge", "--no-edit", "-q", &tip]));
+    assert!(
+        core.set_worktree_pending(&id, WorktreeState::Ready, Some(&tip))
+            .unwrap()
+    );
+    runtime
+        .block_on(core.prompt(&id, prompt("two"), TurnOptions::default()))
+        .unwrap();
+    std::fs::remove_dir_all(&top).unwrap();
+    anysola_core::api::cleanup_worktrees(&db(&env));
+    let row = runtime.block_on(core.recreate_worktree(&id)).unwrap();
+    assert_eq!(
+        row.base_pending.as_deref(),
+        Some(tip.as_str()),
+        "made again"
+    );
+    assert!(git_ok(&top, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]));
+    assert_eq!(read(&top.join("a.txt")).as_deref(), Some("resolved\n"));
+    assert_eq!(read(&top.join("m.txt")).as_deref(), Some("m\n"));
+    assert_eq!(
+        read(&top.join("cache")).as_deref(),
+        Some("kept"),
+        "BREAK: deleted"
+    );
+}
+
 /// Start-up cleanup: a cut-off preparation fails and its folder goes; a deleted session's
 /// worktree, branch and row go; an apply cut off after its commit finishes, one cut off before
 /// it leaves the main folder alone.
@@ -1497,6 +1627,176 @@ fn a_crash_mid_apply_brings_the_stashed_edits_back_or_names_them() {
     let error = row.error.unwrap();
     assert!(error.contains("stash@{0}"), "{error}");
     assert!(git(&project, &["stash", "list"]).contains(&half));
+}
+
+/// An applied session, ready again: `(session id, applied commit, its parent)`. The shell's apply
+/// in short, onto the main folder's current branch.
+fn applied(
+    runtime: &tokio::runtime::Runtime,
+    core: &Core,
+    project: &Path,
+    file: &str,
+) -> (String, String, String) {
+    let (id, _) = isolated(runtime, core);
+    assert!(
+        core.set_worktree_state(&id, WorktreeState::Ready, WorktreeState::Applying)
+            .unwrap()
+    );
+    let from = git(project, &["rev-parse", "HEAD"]);
+    std::fs::write(project.join(file), format!("applied {file}")).unwrap();
+    git(project, &["add", "-A"]);
+    git(project, &["commit", "-qm", "applied"]);
+    let commit = git(project, &["rev-parse", "HEAD"]);
+    assert!(
+        core.mark_apply(&id, &from, &git(project, &["rev-parse", "HEAD^{tree}"]))
+            .unwrap()
+    );
+    core.continue_after_apply(&id, &commit).unwrap();
+    (id, commit, from)
+}
+
+/// The row keeps the branch an apply went to, and an undo clears only its own notes: the
+/// cleanup's note about a kept stash stays.
+#[test]
+fn an_apply_keeps_its_branch_and_an_undo_keeps_other_notes() {
+    let gateway = turns(vec![]);
+    let env = env(&gateway.url);
+    let project = project(&env, &[("a.txt", "a0")]);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (id, commit, parent) = applied(&runtime, &core, &project, "a.txt");
+    let row = core.session_worktree(&id).unwrap().unwrap();
+    assert_eq!(row.apply_branch.as_deref(), Some("refs/heads/main"));
+    assert_eq!(row.undo_from, None);
+    // A later apply onto another branch that doesn't go through leaves it naming the branch the
+    // applied commit is on.
+    git(&project, &["checkout", "-q", "-b", "feature"]);
+    assert!(
+        core.set_worktree_state(&id, WorktreeState::Ready, WorktreeState::Applying)
+            .unwrap()
+    );
+    let head = git(&project, &["rev-parse", "HEAD"]);
+    assert!(
+        core.mark_apply(&id, &head, "0000000000000000000000000000000000000000")
+            .unwrap()
+    );
+    assert!(
+        core.set_worktree_state(&id, WorktreeState::Applying, WorktreeState::Ready)
+            .unwrap()
+    );
+    let row = core.session_worktree(&id).unwrap().unwrap();
+    assert_eq!(
+        row.apply_branch.as_deref(),
+        Some("refs/heads/main"),
+        "BREAK: a failed apply renamed the applied commit's branch"
+    );
+    git(&project, &["checkout", "-q", "main"]);
+    let kept = "Your main-folder edits set aside for an apply are kept in the stash: stash@{0} in git stash list.";
+    assert!(
+        core.set_worktree_error(&id, WorktreeState::Ready, WorktreeState::Ready, kept)
+            .unwrap()
+    );
+    assert!(
+        core.set_worktree_state(&id, WorktreeState::Ready, WorktreeState::Applying)
+            .unwrap()
+    );
+    assert!(core.mark_undo(&id, &commit).unwrap());
+    let row = core.session_worktree(&id).unwrap().unwrap();
+    assert_eq!(row.undo_from.as_deref(), Some(commit.as_str()));
+    // The shell's undo, in short.
+    git(&project, &["reset", "-q", "--hard", &parent]);
+    let row = core.undo_apply(&id, &parent).unwrap();
+    assert_eq!(row.state, WorktreeState::Ready);
+    assert_eq!(row.applied_commit, None);
+    assert_eq!(row.undo_from, None);
+    assert_eq!(
+        row.error.as_deref(),
+        Some(kept),
+        "BREAK: the stash note is gone"
+    );
+}
+
+/// Start-up cleanup tells an undo cut off by a crash from an apply: finished on the main folder
+/// (its branch is back on the parent) it is recorded as undone; not yet (still on the applied
+/// commit) the mark stays for the desktop to settle the main folder, and is reported at each
+/// start until it is cleared; moved on since, it says so. Never "An apply was cut off".
+#[test]
+fn a_crash_mid_undo_is_told_apart_from_an_apply() {
+    let gateway = turns(vec![]);
+    let env = env(&gateway.url);
+    let project = project(&env, &[("a.txt", "a0"), ("b.txt", "b0"), ("c.txt", "c0")]);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let undoing = |id: &str, commit: &str| {
+        assert!(
+            core.set_worktree_state(id, WorktreeState::Ready, WorktreeState::Applying)
+                .unwrap()
+        );
+        assert!(core.mark_undo(id, commit).unwrap());
+    };
+    let of = |cleaned: &[anysola_core::api::Cleaned], id: &str| {
+        cleaned.iter().find(|c| c.session_id == id).cloned()
+    };
+    // Finished on the main folder, then the crash.
+    let (done, done_commit, done_parent) = applied(&runtime, &core, &project, "a.txt");
+    undoing(&done, &done_commit);
+    git(&project, &["reset", "-q", "--hard", &done_parent]);
+    let cleaned = anysola_core::api::cleanup_worktrees(&db(&env));
+    let entry = of(&cleaned, &done).expect("reported");
+    let notice = entry.notice.unwrap_or_default();
+    assert!(!notice.contains("An apply was cut off"), "{notice}");
+    assert!(notice.contains("undo"), "{notice}");
+    assert_eq!(entry.undo, None);
+    let row = core.session_worktree(&done).unwrap().unwrap();
+    assert_eq!(row.state, WorktreeState::Ready);
+    assert_eq!(row.applied_commit, None, "recorded as undone");
+    assert_eq!(row.base_commit, done_parent);
+    assert_eq!(row.undo_from, None);
+
+    // Cut off before the branch went back: the main folder is the desktop's to settle.
+    let (half, half_commit, _) = applied(&runtime, &core, &project, "b.txt");
+    undoing(&half, &half_commit);
+    let cleaned = anysola_core::api::cleanup_worktrees(&db(&env));
+    let entry = of(&cleaned, &half).expect("reported");
+    let notice = entry.notice.unwrap_or_default();
+    assert!(!notice.contains("An apply was cut off"), "{notice}");
+    assert!(notice.contains("undo"), "{notice}");
+    assert_eq!(entry.undo.as_deref(), Some(half_commit.as_str()));
+    let row = core.session_worktree(&half).unwrap().unwrap();
+    assert_eq!(row.state, WorktreeState::Ready);
+    assert_eq!(row.applied_commit.as_deref(), Some(half_commit.as_str()));
+    assert_eq!(row.undo_from.as_deref(), Some(half_commit.as_str()));
+    // Reported again at the next start, until the desktop clears the mark.
+    let again = anysola_core::api::cleanup_worktrees(&db(&env));
+    assert_eq!(
+        of(&again, &half).and_then(|c| c.undo).as_deref(),
+        Some(half_commit.as_str())
+    );
+    assert!(anysola_core::api::clear_undo_mark(&db(&env), &half));
+    let later = anysola_core::api::cleanup_worktrees(&db(&env));
+    assert!(of(&later, &half).is_none(), "{later:?}");
+
+    // The main folder moved on since: said, nothing recorded as undone.
+    let (moved, moved_commit, _) = applied(&runtime, &core, &project, "c.txt");
+    undoing(&moved, &moved_commit);
+    std::fs::write(project.join("c.txt"), "the user's next commit").unwrap();
+    git(&project, &["commit", "-qam", "next"]);
+    let cleaned = anysola_core::api::cleanup_worktrees(&db(&env));
+    let entry = of(&cleaned, &moved).expect("reported");
+    let notice = entry.notice.unwrap_or_default();
+    assert!(notice.contains("moved"), "{notice}");
+    assert_eq!(entry.undo, None);
+    let row = core.session_worktree(&moved).unwrap().unwrap();
+    assert_eq!(row.applied_commit.as_deref(), Some(moved_commit.as_str()));
+    assert_eq!(row.undo_from, None);
+    // An undo afterwards clears that note: it is the undo's own.
+    assert!(
+        core.set_worktree_state(&moved, WorktreeState::Ready, WorktreeState::Applying)
+            .unwrap()
+    );
+    let parent = git(&project, &["rev-parse", &format!("{moved_commit}^")]);
+    let row = core.undo_apply(&moved, &parent).unwrap();
+    assert_eq!(row.error, None);
 }
 
 #[test]
