@@ -4,6 +4,34 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.4.2 (2026-11-25)
+
+- Security fixes for 1.3.0–1.4.1, and two defaults change:
+  - LSP diagnostics are now off by default: a language server runs the project's own build tooling outside any
+    sandbox and without project approval. Turn them back on with `"lsp": true` in `~/.anysola/config.json`.
+    A project's config can only turn them off; until now its `"lsp": true` could turn them back on.
+  - The shell sandbox is now experimental and off by default; worktree sessions no longer turn it on by
+    themselves. Turn it on with `"sandbox": true` in `~/.anysola/config.json`. When it is on but can't start
+    (bubblewrap missing, user namespaces restricted, Windows), shell commands are refused with the reason
+    instead of running unconfined. A project's `"sandbox"` is ignored with a warning, as `"shell"` is.
+  - The sandbox no longer makes any folder but the session's own writable: not an approved outside working
+    directory, not the worktree's `.git/worktrees/<name>` folder.
+  - The live Preview can no longer navigate the app window away (or open popups), not even on a click. A
+    `[::1]` address is opened as `localhost` (it used to stay blank).
+  - Undoing an apply refuses, naming the file, when a file the commit removed is back in the main folder
+    (ignored files included) instead of overwriting it, or when an ignored file sits in a folder the commit put
+    in a file's place instead of deleting it, and refuses on a detached HEAD. A file only touched since (same
+    content) no longer blocks it.
+  - "Delete all sessions" closes the embedded terminals of the worktrees it removes. Ctrl+V in the terminal
+    now pastes on Linux too, and keeps bracketed paste, so a pasted multi-line command waits for Enter where
+    the shell supports it.
+- Taken back from earlier notes: 1.4.0's "enabled automatically for isolated worktree sessions" (it is off by
+  default now), and 1.4.1's "so `git` and build tools work inside worktrees": in a sandboxed worktree session
+  `git add` and `commit` don't work, and package caches under the home folder can't be written. The sandbox only
+  limits where the agent's shell tool writes; reads and the network stay open, and everything else that runs
+  commands is outside it: hooks, formatters, LSP servers, scheduled checks, MCP servers, shell placeholders in
+  command templates, your own `!` commands, the worktree setup command and the embedded terminal.
+
 ## 1.4.1 (2026-11-24)
 
 - Security & reliability hardening from a full pass over 1.3.0/1.4.0:

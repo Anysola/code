@@ -1851,7 +1851,8 @@ pub async fn worktree_apply(
 }
 
 /// Undoes the last commit this session applied onto the main folder, as long as the main folder's
-/// `HEAD` is still that exact commit and none of its files have uncommitted or staged edits. The
+/// `HEAD` is a branch still at that exact commit, none of its files have uncommitted or staged
+/// edits, and nothing (ignored files included) is where a file it removed comes back. The
 /// worktree's own files are kept intact and its base moves back to the undone commit's parent.
 #[tauri::command]
 pub async fn worktree_undo_apply(
@@ -1923,6 +1924,14 @@ fn undo_apply(row: &SessionWorktreeRow) -> Result<String, String> {
     if let Some(what) = operation(&top) {
         return Err(format!("Finish the {what} in the main folder first."));
     }
+    // On a branch: a detached HEAD would be rewound while the branch the apply went to keeps
+    // the commit. (Another branch checked out at the same commit isn't caught: the row doesn't
+    // keep which branch the apply went to.)
+    let branch = read_git(&top, &["symbolic-ref", "-q", "HEAD"])
+        .filter(|b| !b.is_empty())
+        .ok_or_else(|| {
+            "The main folder isn’t on a branch (detached HEAD). Check out the branch the commit was applied to first.".to_string()
+        })?;
     let head = read_git(&top, &["rev-parse", "HEAD"])
         .ok_or_else(|| "Couldn’t read the main folder’s commit.".to_string())?;
     if head != applied {
@@ -1941,10 +1950,16 @@ fn undo_apply(row: &SessionWorktreeRow) -> Result<String, String> {
     if !staged.status.success() {
         return Err("The main folder has staged changes. Commit or unstage them first.".into());
     }
+    in_the_way_of_undo(&top, applied, &parent)?;
+    // Files only touched (same content, new timestamp) aren't edits.
+    let _ = run_git(&top, &["update-index", "-q", "--refresh"]);
     if let Err(failure) = run_git(&top, &["read-tree", "-m", "-u", applied, &parent]) {
         return Err(match failure {
             Failure::Failed(m) if m.contains("not uptodate") || m.contains("would be overwritten") => {
-                "The main folder has uncommitted edits in files from that commit. Save or stash them first.".into()
+                match blocking_file(&m) {
+                    Some(file) => format!("The main folder has uncommitted edits in “{file}”, a file from that commit. Save or stash them first."),
+                    None => "The main folder has uncommitted edits in files from that commit. Save or stash them first.".into(),
+                }
             }
             Failure::Failed(m) => m,
             other => git::explain(Op::Commit, other),
@@ -1956,7 +1971,7 @@ fn undo_apply(row: &SessionWorktreeRow) -> Result<String, String> {
             "update-ref",
             "-m",
             "anysola: undo apply",
-            "HEAD",
+            &branch,
             &parent,
             applied,
         ],
@@ -1965,6 +1980,95 @@ fn undo_apply(row: &SessionWorktreeRow) -> Result<String, String> {
         return Err(git::explain(Op::Commit, failure));
     }
     Ok(parent)
+}
+
+/// Refuses, naming it, a file the undo would write over that Git doesn't guard: a path the
+/// applied commit removed (it comes back) that is in the main folder again, ignored files
+/// included, or something that isn't a real folder where one of its leading folders goes. As
+/// the apply's own check.
+fn in_the_way_of_undo(top: &Path, applied: &str, parent: &str) -> Result<(), String> {
+    // From the commit to its parent, `A`dded: in the parent, not in the commit.
+    let removed = run_git(
+        top,
+        &[
+            "diff-tree",
+            "-r",
+            "--no-renames",
+            "--name-only",
+            "-z",
+            "--diff-filter=A",
+            applied,
+            parent,
+        ],
+    )
+    .map_err(|f| git::explain(Op::Status, f))?;
+    // `-z`: names as they are (a quote, a tab or a newline in one isn't C-quoted).
+    let back: Vec<String> = removed
+        .split('\0')
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .collect();
+    // Where the commit put a folder in a removed file's place, the undo deletes that folder:
+    // Git guards its untracked files, not its ignored ones.
+    for path in &back {
+        if !top.join(path).symlink_metadata().is_ok_and(|m| m.is_dir()) {
+            continue;
+        }
+        let inside = run_git(
+            top,
+            &["ls-files", "--others", "-z", "--", &format!("{path}/")],
+        )
+        .map_err(|f| git::explain(Op::Status, f))?;
+        if let Some(file) = inside.split('\0').find(|p| !p.is_empty()) {
+            return Err(format!(
+                "“{file}” in the main folder would be deleted by undoing the apply (that commit made “{path}” a folder). Move it away first."
+            ));
+        }
+    }
+    let mut candidates: Vec<String> = Vec::new();
+    for path in &back {
+        let mut prefix = String::new();
+        for part in path.split('/') {
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(part);
+            if !candidates.contains(&prefix) {
+                candidates.push(prefix.clone());
+            }
+        }
+    }
+    let unknown: Vec<&String> = candidates.iter().collect();
+    let committed = in_commit(top, applied, &unknown);
+    let blocking = unknown.into_iter().find(|path| {
+        let in_the_way = match top.join(path).symlink_metadata() {
+            Ok(_) if back.contains(path) => true,
+            Ok(meta) => !meta.is_dir(),
+            Err(_) => false,
+        };
+        in_the_way && !committed.contains(*path)
+    });
+    match blocking {
+        Some(file) => Err(format!(
+            "“{file}” in the main folder would be overwritten by undoing the apply (that commit removed it). Move it away first."
+        )),
+        None => Ok(()),
+    }
+}
+
+/// The file a failed `read-tree` names: `Entry 'a.txt' not uptodate`, or the first one listed
+/// after `would be overwritten by merge:`.
+fn blocking_file(message: &str) -> Option<String> {
+    if let Some(rest) = message.split("Entry '").nth(1)
+        && let Some(end) = rest.find("' ")
+    {
+        return Some(rest[..end].to_string());
+    }
+    let (_, list) = message.split_once("would be overwritten by merge:")?;
+    list.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(str::to_string)
 }
 
 /// The apply itself, while `applying`. `Ok((commit, stash left))`; on `Err` the main folder is

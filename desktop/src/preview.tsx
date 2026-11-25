@@ -60,7 +60,11 @@ export function normalizeLocalUrl(raw: string): string | null {
     const u = new URL(withProto)
     if (u.protocol !== "http:" && u.protocol !== "https:") return null
     const host = u.hostname.toLowerCase()
-    if (host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1") {
+    if (host === "localhost" || host === "127.0.0.1") return u.toString()
+    // A CSP source can't name an IPv6 address (the webviews drop `[::1]` from `frame-src`), so the
+    // frame would stay blank: `localhost` reaches the same server.
+    if (host === "[::1]" || host === "::1") {
+      u.hostname = "localhost"
       return u.toString()
     }
     return null
@@ -288,6 +292,10 @@ export function PreviewPanel() {
               key={`${url}#${nonce}`}
               src={url}
               title="Local preview"
+              // No top navigation or popups: the embedded page can never take the app window
+              // elsewhere, not even on a click.
+              sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
+              referrerPolicy="no-referrer"
               style={vpWidth ? { width: vpWidth } : undefined}
               className={cn(
                 "h-full border-0 bg-background",

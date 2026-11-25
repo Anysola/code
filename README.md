@@ -53,7 +53,8 @@ allowed, with Stop allowing.
 
 Some things a project can never do, allowed or not: lift a rule or policy of yours that refuses; choose the agent
 your sessions run on when you chose one; turn off, hide or retype a built-in agent or one of yours; replace one of
-your commands; choose the shell or where worktrees are created. Rules name files, not spellings: a rule on
+your commands; choose the shell or where worktrees are created; turn the shell sandbox on or off, or turn LSP
+diagnostics on (it can turn them off). Rules name files, not spellings: a rule on
 `secrets/*` holds in a worktree, from a subfolder and through a symlink, and a symlink that leads out of the
 project is an outside path. A subagent is bound by the rules of every session above it.
 
@@ -83,6 +84,18 @@ main folder aren't picked up until Recreate. The file tools also never write the
 A worktree is not a sandbox. Only the file tools are held to it: shell commands run as anywhere else and can
 reach any folder, MCP servers run with the main folder as their folder and aren't confined either, and Git in a
 worktree shares the repository's branches and objects (it can move or push them).
+
+An experimental shell sandbox (Linux only, with bubblewrap) is off by default; `"sandbox": true` in
+`~/.anysola/config.json` turns it on (`{"network": false}` also cuts the network). It only limits where the
+agent's shell tool writes: just the session's folder (its worktree, or the main folder) is writable, everything
+else reads as usual and the network stays open. In a worktree session `git add`/`commit` don't work inside it,
+and package caches under your home folder can't be written. Everything else that runs commands is outside it:
+hooks, formatters, LSP servers, scheduled checks, MCP servers, shell placeholders in command templates, your own
+`!` commands, the worktree setup command and the embedded terminal. When it is on but can't start (bubblewrap
+missing, user namespaces restricted, or not Linux), shell commands are refused instead of run unconfined.
+
+Post-edit LSP diagnostics are off by default too: a language server runs the project's own build tooling outside
+any sandbox and without asking. `"lsp": true` in `~/.anysola/config.json` turns them on.
 
 A branch made from an older session (from before worktrees) starts from the main folder's current commit with
 only that session's own files as they were then; other uncommitted changes of the main folder aren't in it.

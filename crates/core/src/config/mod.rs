@@ -472,9 +472,20 @@ impl Config {
         {
             merge_formatter(&mut self.values, formatter);
         }
-        if document.project {
-            // A project document can never disable or weaken the user's or worktree's sandbox.
-            data.remove("sandbox");
+        // The shell sandbox is the user's to turn on or off: a repository must not choose it.
+        if document.project && data.remove("sandbox").is_some() {
+            self.warnings.push(format!(
+                "Ignoring \"sandbox\" in {}: it only works in your own config (~/.anysola/config.json).",
+                document.source.as_deref().unwrap_or("a project document")
+            ));
+        }
+        // LSP servers run the project's build tooling: a repository may turn them off, never on.
+        if document.project && data.get("lsp").is_some_and(|v| v != &Value::Bool(false)) {
+            data.remove("lsp");
+            self.warnings.push(format!(
+                "Ignoring \"lsp\" in {}: a project can only turn it off; turn it on in your own config (~/.anysola/config.json).",
+                document.source.as_deref().unwrap_or("a project document")
+            ));
         }
         for (key, value) in data {
             self.values.insert(key, value);

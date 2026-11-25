@@ -3,10 +3,15 @@
 //! `didOpen`/`didChange` + `didSave`, waits briefly for `textDocument/publishDiagnostics`, and
 //! returns errors/warnings to append to the tool output.
 //!
-//! Security: only well-known binaries resolved from `PATH` are ever spawned (never project-local
-//! executables under `node_modules/.bin` or `.venv/bin`, and never commands from project config).
-//! If no matching server is installed, or if config sets `"lsp": false`, diagnostics silently
-//! return empty with zero overhead.
+//! Off by default: only `"lsp": true` in the user's own (or managed) config turns it on, and a
+//! project document can only turn it off. A language server runs the project's build tooling
+//! (`cargo metadata`, build scripts, a workspace's own TypeScript), outside the shell sandbox and
+//! without the project approval its hooks or formatters wait for.
+//!
+//! Only well-known binaries resolved from `PATH` are spawned (never project-local executables
+//! under `node_modules/.bin` or `.venv/bin`, and never commands from project config). If no
+//! matching server is installed, or LSP is off, diagnostics silently return empty with zero
+//! overhead.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

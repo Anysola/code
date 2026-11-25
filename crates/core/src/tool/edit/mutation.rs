@@ -135,8 +135,9 @@ pub(crate) async fn format(
     Some(file.text)
 }
 
-/// Runs LSP diagnostics on a written file if a matching language server is installed and config
-/// does not set `"lsp": false`.
+/// Runs LSP diagnostics on a written file if a matching language server is installed and the
+/// user's own (or managed) config sets `"lsp": true`: off by default, since a language server
+/// runs the project's build tooling (a project document can only turn it off).
 pub(crate) async fn diagnose(
     ctx: &super::super::ToolContext,
     path: &Path,
@@ -144,12 +145,7 @@ pub(crate) async fn diagnose(
     text: &str,
 ) -> Option<String> {
     let lsp = ctx.host.lsp()?;
-    let enabled = ctx
-        .host
-        .config()
-        .get("lsp")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(true);
+    let enabled = ctx.host.config().get("lsp") == Some(&serde_json::Value::Bool(true));
     let diags = lsp.diagnose(&ctx.worktree, path, text, enabled).await;
     crate::lsp::format_diagnostics(resource, &diags)
 }

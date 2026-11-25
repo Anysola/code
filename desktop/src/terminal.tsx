@@ -231,14 +231,10 @@ function getOrCreate(directory: string): TermInstance {
       if (sel) void navigator.clipboard.writeText(sel)
       return false
     }
-    if (ctrl && e.key.toLowerCase() === "v") {
-      e.preventDefault()
-      e.stopPropagation()
-      void navigator.clipboard.readText().then((text) => {
-        if (text && inst.ptyId) void currentBridge().terminalWrite(inst.ptyId, text)
-      })
-      return false
-    }
+    // Paste: xterm must not send ^V, and the webview's own paste goes on (no preventDefault), so
+    // xterm's paste handler gets the text. That keeps bracketed paste (a pasted multi-line command
+    // waits for Enter) and needs no clipboard permission, which WebKitGTK never grants a page.
+    if (ctrl && e.key.toLowerCase() === "v") return false
     return true
   })
 

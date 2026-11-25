@@ -238,7 +238,11 @@ pub async fn delete_all_sessions(app: State<'_, App>) -> Answer {
             kept += 1;
             continue;
         }
-        // Its worktree goes too; one being applied is kept.
+        // Its worktree goes too (any terminal holding the folder open is closed first, as when
+        // deleting one); one being applied is kept.
+        if let Ok(Some(w)) = db.session_worktree(&id) {
+            app.terminals.close_in_directory(&w.directory);
+        }
         if crate::worktree::before_delete(core.as_ref(), &db, &id)
             .await
             .is_err()

@@ -355,17 +355,17 @@ impl ShellTool {
         std::fs::create_dir_all(&directory).map_err(|e| ToolError::unknown(e.to_string()))?;
         let id = crate::ids::shell();
         let file = directory.join(format!("{id}.out"));
-        let isolated = ctx.main != ctx.worktree;
-        let sandbox_cfg =
-            sandbox::SandboxConfig::from_value(ctx.host.config().get("sandbox"), isolated);
+        let sandbox_cfg = sandbox::SandboxConfig::from_value(ctx.host.config().get("sandbox"));
         let raw_args = select::args(&shell, &input.command);
+        // Asked for and unavailable: refused, never run unconfined.
         let (program, args, sandboxed) = sandbox::wrap(
             &shell,
             raw_args,
             &target.absolute,
             &ctx.worktree,
             sandbox_cfg,
-        );
+        )
+        .map_err(ToolError::unknown)?;
         let mut env = environment(ctx);
         if sandboxed {
             env.push(("ANYSOLA_SANDBOX".into(), "1".into()));
