@@ -4,7 +4,7 @@
  * says it changed; only streaming text lives here between reads.
  */
 import { useSyncExternalStore } from "react"
-import { handleTerminalEvent } from "./terminal"
+import { clearStaleTerminals, handleTerminalEvent } from "./terminal"
 
 import {
   getBridge,
@@ -573,6 +573,7 @@ export async function start() {
   started = true
   bridge = await getBridge()
   bridge.onEvent(onEvent)
+  clearStaleTerminals()
   onPrefsFailure((notice) => set({ notice, noticeLink: null }))
   // The update check waits for the preference that may turn it off; the first session too, so
   // its file changes and command output open as the preferences say.
@@ -2157,9 +2158,13 @@ export async function applyWorktree(
   }
 }
 
-export async function undoApplyWorktree(h: Here): Promise<{ commit: string } | { error: string }> {
+/** `pushed`: the user confirmed undoing a commit a remote branch already has. */
+export async function undoApplyWorktree(
+  h: Here,
+  pushed = false
+): Promise<{ commit: string } | { pushed: string[] } | { error: string }> {
   try {
-    return await bridge.worktreeUndoApply(h.directory, h.sessionId)
+    return await bridge.worktreeUndoApply(h.directory, h.sessionId, pushed)
   } catch (e) {
     return { error: message(e) }
   } finally {

@@ -749,7 +749,7 @@ export function Composer({ open }: { open: Open }) {
             {problem ?? (escHint ? "Press Esc again to stop" : `${model?.name} doesn’t read images.`)}
           </p>
         )}
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
           <Tooltip label="Attach images" side="top">
             <button
               onClick={() => picker.current?.click()}
@@ -770,7 +770,7 @@ export function Composer({ open }: { open: Open }) {
               e.target.value = ""
             }}
           />
-          <div className="flex h-8 items-center rounded-full bg-default/60 p-0.5" role="radiogroup" aria-label="Mode">
+          <div className="flex h-8 shrink-0 items-center rounded-full bg-default/60 p-0.5" role="radiogroup" aria-label="Mode">
             {modes
               .filter((m) => m.id !== "plan" || hasPlan)
               .map((m) => (
@@ -789,25 +789,27 @@ export function Composer({ open }: { open: Open }) {
                 </button>
               ))}
           </div>
-          <div className="ml-auto flex min-w-0 items-center gap-2">
+          {/* Narrow (the preview beside it): the model and the send button take a line of their own,
+              where the model's name gives way if it must; the send button always stays whole. */}
+          <div className="ml-auto flex max-w-full min-w-0 items-center justify-end gap-2">
             <PlaceChip open={open} />
             <ModelPicker open={open} />
             {running && empty ? (
               open.stopping && !stopStuck ? (
-                <button disabled className={btn("secondary", "sm", "gap-2 px-3")} aria-label="Stopping">
+                <button disabled className={btn("secondary", "sm", "shrink-0 gap-2 px-3")} aria-label="Stopping">
                   <Spinner className="size-3" />
                   Stopping…
                 </button>
               ) : (
                 <Tooltip label={open.stopping ? "Still stopping. Stop again" : "Stop"} keys="Esc Esc" side="top">
-                  <button onClick={stop} className={btn("secondary", "sm", "", true)} aria-label="Stop">
+                  <button onClick={stop} className={btn("secondary", "sm", "shrink-0", true)} aria-label="Stop">
                     <span className="size-2.5 rounded-[2px] bg-current" />
                   </button>
                 </Tooltip>
               )
             ) : (
               <Tooltip label={blocked ? "Sending waits for your limit to reset" : closed ?? (running ? "Queue for after this turn" : "Send")} side="top">
-                <button onClick={submit} disabled={empty || !!blocked || !!closed} className={btn("primary", "sm", "", true)} aria-label="Send">
+                <button onClick={submit} disabled={empty || !!blocked || !!closed} className={btn("primary", "sm", "shrink-0", true)} aria-label="Send">
                   <ArrowUp className="size-4" />
                 </button>
               </Tooltip>
@@ -882,10 +884,10 @@ function ModelPicker({ open }: { open: Open }) {
         onClick={() => setShow(!show)}
         aria-expanded={show}
         title={info.variant ? `${info.model} · ${efforts[info.variant] ?? capitalize(info.variant)}` : info.model}
-        className="text-dense flex h-8 max-w-56 min-w-0 items-center gap-1.5 rounded-full px-3 text-muted hover:bg-default/60 hover:text-foreground focus-visible:status-focused-field"
+        className="text-dense flex h-8 w-full max-w-56 min-w-0 items-center gap-1.5 rounded-full px-3 text-muted hover:bg-default/60 hover:text-foreground focus-visible:status-focused-field"
       >
         <span className="min-w-0 truncate">{info.model}</span>
-        {info.variant && <span className="shrink-0 text-muted/70">· {efforts[info.variant] ?? capitalize(info.variant)}</span>}
+        {info.variant && <span className="min-w-0 shrink-[4] truncate text-muted/70">· {efforts[info.variant] ?? capitalize(info.variant)}</span>}
         <ChevronDown className="size-3.5 shrink-0" />
       </button>
       <Popover open={show} onClose={close} side="top" align="end" className="w-72">

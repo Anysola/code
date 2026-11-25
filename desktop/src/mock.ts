@@ -681,7 +681,19 @@ function config0(): AgentConfig {
     autoCompact: true,
     snapshots: true,
     shell: null,
-    shellDetected: "/usr/bin/zsh",
+    ...(new URLSearchParams(location.search).get("os") === "windows"
+      ? {
+          shellDetected: "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+          hooksShellDetected: "C:\\Program Files\\Git\\bin\\bash.exe",
+        }
+      : { shellDetected: "/usr/bin/zsh", hooksShellDetected: "/usr/bin/zsh" }),
+    lsp: false,
+    sandbox: false,
+    // `?sandbox=off` shows the switch on a computer where bubblewrap can't start.
+    sandboxUnavailable:
+      new URLSearchParams(location.search).get("sandbox") === "off"
+        ? "bubblewrap can’t start here: this system restricts unprivileged user namespaces."
+        : null,
     overridden: [{ key: "websearch", file: `${WEB}/anysola.json` }],
     warnings: [],
   }
@@ -1148,7 +1160,34 @@ export function mockBridge(): Bridge {
   /** `five`: the `all` file, with rules and downloads waiting too. */
   const allScene = trustScene === "all" || trustScene === "five"
   const hookScene = empty ? "none" : (params.get("hooks") ?? (allScene ? "waiting" : "user"))
+  // `?os=windows`: hooks run in Git Bash, and a hook from the 1.2 PowerShell starter keeps PowerShell.
+  const windows = params.get("os") === "windows"
   let userHooks: MockHook[] = hookScene === "none" ? [] : hookScene === "all" ? [...userHooks0, envHook] : [...userHooks0]
+  if (windows && hookScene !== "none")
+    userHooks = [
+      {
+        id: "hk_9",
+        event: "Stop",
+        matcher: null,
+        command: "$out = npm test --silent 2>&1 | Out-String; if ($LASTEXITCODE) { [Console]::Error.Write($out); exit 2 }",
+        timeout: 600,
+        shell: "powershell",
+        source: CONFIG,
+        scope: "user",
+      },
+      ...userHooks,
+    ]
+  // As the core resolves a hook's shell here: Windows by name, elsewhere a path or one on PATH.
+  const resolveShell = (own: string | null | undefined, fallback: string) => {
+    if (!own) return fallback
+    if (windows)
+      return (
+        { powershell: "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", cmd: "C:\\WINDOWS\\system32\\cmd.exe", bash: fallback }[
+          own.toLowerCase()
+        ] ?? own
+      )
+    return own.startsWith("/") || ["bash", "zsh", "sh"].includes(own) ? own : fallback
+  }
   let hookFiles = (
     {
       waiting: [projectFile(null)],
@@ -1165,10 +1204,10 @@ export function mockBridge(): Bridge {
   let hookIds = 10
   const hooksNow = (): Hooks => {
     // Where hooks run, as the core answers it (`Core::hook_shell`).
-    const shell = "bash"
+    const shell = windows ? "C:\\Program Files\\Git\\bin\\bash.exe" : "/usr/bin/zsh"
     const active = (h: MockHook): Hook => ({
       ...h,
-      runsIn: (h.scope === "project" ? null : h.shell) ?? shell,
+      runsIn: resolveShell(h.scope === "project" ? null : h.shell, shell),
       active: h.scope === "managed" || (!hooksOff && (h.scope === "user" || hookFiles.some((f) => f.path === h.source && f.decision === "allowed"))),
     })
     const files = hookFiles.map((f) => ({ ...f, hooks: f.hooks.map(active) }))
@@ -1405,6 +1444,7 @@ export function mockBridge(): Bridge {
     matcher: draft.matcher || null,
     command: draft.command,
     timeout: draft.timeout ?? (draft.event === "UserPromptSubmit" ? 30 : 600),
+    shell: draft.shell ?? null,
     source: CONFIG,
     scope: "user",
   })
@@ -1842,9 +1882,11 @@ export function mockBridge(): Bridge {
         emit({ type: "notice", message: "Stopped 2 background commands for the apply: pnpm dev, pnpm vitest --watch pricing" })
       return { commit, stashLeft: stash && review.has("apply-stash-left") ? "stash@{0}" : null }
     },
-    async worktreeUndoApply(_directory, sessionId) {
+    async worktreeUndoApply(_directory, sessionId, pushed) {
       const row = worktreeRow(sessionId)
       if (!row.worktree?.appliedCommit) throw new Error("There’s no applied commit to undo.")
+      // `?review=pushed`: the applied commit is on the remote already.
+      if (review.has("pushed") && !pushed) return { pushed: ["origin/main"] }
       const parent = "3c1a9f4001"
       Object.assign(row.worktree, { state: "ready", baseCommit: parent, appliedCommit: null })
       worktreeChanged(row)
@@ -2509,7 +2551,9 @@ export function mockBridge(): Bridge {
       emit({ type: "terminalData", id, data: btoa(out) })
     },
     async terminalResize() {},
+    async terminalAck() {},
     async terminalClose() {},
+    async terminalCloseAll() {},
     async pickFolder() {
       return WEB
     },

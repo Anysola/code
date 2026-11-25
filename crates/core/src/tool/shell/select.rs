@@ -58,6 +58,24 @@ pub fn resolve_for_hooks(configured: Option<&str>) -> String {
         .clone()
 }
 
+/// The embedded terminal's shell: `configured`, else `$SHELL`, whichever resolves to an
+/// executable (fish and nu too: only the agent can't drive them), else the OS fallback.
+pub fn resolve_for_terminal(configured: Option<&str>) -> String {
+    let shell = env::var("SHELL").ok();
+    [configured, shell.as_deref()]
+        .into_iter()
+        .flatten()
+        .filter(|f| !f.trim().is_empty())
+        .find_map(|f| executable(f.trim()))
+        .unwrap_or_else(|| {
+            if cfg!(windows) {
+                windows_fallback()
+            } else {
+                unix_fallback()
+            }
+        })
+}
+
 fn select_hooks_windows(file: Option<&str>) -> String {
     // Prefer Git Bash on Windows (even if SHELL=powershell.exe is set) so Claude Code-style
     // POSIX hooks work out of the box when Git for Windows is installed.
@@ -268,6 +286,27 @@ fn display(path: PathBuf) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The agent never drives fish or nu, but the user's own terminal runs them.
+    #[test]
+    #[cfg(unix)]
+    fn the_terminal_runs_fish_the_agent_doesnt() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("anysola-fish-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fish = dir.join("fish");
+        std::fs::write(&fish, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&fish, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let fish = fish.display().to_string();
+        assert_eq!(resolve_for_terminal(Some(&fish)), fish);
+        assert_ne!(select(Some(&fish)), fish);
+        // One that isn't there falls back like the agent's.
+        assert_eq!(
+            resolve_for_terminal(Some("/no/such/fish")),
+            resolve_for_terminal(Some("/no/such/shell"))
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn names() {

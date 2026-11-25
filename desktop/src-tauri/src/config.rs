@@ -16,7 +16,7 @@ use crate::{Answer, App, core_for, info, text};
 const ALIASES: [(&[&str], &[&str]); 1] = [(&["snapshots"], &["snapshot"])];
 
 /// The settings this screen writes: the key in `overridden`, its path in the file.
-const KEYS: [(&str, &[&str]); 7] = [
+const KEYS: [(&str, &[&str]); 9] = [
     ("model", &["model"]),
     ("websearch", &["websearch"]),
     ("experimental.todo", &["experimental", "todo"]),
@@ -27,6 +27,8 @@ const KEYS: [(&str, &[&str]); 7] = [
     ("compaction.auto", &["compaction", "auto"]),
     ("snapshots", &["snapshots"]),
     ("shell", &["shell"]),
+    ("lsp", &["lsp"]),
+    ("sandbox", &["sandbox"]),
 ];
 
 const DEPTH: (u64, u64) = (1, 3);
@@ -107,12 +109,70 @@ fn values(data: &Map<String, Value>) -> Value {
         "autoCompact": bool_at(data, &["compaction", "auto"], true),
         "snapshots": bool_at(data, &["snapshots"], true),
         "shell": data.get("shell").and_then(Value::as_str).filter(|s| !s.is_empty()),
+        // Read as the core reads them: only `true` turns LSP on; the sandbox's value may be an object.
+        "lsp": data.get("lsp") == Some(&Value::Bool(true)),
+        "sandbox": anysola_core::tool::shell::sandbox::SandboxConfig::from_value(data.get("sandbox")).enabled,
     })
+}
+
+/// Whether the shell sandbox can start on this computer: None when it can, else why not.
+fn sandbox_unavailable() -> Option<&'static str> {
+    sandbox_unavailable_on(cfg!(target_os = "linux"), bwrap_found(), bwrap_starts)
+}
+
+fn sandbox_unavailable_on(
+    linux: bool,
+    installed: bool,
+    starts: impl FnOnce() -> bool,
+) -> Option<&'static str> {
+    if !linux {
+        Some("It only works on Linux.")
+    } else if !installed {
+        Some("bubblewrap (bwrap) isn’t installed on this computer.")
+    } else if !starts() {
+        Some("bubblewrap can’t start here: this system restricts unprivileged user namespaces.")
+    } else {
+        None
+    }
+}
+
+fn bwrap_found() -> bool {
+    anysola_core::which::which("bwrap").is_some()
+}
+
+#[cfg(target_os = "linux")]
+fn bwrap_starts() -> bool {
+    anysola_core::tool::shell::sandbox::bwrap_path().is_some()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn bwrap_starts() -> bool {
+    false
+}
+
+/// `sandbox` written as the user's value allows: an object keeps its other keys (`network`),
+/// with `"enabled": false` to turn it off; otherwise `true`, or no key (off is the default).
+fn sandbox_value(current: Option<&Value>, on: bool) -> Option<Value> {
+    match current {
+        Some(Value::Object(map)) => {
+            let mut map = map.clone();
+            if on {
+                map.remove("enabled");
+            } else {
+                map.insert("enabled".into(), json!(false));
+            }
+            Some(Value::Object(map))
+        }
+        _ => on.then_some(json!(true)),
+    }
 }
 
 /// The file's text with the patch applied: only the keys present, a default value removing its
 /// key (a null `model` or `shell` too).
 fn apply(text: &str, patch: &Map<String, Value>) -> Result<String, String> {
+    let sandbox_now = jsonc::parse(text)
+        .ok()
+        .and_then(|v| v.get("sandbox").cloned());
     let mut text = text.to_string();
     let flag = |key: &str| -> Result<Option<bool>, String> {
         match patch.get(key) {
@@ -173,6 +233,12 @@ fn apply(text: &str, patch: &Map<String, Value>) -> Result<String, String> {
     if let Some(shell) = name("shell")? {
         put(&["shell"], shell.map(Value::from))?;
     }
+    if let Some(on) = flag("lsp")? {
+        put(&["lsp"], on.then_some(json!(true)))?;
+    }
+    if let Some(on) = flag("sandbox")? {
+        put(&["sandbox"], sandbox_value(sandbox_now.as_ref(), on))?;
+    }
     Ok(text)
 }
 
@@ -211,12 +277,15 @@ fn answer(app: &App, core: &anysola_core::api::Core) -> Answer {
     } else {
         json!(detected)
     };
-    let hooks_detected = anysola_core::tool::shell::hook_shell(None);
+    // Where hooks without a shell of their own run, as the core runs them (its config's `shell`,
+    // the legacy and managed files' too).
+    let hooks_detected = core.hook_shell(None);
     out["hooksShellDetected"] = if hooks_detected.is_empty() {
         Value::Null
     } else {
         json!(hooks_detected)
     };
+    out["sandboxUnavailable"] = json!(sandbox_unavailable());
     out["overridden"] = json!(overridden);
     out["warnings"] = json!(warnings);
     Ok(out)
@@ -317,7 +386,8 @@ mod tests {
         assert_eq!(
             values(&Map::new()),
             json!({"model": null, "websearch": true, "todo": false, "subagentDepth": 1,
-                   "autoCompact": true, "snapshots": true, "shell": null})
+                   "autoCompact": true, "snapshots": true, "shell": null, "lsp": false,
+                   "sandbox": false})
         );
         let data = patch(
             json!({"model": "anysola/claude-sonnet-5-5#high", "websearch": false,
@@ -327,6 +397,54 @@ mod tests {
         assert_eq!(v["model"], "claude-sonnet-5-5");
         assert_eq!(v["websearch"], false);
         assert_eq!(v["subagentDepth"], 3);
+    }
+
+    /// Both stay off unless the user turns them on; turning the sandbox off keeps the rest of
+    /// an object the user wrote.
+    #[test]
+    fn lsp_and_the_sandbox_are_the_users_to_turn_on() {
+        let on = apply("{}", &patch(json!({"lsp": true, "sandbox": true}))).unwrap();
+        assert_eq!(parsed(&on), json!({"lsp": true, "sandbox": true}));
+        let v = values(parsed(&on).as_object().unwrap());
+        assert_eq!(
+            (v["lsp"].clone(), v["sandbox"].clone()),
+            (json!(true), json!(true))
+        );
+        let off = apply(&on, &patch(json!({"lsp": false, "sandbox": false}))).unwrap();
+        assert_eq!(parsed(&off), json!({}));
+        // Only `true` counts for LSP, as in the core.
+        assert_eq!(values(&patch(json!({"lsp": "yes"})))["lsp"], false);
+        let object = r#"{"sandbox": {"network": false}}"#;
+        assert_eq!(values(&patch(parsed(object)))["sandbox"], true);
+        let off = apply(object, &patch(json!({"sandbox": false}))).unwrap();
+        assert_eq!(
+            parsed(&off),
+            json!({"sandbox": {"network": false, "enabled": false}})
+        );
+        assert_eq!(values(parsed(&off).as_object().unwrap())["sandbox"], false);
+        let back = apply(&off, &patch(json!({"sandbox": true}))).unwrap();
+        assert_eq!(parsed(&back), json!({"sandbox": {"network": false}}));
+        assert!(apply("{}", &patch(json!({"lsp": 1}))).is_err());
+    }
+
+    #[test]
+    fn why_the_sandbox_cant_start() {
+        assert!(
+            sandbox_unavailable_on(false, true, || true)
+                .unwrap()
+                .contains("Linux")
+        );
+        assert!(
+            sandbox_unavailable_on(true, false, || true)
+                .unwrap()
+                .contains("installed")
+        );
+        assert!(
+            sandbox_unavailable_on(true, true, || false)
+                .unwrap()
+                .contains("namespaces")
+        );
+        assert_eq!(sandbox_unavailable_on(true, true, || true), None);
     }
 
     fn home(name: &str) -> (std::path::PathBuf, Paths) {

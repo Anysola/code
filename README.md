@@ -41,7 +41,8 @@ the reason, and JSON on stdout can add context or deny a call. Settings → Hook
 Hooks run in your `shell` setting; without one, on Windows in Git Bash when it is installed (so
 `"$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh` works as written), else in the shell commands use. A hook can name its own with a
 `shell` field next to its `command`, such as `"shell": "powershell"` for a PowerShell command; a project's hooks
-can't (the field is ignored there, as a project's `shell` setting is).
+can't (the field is ignored there, as a project's `shell` setting is). Settings → Hooks shows where each hook
+runs and can set its shell.
 
 Hooks only tighten: a hook can block a call or have you asked about it, never allow something your permissions
 would not. Hooks in `~/.anysola/config.json` run right away; a project's hooks run only once you approve them in

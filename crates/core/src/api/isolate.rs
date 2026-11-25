@@ -758,7 +758,9 @@ impl Core {
     }
 
     /// Refuses while a turn or a subagent of the session runs.
-    fn ensure_idle(&self, session_id: &str) -> Result<(), CoreError> {
+    /// Refuses (as releasing or unisolating the worktree would) while a turn or a subagent of the
+    /// session runs here: a front end checks it before closing what holds the worktree open.
+    pub fn ensure_idle(&self, session_id: &str) -> Result<(), CoreError> {
         if self.is_busy(session_id) || self.working(session_id) {
             return Err(busy());
         }
@@ -1823,6 +1825,8 @@ pub fn cleanup(db: &Db) -> Vec<Cleaned> {
                     cleaned.state = Some(WorktreeState::Missing);
                     cleaned.notice = Some("This session's folder is gone.".into());
                 }
+                // An undo cut off earlier is about the main folder, not this one.
+                cleaned.undo = row.undo_from.clone();
             }
             WorktreeState::Applying if row.undo_from.is_some() => {
                 // An undo, not an apply: told apart, never "an apply was cut off". The main
@@ -1875,8 +1879,11 @@ pub fn cleanup(db: &Db) -> Vec<Cleaned> {
                     cleaned.undo = None;
                 }
             }
-            // An undo cut off earlier whose main folder the desktop hasn't settled yet.
-            WorktreeState::Ready if row.undo_from.is_some() => {
+            // An undo cut off earlier whose main folder the desktop hasn't settled yet (the
+            // session's own folder may have gone since).
+            WorktreeState::Ready | WorktreeState::Missing | WorktreeState::Failed
+                if row.undo_from.is_some() =>
+            {
                 cleaned.undo = row.undo_from.clone();
             }
             WorktreeState::Applying => {

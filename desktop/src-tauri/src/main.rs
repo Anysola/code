@@ -1149,11 +1149,8 @@ async fn delete_session(app: State<'_, App>, directory: String, session_id: Stri
     if core.as_ref().is_some_and(|core| core.is_busy(&session_id)) {
         return Err("Stop the session before deleting it.".into());
     }
-    // Its worktree and branch go with it (close any terminal holding the folder open first).
-    if let Ok(Some(w)) = db.session_worktree(&session_id) {
-        app.terminals.close_in_directory(&w.directory);
-    }
-    worktree::before_delete(core.as_ref(), &db, &session_id).await?;
+    // Its worktree and branch go with it (what holds the folder open ends first).
+    worktree::before_delete(core.as_ref(), &db, &app.terminals, &session_id).await?;
     let removed = match &core {
         Some(core) => core.delete_session(&session_id).map_err(text)?,
         None => db.delete_session(&session_id).map_err(text)?,
@@ -1191,6 +1188,11 @@ fn main() {
             (None, Some(error.to_string()))
         }
     };
+    // Windows: hooks added from the ≤1.2 PowerShell starters keep running in PowerShell (once,
+    // before any core reads the file).
+    if cfg!(windows) {
+        hooks::pin_powershell_starters_at_start(&paths, db.as_deref());
+    }
     let (prefs, prefs_invalid) = prefs::Prefs::read(&paths.desktop_prefs());
     anysola_core::skill::set_claude_skills(prefs.sources.claude_skills);
     tauri::Builder::default()
@@ -1376,7 +1378,9 @@ fn main() {
             terminal::terminal_open,
             terminal::terminal_write,
             terminal::terminal_resize,
+            terminal::terminal_ack,
             terminal::terminal_close,
+            terminal::terminal_close_all,
         ])
         .build(tauri::generate_context!())
         .expect("the Anysola Code window failed to start")
@@ -1457,7 +1461,8 @@ mod tests {
             json!({"id": "ses_2", "title": "Renamed", "directory": "/work", "updated": 2, "forkOf": "ses_1",
                    "worktree": {"path": "/data/worktrees/work-abc123/s", "branch": "anysola/s",
                                 "baseBranch": "main", "baseCommit": "abc", "state": "ready", "error": null,
-                                "appliedCommit": null, "restored": null, "leftover": false, "bringing": false}})
+                                "appliedCommit": null, "restored": null, "leftover": false, "bringing": false,
+                                "applyBranch": null}})
         );
     }
 

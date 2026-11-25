@@ -21,6 +21,22 @@ branch.
   no longer reported as an apply cut off, and the note about main-folder edits kept in a stash survives an undo.
 - Recreating a worktree whose "Bring main in" wasn't finished makes that merge again with Git when the session
   worked during it, so the main folder's files no longer show up in Review as the session's own.
+- Settings › Hooks says which shell hooks run in, and each hook can pick its own (PowerShell, Git Bash or cmd on
+  Windows, or another by name or path); the starters are written for the shell picked. On Windows, hooks added
+  from the PowerShell starters of 1.2 and earlier get `"shell": "powershell"` once, so they run as they did then.
+- Undoing an apply only rewinds the branch the apply went to, puts the main folder back when the undo can't be
+  recorded, and an undo cut off by a crash is finished or put back at the next start. A commit you already pushed
+  is undone only after you confirm. When the main folder has moved on, the way out offered is `git revert`.
+- The embedded terminal keeps up with programs that print fast (`yes`, a long log) without freezing the window,
+  closing it ends the programs it started, reloading the window leaves no shell behind, and it opens your
+  `shell` setting or `$SHELL` (fish and nu included).
+- Discarding or deleting a worktree session (one, or all) closes its terminals and stops its language servers,
+  and only once nothing will refuse: a refused discard leaves your terminal open.
+- A previewed page's `alert`, `confirm` and `prompt` now do nothing instead of covering the whole app. The tablet
+  preset in a narrow preview scrolls instead of cutting off the page's left side, and a narrow message box no
+  longer puts the send button over the model picker.
+- Settings › Advanced has switches for LSP diagnostics and the shell sandbox (both still off by default), and
+  says when the sandbox can't start on this computer.
 
 ## 1.4.2 (2026-11-25)
 

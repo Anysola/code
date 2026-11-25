@@ -73,6 +73,7 @@ pub(crate) fn json(row: &SessionWorktreeRow) -> Value {
         "restored": row.restored,
         "leftover": row.leftover,
         "bringing": row.base_pending.is_some(),
+        "applyBranch": row.apply_branch,
     })
 }
 
@@ -108,6 +109,9 @@ pub(crate) fn cleanup_at_start(db: Option<Arc<Db>>) {
     };
     std::thread::spawn(move || {
         for cleaned in anysola_core::api::cleanup_worktrees(&db) {
+            if let Some(applied) = &cleaned.undo {
+                settle_undo(&db, &cleaned.session_id, applied);
+            }
             if let Some(notice) = &cleaned.notice {
                 anysola_core::log::warn(
                     "a session worktree was settled at start",
@@ -1588,21 +1592,18 @@ fn plan(row: &SessionWorktreeRow, markers: bool) -> Result<Plan, Value> {
             "-r",
             "--no-renames",
             "--numstat",
+            "-z",
             &head_tree,
             &result,
         ],
     )
     .unwrap_or_default();
     let (mut files, mut add, mut del, mut touched) = (0, 0u64, 0u64, Vec::new());
-    for line in numstat.lines() {
-        let mut parts = line.splitn(3, '\t');
-        let (a, d, path) = (parts.next(), parts.next(), parts.next());
+    for (a, d, path) in numstat_z(&numstat) {
         files += 1;
-        add += a.and_then(|a| a.parse().ok()).unwrap_or(0);
-        del += d.and_then(|d| d.parse().ok()).unwrap_or(0);
-        if let Some(path) = path {
-            touched.push(path.to_string());
-        }
+        add += a;
+        del += d;
+        touched.push(path);
     }
     let behind = read_git(&top, &["rev-list", "--count", &format!("{base}..{head}")])
         .and_then(|c| c.parse().ok())
@@ -1664,6 +1665,23 @@ fn plan(row: &SessionWorktreeRow, markers: bool) -> Result<Plan, Value> {
         behind,
         dirty,
     })
+}
+
+/// `diff-tree --numstat -z --no-renames` read: added and removed lines (0 for a binary file) and
+/// the path as it is (`-z`: a quote, a tab, a newline or a name beyond ASCII isn't C-quoted).
+fn numstat_z(out: &str) -> Vec<(u64, u64, String)> {
+    out.split('\0')
+        .filter(|r| !r.is_empty())
+        .filter_map(|record| {
+            let mut parts = record.splitn(3, '\t');
+            let (a, d, path) = (parts.next()?, parts.next()?, parts.next()?);
+            Some((
+                a.parse().unwrap_or(0),
+                d.parse().unwrap_or(0),
+                path.to_string(),
+            ))
+        })
+        .collect()
 }
 
 /// Which of `paths` the main folder's ignore rules match.
@@ -1851,20 +1869,30 @@ pub async fn worktree_apply(
 }
 
 /// Undoes the last commit this session applied onto the main folder, as long as the main folder's
-/// `HEAD` is a branch still at that exact commit, none of its files have uncommitted or staged
-/// edits, and nothing (ignored files included) is where a file it removed comes back. The
-/// worktree's own files are kept intact and its base moves back to the undone commit's parent.
+/// `HEAD` is the branch the apply went to, still at that exact commit, none of its files have
+/// uncommitted or staged edits, and nothing (ignored files included) is where a file it removed
+/// comes back. The worktree's own files are kept intact and its base moves back to the undone
+/// commit's parent. A commit a remote branch has is undone only once `pushed` says the user
+/// confirmed: until then the answer names those branches (`{"pushed": [...]}`) and nothing moves.
 #[tauri::command]
 pub async fn worktree_undo_apply(
     handle: AppHandle,
     app: State<'_, App>,
     directory: String,
     session_id: String,
+    pushed: Option<bool>,
 ) -> Answer {
     let core = core_for(&handle, &app, &directory).await?;
     let db = app.db()?.clone();
     if setup_running(&session_id) {
         return Err("The setup command is running. Stop it first.".into());
+    }
+    if !pushed.unwrap_or(false) {
+        let row = row_of(&db, &session_id)?;
+        let remotes = git::blocking(move || Ok(pushed_to(&row))).await?;
+        if !remotes.is_empty() {
+            return Ok(json!({"pushed": remotes}));
+        }
     }
     if !core
         .set_worktree_state(&session_id, WorktreeState::Ready, WorktreeState::Applying)
@@ -1874,40 +1902,143 @@ pub async fn worktree_undo_apply(
     }
     emit(&handle, &db, &session_id);
     let undone = {
-        let (db, id) = (db.clone(), session_id.clone());
+        let (core, db, id) = (core.clone(), db.clone(), session_id.clone());
         git::blocking(move || {
             let row = row_of(&db, &id)?;
-            Ok(undo_apply(&row))
+            let mark = |applied: &str| core.mark_undo(&id, applied).unwrap_or(false);
+            Ok(undo_apply(&row, &mark))
         })
         .await
     };
-    let undone = undone.and_then(|r| r);
+    let back_to_ready = |db: &Db| {
+        let _ = core.set_worktree_state(&session_id, WorktreeState::Applying, WorktreeState::Ready);
+        emit(&handle, db, &session_id);
+    };
     match undone {
-        Ok(parent) => match core.undo_apply(&session_id, &parent) {
+        Ok(Ok(undone)) => match core.undo_apply(&session_id, &undone.parent) {
             Ok(_) => {
                 emit(&handle, &db, &session_id);
-                Ok(json!({"commit": parent}))
+                Ok(json!({"commit": undone.parent}))
             }
             Err(err) => {
-                let _ = core.set_worktree_state(
-                    &session_id,
-                    WorktreeState::Applying,
-                    WorktreeState::Ready,
-                );
-                emit(&handle, &db, &session_id);
-                Err(plain_error(err))
+                // The main folder goes back to the applied commit, as the row still says.
+                let restored = git::blocking(move || Ok(redo_apply(&undone))).await;
+                if matches!(restored, Ok(true)) {
+                    anysola_core::api::clear_undo_mark(&db, &session_id);
+                    back_to_ready(&db);
+                    Err(plain_error(err))
+                } else {
+                    // Left marked and applying: the next start settles it from the main folder.
+                    emit(&handle, &db, &session_id);
+                    Err(format!("{} {STUCK}", plain_error(err)))
+                }
             }
         },
-        Err(error) => {
-            let _ =
-                core.set_worktree_state(&session_id, WorktreeState::Applying, WorktreeState::Ready);
+        Ok(Err(failed)) if failed.settled => {
+            anysola_core::api::clear_undo_mark(&db, &session_id);
+            back_to_ready(&db);
+            Err(failed.message)
+        }
+        Ok(Err(failed)) => {
             emit(&handle, &db, &session_id);
+            Err(format!("{} {STUCK}", failed.message))
+        }
+        // The git work itself failed to run: a mark it may have left is the start's to settle.
+        Err(error) => {
+            back_to_ready(&db);
             Err(error)
         }
     }
 }
 
-fn undo_apply(row: &SessionWorktreeRow) -> Result<String, String> {
+/// Said when an undo stopped halfway and couldn't put the main folder back.
+const STUCK: &str =
+    "The main folder may be halfway between the two commits; restart Anysola Code to settle it.";
+
+/// The remote branches that have the session's applied commit (`git branch -r --contains`).
+fn pushed_to(row: &SessionWorktreeRow) -> Vec<String> {
+    let Some(applied) = row.applied_commit.as_deref().filter(|s| !s.is_empty()) else {
+        return Vec::new();
+    };
+    let Some(top) = top_of(Path::new(&row.folder)) else {
+        return Vec::new();
+    };
+    read_git(
+        &top,
+        &[
+            "branch",
+            "-r",
+            "--contains",
+            applied,
+            // `origin/HEAD` points at another remote branch, listed on its own: left out.
+            "--format=%(if)%(symref)%(then)%(else)%(refname:short)%(end)",
+        ],
+    )
+    .unwrap_or_default()
+    .lines()
+    .map(str::trim)
+    .filter(|l| !l.is_empty())
+    .map(str::to_string)
+    .collect()
+}
+
+/// An undo done on the main folder: its branch is at `parent`, files and index too.
+#[derive(Debug)]
+struct Undone {
+    top: PathBuf,
+    branch: String,
+    applied: String,
+    parent: String,
+}
+
+/// An undo that didn't go through: `settled` when the main folder is as it was before it (the
+/// mark can go), false when it may be halfway (the mark stays for the next start).
+#[derive(Debug)]
+struct Failed {
+    message: String,
+    settled: bool,
+}
+
+impl From<String> for Failed {
+    fn from(message: String) -> Failed {
+        Failed {
+            message,
+            settled: true,
+        }
+    }
+}
+
+/// Puts the main folder back on the applied commit after an undo the core couldn't record:
+/// the branch, then the index and files. False when either step failed.
+fn redo_apply(undone: &Undone) -> bool {
+    run_git(
+        &undone.top,
+        &[
+            "update-ref",
+            "-m",
+            "anysola: undo apply failed",
+            &undone.branch,
+            &undone.applied,
+            &undone.parent,
+        ],
+    )
+    .is_ok()
+        && run_git(
+            &undone.top,
+            &["read-tree", "-m", "-u", &undone.parent, &undone.applied],
+        )
+        .is_ok()
+}
+
+/// Short for `refs/heads/<name>`.
+fn short_branch(full: &str) -> &str {
+    full.strip_prefix("refs/heads/").unwrap_or(full)
+}
+
+/// The undo on the main folder. Every refusal comes before `mark` (the row's undo mark, written
+/// before anything is touched); after it, a failure puts the main folder back or says it may not
+/// have (`Failed::settled`).
+fn undo_apply(row: &SessionWorktreeRow, mark: &dyn Fn(&str) -> bool) -> Result<Undone, Failed> {
     let applied = row
         .applied_commit
         .as_deref()
@@ -1916,28 +2047,58 @@ fn undo_apply(row: &SessionWorktreeRow) -> Result<String, String> {
     verify_worktree(row)?;
     let worktree = Path::new(&row.directory);
     if row.base_pending.is_some() || merge_open(worktree) {
-        return Err("Finish bringing main in before undoing the last apply.".into());
+        return Err("Finish bringing main in before undoing the last apply."
+            .to_string()
+            .into());
     }
     let folder = Path::new(&row.folder);
     let top = top_of(folder)
         .ok_or_else(|| "The main folder isn’t a Git repository anymore.".to_string())?;
     if let Some(what) = operation(&top) {
-        return Err(format!("Finish the {what} in the main folder first."));
+        return Err(format!("Finish the {what} in the main folder first.").into());
     }
-    // On a branch: a detached HEAD would be rewound while the branch the apply went to keeps
-    // the commit. (Another branch checked out at the same commit isn't caught: the row doesn't
-    // keep which branch the apply went to.)
-    let branch = read_git(&top, &["symbolic-ref", "-q", "HEAD"])
-        .filter(|b| !b.is_empty())
-        .ok_or_else(|| {
-            "The main folder isn’t on a branch (detached HEAD). Check out the branch the commit was applied to first.".to_string()
-        })?;
+    // On the branch the apply went to (when the row knows it; before 1.4.3, any branch): a
+    // detached HEAD, or another branch at the same commit, would be rewound while the apply's
+    // branch keeps the commit.
+    let current = read_git(&top, &["symbolic-ref", "-q", "HEAD"]).filter(|b| !b.is_empty());
+    let branch = match (&row.apply_branch, current) {
+        (Some(to), Some(current)) if *to == current => current,
+        (Some(to), Some(current)) => {
+            return Err(format!(
+                "The main folder is on {}, not {}, the branch the commit was applied to. Check out {} first.",
+                short_branch(&current),
+                short_branch(to),
+                short_branch(to)
+            )
+            .into());
+        }
+        (Some(to), None) => {
+            return Err(format!(
+                "The main folder isn’t on a branch (detached HEAD). Check out {}, the branch the commit was applied to, first.",
+                short_branch(to)
+            )
+            .into());
+        }
+        (None, Some(current)) => current,
+        (None, None) => {
+            return Err("The main folder isn’t on a branch (detached HEAD). Check out the branch the commit was applied to first.".to_string().into());
+        }
+    };
     let head = read_git(&top, &["rev-parse", "HEAD"])
         .ok_or_else(|| "Couldn’t read the main folder’s commit.".to_string())?;
     if head != applied {
-        return Err(
-            "The main folder has moved past the applied commit. Undo it with Git instead.".into(),
-        );
+        let short = &applied[..applied.len().min(7)];
+        let moved_on = run_git(&top, &["merge-base", "--is-ancestor", applied, &head]).is_ok();
+        return Err(if moved_on {
+            format!(
+                "The main folder has moved past the applied commit. To take it back, revert it with Git: git revert {short}"
+            )
+        } else {
+            format!(
+                "The main folder’s branch isn’t at the applied commit ({short}) anymore: it was reset or rewritten, so there’s nothing here to undo."
+            )
+        }
+        .into());
     }
     let parent = read_git(
         &top,
@@ -1948,11 +2109,19 @@ fn undo_apply(row: &SessionWorktreeRow) -> Result<String, String> {
         .run()
         .map_err(|f| git::explain(Op::Status, f))?;
     if !staged.status.success() {
-        return Err("The main folder has staged changes. Commit or unstage them first.".into());
+        return Err(
+            "The main folder has staged changes. Commit or unstage them first."
+                .to_string()
+                .into(),
+        );
     }
     in_the_way_of_undo(&top, applied, &parent)?;
     // Files only touched (same content, new timestamp) aren't edits.
     let _ = run_git(&top, &["update-index", "-q", "--refresh"]);
+    // From here on the main folder changes: a crash is told apart from an apply cut off.
+    if !mark(applied) {
+        return Err("This session’s apply changed meanwhile.".to_string().into());
+    }
     if let Err(failure) = run_git(&top, &["read-tree", "-m", "-u", applied, &parent]) {
         return Err(match failure {
             Failure::Failed(m) if m.contains("not uptodate") || m.contains("would be overwritten") => {
@@ -1963,7 +2132,8 @@ fn undo_apply(row: &SessionWorktreeRow) -> Result<String, String> {
             }
             Failure::Failed(m) => m,
             other => git::explain(Op::Commit, other),
-        });
+        }
+        .into());
     }
     if let Err(failure) = run_git(
         &top,
@@ -1976,10 +2146,52 @@ fn undo_apply(row: &SessionWorktreeRow) -> Result<String, String> {
             applied,
         ],
     ) {
-        let _ = run_git(&top, &["read-tree", "-m", "-u", &parent, applied]);
-        return Err(git::explain(Op::Commit, failure));
+        let back = run_git(&top, &["read-tree", "-m", "-u", &parent, applied]).is_ok();
+        return Err(Failed {
+            message: git::explain(Op::Commit, failure),
+            settled: back,
+        });
     }
-    Ok(parent)
+    Ok(Undone {
+        top,
+        branch,
+        applied: applied.to_string(),
+        parent,
+    })
+}
+
+/// At start, for an undo cut off with the main folder's branch still on the applied commit
+/// ([`anysola_core::api::Cleaned::undo`]): its index and files go back to that commit when the
+/// cut came after they moved to the parent; nothing is touched otherwise. The mark goes once
+/// the main folder is settled (kept, to try again, when putting it back failed).
+fn settle_undo(db: &Db, session_id: &str, applied: &str) {
+    let Ok(Some(row)) = db.session_worktree(session_id) else {
+        return;
+    };
+    let Some(top) = top_of(Path::new(&row.folder)) else {
+        return;
+    };
+    let head = read_git(&top, &["rev-parse", "HEAD"]);
+    let parent = read_git(
+        &top,
+        &["rev-parse", "--verify", "--quiet", &format!("{applied}^")],
+    );
+    if let (Some(head), Some(parent)) = (head, parent)
+        && head == applied
+        // The index is the parent's: `read-tree` ran, `update-ref` didn't.
+        && run_git(&top, &["diff-index", "--cached", "--quiet", &parent, "--"]).is_ok()
+        && run_git(&top, &["diff-index", "--cached", "--quiet", applied, "--"]).is_err()
+    {
+        let _ = run_git(&top, &["update-index", "-q", "--refresh"]);
+        if let Err(failure) = run_git(&top, &["read-tree", "-m", "-u", &parent, applied]) {
+            anysola_core::log::warn(
+                "an undo cut off couldn't be put back",
+                &[("session", session_id), ("error", &format!("{failure:?}"))],
+            );
+            return;
+        }
+    }
+    anysola_core::api::clear_undo_mark(db, session_id);
 }
 
 /// Refuses, naming it, a file the undo would write over that Git doesn't guard: a path the
@@ -2371,8 +2583,12 @@ pub async fn worktree_discard(
     })
     .await?;
     isolate_done(&session_id).await;
-    if let Ok(Some(w)) = db.session_worktree(&session_id) {
-        app.terminals.close_in_directory(&w.directory);
+    // What holds the folder goes only once nothing will refuse the discard (a refused one
+    // leaves the user's terminal alone).
+    if let Ok(Some(w)) = db.session_worktree(&session_id)
+        && releasable(&core, &w).is_ok()
+    {
+        let_go(&app.terminals, Some(&core), &w.directory).await;
     }
     let result = core.release_worktree(&session_id, Release::Discarded).await;
     emit(&handle, &db, &session_id);
@@ -2390,13 +2606,15 @@ pub async fn worktree_recreate(
     cleaned().await;
     let core = core_for(&handle, &app, &directory).await?;
     let db = app.db()?.clone();
-    let pending = row_of(&db, &session_id)
-        .map(|r| r.base_pending.is_some())
-        .unwrap_or(false);
+    let before = row_of(&db, &session_id).ok();
     let row = core.recreate_worktree(&session_id).await;
     emit(&handle, &db, &session_id);
     let row = row.map_err(plain_error)?;
-    if pending {
+    // Made again by git, or committed after all (the base moved to it): nothing was dropped.
+    let dropped = before.is_some_and(|b| {
+        b.base_pending.is_some() && row.base_pending.is_none() && row.base_commit == b.base_commit
+    });
+    if dropped {
         // The bring-in that was open is dropped with the folder: say so.
         let _ = handle.emit(
             "core",
@@ -2427,8 +2645,10 @@ pub async fn worktree_to_folder(
     isolate_done(&session_id).await;
     if let Ok(db) = app.db()
         && let Ok(Some(w)) = db.session_worktree(&session_id)
+        && core.ensure_idle(&session_id).is_ok()
+        && matches!(w.state, WorktreeState::Preparing | WorktreeState::Failed)
     {
-        app.terminals.close_in_directory(&w.directory);
+        let_go(&app.terminals, Some(&core), &w.directory).await;
     }
     let row = core.unisolate(&session_id).await.map_err(plain_error)?;
     crate::changed(&handle, &session_id);
@@ -2548,11 +2768,33 @@ pub(crate) fn crosses_apply(core: &Core, session_id: &str, message_id: &str) -> 
     .any(|c| since.contains(c))
 }
 
+/// Whether releasing the worktree would go through: what `release_worktree` refuses (a turn or
+/// a subagent running, an apply under way, already released), checked first.
+fn releasable(core: &Core, row: &SessionWorktreeRow) -> Result<(), String> {
+    core.ensure_idle(&row.session_id).map_err(plain_error)?;
+    if row.state.released() || row.state == WorktreeState::Applying {
+        return Err("This session’s worktree can’t be let go right now.".into());
+    }
+    Ok(())
+}
+
+/// Before a worktree folder is removed: the embedded terminals in it end (waited for, so
+/// Windows lets the folder go) and the language servers running for it stop.
+async fn let_go(terminals: &crate::terminal::Manager, core: Option<&Core>, directory: &str) {
+    let (manager, folder) = (terminals.clone(), directory.to_string());
+    let _ = tauri::async_runtime::spawn_blocking(move || manager.close_in_directory(&folder)).await;
+    if let Some(core) = core {
+        core.shutdown_lsp_root(Path::new(directory)).await;
+    }
+}
+
 /// Lets a session's worktree go before the session is deleted: with its core running, as a
-/// discard (its background commands stop); refused while an apply runs.
+/// discard (its background commands stop); refused while an apply runs. The terminals and
+/// language servers holding its folder end once nothing will refuse.
 pub(crate) async fn before_delete(
     core: Option<&Core>,
     db: &Db,
+    terminals: &crate::terminal::Manager,
     session_id: &str,
 ) -> Result<(), String> {
     let Some(row) = db.session_worktree(session_id).map_err(text)? else {
@@ -2568,12 +2810,16 @@ pub(crate) async fn before_delete(
     })
     .await;
     isolate_done(session_id).await;
-    if let Some(core) = core
-        && !row.state.released()
-    {
-        core.release_worktree(session_id, Release::Discarded)
-            .await
-            .map_err(plain_error)?;
+    match core {
+        Some(core) if !row.state.released() => {
+            releasable(core, &row)?;
+            let_go(terminals, Some(core), &row.directory).await;
+            core.release_worktree(session_id, Release::Discarded)
+                .await
+                .map_err(plain_error)?;
+        }
+        // The folder goes with the session's rows (`after_delete`).
+        _ => let_go(terminals, core, &row.directory).await,
     }
     Ok(())
 }

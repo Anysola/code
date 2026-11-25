@@ -186,23 +186,12 @@ export function GitMenu({ open, compact = false }: { open: Open; compact?: boole
 function WorktreeMenu({ open, worktree, compact }: { open: Open; worktree: SessionWorktree; compact: boolean }) {
   const git = useStore((s) => s.git)
   const [show, setShow] = useState(false)
-  const [undoing, setUndoing] = useState(false)
-  const [undoError, setUndoError] = useState<string | null>(null)
+  const here = hereOf(open)
+  const undo = useUndoApply(here, () => setShow(false))
   const close = useCallback(() => {
     setShow(false)
-    setUndoError(null)
-  }, [])
-  const here = hereOf(open)
-  const undo = async () => {
-    if (!here) return
-    setUndoing(true)
-    setUndoError(null)
-    const r = await undoApplyWorktree(here)
-    setUndoing(false)
-    if ("error" in r) return setUndoError(r.error)
-    close()
-    flash("Undid the last apply")
-  }
+    undo.reset()
+  }, [undo])
   // A folder that's gone has no changes to count (the last read of it may linger).
   const read = git?.repo && sameFolder(git.directory, worktree.path) && worktree.state !== "missing" ? git : null
   const changed = read?.files.length ?? 0
@@ -259,15 +248,16 @@ function WorktreeMenu({ open, worktree, compact }: { open: Open; worktree: Sessi
               >
                 Review & apply
               </button>
-              {worktree.state === "ready" && worktree.appliedCommit && (
-                <button disabled={undoing} onClick={() => void undo()} className={btn("ghost", "sm", "gap-1.5 text-muted")}>
-                  {undoing ? <Spinner className="size-3" /> : <RotateCcw className="size-3.5" />}
+              {worktree.state === "ready" && worktree.appliedCommit && !undo.pushed && (
+                <button disabled={undo.busy} onClick={() => void undo.run()} className={btn("ghost", "sm", "gap-1.5 text-muted")}>
+                  {undo.busy ? <Spinner className="size-3" /> : <RotateCcw className="size-3.5" />}
                   Undo apply
                 </button>
               )}
             </div>
           )}
-          {undoError && <p className="text-2xs text-danger select-text">{undoError}</p>}
+          {undo.pushed && <PushedConfirm undo={undo} />}
+          {undo.error && <p className="text-2xs text-danger select-text">{undo.error}</p>}
         </div>
       </Popover>
     </div>
@@ -864,29 +854,71 @@ function UndoApplyButton({
   onError?: (err: string | null) => void
   compact?: boolean
 }) {
+  const undo = useUndoApply(here, onUndone, onError)
+  if (undo.pushed) return <PushedConfirm undo={undo} />
+  return (
+    <span className={cn("inline-flex flex-col items-start gap-1", compact && "items-end")}>
+      <button disabled={undo.busy} onClick={() => void undo.run()} className={btn(compact ? "ghost" : "secondary", "sm", "gap-1.5 text-muted")}>
+        {undo.busy ? <Spinner className="size-3" /> : <RotateCcw className="size-3.5" />}
+        {compact ? "Undo" : "Undo apply"}
+      </button>
+      {undo.error && <span className="text-2xs text-danger select-text">{undo.error}</span>}
+    </span>
+  )
+}
+
+type UndoApply = ReturnType<typeof useUndoApply>
+
+/**
+ * Undoing the last apply, one way for every button that offers it: a commit a remote branch
+ * already has is undone only once the user confirms.
+ */
+function useUndoApply(here: Here | null, onUndone: () => void, onError?: (err: string | null) => void) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const run = async () => {
+  const [pushed, setPushed] = useState<string[] | null>(null)
+  const run = async (confirmed = false) => {
+    if (!here) return
     setBusy(true)
     setError(null)
     onError?.(null)
-    const r = await undoApplyWorktree(here)
+    const r = await undoApplyWorktree(here, confirmed)
     setBusy(false)
     if ("error" in r) {
+      setPushed(null)
       if (onError) onError(r.error)
       else setError(r.error)
       return
     }
+    if ("pushed" in r) return setPushed(r.pushed)
+    setPushed(null)
     flash("Undid the last apply")
     onUndone()
   }
+  const reset = () => {
+    setPushed(null)
+    setError(null)
+  }
+  return { busy, error, pushed, run, reset }
+}
+
+/** One line on what undoing a pushed commit does, and the confirm. */
+function PushedConfirm({ undo }: { undo: UndoApply }) {
+  const remotes = undo.pushed ?? []
   return (
-    <span className={cn("inline-flex flex-col items-start gap-1", compact && "items-end")}>
-      <button disabled={busy} onClick={() => void run()} className={btn(compact ? "ghost" : "secondary", "sm", "gap-1.5 text-muted")}>
-        {busy ? <Spinner className="size-3" /> : <RotateCcw className="size-3.5" />}
-        {compact ? "Undo" : "Undo apply"}
-      </button>
-      {error && <span className="text-2xs text-danger select-text">{error}</span>}
+    <span className="flex flex-col items-start gap-1.5" role="alert">
+      <span className="text-2xs text-warning">
+        Already pushed to <span className="font-mono">{remotes.join(", ")}</span>. Undoing moves only your local branch back.
+      </span>
+      <span className="flex items-center gap-1">
+        <button disabled={undo.busy} onClick={() => void undo.run(true)} className={btn("secondary", "sm", "gap-1.5")}>
+          {undo.busy ? <Spinner className="size-3" /> : <RotateCcw className="size-3.5" />}
+          Undo anyway
+        </button>
+        <button disabled={undo.busy} onClick={undo.reset} className={btn("ghost", "sm", "text-muted")}>
+          Keep it
+        </button>
+      </span>
     </span>
   )
 }

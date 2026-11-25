@@ -173,6 +173,18 @@ pub fn invocation(configured: Option<&str>, command: &str) -> (String, Vec<Strin
     (shell, args)
 }
 
+/// The shell's display name (`bash`, `pwsh`, `cmd`, …) for a path or a name.
+pub fn name_of(shell: &str) -> String {
+    select::name(shell)
+}
+
+/// The shell the desktop's embedded terminal runs: the user's `shell` setting, else `$SHELL`,
+/// fish and nu included (the user's own terminal, which the agent doesn't drive), else the
+/// platform's.
+pub fn terminal_shell(configured: Option<&str>) -> String {
+    select::resolve_for_terminal(configured)
+}
+
 /// The shell hooks run with: respects an explicit `configured` shell, and prefers Git Bash on
 /// Windows when none is configured.
 pub fn hook_shell(configured: Option<&str>) -> String {

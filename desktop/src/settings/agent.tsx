@@ -29,7 +29,7 @@ import {
   useLoad,
   Value,
 } from "./controls"
-import { shortPath } from "./hooks"
+import { shellName, shortPath } from "./hooks"
 import { EntryRow, ProjectDownloads, TrustRow } from "./trust"
 
 /** The folder the agent sections read, and whether it is the app's own; or why it can't be read. */
@@ -770,6 +770,8 @@ const KEYS: Record<keyof AgentConfigPatch, string[]> = {
   autoCompact: ["autoCompact", "compaction.auto", "compaction"],
   snapshots: ["snapshots", "snapshot"],
   shell: ["shell"],
+  lsp: ["lsp"],
+  sandbox: ["sandbox"],
 }
 
 export function AdvancedSection() {
@@ -842,6 +844,34 @@ function Advanced({ directory }: { directory: string }) {
                 onChange={(snapshots) => change({ snapshots })}
               />
               <Shell config={c} hint={over("shell")} onChange={(shell) => change({ shell })} />
+              <ConfigToggle
+                id="lsp"
+                label="Language server diagnostics"
+                hint={
+                  over("lsp") ??
+                  "After an edit the agent sees the errors a language server from your PATH reports; the server runs the project’s own config and plugins."
+                }
+                checked={c.lsp}
+                onChange={(lsp) => change({ lsp })}
+              />
+              <ConfigToggle
+                id="sandbox"
+                label="Shell sandbox"
+                hint={
+                  over("sandbox") ??
+                  (c.sandboxUnavailable && !c.sandbox ? (
+                    `Experimental: shell commands could write only inside the session’s folder. ${c.sandboxUnavailable}`
+                  ) : c.sandboxUnavailable ? (
+                    <span className="text-warning">On, but it can’t start here, so no shell command runs. {c.sandboxUnavailable}</span>
+                  ) : (
+                    "Experimental, Linux only: shell commands can write only inside the session’s folder, and Git commits don’t work in it."
+                  ))
+                }
+                checked={c.sandbox}
+                // Off stays reachable: a sandbox that's on but can't start stops every command.
+                disabled={!!c.sandboxUnavailable && !c.sandbox}
+                onChange={(sandbox) => change({ sandbox })}
+              />
             </Group>
             <WorktreeSetup directory={directory} />
             <ProjectFormatters directory={directory} />
@@ -953,19 +983,30 @@ function ConfigToggle({
   label,
   hint,
   checked,
+  disabled,
   onChange,
 }: {
   id: string
   label: string
   hint?: ReactNode
   checked: boolean
+  disabled?: boolean
   onChange: (on: boolean) => void
 }) {
   return (
     <Row label={label} hint={hint} id={`cfg-${id}`}>
-      <Toggle labelledBy={`cfg-${id}`} checked={checked} onChange={onChange} />
+      <Toggle labelledBy={`cfg-${id}`} checked={checked} disabled={disabled} onChange={onChange} />
     </Row>
   )
+}
+
+/** What runs commands, and hooks when they run elsewhere (Windows: Git Bash when installed). */
+function shellHint(config: AgentConfig, custom: boolean): string | undefined {
+  const hooks = config.hooksShellDetected ?? null
+  const differ = hooks !== null && config.shellDetected !== null && shellName(hooks) !== shellName(config.shellDetected)
+  if (custom) return differ ? `Hooks run in ${shellName(hooks)}` : undefined
+  if (!config.shellDetected) return "Picks one when a command runs"
+  return differ ? `Uses ${config.shellDetected}; hooks run in ${shellName(hooks)}` : `Uses ${config.shellDetected}`
 }
 
 function Shell({ config, hint, onChange }: { config: AgentConfig; hint?: ReactNode; onChange: (shell: string | null) => void }) {
@@ -983,7 +1024,7 @@ function Shell({ config, hint, onChange }: { config: AgentConfig; hint?: ReactNo
     <>
       <Row
         label="Shell"
-        hint={hint ?? (custom ? undefined : config.shellDetected ? `Uses ${config.shellDetected}` : "Picks one when a command runs")}
+        hint={hint ?? shellHint(config, custom)}
       >
         <Segmented
           label="Shell"

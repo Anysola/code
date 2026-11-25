@@ -287,19 +287,22 @@ export function PreviewPanel() {
 
         {/* Body */}
         {url ? (
-          <div className="flex min-h-0 flex-1 items-stretch justify-center overflow-auto bg-background">
+          // A preset wider than the panel starts at the left edge and scrolls (auto margins center
+          // it only when it fits; centering an overflowing child would cut its left side off).
+          <div className="flex min-h-0 flex-1 items-stretch overflow-auto bg-background">
             <iframe
               key={`${url}#${nonce}`}
               src={url}
               title="Local preview"
               // No top navigation or popups: the embedded page can never take the app window
-              // elsewhere, not even on a click.
-              sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
+              // elsewhere, not even on a click. No modals either: a page's alert/confirm/prompt
+              // would put a dialog over the whole app; they do nothing here.
+              sandbox="allow-scripts allow-same-origin allow-forms"
               referrerPolicy="no-referrer"
               style={vpWidth ? { width: vpWidth } : undefined}
               className={cn(
                 "h-full border-0 bg-background",
-                vpWidth ? "shrink-0" : "w-full",
+                vpWidth ? "mx-auto shrink-0" : "w-full",
                 resizing && "pointer-events-none"
               )}
             />

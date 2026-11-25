@@ -1772,6 +1772,21 @@ fn a_crash_mid_undo_is_told_apart_from_an_apply() {
         of(&again, &half).and_then(|c| c.undo).as_deref(),
         Some(half_commit.as_str())
     );
+    // The session's own folder going meanwhile doesn't hide the main folder's undo: reported as
+    // the row turns missing, and while it is.
+    std::fs::remove_dir_all(&row.directory).unwrap();
+    for _ in 0..2 {
+        let cleaned = anysola_core::api::cleanup_worktrees(&db(&env));
+        assert_eq!(
+            of(&cleaned, &half).and_then(|c| c.undo).as_deref(),
+            Some(half_commit.as_str()),
+            "{cleaned:?}"
+        );
+    }
+    assert_eq!(
+        core.session_worktree(&half).unwrap().unwrap().state,
+        WorktreeState::Missing
+    );
     assert!(anysola_core::api::clear_undo_mark(&db(&env), &half));
     let later = anysola_core::api::cleanup_worktrees(&db(&env));
     assert!(of(&later, &half).is_none(), "{later:?}");

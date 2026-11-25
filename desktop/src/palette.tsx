@@ -75,6 +75,8 @@ function useCommands(): Command[] {
         run: () => {
           void undoApplyWorktree({ directory, sessionId }).then((r) => {
             if ("error" in r) notify(r.error)
+            // Pushed already: the worktree menu asks before undoing it.
+            else if ("pushed" in r) notify(`${r.pushed.join(", ")} already has this commit. Undo it from the worktree menu, which asks first.`)
             else flash("Undid the last apply")
           })
         },

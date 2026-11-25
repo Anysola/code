@@ -861,7 +861,7 @@ fn undo_apply_reverts_head_and_keeps_worktree_changes() {
     row.applied_commit = Some(applied.clone());
     row.base_commit = applied.clone();
 
-    let parent = undo_apply(&row).unwrap();
+    let parent = undo(&row).unwrap();
     assert_eq!(parent, before_head);
     assert_eq!(
         read_git(&main, &["rev-parse", "HEAD"]).as_deref(),
@@ -873,6 +873,13 @@ fn undo_apply_reverts_head_and_keeps_worktree_changes() {
         std::fs::read_to_string(w(&row).join("undo_new.txt")).unwrap(),
         "created in worktree\n"
     );
+}
+
+/// The undo with its mark always granted: the parent it went back to, or why not.
+fn undo(row: &SessionWorktreeRow) -> Result<String, String> {
+    undo_apply(row, &|_| true)
+        .map(|u| u.parent)
+        .map_err(|f| f.message)
 }
 
 /// An applied commit made by the session in `w(row)`, recorded on the row as the apply does.
@@ -894,13 +901,13 @@ fn undo_apply_never_overwrites_an_ignored_file_where_a_removed_one_comes_back() 
     assert!(!main.join("b.txt").exists());
     write(&main, ".git/info/exclude", "b.txt\n");
     write(&main, "b.txt", "MY-SECRET\n");
-    let err = undo_apply(&row).unwrap_err();
+    let err = undo(&row).unwrap_err();
     assert!(err.contains("b.txt"), "{err}");
     assert_eq!(read(&main, "b.txt"), "MY-SECRET\n");
     assert_eq!(sandbox.git(&main, &["rev-parse", "HEAD"]), commit);
     // Moved away, the undo goes through and the committed file is back.
     std::fs::remove_file(main.join("b.txt")).unwrap();
-    undo_apply(&row).unwrap();
+    undo(&row).unwrap();
     assert_eq!(read(&main, "b.txt"), "bee\n");
 }
 
@@ -916,12 +923,12 @@ fn undo_apply_never_deletes_an_ignored_file_in_a_folder_that_was_a_file() {
     assert!(main.join("b.txt").is_dir());
     write(&main, ".git/info/exclude", "*.env\n");
     write(&main, "b.txt/sub/.env", "MY-SECRET\n");
-    let err = undo_apply(&row).unwrap_err();
+    let err = undo(&row).unwrap_err();
     assert!(err.contains("b.txt/sub/.env"), "{err}");
     assert_eq!(read(&main, "b.txt/sub/.env"), "MY-SECRET\n");
     assert_eq!(sandbox.git(&main, &["rev-parse", "HEAD"]), commit);
     std::fs::remove_dir_all(main.join("b.txt/sub")).unwrap();
-    undo_apply(&row).unwrap();
+    undo(&row).unwrap();
     assert_eq!(read(&main, "b.txt"), "bee\n");
 }
 
@@ -939,7 +946,7 @@ fn undo_apply_sees_a_removed_file_whose_name_git_quotes() {
     let commit = applied(&mut row, "remove it");
     write(&main, ".git/info/exclude", "*.cfg\n");
     write(&main, "a\"b.cfg", "MY-SECRET\n");
-    let err = undo_apply(&row).unwrap_err();
+    let err = undo(&row).unwrap_err();
     assert!(err.contains("a\"b.cfg"), "{err}");
     assert_eq!(read(&main, "a\"b.cfg"), "MY-SECRET\n");
     assert_eq!(sandbox.git(&main, &["rev-parse", "HEAD"]), commit);
@@ -954,7 +961,7 @@ fn undo_apply_refuses_on_a_detached_head() {
     write(&w(&row), "a.txt", "v1\n");
     let commit = applied(&mut row, "apply v1");
     sandbox.git(&main, &["checkout", "-q", "--detach"]);
-    let err = undo_apply(&row).unwrap_err();
+    let err = undo(&row).unwrap_err();
     assert!(err.contains("detached"), "{err}");
     assert_eq!(sandbox.git(&main, &["rev-parse", "HEAD"]), commit);
     assert_eq!(sandbox.git(&main, &["rev-parse", "main"]), commit);
@@ -976,7 +983,7 @@ fn undo_apply_goes_through_a_touched_but_unchanged_file() {
     file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(3600))
         .unwrap();
     drop(file);
-    assert_eq!(undo_apply(&row).unwrap(), before);
+    assert_eq!(undo(&row).unwrap(), before);
     assert_eq!(read(&main, "a.txt"), "one\ntwo\nthree\n");
 }
 
@@ -989,7 +996,7 @@ fn undo_apply_refuses_staged_changes() {
     let commit = applied(&mut row, "apply v1");
     write(&main, "b.txt", "staged\n");
     sandbox.git(&main, &["add", "b.txt"]);
-    let err = undo_apply(&row).unwrap_err();
+    let err = undo(&row).unwrap_err();
     assert!(err.contains("staged"), "{err}");
     assert_eq!(sandbox.git(&main, &["rev-parse", "HEAD"]), commit);
     assert_eq!(
@@ -1009,7 +1016,7 @@ fn undo_apply_refuses_when_main_moved_or_dirty() {
 
     // Uncommitted edit to an applied file blocks undo without touching it.
     write(&main, "a.txt", "local edit\n");
-    assert!(undo_apply(&row).is_err());
+    assert!(undo(&row).is_err());
     assert_eq!(
         std::fs::read_to_string(main.join("a.txt")).unwrap(),
         "local edit\n"
@@ -1018,6 +1025,234 @@ fn undo_apply_refuses_when_main_moved_or_dirty() {
     // A newer commit on main also blocks undo.
     sandbox.git(&main, &["add", "a.txt"]);
     sandbox.git(&main, &["commit", "-qm", "later commit"]);
-    let err = undo_apply(&row).unwrap_err();
+    let err = undo(&row).unwrap_err();
     assert!(err.contains("moved past"), "{err}");
+}
+
+/// The row knows the branch the apply went to: another branch checked out at the same commit is
+/// never rewound, and the undo moves that branch.
+#[test]
+fn undo_apply_rewinds_only_the_branch_the_apply_went_to() {
+    let sandbox = Sandbox::new("undo-branch");
+    let (main, mut row) = sandbox.session();
+    let before = sandbox.git(&main, &["rev-parse", "HEAD"]);
+    write(&w(&row), "a.txt", "v1\n");
+    let commit = applied(&mut row, "apply v1");
+    row.apply_branch = Some("refs/heads/main".into());
+    sandbox.git(&main, &["checkout", "-q", "-b", "feature"]);
+    let err = undo(&row).unwrap_err();
+    assert!(
+        err.contains("feature") && err.contains("Check out main"),
+        "{err}"
+    );
+    assert_eq!(sandbox.git(&main, &["rev-parse", "feature"]), commit);
+    assert_eq!(sandbox.git(&main, &["rev-parse", "main"]), commit);
+    sandbox.git(&main, &["checkout", "-q", "--detach"]);
+    let err = undo(&row).unwrap_err();
+    assert!(err.contains("detached") && err.contains("main"), "{err}");
+    sandbox.git(&main, &["checkout", "-q", "main"]);
+    assert_eq!(undo(&row).unwrap(), before);
+    assert_eq!(sandbox.git(&main, &["rev-parse", "main"]), before);
+    assert_eq!(sandbox.git(&main, &["rev-parse", "feature"]), commit);
+}
+
+/// "Moved past" only when the branch went on from the applied commit, and then the way out is
+/// `git revert`, never a reset; a branch put back elsewhere says so.
+#[test]
+fn undo_apply_says_how_the_branch_moved() {
+    let sandbox = Sandbox::new("undo-moved");
+    let (main, mut row) = sandbox.session();
+    let before = sandbox.git(&main, &["rev-parse", "HEAD"]);
+    write(&w(&row), "a.txt", "v1\n");
+    let commit = applied(&mut row, "apply v1");
+    write(&main, "b.txt", "later\n");
+    sandbox.git(&main, &["commit", "-qam", "later"]);
+    let err = undo(&row).unwrap_err();
+    assert!(err.contains("moved past"), "{err}");
+    assert!(
+        err.contains(&format!("git revert {}", &commit[..7])),
+        "{err}"
+    );
+    assert!(!err.contains("reset"), "{err}");
+    sandbox.git(&main, &["reset", "-q", "--hard", &before]);
+    let err = undo(&row).unwrap_err();
+    assert!(
+        !err.contains("moved past") && err.contains("isn’t at the applied commit"),
+        "{err}"
+    );
+}
+
+/// The mark goes on only once every check passed; refused without it, nothing changes.
+#[test]
+fn undo_apply_marks_only_once_it_touches_the_main_folder() {
+    let sandbox = Sandbox::new("undo-mark");
+    let (main, mut row) = sandbox.session();
+    write(&w(&row), "a.txt", "v1\n");
+    let commit = applied(&mut row, "apply v1");
+    let marked = std::cell::Cell::new(0);
+    let counting = |applied: &str| {
+        assert_eq!(applied, commit);
+        marked.set(marked.get() + 1);
+        true
+    };
+    write(&main, "b.txt", "staged\n");
+    sandbox.git(&main, &["add", "b.txt"]);
+    assert!(undo_apply(&row, &counting).is_err());
+    assert_eq!(marked.get(), 0, "a refusal never marks");
+    sandbox.git(&main, &["reset", "-q", "b.txt"]);
+    let before = state(&sandbox, &main);
+    let err = undo_apply(&row, &|_| false).unwrap_err();
+    assert!(err.settled);
+    assert_eq!(state(&sandbox, &main), before, "no mark, no change");
+    let undone = undo_apply(&row, &counting).unwrap();
+    assert_eq!(marked.get(), 1);
+    // The core couldn't record it: the main folder goes back to the applied commit.
+    assert!(redo_apply(&undone));
+    assert_eq!(state(&sandbox, &main), before);
+    assert_eq!(read(&main, "a.txt"), "v1\n");
+}
+
+/// A branch update git refuses puts the index and files back: settled, nothing half-done.
+#[test]
+#[cfg(unix)]
+fn undo_apply_puts_the_files_back_when_the_branch_cant_move() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new("undo-refused-ref");
+    let (main, mut row) = sandbox.session();
+    write(&w(&row), "a.txt", "v1\n");
+    let commit = applied(&mut row, "apply v1");
+    let hook = main.join(".git/hooks/reference-transaction");
+    write(
+        &main,
+        ".git/hooks/reference-transaction",
+        "#!/bin/sh\n[ \"$1\" = prepared ] && exit 1\nexit 0\n",
+    );
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let before = state(&sandbox, &main);
+    let err = undo_apply(&row, &|_| true).unwrap_err();
+    assert!(err.settled, "{err:?}");
+    assert_eq!(state(&sandbox, &main), before);
+    assert_eq!(sandbox.git(&main, &["rev-parse", "main"]), commit);
+}
+
+/// Cut off between the two steps (index and files on the parent, the branch on the applied
+/// commit): the start puts them back on the applied commit and drops the mark; a main folder
+/// the undo never touched only loses the mark.
+#[test]
+fn an_undo_cut_off_halfway_is_put_back_at_start() {
+    let sandbox = Sandbox::new("undo-settle");
+    let (main, mut row) = sandbox.session();
+    write(&w(&row), "a.txt", "v1\n");
+    write(&main, "keep.txt", "user's own\n");
+    let commit = applied(&mut row, "apply v1");
+    let parent = sandbox.git(&main, &["rev-parse", &format!("{commit}^")]);
+    sandbox.git(&main, &["read-tree", "-m", "-u", &commit, &parent]);
+    assert_eq!(read(&main, "a.txt"), "one\ntwo\nthree\n");
+    let db = Db::open(&sandbox.0.join("a.db")).unwrap();
+    row.undo_from = Some(commit.clone());
+    db.insert_session_worktree(&row).unwrap();
+    settle_undo(&db, &row.session_id, &commit);
+    assert_eq!(read(&main, "a.txt"), "v1\n");
+    assert_eq!(sandbox.git(&main, &["rev-parse", "HEAD"]), commit);
+    assert_eq!(
+        sandbox.git(&main, &["status", "--porcelain"]),
+        "?? keep.txt",
+        "only the user's own file differs"
+    );
+    let row_now = db.session_worktree(&row.session_id).unwrap().unwrap();
+    assert_eq!(row_now.undo_from, None);
+    // Nothing touched: only the mark goes.
+    let db2 = Db::open(&sandbox.0.join("b.db")).unwrap();
+    db2.insert_session_worktree(&row).unwrap();
+    let before = state(&sandbox, &main);
+    settle_undo(&db2, &row.session_id, &commit);
+    assert_eq!(state(&sandbox, &main), before);
+    assert_eq!(
+        db2.session_worktree(&row.session_id)
+            .unwrap()
+            .unwrap()
+            .undo_from,
+        None
+    );
+}
+
+/// A commit a remote branch has is named before undoing it.
+#[test]
+fn a_pushed_commit_is_named() {
+    let sandbox = Sandbox::new("undo-pushed");
+    let (main, mut row) = sandbox.session();
+    write(&w(&row), "a.txt", "v1\n");
+    applied(&mut row, "apply v1");
+    assert!(pushed_to(&row).is_empty());
+    let remote = sandbox.0.join("remote.git");
+    sandbox.git(
+        &sandbox.0,
+        &["init", "-q", "--bare", &remote.display().to_string()],
+    );
+    sandbox.git(
+        &main,
+        &["remote", "add", "origin", &remote.display().to_string()],
+    );
+    sandbox.git(&main, &["push", "-q", "origin", "main"]);
+    sandbox.git(&main, &["remote", "set-head", "origin", "main"]);
+    assert_eq!(pushed_to(&row), ["origin/main"]);
+}
+
+/// The apply reads its own diff's names as they are: one with a tab or beyond ASCII still
+/// matches the main folder's edit to it.
+#[test]
+fn the_applys_names_are_read_as_they_are() {
+    assert_eq!(
+        numstat_z("3\t1\ta\tb.txt\0-\t-\tlogo.png\0"),
+        [
+            (3, 1, "a\tb.txt".to_string()),
+            (0, 0, "logo.png".to_string())
+        ]
+    );
+    let sandbox = Sandbox::new("numstat");
+    let (main, row) = sandbox.session();
+    // Windows can't name a file with a tab: beyond ASCII there, which git quotes too.
+    let name = if cfg!(windows) {
+        "na\u{ef}ve.txt"
+    } else {
+        "tab\tna\u{ef}ve.txt"
+    };
+    write(&main, name, "one\n");
+    sandbox.git(&main, &["add", "-A"]);
+    sandbox.git(&main, &["commit", "-qm", "odd name"]);
+    let (_, tip) = bring_base(&row).unwrap();
+    let row = SessionWorktreeRow {
+        base_commit: tip,
+        ..row
+    };
+    write(&w(&row), name, "one\nsession\n");
+    write(&main, name, "user\none\n");
+    let plan = plan(&row, false).unwrap_or_else(|r| panic!("{r}"));
+    assert_eq!(plan.dirty, [name]);
+}
+
+/// Deleting a session whose worktree can't go yet (an apply under way) leaves its terminal
+/// alone; once it can, the terminal ends before the folder goes.
+#[test]
+#[cfg(unix)]
+fn a_refused_delete_keeps_the_terminal() {
+    let sandbox = Sandbox::new("delete-terminal");
+    let (_main, mut row) = sandbox.session();
+    let db = Db::open(&sandbox.0.join("a.db")).unwrap();
+    row.state = WorktreeState::Applying;
+    db.insert_session_worktree(&row).unwrap();
+    let terminals = crate::terminal::Manager::default();
+    let emit: crate::terminal::Emit = Arc::new(|_| {});
+    terminals
+        .open(emit, &row.directory, "/bin/sh", 80, 24)
+        .unwrap();
+    let refused =
+        tauri::async_runtime::block_on(before_delete(None, &db, &terminals, &row.session_id));
+    assert!(refused.is_err());
+    assert_eq!(terminals.count(), 1, "the user's terminal stays");
+    let db = Db::open(&sandbox.0.join("b.db")).unwrap();
+    row.state = WorktreeState::Ready;
+    db.insert_session_worktree(&row).unwrap();
+    tauri::async_runtime::block_on(before_delete(None, &db, &terminals, &row.session_id)).unwrap();
+    assert_eq!(terminals.count(), 0);
 }

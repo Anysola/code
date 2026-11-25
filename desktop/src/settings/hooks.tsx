@@ -103,6 +103,44 @@ export function shortPath(path: string, directory: string) {
 const isPath = (source: string) => /[\\/]/.test(source)
 
 // ---------------------------------------------------------------------------
+// Shells
+// ---------------------------------------------------------------------------
+
+/** A shell path as people call it: "Git Bash", "PowerShell", "cmd", "zsh". */
+export function shellName(path: string): string {
+  const file = (path.split(/[\\/]/).pop() ?? path).toLowerCase().replace(/\.exe$/, "")
+  if (file === "bash" && /\\git\\/i.test(path)) return "Git Bash"
+  if (file === "pwsh" || file === "powershell") return "PowerShell"
+  return file
+}
+
+/** A Windows path (the core's answer for where hooks run says which system this is). */
+const windowsPath = (path: string) => /^[A-Za-z]:[\\/]/.test(path)
+
+const isPowerShell = (path: string) => /(pwsh|powershell)(\.exe)?$/i.test(path)
+
+type ShellChoice = "default" | "powershell" | "bash" | "cmd" | "custom"
+
+/** The `shell` each choice writes ("custom": what was typed). */
+const SHELL_VALUE: Record<Exclude<ShellChoice, "default" | "custom">, string> = {
+  powershell: "powershell",
+  bash: "bash",
+  cmd: "cmd",
+}
+
+function shellChoice(shell: string | null | undefined, windows: boolean): ShellChoice {
+  const s = (shell ?? "").trim()
+  if (!s) return "default"
+  if (windows) {
+    const lower = s.toLowerCase()
+    if (lower === "powershell" || lower === "pwsh") return "powershell"
+    if (lower === "bash") return "bash"
+    if (lower === "cmd") return "cmd"
+  }
+  return "custom"
+}
+
+// ---------------------------------------------------------------------------
 // The folder's hooks, read once and shared
 // ---------------------------------------------------------------------------
 
@@ -146,7 +184,7 @@ export function HooksSection() {
 }
 
 /** The form's starting point: a new hook (blank or a starter's), or one being changed. */
-type Draft = HookDraft & { id: string | null }
+type Draft = HookDraft & { id: string | null; starter?: StarterId }
 
 function HookList({ directory }: { directory: string }) {
   const load = useHooks(directory)
@@ -155,16 +193,17 @@ function HookList({ directory }: { directory: string }) {
   const [editing, setEditing] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [switching, setSwitching] = useState(false)
-  const pwsh = usePowerShell(directory)
   return (
     <Loaded load={load} rows={3}>
       {(h) => {
+        // Where hooks without a shell of their own run, as the core answers it.
+        const shells = { path: h.shell ?? "", windows: windowsPath(h.shell ?? "") }
         const mine = h.hooks.filter((x) => x.scope === "user")
         const managed = h.hooks.filter((x) => x.scope === "managed")
         const any = h.hooks.length > 0 || h.files.length > 0
         const add = (draft?: Omit<Draft, "id">) => {
           setEditing(null)
-          setAdding((a) => ({ event: "PreToolUse", matcher: null, command: "", timeout: null, ...draft, id: null, n: (a?.n ?? 0) + 1 }))
+          setAdding((a) => ({ event: "PreToolUse", matcher: null, command: "", timeout: null, shell: null, ...draft, id: null, n: (a?.n ?? 0) + 1 }))
         }
         return (
           <>
@@ -206,14 +245,14 @@ function HookList({ directory }: { directory: string }) {
             {h.files
               .filter((f) => f.decision === null)
               .map((f) => (
-                <ProjectFile key={f.path} file={f} directory={directory} off={h.disabled} onList={load.set} />
+                <ProjectFile key={f.path} file={f} directory={directory} off={h.disabled} onList={load.set} defaultShell={shells.path} />
               ))}
             {adding && (
               <HookForm
                 key={adding.n}
                 directory={directory}
                 draft={adding}
-                pwsh={pwsh}
+                shells={shells}
                 onDone={(next) => {
                   setAdding(null)
                   if (next) load.set(next)
@@ -221,7 +260,12 @@ function HookList({ directory }: { directory: string }) {
               />
             )}
             <Group
-              label="Your hooks"
+              label={
+                <>
+                  Your hooks
+                  {shells.path && <span className="ml-2 font-normal">run in {shellName(shells.path)}</span>}
+                </>
+              }
               aside={
                 // The empty state has its own button.
                 !adding &&
@@ -241,15 +285,15 @@ function HookList({ directory }: { directory: string }) {
               }
             >
               {mine.length === 0 ? (
-                <Empty adding={!!adding} pwsh={pwsh} onAdd={add} />
+                <Empty adding={!!adding} shells={shells} onAdd={add} />
               ) : (
                 mine.map((x, i) =>
                   x.id && editing === x.id ? (
                     <HookForm
                       key={x.id}
                       directory={directory}
-                      draft={{ ...x, timeout: x.timeout === defaultTimeout(x.event) ? null : x.timeout, id: x.id }}
-                      pwsh={pwsh}
+                      draft={{ ...x, shell: x.shell ?? null, timeout: x.timeout === defaultTimeout(x.event) ? null : x.timeout, id: x.id }}
+                      shells={shells}
                       bare
                       onDone={(next) => {
                         setEditing(null)
@@ -261,6 +305,7 @@ function HookList({ directory }: { directory: string }) {
                       key={x.id ?? `${x.source}:${i}`}
                       hook={x}
                       directory={directory}
+                      defaultShell={shells.path}
                       onEdit={
                         x.id
                           ? () => {
@@ -278,12 +323,12 @@ function HookList({ directory }: { directory: string }) {
             {h.files
               .filter((f) => f.decision !== null)
               .map((f) => (
-              <ProjectFile key={f.path} file={f} directory={directory} off={h.disabled} onList={load.set} />
+              <ProjectFile key={f.path} file={f} directory={directory} off={h.disabled} onList={load.set} defaultShell={shells.path} />
             ))}
             {managed.length > 0 && (
               <Group label="From your organization" note="Set by your organization. They always run, even with hooks off.">
                 {managed.map((x, i) => (
-                  <HookRow key={`${x.source}:${i}`} hook={x} directory={directory} />
+                  <HookRow key={`${x.source}:${i}`} hook={x} directory={directory} defaultShell={shells.path} />
                 ))}
               </Group>
             )}
@@ -294,58 +339,70 @@ function HookList({ directory }: { directory: string }) {
   )
 }
 
-/** Whether hooks run in PowerShell here (Windows without a shell set), for the starters. */
-function usePowerShell(directory: string) {
-  const [pwsh, setPwsh] = useState(false)
-  useEffect(() => {
-    let live = true
-    currentBridge()
-      .configGet(directory)
-      .then(
-        (c) => live && setPwsh(/(pwsh|powershell)(\.exe)?$/i.test(c.shell ?? c.hooksShellDetected ?? c.shellDetected ?? "")),
-        () => {}
-      )
-    return () => {
-      live = false
-    }
-  }, [directory])
-  return pwsh
-}
+type Shells = { path: string; windows: boolean }
 
-/** Three hooks people start with, written for the shell they will run in. */
-function starters(pwsh: boolean): { label: string; hint: string; draft: Omit<Draft, "id"> }[] {
-  // PowerShell gets its own spelling; sh, bash, zsh and Git Bash share the other.
+type StarterId = "block" | "lint" | "test"
+
+/** A starter's command in PowerShell's spelling or the one sh, bash, zsh and Git Bash share. */
+function starterCommand(id: StarterId, pwsh: boolean): string {
   const failing = (run: string) =>
     pwsh
       ? `$out = ${run} 2>&1 | Out-String; if ($LASTEXITCODE) { [Console]::Error.Write($out); exit 2 }`
       : `${run} >&2 || exit 2`
+  switch (id) {
+    case "block":
+      return pwsh
+        ? `if ([Console]::In.ReadToEnd() -match 'git push.*(-f|--force)') { [Console]::Error.WriteLine('Force-pushing is off for the agent.'); exit 2 }`
+        : `if grep -qE 'git push.*(-f|--force)'; then echo 'Force-pushing is off for the agent.' >&2; exit 2; fi`
+    case "lint":
+      return failing("npm run lint --silent")
+    case "test":
+      return failing("npm test --silent")
+  }
+}
+
+/**
+ * Whether a starter written for this choice is PowerShell's spelling; null where neither fits
+ * (cmd, a shell typed in), so the command is left as it is.
+ */
+function starterPwsh(choice: ShellChoice, shells: Shells): boolean | null {
+  if (choice === "powershell") return true
+  if (choice === "bash") return false
+  if (choice === "default") return isPowerShell(shells.path)
+  return null
+}
+
+/**
+ * Three hooks people start with. On Windows each names the shell it is written for, so it keeps
+ * running there whatever the default becomes; elsewhere every default shell reads the same.
+ */
+function starters(shells: Shells): { label: string; hint: string; draft: Omit<Draft, "id"> }[] {
+  const pwsh = isPowerShell(shells.path)
+  const shell = shells.windows ? (pwsh ? "powershell" : "bash") : null
+  const draft = (starter: StarterId, event: HookEvent, matcher: string | null) => ({
+    starter,
+    event,
+    matcher,
+    timeout: null,
+    shell,
+    command: starterCommand(starter, pwsh),
+  })
   return [
-    {
-      label: "Block a command",
-      hint: "Stop the agent from force-pushing with git",
-      draft: {
-        event: "PreToolUse",
-        matcher: "Bash",
-        timeout: null,
-        command: pwsh
-          ? `if ([Console]::In.ReadToEnd() -match 'git push.*(-f|--force)') { [Console]::Error.WriteLine('Force-pushing is off for the agent.'); exit 2 }`
-          : `if grep -qE 'git push.*(-f|--force)'; then echo 'Force-pushing is off for the agent.' >&2; exit 2; fi`,
-      },
-    },
+    { label: "Block a command", hint: "Stop the agent from force-pushing with git", draft: draft("block", "PreToolUse", "Bash") },
     {
       label: "Check the code after every edit",
       hint: "Run the linter after each file change and tell the agent what it found",
-      draft: { event: "PostToolUse", matcher: "Edit|Write", timeout: null, command: failing("npm run lint --silent") },
+      draft: draft("lint", "PostToolUse", "Edit|Write"),
     },
     {
       label: "Don’t finish until tests pass",
       hint: "Run the tests when the agent finishes, and keep it working while they fail",
-      draft: { event: "Stop", matcher: null, timeout: null, command: failing("npm test --silent") },
+      draft: draft("test", "Stop", null),
     },
   ]
 }
 
-function Empty({ adding, pwsh, onAdd }: { adding: boolean; pwsh: boolean; onAdd: (d?: Omit<Draft, "id">) => void }) {
+function Empty({ adding, shells, onAdd }: { adding: boolean; shells: Shells; onAdd: (d?: Omit<Draft, "id">) => void }) {
   return (
     <>
       <div className="flex min-h-12 items-center gap-4 px-4 py-3">
@@ -359,7 +416,7 @@ function Empty({ adding, pwsh, onAdd }: { adding: boolean; pwsh: boolean; onAdd:
           </button>
         )}
       </div>
-      {starters(pwsh).map((s) => (
+      {starters(shells).map((s) => (
         <button
           type="button"
           key={s.label}
@@ -380,16 +437,28 @@ function Empty({ adding, pwsh, onAdd }: { adding: boolean; pwsh: boolean; onAdd:
 function HookRow({
   hook: h,
   directory,
+  defaultShell,
   onEdit,
   onList,
 }: {
   hook: Hook
   directory: string
+  /** Where hooks without a shell of their own run (the group's heading says it). */
+  defaultShell: string
   onEdit?: () => void
   onList?: (h: Hooks) => void
 }) {
+  // Where it runs, when that isn't where the heading says: its own shell (or the one it falls
+  // back to when that one isn't on this computer).
+  const runsIn = h.runsIn ? shellName(h.runsIn) : null
+  const own = h.shell ? shellName(h.shell) : null
+  const missing = own !== null && runsIn !== null && own.toLowerCase() !== runsIn.toLowerCase() && !(own === "bash" && runsIn === "Git Bash")
+  const elsewhere = runsIn !== null && (own !== null || runsIn !== shellName(defaultShell))
   // One that doesn't run is quieter; the switch or its file's state above says why.
-  const meta = [h.timeout !== defaultTimeout(h.event) && `Time limit ${h.timeout} s`].filter(Boolean)
+  const meta = [
+    elsewhere && !missing && `In ${runsIn}`,
+    h.timeout !== defaultTimeout(h.event) && `Time limit ${h.timeout} s`,
+  ].filter(Boolean)
   const editable = !!h.id && !!onList
   return (
     <div className="flex flex-wrap items-start gap-x-4 gap-y-2 px-4 py-3">
@@ -398,6 +467,11 @@ function HookRow({
           <span className="truncate text-sm">{when(h.event, h.matcher)}</span>
           {meta.length > 0 && <span className="text-2xs shrink-0 text-muted">{meta.join(" · ")}</span>}
         </div>
+        {missing && (
+          <span className="text-2xs text-warning">
+            Hooks can’t run in {h.shell} here, so it runs in {runsIn}
+          </span>
+        )}
         <span className="truncate font-mono text-xs text-muted" title={h.command}>
           {h.command}
         </span>
@@ -447,11 +521,13 @@ function ProjectFile({
   directory,
   off,
   onList,
+  defaultShell,
 }: {
   file: HookFile
   directory: string
   off: boolean
   onList: (h: Hooks) => void
+  defaultShell: string
 }) {
   const [busy, setBusy] = useState<boolean | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -528,7 +604,7 @@ function ProjectFile({
         )}
       </Row>
       {f.hooks.map((x, i) => (
-        <HookRow key={i} hook={x} directory={directory} />
+        <HookRow key={i} hook={x} directory={directory} defaultShell={defaultShell} />
       ))}
       {error && <p className="text-dense px-4 py-2.5 text-danger select-text">{error}</p>}
     </Group>
@@ -542,13 +618,13 @@ function ProjectFile({
 function HookForm({
   directory,
   draft,
-  pwsh,
+  shells,
   bare = false,
   onDone,
 }: {
   directory: string
   draft: Draft
-  pwsh: boolean
+  shells: Shells
   /** In place of its row, inside the list: no heading or surface of its own. */
   bare?: boolean
   onDone: (h: Hooks | null) => void
@@ -558,6 +634,18 @@ function HookForm({
   const [custom, setCustom] = useState(preset(draft.event, draft.matcher) === "custom" ? (draft.matcher ?? "") : "")
   const [command, setCommand] = useState(draft.command)
   const [timeout, setTimeoutText] = useState(draft.timeout === null ? "" : String(draft.timeout))
+  const [shell, setShell] = useState<ShellChoice>(shellChoice(draft.shell, shells.windows))
+  const [customShell, setCustomShell] = useState(shellChoice(draft.shell, shells.windows) === "custom" ? (draft.shell ?? "") : "")
+  const pwsh = starterPwsh(shell, shells) ?? isPowerShell(shells.path)
+  const pickShell = (next: ShellChoice) => {
+    // A starter not changed yet is written again for the shell picked.
+    if (draft.starter) {
+      const was = starterPwsh(shell, shells)
+      const now = starterPwsh(next, shells)
+      if (was !== null && now !== null && command === starterCommand(draft.starter, was)) setCommand(starterCommand(draft.starter, now))
+    }
+    setShell(next)
+  }
   const [tried, setTried] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -586,6 +674,7 @@ function HookForm({
     custom: matches && choice === "custom" && !custom.trim() ? (tools ? "Name the tools, like Bash or Edit|Write." : "Name the start, like startup.") : null,
     command: !command.trim() ? "Enter the command to run." : null,
     timeout: seconds && !/^[1-9]\d{0,5}$/.test(seconds) ? "A whole number of seconds." : null,
+    shell: shell === "custom" && !customShell.trim() ? "Enter a shell’s name or path." : null,
   }
   const valid = !Object.values(problems).some(Boolean)
 
@@ -597,6 +686,7 @@ function HookForm({
       matcher: !matches ? null : choice === "custom" ? custom.trim() : PRESET_MATCHER[choice],
       command: command.trim(),
       timeout: seconds ? Number(seconds) : null,
+      shell: shell === "default" ? null : shell === "custom" ? customShell.trim() : SHELL_VALUE[shell],
     }
     setSaving(true)
     setError(null)
@@ -620,6 +710,19 @@ function HookForm({
       ]
   // A session-start matcher the form has no word for stays as typed.
   if (event === "SessionStart" && choice === "custom") options.push({ id: "custom", label: "Custom" })
+
+  // Windows' shells by name; elsewhere the default (every one reads POSIX) or one typed in.
+  const shellOptions: { id: ShellChoice; label: string; title?: string }[] = [
+    { id: "default", label: "Default", title: shells.path ? `Where hooks run: ${shellName(shells.path)}` : undefined },
+    ...(shells.windows
+      ? ([
+          { id: "powershell", label: "PowerShell" },
+          { id: "bash", label: "Git Bash" },
+          { id: "cmd", label: "cmd" },
+        ] as const)
+      : []),
+    { id: "custom", label: "Other" },
+  ]
 
   const body = (
     <div className={cn("flex flex-col gap-4", bare ? "px-4 py-4" : "rounded-xl bg-surface p-4")}>
@@ -656,6 +759,28 @@ function HookForm({
                     ? "Tool names separated by |, or a pattern."
                     : "startup or resume."}
               </span>
+            </span>
+          </>
+        )}
+        <span className="text-2xs text-muted">Runs in</span>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <Segmented label="Runs in" value={shell} onChange={pickShell} options={shellOptions} />
+          {shell === "default" && shells.path && <span className="text-2xs text-muted">{shellName(shells.path)}</span>}
+        </div>
+        {shell === "custom" && (
+          <>
+            <span />
+            <span className="flex flex-col gap-1.5">
+              <input
+                value={customShell}
+                onChange={(e) => setCustomShell(e.target.value)}
+                placeholder={shells.windows ? "C:\\Program Files\\PowerShell\\7\\pwsh.exe" : "/bin/zsh"}
+                aria-label="Shell"
+                spellCheck={false}
+                aria-invalid={tried && !!problems.shell}
+                className={cn(input, "font-mono")}
+              />
+              {tried && problems.shell && <span className="text-2xs text-danger">{problems.shell}</span>}
             </span>
           </>
         )}

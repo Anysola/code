@@ -134,8 +134,24 @@ type TermInstance = {
 
 const instances = new Map<string, TermInstance>()
 const byPtyId = new Map<string, TermInstance>()
-/** Buffer early events that arrive before `terminalOpen` resolves and registers `byPtyId`. */
+/**
+ * Events that arrive before `terminalOpen` resolves and registers `byPtyId`. The shell sends at
+ * most about a megabyte before the window acknowledges any, so a live terminal's early output
+ * fits under `EARLY_BYTES`; an exit is always kept.
+ */
 const pendingEvents = new Map<string, TerminalEvent[]>()
+const pendingBytes = new Map<string, number>()
+const EARLY_BYTES = 2 * 1024 * 1024
+/** Terminals this window closed: what they still send (last output, the exit) is dropped. */
+const closedIds = new Set<string>()
+
+/** The window's start: shells a previous load of it left are ended before any opens. */
+let cleared: Promise<void> | null = null
+export function clearStaleTerminals() {
+  cleared ??= currentBridge()
+    .terminalCloseAll()
+    .catch(() => {})
+}
 
 function notifyInstance(inst: TermInstance) {
   inst.listeners.forEach((fn) => fn())
@@ -144,7 +160,9 @@ function notifyInstance(inst: TermInstance) {
 function applyEvent(inst: TermInstance, event: TerminalEvent) {
   if (event.type === "terminalData") {
     const bytes = decodeBase64(event.data)
-    inst.term.write(bytes)
+    const id = event.id
+    // Acknowledged once xterm has processed it: the shell waits while too much is unprocessed.
+    inst.term.write(bytes, () => void currentBridge().terminalAck(id, bytes.length).catch(() => {}))
     try {
       const chunk = inst.decoder.decode(bytes, { stream: true })
       inst.lineBuf = (inst.lineBuf + chunk).slice(-1024)
@@ -162,6 +180,7 @@ function applyEvent(inst: TermInstance, event: TerminalEvent) {
     }
   } else {
     byPtyId.delete(event.id)
+    closedIds.add(event.id)
     inst.ptyId = null
     inst.exited = { code: event.code }
     const suffix = event.code === null ? "" : ` (exit ${event.code})`
@@ -172,16 +191,28 @@ function applyEvent(inst: TermInstance, event: TerminalEvent) {
 
 /** Routed from `store.ts`'s single `core` event listener. */
 export function handleTerminalEvent(event: TerminalEvent) {
+  if (closedIds.has(event.id)) return
   const inst = byPtyId.get(event.id)
   if (!inst) {
     const list = pendingEvents.get(event.id) ?? []
-    if (list.length < 200) {
+    const size = event.type === "terminalData" ? event.data.length : 0
+    const held = pendingBytes.get(event.id) ?? 0
+    if (event.type === "terminalExit" || held + size <= EARLY_BYTES) {
       list.push(event)
       pendingEvents.set(event.id, list)
+      pendingBytes.set(event.id, held + size)
     }
     return
   }
   applyEvent(inst, event)
+}
+
+/** Forgets a terminal the window closed, and anything it sent before that went unclaimed. */
+function forget(id: string) {
+  closedIds.add(id)
+  byPtyId.delete(id)
+  pendingEvents.delete(id)
+  pendingBytes.delete(id)
 }
 
 function getOrCreate(directory: string): TermInstance {
@@ -254,6 +285,7 @@ async function startPty(inst: TermInstance) {
   inst.lineBuf = ""
   notifyInstance(inst)
   try {
+    await cleared
     const cols = Math.max(20, inst.term.cols || 80)
     const rows = Math.max(4, inst.term.rows || 14)
     const { id, shell } = await currentBridge().terminalOpen(inst.directory, cols, rows)
@@ -262,10 +294,9 @@ async function startPty(inst: TermInstance) {
     byPtyId.set(id, inst)
     // Flush any early output/exit events that arrived before `terminalOpen` returned.
     const buffered = pendingEvents.get(id)
-    if (buffered) {
-      pendingEvents.delete(id)
-      for (const ev of buffered) applyEvent(inst, ev)
-    }
+    pendingEvents.delete(id)
+    pendingBytes.delete(id)
+    for (const ev of buffered ?? []) applyEvent(inst, ev)
   } catch (e) {
     inst.error = e instanceof Error ? e.message : String(e)
   } finally {
@@ -277,8 +308,7 @@ async function startPty(inst: TermInstance) {
 async function restartPty(inst: TermInstance) {
   if (inst.ptyId) {
     const old = inst.ptyId
-    byPtyId.delete(old)
-    pendingEvents.delete(old)
+    forget(old)
     inst.ptyId = null
     await currentBridge().terminalClose(old).catch(() => {})
   }

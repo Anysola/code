@@ -393,6 +393,12 @@ export type AgentConfig = {
    * count; on Windows Git Bash when installed and no `shell` is set).
    */
   hooksShellDetected?: string | null
+  /** `lsp`: diagnostics from language servers after edits; only `true` turns it on (off by default). */
+  lsp: boolean
+  /** `sandbox` turned on (`true`, or an object without `"enabled": false`); off by default. */
+  sandbox: boolean
+  /** Why the shell sandbox can't start on this computer; null when it can. */
+  sandboxUnavailable: string | null
   /** Settings another file overrides for the open folder: the key and that file. */
   overridden: { key: string; file: string }[]
   /** What the config loader complained about. */
@@ -400,7 +406,7 @@ export type AgentConfig = {
 }
 
 export type AgentConfigPatch = Partial<
-  Pick<AgentConfig, "model" | "websearch" | "todo" | "subagentDepth" | "autoCompact" | "snapshots" | "shell">
+  Pick<AgentConfig, "model" | "websearch" | "todo" | "subagentDepth" | "autoCompact" | "snapshots" | "shell" | "lsp" | "sandbox">
 >
 
 export type McpServer = {
@@ -1007,7 +1013,11 @@ export type Bridge = {
     stash: boolean,
     markers?: boolean
   ): Promise<{ commit: string; stashLeft: string | null }>
-  worktreeUndoApply(directory: string, sessionId: string): Promise<{ commit: string }>
+  /**
+   * Undoes the last apply. A commit a remote branch already has is undone only with `pushed`
+   * true (the user confirmed): until then the answer names those branches and nothing moves.
+   */
+  worktreeUndoApply(directory: string, sessionId: string, pushed?: boolean): Promise<{ commit: string } | { pushed: string[] }>
   /** Deletes the worktree and its branch (irreversible: confirm first). The session stays readable. */
   worktreeDiscard(directory: string, sessionId: string): Promise<void>
   /** Merges the base branch into the session's branch; conflicts stay in the worktree as markers. */
@@ -1104,7 +1114,11 @@ export type Bridge = {
   terminalOpen(directory: string, cols: number, rows: number): Promise<{ id: string; shell: string }>
   terminalWrite(id: string, data: string): Promise<void>
   terminalResize(id: string, cols: number, rows: number): Promise<void>
+  /** xterm processed `bytes` of the terminal's output: the shell sends more once the window keeps up. */
+  terminalAck(id: string, bytes: number): Promise<void>
   terminalClose(id: string): Promise<void>
+  /** Every terminal of this window ends: called as the window loads, so a reload leaves no shell running. */
+  terminalCloseAll(): Promise<void>
 
   /** Closes the app even while turns run (they are stopped). */
   quit(): Promise<void>
@@ -1170,7 +1184,8 @@ function tauriBridge(): Bridge {
     worktreeApplyCheck: (directory, sessionId) => invoke("worktree_apply_check", { directory, sessionId }),
     worktreeApply: (directory, sessionId, message, onto, stash, markers) =>
       invoke("worktree_apply", { directory, sessionId, message, onto, stash, markers: markers ?? false }),
-    worktreeUndoApply: (directory, sessionId) => invoke("worktree_undo_apply", { directory, sessionId }),
+    worktreeUndoApply: (directory, sessionId, pushed) =>
+      invoke("worktree_undo_apply", { directory, sessionId, pushed: pushed ?? false }),
     worktreeDiscard: (directory, sessionId) => invoke("worktree_discard", { directory, sessionId }),
     worktreeBringBase: (directory, sessionId) => invoke("worktree_bring_base", { directory, sessionId }),
     worktreeRecreate: (directory, sessionId) => invoke("worktree_recreate", { directory, sessionId }),
@@ -1235,7 +1250,9 @@ function tauriBridge(): Bridge {
     terminalOpen: (directory, cols, rows) => invoke("terminal_open", { directory, cols, rows }),
     terminalWrite: (id, data) => invoke("terminal_write", { id, data }),
     terminalResize: (id, cols, rows) => invoke("terminal_resize", { id, cols, rows }),
+    terminalAck: (id, bytes) => invoke("terminal_ack", { id, bytes }),
     terminalClose: (id) => invoke("terminal_close", { id }),
+    terminalCloseAll: () => invoke("terminal_close_all"),
     quit: () => invoke("quit"),
     keepOpen: () => invoke("keep_open"),
     async pickFolder(defaultPath) {

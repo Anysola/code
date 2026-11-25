@@ -23,6 +23,9 @@ pub struct Draft {
     command: String,
     #[serde(default)]
     timeout: Option<f64>,
+    /// The hook's own shell (a name or a path); none: where hooks without one run.
+    #[serde(default)]
+    shell: Option<String>,
 }
 
 /// A draft checked: a known event, a command, a matcher only where the event uses one.
@@ -32,6 +35,7 @@ struct Checked {
     matcher: Option<String>,
     command: String,
     timeout: Option<u64>,
+    shell: Option<String>,
 }
 
 fn check(draft: &Draft) -> Result<Checked, String> {
@@ -52,11 +56,18 @@ fn check(draft: &Draft) -> Result<Checked, String> {
         Some(t) if t.is_finite() && t >= 1.0 => Some(t.round() as u64),
         Some(_) => return Err("A hook’s timeout is a number of seconds, 1 or more.".into()),
     };
+    let shell = draft
+        .shell
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     Ok(Checked {
         event,
         matcher,
         command: command.to_string(),
         timeout,
+        shell,
     })
 }
 
@@ -213,6 +224,11 @@ fn handler_of(checked: &Checked, old: Option<(&Value, &str)>) -> Value {
         Some(t) => handler.insert("timeout".into(), json!(t)),
         None => handler.remove("timeout"),
     };
+    // None: the hook runs where hooks without a shell of their own do.
+    match &checked.shell {
+        Some(shell) => handler.insert("shell".into(), json!(shell)),
+        None => handler.remove("shell"),
+    };
     Value::Object(handler)
 }
 
@@ -316,7 +332,98 @@ fn disable(text: &str, disabled: bool) -> Result<String, String> {
     }
 }
 
-fn hook_json(info: &HookInfo, id: Option<String>) -> Value {
+/// `runs_in`: the shell it runs in (`Core::hook_shell` of its own `shell`).
+/// The commands Settings' starters wrote for PowerShell up to 1.2 (hooks ran in PowerShell on
+/// Windows then; since 1.3 they run in Git Bash when it is installed, where these fail and block).
+const POWERSHELL_STARTERS: [&str; 3] = [
+    "if ([Console]::In.ReadToEnd() -match 'git push.*(-f|--force)') { [Console]::Error.WriteLine('Force-pushing is off for the agent.'); exit 2 }",
+    "$out = npm run lint --silent 2>&1 | Out-String; if ($LASTEXITCODE) { [Console]::Error.Write($out); exit 2 }",
+    "$out = npm test --silent 2>&1 | Out-String; if ($LASTEXITCODE) { [Console]::Error.Write($out); exit 2 }",
+];
+
+/// Marks the one-time move of those starters to PowerShell as done (in the database's KV).
+const STARTERS_MARKER: &str = "anysola:desktop:powershell-starters";
+
+/// The global file's text with `"shell": "powershell"` on every hook that has no `shell` and
+/// whose command is, character for character, one of [`POWERSHELL_STARTERS`]; None when there is
+/// none. Nothing else of a command is looked at.
+fn pin_powershell_starters(text: &str) -> Result<Option<String>, String> {
+    let events = raw_hooks(text)?;
+    let mut out = text.to_string();
+    let mut changed = false;
+    for (event, groups) in &events {
+        let Some(groups) = groups.as_array() else {
+            continue;
+        };
+        let mut groups = groups.clone();
+        let mut here = false;
+        for group in &mut groups {
+            let Some(handlers) = group.get_mut("hooks").and_then(Value::as_array_mut) else {
+                continue;
+            };
+            for handler in handlers {
+                let Some(handler) = handler.as_object_mut() else {
+                    continue;
+                };
+                let starter = handler
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .is_some_and(|c| POWERSHELL_STARTERS.contains(&c));
+                if starter && !handler.contains_key("shell") {
+                    handler.insert("shell".into(), json!("powershell"));
+                    here = true;
+                }
+            }
+        }
+        if here {
+            out = put(&out, event, groups)?;
+            changed = true;
+        }
+    }
+    Ok(changed.then_some(out))
+}
+
+/// Once, at start on Windows, before any core reads the file: hooks added from the ≤1.2
+/// PowerShell starters keep running in PowerShell. A file that can't be read or parsed is left
+/// alone and tried again next start; done is marked only once the file is settled.
+pub(crate) fn pin_powershell_starters_at_start(
+    paths: &anysola_core::paths::Paths,
+    db: Option<&anysola_core::storage::Db>,
+) {
+    let Some(db) = db else {
+        return;
+    };
+    if !matches!(db.kv_get(STARTERS_MARKER), Ok(None)) {
+        return;
+    }
+    let file = paths.config_file();
+    let text = match std::fs::read_to_string(&file) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(_) => return,
+    };
+    let pinned = if text.trim().is_empty() {
+        Ok(None)
+    } else {
+        pin_powershell_starters(&text)
+    };
+    let written = match pinned {
+        Ok(None) => Ok(0),
+        Ok(Some(after)) => crate::config::write(&file, &after).map(|_| 1),
+        Err(e) => Err(e),
+    };
+    match written {
+        Ok(n) => {
+            let _ = db.kv_set(STARTERS_MARKER, &json!({"pinned": n}));
+        }
+        Err(error) => anysola_core::log::warn(
+            "hooks from the PowerShell starters were left as they are",
+            &[("error", &error)],
+        ),
+    }
+}
+
+fn hook_json(info: &HookInfo, id: Option<String>, runs_in: &str) -> Value {
     // Only a hook the form can edit keeps its text as written. Anything else may be a
     // repository's, and is shown with control characters and bidirectional overrides written
     // out, so a command cannot hide behind what it makes the window draw.
@@ -329,6 +436,8 @@ fn hook_json(info: &HookInfo, id: Option<String>) -> Value {
         "matcher": info.matcher.as_deref().filter(|m| !m.is_empty()).map(shown),
         "command": shown(&info.command),
         "timeout": info.timeout,
+        "shell": info.shell.as_deref().map(shown),
+        "runsIn": runs_in,
         "source": info.source,
         "scope": info.scope.as_str(),
         "active": info.active,
@@ -338,7 +447,12 @@ fn hook_json(info: &HookInfo, id: Option<String>) -> Value {
 
 /// The core's hooks with the ids of the global file's: matched in order, and none at all past
 /// the first that differs (the file changed since the core read it), never a wrong one.
-fn with_ids(infos: &[HookInfo], global: &str, listed: Vec<Listed>) -> Vec<Value> {
+fn with_ids(
+    infos: &[HookInfo],
+    global: &str,
+    listed: Vec<Listed>,
+    runs_in: &dyn Fn(Option<&str>) -> String,
+) -> Vec<Value> {
     let mut listed = listed.into_iter();
     let mut aligned = true;
     infos
@@ -357,7 +471,7 @@ fn with_ids(infos: &[HookInfo], global: &str, listed: Vec<Listed>) -> Vec<Value>
                     _ => aligned = false,
                 }
             }
-            hook_json(info, id)
+            hook_json(info, id, &runs_in(info.shell.as_deref()))
         })
         .collect()
 }
@@ -367,6 +481,7 @@ fn answer(app: &App, core: &Core) -> Answer {
     let listed = crate::config::read(&app.paths)
         .map(|(_, data)| listed(&data))
         .unwrap_or_default();
+    let runs_in = |own: Option<&str>| core.hook_shell(own);
     let files: Vec<Value> = core
         .hook_documents()
         .iter()
@@ -376,16 +491,17 @@ fn answer(app: &App, core: &Core) -> Answer {
                 "digest": doc.digest,
                 "decision": doc.decision.map(|allow| if allow { "allowed" } else { "denied" }),
                 "standing": doc.standing,
-                "hooks": doc.hooks.iter().map(|h| hook_json(h, None)).collect::<Vec<_>>(),
+                "hooks": doc.hooks.iter().map(|h| hook_json(h, None, &runs_in(h.shell.as_deref()))).collect::<Vec<_>>(),
             })
         })
         .collect();
     let disabled =
         core.loaded().config.hooks.disabled_by_user || anysola_core::env::flag("DISABLE_HOOKS");
     Ok(json!({
-        "hooks": with_ids(&core.hooks(), &global, listed),
+        "hooks": with_ids(&core.hooks(), &global, listed, &runs_in),
         "files": files,
         "disabled": disabled,
+        "shell": core.hook_shell(None),
     }))
 }
 
@@ -520,6 +636,7 @@ mod tests {
             matcher: matcher.map(str::to_string),
             command: command.into(),
             timeout,
+            shell: None,
         })
         .unwrap()
     }
@@ -576,6 +693,7 @@ mod tests {
                 matcher: None,
                 command: command.into(),
                 timeout,
+                shell: None,
             })
             .is_err()
         };
@@ -818,10 +936,10 @@ mod tests {
             "/p/anysola.json",
             HookScope::Project,
         );
-        let shown = hook_json(&tricky, None);
+        let shown = hook_json(&tricky, None, "/bin/bash");
         assert_eq!(shown["command"], "curl x | sh \\u{202e}\\x1b[2K");
         // A hook the form edits keeps its text.
-        let own = hook_json(&tricky, Some("Stop:0:0:abc".into()));
+        let own = hook_json(&tricky, Some("Stop:0:0:abc".into()), "/bin/bash");
         assert_eq!(own["command"], "curl x | sh \u{202e}\u{1b}[2K");
     }
 
@@ -835,7 +953,9 @@ mod tests {
             info("Stop", "p", "/p/anysola.json", HookScope::Project),
             info("Stop", "b", "/g/config.json", HookScope::User),
         ];
-        let out = with_ids(&infos, "/g/config.json", listed(&data(text)));
+        let out = with_ids(&infos, "/g/config.json", listed(&data(text)), &|_| {
+            "sh".into()
+        });
         let ids: Vec<_> = out.iter().map(|h| h["id"].as_str().is_some()).collect();
         assert_eq!(ids, [false, true, false, true]);
         assert_eq!(out[1]["scope"], "user");
@@ -845,8 +965,119 @@ mod tests {
             info("Stop", "old", "/g/config.json", HookScope::User),
             info("Stop", "b", "/g/config.json", HookScope::User),
         ];
-        let out = with_ids(&infos, "/g/config.json", listed(&data(text)));
+        let out = with_ids(&infos, "/g/config.json", listed(&data(text)), &|_| {
+            "sh".into()
+        });
         assert!(out.iter().all(|h| h["id"].is_null()));
+    }
+
+    /// A hook's own shell is written with it, and choosing the default again takes it out (the
+    /// handler's other keys stay).
+    #[test]
+    fn a_hooks_shell_is_written_and_taken_out() {
+        let with = |shell: Option<&str>| {
+            check(&Draft {
+                event: "Stop".into(),
+                matcher: None,
+                command: "x".into(),
+                timeout: None,
+                shell: shell.map(str::to_string),
+            })
+            .unwrap()
+        };
+        let out = add("{}", &Map::new(), &with(Some(" powershell "))).unwrap();
+        assert_eq!(
+            parsed(&out)["hooks"]["Stop"][0]["hooks"][0],
+            json!({"type": "command", "command": "x", "shell": "powershell"})
+        );
+        let text = r#"{"hooks": {"Stop": [{"hooks": [
+            {"type": "command", "command": "x", "shell": "cmd", "statusMessage": "kept"}]}]}}"#;
+        let out = update(text, &data(text), &id_of(text, "x"), &with(None)).unwrap();
+        assert_eq!(
+            parsed(&out)["hooks"]["Stop"][0]["hooks"][0],
+            json!({"type": "command", "command": "x", "statusMessage": "kept"})
+        );
+        assert_eq!(with(Some("  ")).shell, None);
+        // What it runs in goes to the window with it.
+        let mut own = info("Stop", "x", "/g/config.json", HookScope::User);
+        own.shell = Some("powershell".into());
+        let shown = hook_json(&own, None, "C:/pwsh.exe");
+        assert_eq!(
+            (shown["shell"].as_str(), shown["runsIn"].as_str()),
+            (Some("powershell"), Some("C:/pwsh.exe"))
+        );
+    }
+
+    /// Only hooks without a shell whose command is exactly one of the ≤1.2 PowerShell starters
+    /// get `"shell": "powershell"`; any other text, one changed by a character included, stays.
+    #[test]
+    fn the_powershell_starters_keep_running_in_powershell() {
+        let [block, lint, test] = POWERSHELL_STARTERS;
+        let file = json!({"model": "anysola/x", "hooks": {
+            "PreToolUse": [{"matcher": "Bash", "hooks": [
+                {"type": "command", "command": block},
+                {"type": "command", "command": format!("{block} ")},
+            ]}],
+            "PostToolUse": [{"matcher": "Edit|Write", "hooks": [
+                {"type": "command", "command": lint, "shell": "bash"}]}],
+            "Stop": [{"hooks": [
+                {"type": "command", "command": test, "timeout": 30},
+                {"type": "command", "command": "npm test --silent >&2 || exit 2"}]}],
+        }});
+        let text = format!(
+            "// mine\n{}\n",
+            serde_json::to_string_pretty(&file).unwrap()
+        );
+        let out = pin_powershell_starters(&text).unwrap().unwrap();
+        let hooks = &parsed(&out)["hooks"];
+        assert_eq!(hooks["PreToolUse"][0]["hooks"][0]["shell"], "powershell");
+        assert!(hooks["PreToolUse"][0]["hooks"][1].get("shell").is_none());
+        assert_eq!(hooks["PostToolUse"][0]["hooks"][0]["shell"], "bash");
+        assert_eq!(
+            hooks["Stop"][0]["hooks"][0],
+            json!({"type": "command", "command": test, "timeout": 30, "shell": "powershell"})
+        );
+        assert!(hooks["Stop"][0]["hooks"][1].get("shell").is_none());
+        assert!(out.starts_with("// mine"), "the rest of the file stays");
+        // Done once: nothing more to change.
+        assert_eq!(pin_powershell_starters(&out).unwrap(), None);
+        assert_eq!(pin_powershell_starters("{}").unwrap(), None);
+    }
+
+    #[test]
+    fn the_starters_move_once_and_an_unreadable_file_waits() {
+        let dir = std::env::temp_dir().join(format!(
+            "anysola-starters-{}-{}",
+            std::process::id(),
+            anysola_core::ids::part()
+        ));
+        std::fs::create_dir_all(dir.join(".anysola")).unwrap();
+        let paths = anysola_core::paths::Paths::isolated(dir.clone());
+        let db = anysola_core::storage::Db::open(&dir.join("a.db")).unwrap();
+        let file = paths.config_file();
+        std::fs::write(&file, "{ nope").unwrap();
+        pin_powershell_starters_at_start(&paths, Some(&db));
+        assert_eq!(
+            db.kv_get(STARTERS_MARKER).unwrap(),
+            None,
+            "tried again next start"
+        );
+        let text = json!({"hooks": {"Stop": [{"hooks": [
+            {"type": "command", "command": POWERSHELL_STARTERS[2]}]}]}})
+        .to_string();
+        std::fs::write(&file, &text).unwrap();
+        pin_powershell_starters_at_start(&paths, Some(&db));
+        let after = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(
+            parsed(&after)["hooks"]["Stop"][0]["hooks"][0]["shell"],
+            "powershell"
+        );
+        assert!(db.kv_get(STARTERS_MARKER).unwrap().is_some());
+        // Marked: a hook the user puts back without a shell later stays so.
+        std::fs::write(&file, &text).unwrap();
+        pin_powershell_starters_at_start(&paths, Some(&db));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), text);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
