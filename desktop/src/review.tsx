@@ -877,6 +877,11 @@ function useUndoApply(here: Here | null, onUndone: () => void, onError?: (err: s
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pushed, setPushed] = useState<string[] | null>(null)
+  const sessionId = here?.sessionId ?? null
+  useEffect(() => {
+    setPushed(null)
+    setError(null)
+  }, [sessionId])
   const run = async (confirmed = false) => {
     if (!here) return
     setBusy(true)

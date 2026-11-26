@@ -351,11 +351,14 @@ pub async fn interpolate(
                 .stderr(std::process::Stdio::piped());
             #[cfg(unix)]
             command.process_group(0);
+            let mark = crate::children::mark_tokio(&mut command);
             let child = command.spawn().map_err(failed)?;
+            let ours = crate::children::adopt_tokio(&child, crate::children::Leads::Group, mark);
             // A command cancelled while this runs (Stop) takes the process and its children down.
             let guard = KillOnDrop(child.id());
             let output = child.wait_with_output().await.map_err(failed)?;
             std::mem::forget(guard);
+            drop(ours);
             let mut combined = output.stdout;
             combined.extend(output.stderr);
             Ok(String::from_utf8_lossy(&combined).into_owned())

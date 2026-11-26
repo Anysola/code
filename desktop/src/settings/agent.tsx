@@ -858,14 +858,16 @@ function Advanced({ directory }: { directory: string }) {
                 id="sandbox"
                 label="Shell sandbox"
                 hint={
-                  over("sandbox") ??
-                  (c.sandboxUnavailable && !c.sandbox ? (
-                    `Experimental: shell commands could write only inside the session’s folder. ${c.sandboxUnavailable}`
-                  ) : c.sandboxUnavailable ? (
+                  c.sandbox && c.sandboxUnavailable ? (
                     <span className="text-warning">On, but it can’t start here, so no shell command runs. {c.sandboxUnavailable}</span>
                   ) : (
-                    "Experimental, Linux only: shell commands can write only inside the session’s folder, and Git commits don’t work in it."
-                  ))
+                    over("sandbox") ??
+                    (c.sandboxUnavailable ? (
+                      `Experimental: shell commands could write only inside the session’s folder. ${c.sandboxUnavailable}`
+                    ) : (
+                      "Experimental, Linux only: shell commands can write only inside the session’s folder, and Git commits don’t work in it."
+                    ))
+                  )
                 }
                 checked={c.sandbox}
                 // Off stays reachable: a sandbox that's on but can't start stops every command.
@@ -1003,7 +1005,8 @@ function ConfigToggle({
 /** What runs commands, and hooks when they run elsewhere (Windows: Git Bash when installed). */
 function shellHint(config: AgentConfig, custom: boolean): string | undefined {
   const hooks = config.hooksShellDetected ?? null
-  const differ = hooks !== null && config.shellDetected !== null && shellName(hooks) !== shellName(config.shellDetected)
+  const active = custom ? config.shell : config.shellDetected
+  const differ = hooks !== null && active !== null && shellName(hooks) !== shellName(active)
   if (custom) return differ ? `Hooks run in ${shellName(hooks)}` : undefined
   if (!config.shellDetected) return "Picks one when a command runs"
   return differ ? `Uses ${config.shellDetected}; hooks run in ${shellName(hooks)}` : `Uses ${config.shellDetected}`

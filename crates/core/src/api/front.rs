@@ -188,13 +188,62 @@ impl Core {
         let configured = self.loaded().config.shell().map(str::to_string);
         let (program, args) = crate::tool::shell::invocation(configured.as_deref(), command);
         let created = now_ms();
-        let child = crate::console::tokio_command(program)
+        let mut process = crate::console::tokio_command(program);
+        process
             .args(args)
             .current_dir(&session.directory)
             .stdin(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .output();
-        let (output, metadata) = match tokio::time::timeout(SHELL_TIMEOUT, child).await {
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        #[cfg(unix)]
+        process.process_group(0);
+        let mark = crate::children::mark_tokio(&mut process);
+        let child = process.spawn().map(|child| {
+            let pid = child.id();
+            let ours = crate::children::adopt_tokio(&child, crate::children::Leads::Group, mark);
+            (child, pid, ours)
+        });
+        struct KillGroup(Option<u32>);
+        impl Drop for KillGroup {
+            fn drop(&mut self) {
+                if let Some(pid) = self.0.take() {
+                    crate::tool::shell::exec::force_kill(pid);
+                }
+            }
+        }
+        let output = async move {
+            use tokio::io::AsyncReadExt;
+            let (mut child, pid, ours) = child?;
+            // Declared after `child` so on timeout/cancel `guard` drops (killing the whole tree)
+            // before `child` (`kill_on_drop`) terminates and closes only the shell pid.
+            let mut guard = KillGroup(pid);
+            let mut stdout = child.stdout.take();
+            let mut stderr = child.stderr.take();
+            let read_out = async move {
+                let mut buf = Vec::new();
+                if let Some(ref mut s) = stdout {
+                    let _ = s.read_to_end(&mut buf).await;
+                }
+                buf
+            };
+            let read_err = async move {
+                let mut buf = Vec::new();
+                if let Some(ref mut s) = stderr {
+                    let _ = s.read_to_end(&mut buf).await;
+                }
+                buf
+            };
+            let (status, stdout, stderr) = tokio::join!(child.wait(), read_out, read_err);
+            guard.0 = None;
+            drop(ours);
+            Ok::<_, std::io::Error>(std::process::Output {
+                status: status?,
+                stdout,
+                stderr,
+            })
+        };
+        let (output, metadata) = match tokio::time::timeout(SHELL_TIMEOUT, output).await {
             Ok(Ok(out)) => {
                 let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
                 text.push_str(&String::from_utf8_lossy(&out.stderr));

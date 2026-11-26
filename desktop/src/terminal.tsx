@@ -147,10 +147,19 @@ const closedIds = new Set<string>()
 
 /** The window's start: shells a previous load of it left are ended before any opens. */
 let cleared: Promise<void> | null = null
+let clearing = false
 export function clearStaleTerminals() {
-  cleared ??= currentBridge()
+  if (cleared) return
+  clearing = true
+  cleared = currentBridge()
     .terminalCloseAll()
     .catch(() => {})
+    .finally(() => {
+      clearing = false
+      // Drop any late events emitted by shells from a previous load of the window.
+      pendingEvents.clear()
+      pendingBytes.clear()
+    })
 }
 
 function notifyInstance(inst: TermInstance) {
@@ -194,6 +203,7 @@ export function handleTerminalEvent(event: TerminalEvent) {
   if (closedIds.has(event.id)) return
   const inst = byPtyId.get(event.id)
   if (!inst) {
+    if (clearing) return
     const list = pendingEvents.get(event.id) ?? []
     const size = event.type === "terminalData" ? event.data.length : 0
     const held = pendingBytes.get(event.id) ?? 0

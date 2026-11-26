@@ -109,7 +109,7 @@ const isPath = (source: string) => /[\\/]/.test(source)
 /** A shell path as people call it: "Git Bash", "PowerShell", "cmd", "zsh". */
 export function shellName(path: string): string {
   const file = (path.split(/[\\/]/).pop() ?? path).toLowerCase().replace(/\.exe$/, "")
-  if (file === "bash" && /\\git\\/i.test(path)) return "Git Bash"
+  if (file === "bash" && /[\\/]git[\\/]/i.test(path)) return "Git Bash"
   if (file === "pwsh" || file === "powershell") return "PowerShell"
   return file
 }

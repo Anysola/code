@@ -743,6 +743,55 @@ impl Core {
         )?)
     }
 
+    /// Atomically moves a `ready` worktree into `applying` with its `undo_from` mark set to its
+    /// `applied_commit`, under the turns lock (preserving any existing stash note in `error`): a
+    /// crash before the main folder is touched is never mistaken for a cut-off apply. Returns
+    /// `Ok(false)` if the row is not `ready` or has no `applied_commit`.
+    pub fn begin_undo(&self, session_id: &str) -> Result<bool, CoreError> {
+        let shared = &self.shared;
+        let turns = shared.turns.lock().unwrap_or_else(|e| e.into_inner());
+        if turns.contains_key(session_id) || self.working(session_id) {
+            return Err(busy());
+        }
+        let Some(row) = shared.db.session_worktree(session_id)? else {
+            return Ok(false);
+        };
+        let Some(applied) = row.applied_commit.as_deref().filter(|s| !s.is_empty()) else {
+            return Ok(false);
+        };
+        let moved = shared.db.update_session_worktree(
+            session_id,
+            WorktreeState::Ready,
+            &[
+                ("state", WorktreeState::Applying.as_str().to_string().into()),
+                ("undo_from", applied.to_string().into()),
+            ],
+        )?;
+        drop(turns);
+        Ok(moved)
+    }
+
+    /// Refuses (as [`Core::unisolate`] would) before anything holding the worktree is stopped.
+    pub fn can_unisolate(&self, session_id: &str) -> Result<(), CoreError> {
+        let shared = &self.shared;
+        self.ensure_idle(session_id)?;
+        let row = shared
+            .db
+            .session_worktree(session_id)?
+            .ok_or_else(|| worktree_error("This session has no worktree."))?;
+        if !matches!(row.state, WorktreeState::Preparing | WorktreeState::Failed) {
+            return Err(worktree_error(
+                "This session already works in its worktree; apply or discard it instead.",
+            ));
+        }
+        if ran_since(&shared.db, session_id, row.time_created)? {
+            return Err(worktree_error(
+                "This session already worked in its worktree; apply or discard it instead.",
+            ));
+        }
+        Ok(())
+    }
+
     fn wake_waiting(&self, session_id: &str) -> Result<(), CoreError> {
         let waiting = crate::session::inbox::next(
             &self.shared.db,
@@ -1829,10 +1878,21 @@ pub fn cleanup(db: &Db) -> Vec<Cleaned> {
                 cleaned.undo = row.undo_from.clone();
             }
             WorktreeState::Applying if row.undo_from.is_some() => {
-                // An undo, not an apply: told apart, never "an apply was cut off". The main
-                // folder's git state is the desktop's to settle; this records what it can.
+                // An undo, not an apply: told apart, never "an apply was cut off". When the row
+                // knows which branch the apply went to, check that branch's tip (not whatever
+                // branch HEAD happens to be on now) so switching branches never marks an intact
+                // apply as undone. The main folder's git index/files are only settled if HEAD is
+                // still on that branch.
                 let applied = row.undo_from.clone().unwrap_or_default();
-                let head = git_sync(&top, &["rev-parse", "--verify", "--quiet", "HEAD"], &[]).ok();
+                let target_ref = row.apply_branch.as_deref().unwrap_or("HEAD");
+                let tip =
+                    git_sync(&top, &["rev-parse", "--verify", "--quiet", target_ref], &[]).ok();
+                let current_branch = git_sync(&top, &["symbolic-ref", "-q", "HEAD"], &[]).ok();
+                let on_apply_branch = match (&row.apply_branch, &current_branch) {
+                    (Some(to), Some(cur)) => cur == to,
+                    (None, Some(_)) => true,
+                    _ => false,
+                };
                 let parent = git_sync(
                     &top,
                     &["rev-parse", "--verify", "--quiet", &format!("{applied}^")],
@@ -1846,7 +1906,7 @@ pub fn cleanup(db: &Db) -> Vec<Cleaned> {
                 };
                 let null = || rusqlite::types::Value::Null;
                 let (notice, extra): (&str, Vec<(&str, rusqlite::types::Value)>) =
-                    if head.is_some() && head == parent {
+                    if tip.is_some() && tip == parent {
                         let parent = parent.clone().unwrap_or_default();
                         (
                             UNDO_FINISHED,
@@ -1863,9 +1923,18 @@ pub fn cleanup(db: &Db) -> Vec<Cleaned> {
                                 ("error", note(UNDO_FINISHED)),
                             ],
                         )
-                    } else if head.as_deref() == Some(applied.as_str()) {
-                        cleaned.undo = Some(applied.clone());
-                        (UNDO_NOT_FINISHED, vec![("error", note(UNDO_NOT_FINISHED))])
+                    } else if tip.as_deref() == Some(applied.as_str()) {
+                        if on_apply_branch {
+                            cleaned.undo = Some(applied.clone());
+                            (UNDO_NOT_FINISHED, vec![("error", note(UNDO_NOT_FINISHED))])
+                        } else {
+                            // Another branch is checked out now: the apply's branch still has the
+                            // commit, and the working tree is not its to touch.
+                            (
+                                UNDO_NOT_FINISHED,
+                                vec![("undo_from", null()), ("error", note(UNDO_NOT_FINISHED))],
+                            )
+                        }
                     } else {
                         (
                             UNDO_MOVED,

@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod api;
+pub mod children;
 pub mod codemode;
 pub mod command;
 pub mod config;

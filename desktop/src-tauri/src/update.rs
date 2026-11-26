@@ -102,12 +102,22 @@ pub async fn update_install(handle: AppHandle, pending: State<'_, Pending>) -> A
 
 /// The cleanup of `RunEvent::Exit` in `main`, for the Windows installer's exit. It runs inside
 /// the install command on an async worker, where blocking on the runtime would panic: a thread
-/// of its own does it, and is waited for no longer than its two graces and a little more. (With
-/// every worker of the runtime busy, the timer its timeout needs might never fire.)
+/// of its own does it, and is waited for no longer than its waits add up to and a little more.
+/// (With every worker of the runtime busy, the timer its timeout needs might never fire.)
+///
+/// The plugin calls this, then starts the installer with `ShellExecuteW` from this process, then
+/// `std::process::exit(0)` (`tauri-plugin-updater` `Update::install_inner`, Windows). Everything
+/// here has ended (or been given up on) before the installer exists, and the installer can't be
+/// in a Job of ours: only children handed to `anysola_core::children` join one, never this
+/// process, so nothing it starts inherits one. The app-wide Job closes at `exit(0)` and ends
+/// whatever of ours is still running; the installer goes on.
 fn before_exit(handle: &AppHandle) {
     let worker = handle.clone();
-    bounded(EXIT_GRACE * 2 + Duration::from_secs(1), move || {
+    // Setup commands 5 s, terminals 2 s, the cores and Discord a grace each.
+    bounded(EXIT_GRACE * 2 + Duration::from_secs(8), move || {
         let app = worker.state::<App>();
+        crate::worktree::stop_all_setups();
+        app.terminals.close_all();
         tauri::async_runtime::block_on(async {
             let _ = tokio::time::timeout(EXIT_GRACE, app.drop_cores()).await;
         });

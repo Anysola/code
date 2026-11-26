@@ -548,9 +548,15 @@ fn ready(
     }
 }
 
+/// The server's process and everything it starts (see `crate::children`).
+struct Server {
+    child: Child,
+    tree: crate::children::Tree,
+}
+
 struct LspClient {
     tx: mpsc::Sender<Frame>,
-    child: Arc<Mutex<Option<Child>>>,
+    child: Arc<Mutex<Option<Server>>>,
     pid: Option<u32>,
     next_id: AtomicI64,
     state: Arc<Mutex<SharedState>>,
@@ -600,11 +606,14 @@ impl LspClient {
                     .unwrap_or_else(std::env::temp_dir),
             );
         }
+        let mark = crate::children::mark_tokio(&mut cmd);
+        let prep = crate::children::prepare_tree();
         let mut child = cmd.spawn().map_err(|e| e.to_string())?;
         let pid = child.id();
+        let tree = prep.attach_tokio(&child, mark);
         let mut stdin = child.stdin.take().ok_or("no stdin")?;
         let stdout = child.stdout.take().ok_or("no stdout")?;
-        let child = Arc::new(Mutex::new(Some(child)));
+        let child = Arc::new(Mutex::new(Some(Server { child, tree })));
         let state = Arc::new(Mutex::new(SharedState::default()));
         let notify = Arc::new(Notify::new());
         let dead = Arc::new(AtomicBool::new(false));
@@ -625,6 +634,15 @@ impl LspClient {
             );
             tokio::spawn(async move {
                 while let Some(frame) = rx.recv().await {
+                    // Record before the bytes reach the server, so a fast versionless response
+                    // cannot beat this lock and have its generation treated as stale.
+                    if let Some((key, version)) = frame.mark {
+                        let mut st = lock(&state);
+                        let generation = st.diagnostics.get(&key).map_or(0, |(g, _, _)| *g);
+                        st.written.insert(key, (version, generation));
+                        drop(st);
+                        notify.notify_waiters();
+                    }
                     let wrote = tokio::time::timeout(limits.write, async {
                         stdin.write_all(&frame.bytes).await?;
                         stdin.flush().await
@@ -637,13 +655,6 @@ impl LspClient {
                         notify.notify_waiters();
                         kill_tree(&child, pid);
                         break;
-                    }
-                    if let Some((key, version)) = frame.mark {
-                        let mut st = lock(&state);
-                        let generation = st.diagnostics.get(&key).map_or(0, |(g, _, _)| *g);
-                        st.written.insert(key, (version, generation));
-                        drop(st);
-                        notify.notify_waiters();
                     }
                 }
                 // Dropping stdin: the server reads end of input.
@@ -922,7 +933,7 @@ impl LspClient {
             for _ in 0..10 {
                 let exited = lock(&self.child)
                     .as_mut()
-                    .is_none_or(|c| c.try_wait().ok().flatten().is_some());
+                    .is_none_or(|s| s.child.try_wait().ok().flatten().is_some());
                 if exited {
                     break;
                 }
@@ -955,17 +966,22 @@ impl Drop for LspClient {
     }
 }
 
-/// Kills the server and, on Unix, its whole process group (it runs in its own). On Windows only
-/// the server process for now: the process-tree helper (a Job Object) goes here.
-fn kill_tree(child: &Arc<Mutex<Option<Child>>>, pid: Option<u32>) {
+/// Kills the server and everything it started. Unix: its process group (it runs in its own)
+/// while the server is unreaped, so the group's id is still its; then, as for Windows, its
+/// [`crate::children::Tree`]: the group's verified members (also after the server ended), or
+/// the server's own Job (an npm shim's node, rustup's proxy's real server).
+fn kill_tree(server: &Arc<Mutex<Option<Server>>>, pid: Option<u32>) {
     // Only while the child is still ours: once taken (killed before), its id may be another's.
-    if let Some(mut child) = lock(child).take() {
+    if let Some(Server { mut child, tree }) = lock(server).take() {
         #[cfg(unix)]
-        if let Some(pid) = pid {
+        if let Some(pid) = pid
+            && matches!(child.try_wait(), Ok(None))
+        {
             crate::tool::shell::exec::force_kill(pid);
         }
         #[cfg(not(unix))]
         let _ = pid;
+        drop(tree);
         let _ = child.start_kill();
         // Reaped in the background, so no zombie is left (at process exit there is no runtime to
         // do it, and no need).
@@ -1100,18 +1116,29 @@ fn frame(msg: &Value) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+const MAX_HEADER_LINE: u64 = 8 * 1024;
+const MAX_HEADERS: usize = 64;
+
 async fn read_message<R: AsyncRead + Unpin>(
     reader: &mut BufReader<R>,
 ) -> Result<Option<Value>, String> {
     let mut content_length: Option<usize> = None;
+    let mut headers = 0usize;
     loop {
+        headers += 1;
+        if headers > MAX_HEADERS {
+            return Err("too many LSP headers".into());
+        }
         let mut line = String::new();
-        let n = reader
+        let n = tokio::io::AsyncReadExt::take(&mut *reader, MAX_HEADER_LINE + 1)
             .read_line(&mut line)
             .await
             .map_err(|e| e.to_string())?;
         if n == 0 {
             return Ok(None);
+        }
+        if n as u64 > MAX_HEADER_LINE {
+            return Err("LSP header line too long".into());
         }
         let trimmed = line.trim();
         if trimmed.is_empty() {

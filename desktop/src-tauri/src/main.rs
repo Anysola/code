@@ -1181,6 +1181,9 @@ fn main() {
     // Core's log file, each line marked `role=desktop`; nothing on stdout.
     anysola_core::log::init_as(&paths, None, false, "desktop");
     path_repair::report();
+    // Linux: the groups this run starts are written down, so the next start can end what a
+    // crash leaves of them (Windows: the Job does it at once).
+    anysola_core::children::keep_records(paths.children_dir());
     let (db, db_fault) = match Db::open(&paths.database()) {
         Ok(db) => (Some(Arc::new(db)), None),
         Err(error) => {
@@ -1263,6 +1266,17 @@ fn main() {
             let _ = state.discord.set(discord::Handle::start(wanted));
             // Session worktrees left from the last run, settled in the background.
             worktree::cleanup_at_start(state.db.clone());
+            // What a crashed run left of its children (Linux; a running copy's are kept).
+            let records = state.paths.children_dir();
+            std::thread::spawn(move || {
+                let killed = anysola_core::children::sweep(&records);
+                if killed > 0 {
+                    anysola_core::log::info(
+                        "ended what the last run left running",
+                        &[("processes", &killed.to_string())],
+                    );
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

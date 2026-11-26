@@ -118,7 +118,11 @@ pub fn spawn(job: Job<'_>) -> io::Result<Running> {
         .stderr(writer);
     #[cfg(unix)]
     command.process_group(0);
+    let mark = crate::children::mark_tokio(&mut command);
     let child = command.spawn()?;
+    // A crash or the updater's exit takes it too (Windows: the app's Job; Linux: the next
+    // start's sweep), as `kill_background_shells` does on a normal exit.
+    let ours = crate::children::adopt_tokio(&child, crate::children::Leads::Group, mark);
     // The command still holds our copies of the pipe's write end; the pipe only reaches EOF once
     // they are closed.
     drop(command);
@@ -148,6 +152,7 @@ pub fn spawn(job: Job<'_>) -> io::Result<Running> {
     let supervisor = tokio::spawn(async move {
         let ended = supervised.await;
         drop(tracked);
+        drop(ours);
         ended
     });
     Ok(Running {

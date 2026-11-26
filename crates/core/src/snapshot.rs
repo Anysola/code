@@ -366,9 +366,11 @@ impl Store {
     }
 
     /// Lays over `target` only what `tree` (captured on commit `from`) changed since `from`, under
-    /// the scope: files it changed or added are written, files it lacks are removed, except, as
-    /// [`overlay`] does, ones it never captures (over 2 MiB, or force-added files the ignore rules
-    /// match), whose absence says nothing. Nothing when a tree can't be read.
+    /// the scope: files it changed or added are written via a temporary index (preserving
+    /// symlinks, executable bits and submodules without following symlinks in `target`), files it
+    /// lacks are removed, except, as [`overlay`] does, directories and ones it never captures
+    /// (over 2 MiB, or force-added files the ignore rules match), whose absence says nothing.
+    /// Nothing when a tree can't be read.
     pub fn overlay_changes(&self, from: &str, tree: &str, target: &Path) -> Result<(), String> {
         let prefix = format!("{}/", self.scope.trim_end_matches('/'));
         let changed: Vec<String> = self
@@ -385,23 +387,27 @@ impl Store {
             .collect();
         let (write, lacking): (Vec<String>, Vec<String>) =
             changed.into_iter().partition(|p| present.contains(p));
-        let write: Vec<(String, String)> = write
-            .into_iter()
-            .map(|path| (path, tree.to_string()))
-            .collect();
-        self.restore_into(&write, target)?;
+        // Remove lacking files before writing so a file -> directory replacement clears the old
+        // file before `plain_parents` checks the new path's parent folders.
         for path in lacking {
             if plain_parents(target, &path).is_err() || ignored_in(target, &path) {
                 continue;
             }
             let file = target.join(&path);
             match std::fs::symlink_metadata(&file) {
+                Ok(meta) if meta.is_dir() => {}
                 Ok(meta) if meta.is_file() && meta.len() > MAX_UNTRACKED_BYTES => {}
                 Ok(_) => {
                     std::fs::remove_file(&file).map_err(|e| format!("Cannot remove {path}: {e}"))?
                 }
                 Err(_) => {}
             }
+        }
+        if !write.is_empty() {
+            for path in &write {
+                plain_parents(target, path)?;
+            }
+            checkout_subset(&self.git_dir, tree, &write, target)?;
         }
         Ok(())
     }
@@ -421,11 +427,19 @@ impl Store {
                         std::fs::create_dir_all(parent)
                             .map_err(|e| format!("Cannot restore {path}: {e}"))?;
                     }
+                    // Never write through an existing symlink at the destination path.
+                    if file
+                        .symlink_metadata()
+                        .is_ok_and(|m| m.file_type().is_symlink())
+                    {
+                        std::fs::remove_file(&file)
+                            .map_err(|e| format!("Cannot replace {path}: {e}"))?;
+                    }
                     std::fs::write(&file, content)
                         .map_err(|e| format!("Cannot restore {path}: {e}"))?;
                 }
                 None => {
-                    if file.symlink_metadata().is_ok() {
+                    if file.symlink_metadata().is_ok_and(|m| !m.is_dir()) {
                         std::fs::remove_file(&file)
                             .map_err(|e| format!("Cannot remove {path}: {e}"))?;
                     }
@@ -485,6 +499,56 @@ fn plain_parents(root: &Path, relative: &str) -> Result<(), String> {
             Err(_) => break,
         }
     }
+    Ok(())
+}
+
+/// Checks out `paths` from `tree` into `target` through a temporary index (preserving symlinks,
+/// executable bits and gitlinks without writing through existing symlinks in `target`).
+fn checkout_subset(
+    git_dir: &Path,
+    tree: &str,
+    paths: &[String],
+    target: &Path,
+) -> Result<(), String> {
+    use std::io::Write;
+    let index = TempIndex(git_dir.join(format!("subset-{}.index", crate::ids::part())));
+    let run = |args: &[&str], input: Option<&[u8]>| -> Result<Vec<u8>, String> {
+        let mut child = crate::console::command("git")
+            .arg("--git-dir")
+            .arg(git_dir)
+            .arg("--work-tree")
+            .arg(target)
+            .args(args)
+            .current_dir(target)
+            .env("GIT_INDEX_FILE", &index.0)
+            .env("GIT_LITERAL_PATHSPECS", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        if let Some(input) = input {
+            child
+                .stdin
+                .take()
+                .ok_or("no stdin")?
+                .write_all(input)
+                .map_err(|e| e.to_string())?;
+        }
+        drop(child.stdin.take());
+        let output = child.wait_with_output().map_err(|e| e.to_string())?;
+        if output.status.success() {
+            Ok(output.stdout)
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        }
+    };
+    run(&["read-tree", tree], None)?;
+    let input: Vec<u8> = paths
+        .iter()
+        .flat_map(|p| [p.as_bytes(), b"\0"].concat())
+        .collect();
+    run(&["checkout-index", "-f", "-z", "--stdin"], Some(&input))?;
     Ok(())
 }
 
@@ -599,6 +663,7 @@ pub fn overlay(
             continue;
         }
         match std::fs::symlink_metadata(&file) {
+            Ok(meta) if meta.is_dir() => {}
             Ok(meta) if meta.is_file() && meta.len() > MAX_UNTRACKED_BYTES => kept.push(path),
             Ok(_) => {
                 std::fs::remove_file(&file).map_err(|e| format!("Cannot remove {path}: {e}"))?
@@ -696,5 +761,65 @@ mod tests {
         assert!(plain_parents(&checkout, "x.txt").is_ok());
         assert!(plain_parents(&checkout, "../x.txt").is_err());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn overlay_changes_preserves_symlinks_and_skips_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("p");
+        std::fs::create_dir_all(&project).unwrap();
+        git(&project, &["init", "-q"]);
+        std::fs::write(project.join("target.txt"), "real content\n").unwrap();
+        std::fs::write(project.join("becomes_dir"), "old file\n").unwrap();
+        git(&project, &["add", "."]);
+        git(&project, &["commit", "-q", "-m", "init"]);
+        let base = String::from_utf8_lossy(
+            &Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&project)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .trim()
+        .to_string();
+        let data = root.path().join("data");
+        let store = Store::open(&data, "pid", &project).unwrap();
+        // Capture a step where `link` is a symlink to `target.txt` and `becomes_dir` was replaced
+        // by a directory containing a file.
+        std::os::unix::fs::symlink("target.txt", project.join("link")).unwrap();
+        std::fs::remove_file(project.join("becomes_dir")).unwrap();
+        std::fs::create_dir(project.join("becomes_dir")).unwrap();
+        std::fs::write(project.join("becomes_dir/in.txt"), "inside\n").unwrap();
+        let step = store.capture().unwrap();
+
+        // Destination starts with `becomes_dir` still a regular file (as after `remerge`),
+        // `link` already a symlink to `target.txt`, and an extra directory at a lacking path.
+        let dest = root.path().join("dest");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("target.txt"), "precious\n").unwrap();
+        std::fs::write(dest.join("becomes_dir"), "old file\n").unwrap();
+        std::os::unix::fs::symlink("target.txt", dest.join("link")).unwrap();
+
+        store.overlay_changes(&base, &step, &dest).unwrap();
+        assert!(
+            dest.join("link")
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "link stays a symlink"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.join("target.txt")).unwrap(),
+            "precious\n",
+            "symlink target must never be overwritten with the link's target text"
+        );
+        assert!(dest.join("becomes_dir").is_dir());
+        assert_eq!(
+            std::fs::read_to_string(dest.join("becomes_dir/in.txt")).unwrap(),
+            "inside\n"
+        );
     }
 }

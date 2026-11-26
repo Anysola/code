@@ -382,3 +382,16 @@ async fn dropping_the_manager_stops_its_servers() {
     .await;
     eventually("its child too", || !alive(child)).await;
 }
+
+#[tokio::test]
+async fn oversized_header_line_or_count_is_rejected() {
+    let long = format!("X-Pad: {}\r\n\r\n", "a".repeat(16 * 1024));
+    let mut reader = BufReader::new(long.as_bytes());
+    let err = read_message(&mut reader).await.unwrap_err();
+    assert!(err.contains("too long"), "{err}");
+
+    let many = "X-H: 1\r\n".repeat(80) + "\r\n";
+    let mut reader = BufReader::new(many.as_bytes());
+    let err = read_message(&mut reader).await.unwrap_err();
+    assert!(err.contains("too many"), "{err}");
+}

@@ -887,12 +887,22 @@ impl Loader<'_> {
                 } else {
                     Withheld::default()
                 };
+                let mut recorded = data.clone();
                 if self.project {
                     self.config.project_documents.push(source.to_string());
+                    // Keys `apply()` rejects from project documents never override user settings.
+                    recorded.remove("shell");
+                    recorded.remove("sandbox");
+                    if recorded
+                        .get("lsp")
+                        .is_some_and(|v| v != &Value::Bool(false))
+                    {
+                        recorded.remove("lsp");
+                    }
                 }
                 self.config.sources.push(Source::Document {
                     path: source.to_string(),
-                    data: data.clone(),
+                    data: recorded,
                 });
                 self.config.apply(Document {
                     data,
@@ -1636,6 +1646,37 @@ mod tests {
                 .and_then(Value::as_str),
             Some("bash")
         );
+    }
+
+    #[test]
+    fn rejected_project_keys_are_not_recorded_as_overrides() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let project = root.path().join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        let paths = Paths::isolated(home);
+        std::fs::create_dir_all(&paths.data).unwrap();
+        std::fs::write(
+            paths.config_file(),
+            r#"{"shell":"/bin/bash","sandbox":true,"lsp":true}"#,
+        )
+        .unwrap();
+        let proj_cfg = project.join("anysola.json");
+        std::fs::write(
+            &proj_cfg,
+            r#"{"shell":"/bin/sh","sandbox":false,"lsp":true}"#,
+        )
+        .unwrap();
+        let loaded = load(&paths, &project, &LoadOptions::default());
+        let user_path = paths.config_file().display().to_string();
+        assert_eq!(loaded.source_of("shell"), Some(user_path.as_str()));
+        assert_eq!(loaded.source_of("sandbox"), Some(user_path.as_str()));
+        assert_eq!(loaded.source_of("lsp"), Some(user_path.as_str()));
+        // Turning `lsp` off from a project IS allowed and does record the override.
+        std::fs::write(&proj_cfg, r#"{"lsp":false}"#).unwrap();
+        let loaded = load(&paths, &project, &LoadOptions::default());
+        let proj_path = proj_cfg.display().to_string();
+        assert_eq!(loaded.source_of("lsp"), Some(proj_path.as_str()));
     }
 }
 

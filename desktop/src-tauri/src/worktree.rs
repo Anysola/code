@@ -323,6 +323,18 @@ struct Slot {
     /// The worktree is going (discarded, deleted, back to the main folder): the preparation
     /// stops at its next step or file, so nothing makes the folder again.
     cancel: AtomicBool,
+    /// The last setup command and what it started, also once it ended (`npm run dev &`): kept
+    /// until the worktree goes, the command runs again or the app closes, then stopped. A crash
+    /// takes them too (see `anysola_core::children`).
+    tree: Mutex<Option<anysola_core::children::Tree>>,
+}
+
+impl Slot {
+    /// Stops what the last setup command left running.
+    fn end_tree(&self) {
+        let tree = self.tree.lock().unwrap_or_else(|e| e.into_inner()).take();
+        drop(tree);
+    }
 }
 
 fn slots() -> &'static Mutex<HashMap<String, Arc<Slot>>> {
@@ -360,20 +372,27 @@ fn cancel_prepare(session_id: &str) {
     stop_setup(session_id);
 }
 
-/// Stops the session's setup command, if one runs, and waits a moment for it to go.
+/// Stops the session's setup command, if one runs, and waits a moment for it to go; what an
+/// earlier, finished one left running goes too. Whether a command was running.
 fn stop_setup(session_id: &str) -> bool {
     let Some(slot) = existing_slot(session_id) else {
         return false;
     };
-    slot.skip.store(true, Ordering::SeqCst);
-    if !slot.active.load(Ordering::SeqCst) {
+    let was_active = {
+        let _guard = slot.tree.lock().unwrap_or_else(|e| e.into_inner());
+        slot.skip.store(true, Ordering::SeqCst);
+        slot.stop.store(true, Ordering::SeqCst);
+        slot.active.load(Ordering::SeqCst)
+    };
+    if !was_active {
+        slot.end_tree();
         return false;
     }
-    slot.stop.store(true, Ordering::SeqCst);
     let start = Instant::now();
     while slot.active.load(Ordering::SeqCst) && start.elapsed() < Duration::from_secs(5) {
         std::thread::sleep(Duration::from_millis(20));
     }
+    slot.end_tree();
     true
 }
 
@@ -389,7 +408,8 @@ async fn isolate_done(session_id: &str) {
     }
 }
 
-/// Every setup command stops (the app is closing).
+/// Every setup command stops, and what finished ones left running (the app is closing). Waits
+/// for the running ones as `stop_setup` does, 5 s at most in all.
 pub(crate) fn stop_all_setups() {
     let all: Vec<Arc<Slot>> = slots()
         .lock()
@@ -397,9 +417,20 @@ pub(crate) fn stop_all_setups() {
         .values()
         .cloned()
         .collect();
-    for slot in all {
+    for slot in &all {
+        let _guard = slot.tree.lock().unwrap_or_else(|e| e.into_inner());
+        slot.cancel.store(true, Ordering::SeqCst);
         slot.skip.store(true, Ordering::SeqCst);
         slot.stop.store(true, Ordering::SeqCst);
+    }
+    let start = Instant::now();
+    while all.iter().any(|s| s.active.load(Ordering::SeqCst))
+        && start.elapsed() < Duration::from_secs(5)
+    {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    for slot in &all {
+        slot.end_tree();
     }
 }
 
@@ -477,6 +508,19 @@ impl Out {
 
 /// Runs the setup command in the user's shell in `cwd`, line by line into `out`, until it ends,
 /// is stopped or runs past [`SETUP_LIMIT`]. Returns the run's state and exit code.
+/// Atomically claims `slot` to run a setup command and clears `stop` under `slot.tree`'s lock,
+/// so a `stop_setup` or `stop_all_setups` can never race between `active` and `stop`.
+fn claim_setup(slot: &Slot) -> bool {
+    let _guard = slot.tree.lock().unwrap_or_else(|e| e.into_inner());
+    if slot.cancel.load(Ordering::SeqCst) || slot.active.load(Ordering::SeqCst) {
+        return false;
+    }
+    slot.stop.store(false, Ordering::SeqCst);
+    slot.active.store(true, Ordering::SeqCst);
+    true
+}
+
+#[cfg(test)]
 fn run_setup(
     out: &Out,
     shell: Option<&str>,
@@ -485,12 +529,28 @@ fn run_setup(
     worktree: &str,
     limit: Duration,
 ) -> (&'static str, Option<i32>) {
-    let slot = &out.slot;
-    slot.stop.store(false, Ordering::SeqCst);
-    slot.active.store(true, Ordering::SeqCst);
-    let ended = run_setup_inner(out, shell, command, cwd, worktree, limit);
-    slot.active.store(false, Ordering::SeqCst);
-    ended
+    if !claim_setup(&out.slot) {
+        return ("stopped", None);
+    }
+    run_setup_claimed(out, shell, command, cwd, worktree, limit)
+}
+
+fn run_setup_claimed(
+    out: &Out,
+    shell: Option<&str>,
+    command: &str,
+    cwd: &Path,
+    worktree: &str,
+    limit: Duration,
+) -> (&'static str, Option<i32>) {
+    struct ActiveGuard<'a>(&'a AtomicBool);
+    impl Drop for ActiveGuard<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+    let _active = ActiveGuard(&out.slot.active);
+    run_setup_inner(out, shell, command, cwd, worktree, limit)
 }
 
 fn run_setup_inner(
@@ -501,6 +561,11 @@ fn run_setup_inner(
     worktree: &str,
     limit: Duration,
 ) -> (&'static str, Option<i32>) {
+    // What the last run left running goes before this one starts (its dev server, its port).
+    out.slot.end_tree();
+    if out.slot.stop.load(Ordering::SeqCst) || out.slot.cancel.load(Ordering::SeqCst) {
+        return ("stopped", None);
+    }
     let (program, args) = anysola_core::tool::shell::invocation(shell, command);
     let mut child = anysola_core::console::command(&program);
     child
@@ -513,6 +578,11 @@ fn run_setup_inner(
         .stderr(std::process::Stdio::piped());
     // Everything it starts goes with it when it is stopped.
     crate::tree::own_group(&mut child);
+    let mark = anysola_core::children::mark(&mut child);
+    let prep = anysola_core::children::prepare_tree();
+    // This thread waits for the command below, so it outlives it (Linux: a crash ends the
+    // command at once; what it started goes at the next start).
+    anysola_core::children::die_with_spawning_thread(&mut child);
     let mut child = match child.spawn() {
         Ok(child) => child,
         Err(e) => {
@@ -520,6 +590,17 @@ fn run_setup_inner(
             return ("failed", None);
         }
     };
+    let tree = prep.attach(&child, mark);
+    {
+        let mut guard = out.slot.tree.lock().unwrap_or_else(|e| e.into_inner());
+        if out.slot.stop.load(Ordering::SeqCst) || out.slot.cancel.load(Ordering::SeqCst) {
+            drop(guard);
+            crate::tree::kill(&mut child);
+            drop(tree);
+            return ("stopped", None);
+        }
+        *guard = Some(tree);
+    }
     let (sender, lines) = std::sync::mpsc::channel::<(&'static str, String)>();
     let readers: Vec<_> = [
         (
@@ -552,10 +633,12 @@ fn run_setup_inner(
         }
         if out.slot.stop.load(Ordering::SeqCst) {
             crate::tree::kill(&mut child);
+            out.slot.end_tree();
             break ("stopped", None);
         }
         if Instant::now() >= deadline {
             crate::tree::kill(&mut child);
+            out.slot.end_tree();
             break ("timeout", None);
         }
         match child.try_wait() {
@@ -566,6 +649,7 @@ fn run_setup_inner(
             Ok(None) => {}
             Err(_) => {
                 crate::tree::kill(&mut child);
+                out.slot.end_tree();
                 break ("failed", None);
             }
         }
@@ -631,9 +715,6 @@ pub async fn setup_run(
     if row.state != WorktreeState::Ready {
         return Err("The setup command runs once the worktree is ready.".into());
     }
-    if setup_running(&session_id) {
-        return Err("The setup command is running.".into());
-    }
     let command = setup_for(&app.prefs(), &row.folder)
         .ok_or("This folder has no setup command. Add one in Settings.")?;
     let session = core
@@ -641,12 +722,14 @@ pub async fn setup_run(
         .map_err(text)?
         .ok_or("This session no longer exists.")?;
     let out = Out::new(&handle, &row.folder, &session_id);
+    if !claim_setup(&out.slot) {
+        return Err("The setup command is running.".into());
+    }
     out.begin(Some(command.clone()));
-    out.slot.active.store(true, Ordering::SeqCst);
     let shell = core.loaded().config.shell().map(str::to_string);
     tauri::async_runtime::spawn_blocking(move || {
         out.info(&format!("Running {command}"));
-        let (state, code) = run_setup(
+        let (state, code) = run_setup_claimed(
             &out,
             shell.as_deref(),
             &command,
@@ -829,31 +912,35 @@ async fn prepare(handle: AppHandle, core: Core, db: Arc<Db>, id: String, made: M
     if let Some(command) = command.as_deref()
         && still_preparing(&db, &id)
         && !out.slot.skip.load(Ordering::SeqCst)
-        && !out.slot.cancel.load(Ordering::SeqCst)
+        && claim_setup(&out.slot)
     {
-        out.info(&format!("Running {command}"));
-        let (out2, command, worktree) = (out.clone(), command.to_string(), row.directory.clone());
-        // Marked running before the task starts, so "Start now" finds it either way.
-        out.slot.active.store(true, Ordering::SeqCst);
-        let result = tauri::async_runtime::spawn_blocking(move || {
-            if out2.slot.skip.load(Ordering::SeqCst) {
-                out2.slot.active.store(false, Ordering::SeqCst);
-                return ("stopped", None);
-            }
-            run_setup(
-                &out2,
-                shell.as_deref(),
-                &command,
-                &session_dir,
-                &worktree,
-                SETUP_LIMIT,
-            )
-        })
-        .await
-        .unwrap_or(("failed", None));
-        out.slot.active.store(false, Ordering::SeqCst);
-        setup_said(&out, result.0, result.1);
-        ran = Some(result);
+        if out.slot.skip.load(Ordering::SeqCst) {
+            out.slot.active.store(false, Ordering::SeqCst);
+            out.info("Setup skipped.");
+        } else {
+            out.info(&format!("Running {command}"));
+            let (out2, command, worktree) =
+                (out.clone(), command.to_string(), row.directory.clone());
+            let result = tauri::async_runtime::spawn_blocking(move || {
+                if out2.slot.skip.load(Ordering::SeqCst) {
+                    out2.slot.active.store(false, Ordering::SeqCst);
+                    return ("stopped", None);
+                }
+                run_setup_claimed(
+                    &out2,
+                    shell.as_deref(),
+                    &command,
+                    &session_dir,
+                    &worktree,
+                    SETUP_LIMIT,
+                )
+            })
+            .await
+            .unwrap_or(("failed", None));
+            out.slot.active.store(false, Ordering::SeqCst);
+            setup_said(&out, result.0, result.1);
+            ran = Some(result);
+        }
     } else if command.is_some() && out.slot.skip.load(Ordering::SeqCst) {
         out.info("Setup skipped.");
     }
@@ -1709,21 +1796,22 @@ fn ignored_paths(top: &Path, paths: &[&String]) -> Vec<String> {
         .collect()
 }
 
-/// Which of `paths` the commit `rev` has (one `cat-file --batch-check` for all).
+/// Which of `paths` the commit `rev` has (one `cat-file --batch-check -Z` for all, so names with
+/// newlines never shift subsequent results).
 fn in_commit(top: &Path, rev: &str, paths: &[&String]) -> std::collections::HashSet<String> {
     let mut found = std::collections::HashSet::new();
     if paths.is_empty() {
         return found;
     }
-    let input: String = paths.iter().map(|p| format!("{rev}:{p}\n")).collect();
-    let Ok(output) = wgit(top, &["cat-file", "--batch-check"])
+    let input: String = paths.iter().map(|p| format!("{rev}:{p}\0")).collect();
+    let Ok(output) = wgit(top, &["cat-file", "--batch-check", "-Z"])
         .input(input.into_bytes())
         .run()
     else {
         return found;
     };
-    for (path, line) in paths.iter().zip(output.stdout.lines()) {
-        if !line.ends_with(" missing") {
+    for (path, entry) in paths.iter().zip(output.stdout.split('\0')) {
+        if !entry.is_empty() && !entry.ends_with(" missing") {
             found.insert((*path).clone());
         }
     }
@@ -1887,26 +1975,21 @@ pub async fn worktree_undo_apply(
     if setup_running(&session_id) {
         return Err("The setup command is running. Stop it first.".into());
     }
-    if !pushed.unwrap_or(false) {
+    if !core.begin_undo(&session_id).map_err(plain_error)? {
         let row = row_of(&db, &session_id)?;
-        let remotes = git::blocking(move || Ok(pushed_to(&row))).await?;
-        if !remotes.is_empty() {
-            return Ok(json!({"pushed": remotes}));
+        if row.state != WorktreeState::Ready {
+            return Err("This session’s worktree isn’t ready.".into());
         }
-    }
-    if !core
-        .set_worktree_state(&session_id, WorktreeState::Ready, WorktreeState::Applying)
-        .map_err(plain_error)?
-    {
-        return Err("This session’s worktree isn’t ready.".into());
+        return Err("There’s no applied commit to undo.".into());
     }
     emit(&handle, &db, &session_id);
+    let allow_pushed = pushed.unwrap_or(false);
     let undone = {
         let (core, db, id) = (core.clone(), db.clone(), session_id.clone());
         git::blocking(move || {
             let row = row_of(&db, &id)?;
             let mark = |applied: &str| core.mark_undo(&id, applied).unwrap_or(false);
-            Ok(undo_apply(&row, &mark))
+            Ok(undo_apply_checked(&row, allow_pushed, &mark))
         })
         .await
     };
@@ -1915,7 +1998,14 @@ pub async fn worktree_undo_apply(
         emit(&handle, db, &session_id);
     };
     match undone {
-        Ok(Ok(undone)) => match core.undo_apply(&session_id, &undone.parent) {
+        Ok(Ok(UndoOutcome::Pushed(remotes))) => {
+            // Move back to `ready` before clearing `undo_from` so a crash in between is never
+            // mistaken for a cut-off apply.
+            back_to_ready(&db);
+            anysola_core::api::clear_undo_mark(&db, &session_id);
+            Ok(json!({"pushed": remotes}))
+        }
+        Ok(Ok(UndoOutcome::Done(undone))) => match core.undo_apply(&session_id, &undone.parent) {
             Ok(_) => {
                 emit(&handle, &db, &session_id);
                 Ok(json!({"commit": undone.parent}))
@@ -1924,8 +2014,8 @@ pub async fn worktree_undo_apply(
                 // The main folder goes back to the applied commit, as the row still says.
                 let restored = git::blocking(move || Ok(redo_apply(&undone))).await;
                 if matches!(restored, Ok(true)) {
-                    anysola_core::api::clear_undo_mark(&db, &session_id);
                     back_to_ready(&db);
+                    anysola_core::api::clear_undo_mark(&db, &session_id);
                     Err(plain_error(err))
                 } else {
                     // Left marked and applying: the next start settles it from the main folder.
@@ -1935,18 +2025,18 @@ pub async fn worktree_undo_apply(
             }
         },
         Ok(Err(failed)) if failed.settled => {
-            anysola_core::api::clear_undo_mark(&db, &session_id);
             back_to_ready(&db);
+            anysola_core::api::clear_undo_mark(&db, &session_id);
             Err(failed.message)
         }
         Ok(Err(failed)) => {
             emit(&handle, &db, &session_id);
             Err(format!("{} {STUCK}", failed.message))
         }
-        // The git work itself failed to run: a mark it may have left is the start's to settle.
+        // The git work itself failed to run: leave applying + undo_from for the next start to settle.
         Err(error) => {
-            back_to_ready(&db);
-            Err(error)
+            emit(&handle, &db, &session_id);
+            Err(format!("{error} {STUCK}"))
         }
     }
 }
@@ -2035,10 +2125,29 @@ fn short_branch(full: &str) -> &str {
     full.strip_prefix("refs/heads/").unwrap_or(full)
 }
 
-/// The undo on the main folder. Every refusal comes before `mark` (the row's undo mark, written
-/// before anything is touched); after it, a failure puts the main folder back or says it may not
-/// have (`Failed::settled`).
+#[derive(Debug)]
+enum UndoOutcome {
+    Done(Undone),
+    Pushed(Vec<String>),
+}
+
+/// The undo on the main folder (for callers that already confirmed pushed commits, and tests).
+#[cfg(test)]
 fn undo_apply(row: &SessionWorktreeRow, mark: &dyn Fn(&str) -> bool) -> Result<Undone, Failed> {
+    match undo_apply_checked(row, true, mark)? {
+        UndoOutcome::Done(undone) => Ok(undone),
+        UndoOutcome::Pushed(_) => unreachable!("allow_pushed was true"),
+    }
+}
+
+/// The undo on the main folder. Every refusal comes before the pushed-remote check and `mark`
+/// (the row's undo mark, written before anything is touched); after it, a failure puts the main
+/// folder back or says it may not have (`Failed::settled`).
+fn undo_apply_checked(
+    row: &SessionWorktreeRow,
+    allow_pushed: bool,
+    mark: &dyn Fn(&str) -> bool,
+) -> Result<UndoOutcome, Failed> {
     let applied = row
         .applied_commit
         .as_deref()
@@ -2118,6 +2227,13 @@ fn undo_apply(row: &SessionWorktreeRow, mark: &dyn Fn(&str) -> bool) -> Result<U
     in_the_way_of_undo(&top, applied, &parent)?;
     // Files only touched (same content, new timestamp) aren't edits.
     let _ = run_git(&top, &["update-index", "-q", "--refresh"]);
+    // Only ask for confirmation when the undo would otherwise proceed.
+    if !allow_pushed {
+        let remotes = pushed_to(row);
+        if !remotes.is_empty() {
+            return Ok(UndoOutcome::Pushed(remotes));
+        }
+    }
     // From here on the main folder changes: a crash is told apart from an apply cut off.
     if !mark(applied) {
         return Err("This session’s apply changed meanwhile.".to_string().into());
@@ -2152,12 +2268,12 @@ fn undo_apply(row: &SessionWorktreeRow, mark: &dyn Fn(&str) -> bool) -> Result<U
             settled: back,
         });
     }
-    Ok(Undone {
+    Ok(UndoOutcome::Done(Undone {
         top,
         branch,
         applied: applied.to_string(),
         parent,
-    })
+    }))
 }
 
 /// At start, for an undo cut off with the main folder's branch still on the applied commit
@@ -2171,6 +2287,18 @@ fn settle_undo(db: &Db, session_id: &str, applied: &str) {
     let Some(top) = top_of(Path::new(&row.folder)) else {
         return;
     };
+    let on_branch = match (
+        &row.apply_branch,
+        read_git(&top, &["symbolic-ref", "-q", "HEAD"]),
+    ) {
+        (Some(to), Some(cur)) => cur == *to,
+        (None, Some(_)) => true,
+        _ => false,
+    };
+    if !on_branch {
+        anysola_core::api::clear_undo_mark(db, session_id);
+        return;
+    }
     let head = read_git(&top, &["rev-parse", "HEAD"]);
     let parent = read_git(
         &top,
@@ -2228,7 +2356,13 @@ fn in_the_way_of_undo(top: &Path, applied: &str, parent: &str) -> Result<(), Str
         }
         let inside = run_git(
             top,
-            &["ls-files", "--others", "-z", "--", &format!("{path}/")],
+            &[
+                "ls-files",
+                "--others",
+                "-z",
+                "--",
+                &format!(":(literal){path}/"),
+            ],
         )
         .map_err(|f| git::explain(Op::Status, f))?;
         if let Some(file) = inside.split('\0').find(|p| !p.is_empty()) {
@@ -2576,6 +2710,10 @@ pub async fn worktree_discard(
 ) -> Answer {
     let core = core_for(&handle, &app, &directory).await?;
     let db = app.db()?.clone();
+    // Refuse before stopping setup commands, terminals or language servers.
+    if let Ok(Some(w)) = db.session_worktree(&session_id) {
+        releasable(&core, &w)?;
+    }
     let id = session_id.clone();
     git::blocking(move || {
         cancel_prepare(&id);
@@ -2583,8 +2721,6 @@ pub async fn worktree_discard(
     })
     .await?;
     isolate_done(&session_id).await;
-    // What holds the folder goes only once nothing will refuse the discard (a refused one
-    // leaves the user's terminal alone).
     if let Ok(Some(w)) = db.session_worktree(&session_id)
         && releasable(&core, &w).is_ok()
     {
@@ -2636,6 +2772,7 @@ pub async fn worktree_to_folder(
     session_id: String,
 ) -> Answer {
     let core = core_for(&handle, &app, &directory).await?;
+    core.can_unisolate(&session_id).map_err(plain_error)?;
     let id = session_id.clone();
     git::blocking(move || {
         cancel_prepare(&id);
@@ -2645,8 +2782,7 @@ pub async fn worktree_to_folder(
     isolate_done(&session_id).await;
     if let Ok(db) = app.db()
         && let Ok(Some(w)) = db.session_worktree(&session_id)
-        && core.ensure_idle(&session_id).is_ok()
-        && matches!(w.state, WorktreeState::Preparing | WorktreeState::Failed)
+        && core.can_unisolate(&session_id).is_ok()
     {
         let_go(&app.terminals, Some(&core), &w.directory).await;
     }
@@ -2803,6 +2939,11 @@ pub(crate) async fn before_delete(
     if row.state == WorktreeState::Applying {
         return Err("This session’s changes are being applied. Try again in a moment.".into());
     }
+    if let Some(core) = core
+        && !row.state.released()
+    {
+        releasable(core, &row)?;
+    }
     let id = session_id.to_string();
     let _ = git::blocking(move || {
         cancel_prepare(&id);
@@ -2812,8 +2953,12 @@ pub(crate) async fn before_delete(
     isolate_done(session_id).await;
     match core {
         Some(core) if !row.state.released() => {
-            releasable(core, &row)?;
-            let_go(terminals, Some(core), &row.directory).await;
+            let fresh = db
+                .session_worktree(session_id)
+                .map_err(text)?
+                .unwrap_or(row);
+            releasable(core, &fresh)?;
+            let_go(terminals, Some(core), &fresh.directory).await;
             core.release_worktree(session_id, Release::Discarded)
                 .await
                 .map_err(plain_error)?;

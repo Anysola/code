@@ -392,9 +392,51 @@ async fn run_shell(ctx: &ToolContext, condition: &Value, state: &Value) -> Outco
         .kill_on_drop(true);
     #[cfg(unix)]
     command.process_group(0);
-    let output = match command.output().await {
-        Ok(output) => output,
+    let mark = crate::children::mark_tokio(&mut command);
+    let mut child = match command.spawn() {
+        Ok(child) => child,
         Err(error) => return failed(error.to_string()),
+    };
+    struct KillGroup(Option<u32>);
+    impl Drop for KillGroup {
+        fn drop(&mut self) {
+            if let Some(pid) = self.0.take() {
+                crate::tool::shell::exec::force_kill(pid);
+            }
+        }
+    }
+    // Declared after `child` so on cancel `guard` kills the tree before `child`'s `kill_on_drop`.
+    let mut guard = KillGroup(child.id());
+    let ours = crate::children::adopt_tokio(&child, crate::children::Leads::Group, mark);
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+    let read_out = async move {
+        use tokio::io::AsyncReadExt;
+        let mut buf = Vec::new();
+        if let Some(ref mut s) = stdout {
+            let _ = s.read_to_end(&mut buf).await;
+        }
+        buf
+    };
+    let read_err = async move {
+        use tokio::io::AsyncReadExt;
+        let mut buf = Vec::new();
+        if let Some(ref mut s) = stderr {
+            let _ = s.read_to_end(&mut buf).await;
+        }
+        buf
+    };
+    let (status, stdout, stderr) = tokio::join!(child.wait(), read_out, read_err);
+    guard.0 = None;
+    drop(ours);
+    let status = match status {
+        Ok(status) => status,
+        Err(error) => return failed(error.to_string()),
+    };
+    let output = std::process::Output {
+        status,
+        stdout,
+        stderr,
     };
     let (stdout, stderr) = (capped(&output.stdout), capped(&output.stderr));
     let code = output.status.code().unwrap_or(-1);

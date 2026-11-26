@@ -260,15 +260,35 @@ impl Formatters {
                 "formatting file",
                 &[("file", &file), ("command", &argv.join(" "))],
             );
-            let status = crate::console::tokio_command(crate::which::program(&argv[0]))
+            let mut command = crate::console::tokio_command(crate::which::program(&argv[0]));
+            command
                 .args(&argv[1..])
                 .current_dir(directory)
                 .envs(formatter.environment.iter().cloned())
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .kill_on_drop(true)
-                .status();
+                .kill_on_drop(true);
+            #[cfg(unix)]
+            command.process_group(0);
+            let mark = crate::children::mark_tokio(&mut command);
+            struct KillGroup(Option<u32>);
+            impl Drop for KillGroup {
+                fn drop(&mut self) {
+                    if let Some(pid) = self.0.take() {
+                        crate::tool::shell::exec::force_kill(pid);
+                    }
+                }
+            }
+            let status = async {
+                let mut child = command.spawn()?;
+                let mut guard = KillGroup(child.id());
+                let _ours =
+                    crate::children::adopt_tokio(&child, crate::children::Leads::Group, mark);
+                let result = child.wait().await;
+                guard.0 = None;
+                result
+            };
             // A hung formatter must not block the edit (and is killed when given up on).
             let status = match tokio::time::timeout(FORMAT_TIMEOUT, status).await {
                 Ok(status) => status,

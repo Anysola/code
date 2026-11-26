@@ -30,10 +30,10 @@ const FLUSH_AFTER: Duration = Duration::from_millis(16);
 const CHUNK: usize = 64 * 1024;
 /// Bytes sent that the window hasn't acknowledged yet, at most (then reading stops).
 const IN_FLIGHT: usize = 1024 * 1024;
-/// After SIGHUP, how long a terminal's processes get before SIGKILL; then how long the reap may take.
+/// After SIGHUP, how long a terminal's processes get before SIGKILL; then how long the reap may
+/// take (Windows: how long closing the pseudo console may take to end the shell).
 #[cfg(unix)]
 const HANGUP_GRACE: Duration = Duration::from_millis(400);
-#[cfg(unix)]
 const KILL_GRACE: Duration = Duration::from_millis(1500);
 
 /// Sends one `core` event to the window.
@@ -53,7 +53,6 @@ struct FlowState {
     /// Closed by the app: nothing more is sent, the reader stops.
     closed: bool,
     /// The shell was reaped (its pid may name another process now).
-    #[cfg_attr(not(unix), allow(dead_code))]
     reaped: bool,
 }
 
@@ -72,7 +71,6 @@ impl Flow {
     }
 
     /// Waits until the shell was reaped, `limit` at most; whether it was.
-    #[cfg(unix)]
     fn wait_reaped(&self, limit: Duration) -> bool {
         let deadline = Instant::now() + limit;
         let mut state = self.lock();
@@ -100,6 +98,9 @@ struct Entry {
     #[cfg_attr(not(unix), allow(dead_code))]
     pid: Option<u32>,
     flow: Arc<Flow>,
+    /// Linux: the record of the shell's session, so what of it a crash leaves goes at the next
+    /// start (see `anysola_core::children::adopt_session`); gone with the entry.
+    _ours: anysola_core::children::Ours,
 }
 
 /// Live embedded terminals for this window.
@@ -140,10 +141,6 @@ pub(crate) fn shell_for(configured: Option<&str>) -> String {
     anysola_core::tool::shell::terminal_shell(configured)
 }
 
-/// Where the process-tree work of the 1.4.3 "S" package plugs in: every terminal shell, right
-/// after it started (a Windows Job Object). Nothing yet.
-fn started(_pid: Option<u32>) {}
-
 impl Manager {
     pub(crate) fn open(
         &self,
@@ -176,6 +173,9 @@ impl Manager {
         cmd.cwd(dir);
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
+        // What the shell starts carries it, so a crash's leftovers can be told apart (Linux).
+        let mark = anysola_core::children::Mark::new();
+        cmd.env(anysola_core::children::MARKER, mark.value());
 
         let child = pair
             .slave
@@ -184,7 +184,10 @@ impl Manager {
         // Drop the slave handle in the parent so the reader sees EOF when the shell exits.
         drop(pair.slave);
         let pid = child.process_id();
-        started(pid);
+        // Not a Job on Windows: like any terminal window, closing it ends what is attached to its
+        // console, never a program that left it (`code .`, `start`). That the app dying does the
+        // same (the console host leaving once its pipes break) is assumed, not tested here.
+        let ours = anysola_core::children::adopt_session(pid, mark);
 
         let killer = child.clone_killer();
         let reader = Reader::new(pair.master.as_ref())?;
@@ -208,6 +211,7 @@ impl Manager {
                     killer,
                     pid,
                     flow: flow.clone(),
+                    _ours: ours,
                 },
             );
 
@@ -302,7 +306,9 @@ impl Manager {
 
 /// Ends terminals taken out of the list. Unix: SIGHUP to everything the shell's session runs
 /// (its jobs have process groups of their own), a moment, then SIGKILL, and a bounded wait for
-/// the reap; the reader stops either way. Windows: as before 1.4.3 (the S package's job).
+/// the reap; the reader stops either way. Windows: the shell is terminated and the pseudo
+/// console closed, which ends what is attached to it; then a bounded wait for the reap (the
+/// reader sees the end once the console is gone), so a worktree removed next isn't held open.
 fn stop(mut entries: Vec<Entry>) {
     if entries.is_empty() {
         return;
@@ -342,8 +348,15 @@ fn stop(mut entries: Vec<Entry>) {
         let _ = entry.killer.kill();
         entry.flow.close();
     }
+    let flows: Vec<Arc<Flow>> = entries.iter().map(|e| e.flow.clone()).collect();
     // The master goes last (Windows: closing the pseudo console ends what's attached to it).
     entries.clear();
+    if cfg!(windows) {
+        let deadline = Instant::now() + KILL_GRACE;
+        for flow in flows {
+            flow.wait_reaped(deadline.saturating_duration_since(Instant::now()));
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -464,7 +477,7 @@ impl Reader {
         };
         // SAFETY: poll(2) on one descriptor we own.
         let n = unsafe { libc::poll(&mut fds, 1, 50) };
-        n != 0
+        n > 0
     }
 
     fn run(mut self, tx: &SyncSender<Vec<u8>>, flow: &Flow) {

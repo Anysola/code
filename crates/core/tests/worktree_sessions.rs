@@ -2022,3 +2022,33 @@ fn a_leftover_is_removed_at_the_next_start() {
     ));
     assert!(!db(&env).session_worktree(&id).unwrap().unwrap().leftover);
 }
+
+/// Switching to another branch whose tip happens to equal the applied commit's parent must never
+/// fool start-up cleanup into marking an intact apply on `apply_branch` as undone.
+#[test]
+fn a_crash_mid_undo_checks_the_apply_branch_not_head() {
+    let gateway = turns(vec![]);
+    let env = env(&gateway.url);
+    let project = project(&env, &[("a.txt", "a0")]);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    // Apply onto `feature`, leaving `main` at the parent commit.
+    git(&project, &["checkout", "-q", "-b", "feature"]);
+    let (id, commit, _parent) = applied(&runtime, &core, &project, "a.txt");
+    assert!(core.begin_undo(&id).unwrap());
+    // Crash before `update-ref`; user switches back to `main` (which is at `commit^`).
+    drop(core);
+    git(&project, &["checkout", "-q", "main"]);
+    let cleaned = anysola_core::api::cleanup_worktrees(&db(&env));
+    assert_eq!(cleaned.len(), 1);
+    assert_eq!(cleaned[0].undo, None, "HEAD is on another branch");
+    let row = db(&env).session_worktree(&id).unwrap().unwrap();
+    assert_eq!(row.state, WorktreeState::Ready);
+    assert_eq!(
+        row.applied_commit.as_deref(),
+        Some(commit.as_str()),
+        "BREAK: feature still has the applied commit, must not be cleared"
+    );
+    assert_eq!(row.apply_branch.as_deref(), Some("refs/heads/feature"));
+    assert_eq!(row.undo_from, None);
+}

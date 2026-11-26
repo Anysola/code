@@ -26,6 +26,9 @@ pub struct Stdio {
     /// The process group to signal, which outlives the child's own exit.
     #[cfg(unix)]
     pid: Option<u32>,
+    /// The server and what it starts, stopped together also after it ended; dropping it stops
+    /// them (a crash or the updater's exit too, see `anysola_core::children`).
+    tree: anysola_core::children::Tree,
     closing: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -62,7 +65,10 @@ impl Stdio {
             .kill_on_drop(true);
         #[cfg(unix)]
         process.process_group(0);
+        let mark = anysola_core::children::mark_tokio(&mut process);
+        let prep = anysola_core::children::prepare_tree();
         let mut child = process.spawn().map_err(|e| spawn_error(&e, command))?;
+        let tree = prep.attach_tokio(&child, mark);
         #[cfg(unix)]
         let pid = child.id();
         let (mut stdin, stdout, mut stderr) = (
@@ -122,6 +128,7 @@ impl Stdio {
             child,
             #[cfg(unix)]
             pid,
+            tree,
             closing,
         })
     }
@@ -262,12 +269,13 @@ impl Transport for Stdio {
             let Some(mut child) = self.child.lock().await.take() else {
                 return;
             };
+            // Once it was reaped its id may be another group's: what it left is then found by
+            // the tree (verified members on Linux, its Job on Windows), never by that id.
             if tokio::time::timeout(CLOSE_GRACE, child.wait())
                 .await
                 .is_ok()
             {
-                #[cfg(unix)]
-                signal_group(self.pid, libc::SIGKILL);
+                self.tree.kill();
                 return;
             }
             #[cfg(unix)]
@@ -277,17 +285,20 @@ impl Transport for Stdio {
                     .await
                     .is_ok()
                 {
-                    signal_group(self.pid, libc::SIGKILL);
+                    self.tree.kill();
                     return;
                 }
                 signal_group(self.pid, libc::SIGKILL);
             }
             // `npx` and other launchers leave the server as a grandchild; end the whole tree.
             #[cfg(windows)]
-            if let Some(pid) = child.id() {
+            if !self.tree.kill()
+                && let Some(pid) = child.id()
+            {
                 kill_tree(pid);
             }
             let _ = child.kill().await;
+            self.tree.kill();
         }
         .boxed()
     }

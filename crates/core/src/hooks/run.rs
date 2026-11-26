@@ -37,15 +37,23 @@ struct Group {
     pid: u32,
     live: bool,
     _tracked: crate::teardown::Tracked,
+    /// Its record until it is reaped (see `crate::children`).
+    _ours: crate::children::Ours,
 }
 
 impl Group {
-    fn new(pid: u32, command: &str) -> Group {
+    fn new(
+        pid: u32,
+        command: &str,
+        child: &tokio::process::Child,
+        mark: crate::children::Mark,
+    ) -> Group {
         exec::register(pid);
         Group {
             pid,
             live: true,
             _tracked: crate::teardown::track(format!("hook {pid} running: {command}")),
+            _ours: crate::children::adopt_tokio(child, crate::children::Leads::Group, mark),
         }
     }
 
@@ -101,13 +109,14 @@ pub async fn run(job: Job<'_>, cancel: &CancellationToken) -> Ran {
         .kill_on_drop(true);
     #[cfg(unix)]
     command.process_group(0);
+    let mark = crate::children::mark_tokio(&mut command);
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => return Ran::NotStarted(error.to_string()),
     };
     drop(command);
     let pid = child.id().unwrap_or_default();
-    let mut group = Group::new(pid, job.command);
+    let mut group = Group::new(pid, job.command, &child, mark);
     // A hook that does not read its input must not block on a full pipe, nor fail us.
     let stdin = child.stdin.take();
     let input = job.input;

@@ -78,6 +78,11 @@ impl Paths {
         self.data.join("state")
     }
 
+    /// Records of the process groups the desktop app started (Linux; see `crate::children`).
+    pub fn children_dir(&self) -> PathBuf {
+        self.data.join("children")
+    }
+
     pub fn legacy_config_dir(&self) -> PathBuf {
         self.legacy_config.clone()
     }

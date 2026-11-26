@@ -4,7 +4,7 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
-## 1.4.3 (2026-11-25)
+## 1.4.3 (2026-11-26)
 
 - Hooks can name the shell they run in: `"shell": "powershell"` (or `bash`, `cmd`, a path) next to a hook's
   `command` in your own config. A project's hooks can't choose one; the field is ignored there with a warning.
@@ -28,10 +28,17 @@ branch.
   recorded, and an undo cut off by a crash is finished or put back at the next start. A commit you already pushed
   is undone only after you confirm. When the main folder has moved on, the way out offered is `git revert`.
 - The embedded terminal keeps up with programs that print fast (`yes`, a long log) without freezing the window,
-  closing it ends the programs it started, reloading the window leaves no shell behind, and it opens your
+  closing it ends what runs in it, reloading the window leaves no shell behind, and it opens your
   `shell` setting or `$SHELL` (fish and nu included).
 - Discarding or deleting a worktree session (one, or all) closes its terminals and stops its language servers,
   and only once nothing will refuse: a refused discard leaves your terminal open.
+- When Anysola Code crashes, is killed or closes to update, what it started goes with it: on Windows at once
+  (shell commands, hooks, MCP and language servers, a worktree's setup command), on Linux at the next start
+  (a terminal's leftovers too). On Windows this holds for every close: background processes started directly by
+  the agent's commands or a hook now close with the app. The update's installer,
+  and the editor or browser Anysola Code opens itself ("Open in editor", links), are never touched. Closing to
+  update also stops setup commands and terminals, and discarding or deleting a worktree ends what its finished
+  setup command left running (`npm run dev &`).
 - A previewed page's `alert`, `confirm` and `prompt` now do nothing instead of covering the whole app. The tablet
   preset in a narrow preview scrolls instead of cutting off the page's left side, and a narrow message box no
   longer puts the send button over the model picker.

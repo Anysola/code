@@ -567,6 +567,41 @@ fn the_setup_command_runs_is_stopped_and_times_out() {
     assert_eq!(ended, ("timeout", None));
 }
 
+/// A setup command that finished but left something running (`npm run dev &`): discarding or
+/// deleting the worktree stops its setup, and that goes too (its group is found by the tree,
+/// not by the ended command's id).
+#[cfg(unix)]
+#[test]
+fn what_a_finished_setup_left_running_goes_with_it() {
+    let dir = std::env::temp_dir();
+    let out = quiet_out("ses_setup_left");
+    out.begin(Some("x".into()));
+    let ended = run_setup(
+        &out,
+        Some("/bin/sh"),
+        "sleep 60 >/dev/null 2>&1 & echo \"$!\"",
+        &dir,
+        "/wt",
+        Duration::from_secs(30),
+    );
+    assert_eq!(ended, ("done", Some(0)));
+    let left: i32 = lines(&out)
+        .iter()
+        .find_map(|(stream, text)| (stream == "out").then(|| text.parse().ok()).flatten())
+        .expect("the background pid");
+    assert!(!crate::tree::gone(left));
+    assert!(!stop_setup("ses_setup_left"), "no command was running");
+    let started = Instant::now();
+    while !crate::tree::gone(left) {
+        if started.elapsed() > Duration::from_secs(5) {
+            // SAFETY: kill(2) of the test's own leftover before failing.
+            unsafe { libc::kill(left, libc::SIGKILL) };
+            panic!("what the finished setup started still runs");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn hook_fails(main: &Path) {
     let hooks = main.join(".git/hooks");
     std::fs::create_dir_all(&hooks).unwrap();
@@ -1255,4 +1290,96 @@ fn a_refused_delete_keeps_the_terminal() {
     db.insert_session_worktree(&row).unwrap();
     tauri::async_runtime::block_on(before_delete(None, &db, &terminals, &row.session_id)).unwrap();
     assert_eq!(terminals.count(), 0);
+}
+
+/// A folder name starting with `:` (a Git pathspec magic prefix) still guards ignored files
+/// inside it when an undo would replace that folder with the file the commit removed.
+#[test]
+#[cfg(unix)]
+fn undo_apply_never_deletes_ignored_file_in_colon_folder() {
+    let sandbox = Sandbox::new("undo-colon-dir");
+    let (main, mut row) = sandbox.session();
+    write(&main, ".gitignore", "*.env\n");
+    write(&main, ":foo", "was a file\n");
+    sandbox.git(&main, &["add", "--", ".gitignore", ":(literal):foo"]);
+    sandbox.git(&main, &["commit", "-qm", "add :foo"]);
+    let base = sandbox.git(&main, &["rev-parse", "HEAD"]);
+    sandbox.git(&w(&row), &["reset", "-q", "--hard", &base]);
+    row.base_commit = base;
+    std::fs::remove_file(w(&row).join(":foo")).unwrap();
+    write(&w(&row), ":foo/in.txt", "now a folder\n");
+    applied(&mut row, "replace :foo file with folder");
+    write(&main, ":foo/secret.env", "KEEP\n");
+    let err = undo_apply(&row, &|_| true).unwrap_err();
+    assert!(err.settled);
+    assert!(err.message.contains("secret.env"), "{}", err.message);
+    assert_eq!(read(&main, ":foo/secret.env"), "KEEP\n");
+}
+
+/// `in_commit` uses NUL-delimited `cat-file --batch-check -Z`, so a file name containing a
+/// newline never shifts the match results of subsequent paths.
+#[test]
+#[cfg(unix)]
+fn in_commit_handles_newlines_in_names() {
+    let sandbox = Sandbox::new("in-commit-nl");
+    let (main, _row) = sandbox.session();
+    let nl = "line1\nline2.txt".to_string();
+    let real = "a.txt".to_string();
+    let missing = "no-such.txt".to_string();
+    let found = in_commit(&main, "HEAD", &[&nl, &real, &missing]);
+    assert!(!found.contains(&nl));
+    assert!(found.contains(&real), "subsequent path must still match");
+    assert!(!found.contains(&missing));
+}
+
+/// A `stop_setup` arriving after `claim_setup` and before `run_setup_claimed` starts the process
+/// is never wiped out.
+#[test]
+#[cfg(unix)]
+fn stop_before_run_setup_claimed_is_never_wiped() {
+    let sandbox = Sandbox::new("setup-stop-race");
+    let (_main, row) = sandbox.session();
+    let marker = sandbox.0.join("ran");
+    let out = quiet_out(&row.session_id);
+    assert!(claim_setup(&out.slot));
+    // Simulate `stop_setup` landing before the worker enters `run_setup_claimed`.
+    out.slot.stop.store(true, Ordering::SeqCst);
+    let ended = run_setup_claimed(
+        &out,
+        None,
+        &format!("touch {}", marker.display()),
+        &w(&row),
+        &row.directory,
+        Duration::from_secs(5),
+    );
+    assert_eq!(ended, ("stopped", None));
+    assert!(!marker.exists(), "command must not have run");
+    assert!(!out.slot.active.load(Ordering::SeqCst));
+}
+
+/// A pushed commit that would be refused anyway (e.g. main moved on) returns the refusal rather
+/// than asking for pushed-commit confirmation first.
+#[test]
+fn undo_apply_refuses_before_asking_about_pushed() {
+    let sandbox = Sandbox::new("undo-pushed-refuse");
+    let (main, mut row) = sandbox.session();
+    write(&w(&row), "a.txt", "v1\n");
+    applied(&mut row, "apply v1");
+    let remote = sandbox.0.join("remote.git");
+    sandbox.git(
+        &sandbox.0,
+        &["init", "-q", "--bare", &remote.display().to_string()],
+    );
+    sandbox.git(
+        &main,
+        &["remote", "add", "origin", &remote.display().to_string()],
+    );
+    sandbox.git(&main, &["push", "-q", "origin", "main"]);
+    // Move main forward so the undo must be refused.
+    write(&main, "later.txt", "later\n");
+    sandbox.git(&main, &["add", "later.txt"]);
+    sandbox.git(&main, &["commit", "-qm", "later"]);
+    let err = undo_apply_checked(&row, false, &|_| true).unwrap_err();
+    assert!(err.settled);
+    assert!(err.message.contains("git revert"), "{}", err.message);
 }
