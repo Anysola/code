@@ -515,7 +515,11 @@ fn the_documented_hook_form_runs_in_both_kinds_of_session() {
         .unwrap();
     assert!(
         project.join("one.txt").exists(),
-        "the hook let the write through"
+        "the hook let the write through: {:?}",
+        gateway
+            .messages()
+            .last()
+            .map(|r| r.json()["messages"].to_string())
     );
     // A worktree session, its ignored script copied in as the desktop does.
     let (id, top) = isolated(&runtime, &core);

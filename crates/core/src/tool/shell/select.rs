@@ -131,7 +131,19 @@ fn args_for(shell: &str, command: &str, windows: bool) -> Vec<String> {
                 .chain([command])
                 .collect()
         }
-        _ => vec!["-c".into(), command.into()],
+        _ => {
+            // On Windows, Rust's `Command` and Git Bash's `bin/bash.exe` wrapper omit outer quotes
+            // around an argument with no spaces or tabs, leaving `\"` unquoted; MSYS2's startup
+            // parser then treats `\` as literal and opens quotes at `"` (breaking Claude Code's
+            // `"$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh`). A leading space has no effect in a
+            // POSIX shell and forces outer quoting.
+            let command = if windows && command.contains('"') && !command.contains([' ', '\t']) {
+                format!(" {command}")
+            } else {
+                command.into()
+            };
+            vec!["-c".into(), command]
+        }
     }
 }
 
@@ -346,6 +358,10 @@ mod tests {
             "using namespace System.Text; ls"
         );
         assert_eq!(args_for("/usr/bin/bash", "ls", true), ["-c", "ls"]);
+        assert_eq!(
+            args_for("bash", r#""$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh"#, true),
+            ["-c", r#" "$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh"#]
+        );
     }
 
     /// The prefixed command keeps non-ASCII output and the command's exit code.
