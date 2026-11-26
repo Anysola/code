@@ -393,7 +393,7 @@ export type AgentConfig = {
    * count; on Windows Git Bash when installed and no `shell` is set).
    */
   hooksShellDetected?: string | null
-  /** `lsp`: diagnostics from language servers after edits; only `true` turns it on (off by default). */
+  /** `lsp`: diagnostics from language servers after edits; on by default for approved projects (`false` disables everywhere). */
   lsp: boolean
   /** `sandbox` turned on (`true`, or an object without `"enabled": false`); off by default. */
   sandbox: boolean
@@ -540,12 +540,12 @@ export type HookFile = {
 }
 
 /**
- * What a project file can change on this computer, each approved on its own: commands it runs
- * (`hooks`, `mcp`, `formatter`), what it lets the agent do without asking (`permissions`: its
- * allow rules; rules that ask or deny apply without approval), and what it makes the app download
- * (`remote`: instruction URLs and git repositories).
+ * What a project file or folder can change on this computer, each approved on its own: commands it
+ * runs (`hooks`, `mcp`, `formatter`), what it lets the agent do without asking (`permissions`: its
+ * allow rules; rules that ask or deny apply without approval), what it makes the app download
+ * (`remote`: instruction URLs and git repositories), and installed language servers (`lsp`).
  */
-export type TrustKind = "hooks" | "mcp" | "formatter" | "permissions" | "remote"
+export type TrustKind = "hooks" | "mcp" | "formatter" | "permissions" | "remote" | "lsp"
 
 /** One thing a project file would run. `command`: a command line or a URL; `detail`: the rest worth knowing. */
 export type TrustEntry = { label: string; command: string; detail: string | null }

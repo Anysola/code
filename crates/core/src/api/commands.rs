@@ -66,6 +66,9 @@ impl Core {
             None
         };
         let checkout = self.shared.checkout_of(&session);
+        let sandbox =
+            crate::tool::shell::sandbox::SandboxConfig::from_value(loaded.config.get("sandbox"));
+        let sandbox_cache = self.shared.paths.sandbox_cache_dir(&session.id);
         let at = crate::command::RenderEnv {
             project: &checkout.root,
             shell: loaded.config.shell(),
@@ -73,6 +76,8 @@ impl Core {
             env: &self.shared.env,
             mcp: mcp.map(|m| m.as_ref()),
             gate: gate.as_ref(),
+            sandbox,
+            sandbox_cache: sandbox_cache.as_deref(),
         };
         // While a question it raised waits, Stop (or closing, or deleting the session) cancels
         // the whole command: the question is taken down and nothing of it runs.

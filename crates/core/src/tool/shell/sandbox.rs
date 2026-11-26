@@ -1,12 +1,16 @@
-//! Experimental OS-level filesystem (and optional network) sandboxing for the `shell` tool.
+//! Experimental OS-level filesystem, PID/session, and optional network sandboxing for shell
+//! commands (`shell` tool, scheduled `{run}` checks, and template ``!`cmd` ``).
 //!
 //! On Linux, with `bwrap` (bubblewrap) installed and unprivileged user namespaces allowed,
-//! commands run with `/` mounted read-only, `/tmp` on a private tmpfs, and only the session's
-//! working root (`ctx.worktree`) writable. Nothing else is ever bound writable: not an external
-//! `cwd` (it is entered read-only), not the repository's `.git` data (so `git add`/`commit` don't
-//! work inside it). It only limits the shell tool's writes: reads and the network stay open
-//! (unless `"network": false`), and hooks, LSP servers, scheduled checks and the embedded
-//! terminal run outside it.
+//! commands run in a private PID namespace (`--unshare-pid`) and session (`--new-session`), with
+//! `/` mounted read-only, `/tmp` on a private tmpfs, and only the session's working root
+//! (`ctx.worktree`) plus an optional per-session cache directory writable. If `<root>/.git`
+//! exists (a directory in main-folder repos or a gitfile in worktrees), `<root>/.git` itself is
+//! re-mounted read-only so sandboxed commands cannot modify, remove, or rename `.git` to poison
+//! git hooks or repository config. Nothing else is ever bound writable: not an external `cwd` (it
+//! is entered read-only), not a worktree's shared `.git` admin directory. It only limits writes
+//! and process visibility: reads and the network stay open (unless `"network": false`), and
+//! hooks, LSP servers, formatters, MCP servers, and the embedded terminal run outside it.
 //!
 //! Off by default, worktree sessions included. Only user or managed config turns it on:
 //! `"sandbox": true` or an object such as `{"network": false}`; any other value is off. Project
@@ -20,6 +24,43 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use serde_json::Value;
+
+/// Appended to a failed sandboxed command's result when its output reports a read-only filesystem.
+pub const READ_ONLY_NOTE: &str = "[sandbox: writes are limited to the session's working folder]";
+
+/// Whether a command's output mentions a read-only filesystem error (covers GNU/BSD
+/// `Read-only file system`, Node/libuv/Go `read-only file system`, and `EROFS`).
+pub fn mentions_read_only(output: &str) -> bool {
+    output
+        .to_ascii_lowercase()
+        .contains("read-only file system")
+        || output.contains("EROFS")
+}
+
+/// Subdirectories prepared inside a session's writable cache folder (`Paths::sandbox_cache_dir`).
+#[cfg(target_os = "linux")]
+const CACHE_SUBDIRS: [(&str, &str); 7] = [
+    ("TMPDIR", "tmp"),
+    ("XDG_CACHE_HOME", "xdg"),
+    ("npm_config_cache", "npm"),
+    ("PIP_CACHE_DIR", "pip"),
+    ("GOCACHE", "go-build"),
+    ("GOMODCACHE", "go-mod"),
+    ("UV_CACHE_DIR", "uv"),
+];
+
+/// Fallback cache environment paths under the private `/tmp` tmpfs when no session cache dir is
+/// supplied.
+#[cfg(target_os = "linux")]
+const TMP_CACHES: [(&str, &str); 7] = [
+    ("TMPDIR", "/tmp"),
+    ("XDG_CACHE_HOME", "/tmp/.cache"),
+    ("npm_config_cache", "/tmp/.npm"),
+    ("PIP_CACHE_DIR", "/tmp/.pip"),
+    ("GOCACHE", "/tmp/.go-build"),
+    ("GOMODCACHE", "/tmp/.go-mod"),
+    ("UV_CACHE_DIR", "/tmp/.uv"),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SandboxConfig {
@@ -65,8 +106,15 @@ pub fn bwrap_path() -> Option<&'static Path> {
                     "/dev",
                     "--proc",
                     "/proc",
+                    "--tmpfs",
+                    "/tmp",
+                    "--unshare-pid",
+                    "--new-session",
+                    "--die-with-parent",
                     "--",
-                    "/bin/true",
+                    "/bin/sh",
+                    "-c",
+                    ":",
                 ])
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
@@ -92,13 +140,42 @@ fn unavailable() -> String {
     }
 }
 
+/// Prepares a session's writable cache directory and its subdirectories if neither `dir` nor its
+/// parent is a symlink, returning its canonical path verified to sit inside its canonical parent.
+#[cfg(target_os = "linux")]
+fn prepare_cache_dir(dir: &Path) -> Option<PathBuf> {
+    let parent = dir.parent()?;
+    if let Ok(meta) = std::fs::symlink_metadata(parent)
+        && (!meta.is_dir() || meta.file_type().is_symlink())
+    {
+        return None;
+    }
+    if let Ok(meta) = std::fs::symlink_metadata(dir)
+        && (!meta.is_dir() || meta.file_type().is_symlink())
+    {
+        return None;
+    }
+    std::fs::create_dir_all(dir).ok()?;
+    let real_parent = std::fs::canonicalize(parent).ok()?;
+    let real = std::fs::canonicalize(dir).ok()?;
+    if real == Path::new("/") || real.parent() != Some(real_parent.as_path()) {
+        return None;
+    }
+    for (_, sub) in CACHE_SUBDIRS {
+        std::fs::create_dir_all(real.join(sub)).ok()?;
+    }
+    Some(real)
+}
+
 /// Wraps `(program, args)` in the OS sandbox when enabled. Returns `(program, args, active)`;
-/// `Err` (the command must not run) when it is enabled but can't start here.
+/// `Err` (the command must not run) when it is enabled but can't start here or `writable_root`
+/// resolves to `/`.
 pub fn wrap(
     program: &str,
     args: Vec<String>,
     cwd: &Path,
     writable_root: &Path,
+    cache_dir: Option<&Path>,
     cfg: SandboxConfig,
 ) -> Result<(String, Vec<String>, bool), String> {
     if !cfg.enabled {
@@ -106,21 +183,40 @@ pub fn wrap(
     }
     #[cfg(target_os = "linux")]
     if let Some(bwrap) = bwrap_path() {
-        let wrapped = build_bwrap_args(program, &args, cwd, writable_root, cfg.network);
+        let root =
+            std::fs::canonicalize(writable_root).unwrap_or_else(|_| writable_root.to_path_buf());
+        if root == Path::new("/") {
+            return Err(
+                "The shell sandbox refused to run with `/` as the writable working folder, so the command was not run."
+                    .into(),
+            );
+        }
+        let prepared_cache = cache_dir.and_then(prepare_cache_dir);
+        let wrapped = build_bwrap_args(
+            program,
+            &args,
+            cwd,
+            &root,
+            prepared_cache.as_deref(),
+            cfg.network,
+        );
         return Ok((bwrap.to_string_lossy().into_owned(), wrapped, true));
     }
-    let _ = (cwd, writable_root);
+    let _ = (cwd, writable_root, cache_dir);
     Err(unavailable())
 }
 
-/// The `bwrap` arguments: everything read-only but the root; the command starts in `cwd` (which
-/// may be outside the root, read-only).
+/// The `bwrap` arguments: everything read-only except `writable_root` (with `<root>/.git` itself
+/// re-mounted read-only so it cannot be edited, removed, or renamed) and optional `cache_dir`;
+/// private PID namespace and session; the command starts in `cwd` (which may be outside the root,
+/// read-only).
 #[cfg(target_os = "linux")]
 fn build_bwrap_args(
     program: &str,
     args: &[String],
     cwd: &Path,
     writable_root: &Path,
+    cache_dir: Option<&Path>,
     network: bool,
 ) -> Vec<String> {
     let root = std::fs::canonicalize(writable_root).unwrap_or_else(|_| writable_root.to_path_buf());
@@ -138,22 +234,48 @@ fn build_bwrap_args(
         "/proc".into(),
         "--tmpfs".into(),
         "/tmp".into(),
+        "--unshare-pid".into(),
+        "--new-session".into(),
         "--bind".into(),
         root_s.clone(),
         root_s,
     ];
+    // Protect `<root>/.git` itself as a read-only mountpoint (both main-folder `.git/` dirs and
+    // worktree `.git` gitfiles): blocks writes, missing-subdir creation, `rm .git`, and
+    // `mv .git .git.old` (`EBUSY` on a mountpoint).
+    let git_path = root.join(".git");
+    if std::fs::symlink_metadata(&git_path)
+        .is_ok_and(|m| (m.is_dir() || m.is_file()) && !m.file_type().is_symlink())
+    {
+        let text = git_path.to_string_lossy().into_owned();
+        out.extend(["--ro-bind".into(), text.clone(), text]);
+    }
     if !network {
         out.push("--unshare-net".into());
     }
-    // Redirect temp and XDG cache dirs into the private /tmp tmpfs so build tools don't fail
-    // trying to write caches under a read-only $HOME.
+    // Clear uppercase `NPM_CONFIG_CACHE` so host overrides never shadow `npm_config_cache`.
+    out.extend(["--unsetenv".into(), "NPM_CONFIG_CACHE".into()]);
+    // Redirect temp and toolchain caches into either the persistent per-session cache dir or the
+    // private /tmp tmpfs so build tools don't fail trying to write under a read-only $HOME.
+    let cache_real = cache_dir
+        .map(|c| std::fs::canonicalize(c).unwrap_or_else(|_| c.to_path_buf()))
+        .filter(|c| c != Path::new("/"));
+    if let Some(cache_real) = cache_real {
+        let cache_s = cache_real.to_string_lossy().into_owned();
+        out.extend(["--bind".into(), cache_s.clone(), cache_s]);
+        for (var, sub) in CACHE_SUBDIRS {
+            out.extend([
+                "--setenv".into(),
+                var.into(),
+                cache_real.join(sub).to_string_lossy().into_owned(),
+            ]);
+        }
+    } else {
+        for (var, value) in TMP_CACHES {
+            out.extend(["--setenv".into(), var.into(), value.into()]);
+        }
+    }
     out.extend([
-        "--setenv".into(),
-        "TMPDIR".into(),
-        "/tmp".into(),
-        "--setenv".into(),
-        "XDG_CACHE_HOME".into(),
-        "/tmp/.cache".into(),
         "--die-with-parent".into(),
         "--chdir".into(),
         cwd_s,
@@ -241,6 +363,7 @@ mod tests {
             vec!["-c".into(), "true".into()],
             &here,
             &here,
+            None,
             ON,
         )
         .unwrap_err();
@@ -252,6 +375,7 @@ mod tests {
             vec!["-c".into()],
             &here,
             &here,
+            None,
             SandboxConfig {
                 enabled: false,
                 network: true,
@@ -273,6 +397,15 @@ mod tests {
             .collect()
     }
 
+    /// The targets of every read-only bind.
+    #[cfg(target_os = "linux")]
+    fn readonly(args: &[String]) -> Vec<String> {
+        args.windows(3)
+            .filter(|w| w[0] == "--ro-bind")
+            .map(|w| w[2].clone())
+            .collect()
+    }
+
     #[cfg(target_os = "linux")]
     fn real(path: &Path) -> String {
         std::fs::canonicalize(path)
@@ -290,13 +423,74 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::create_dir_all(&outside).unwrap();
         // An approved external working directory is entered, not bound writable.
-        let args = build_bwrap_args("/bin/sh", &[], &outside, &root, true);
+        let args = build_bwrap_args("/bin/sh", &[], &outside, &root, None, true);
         assert_eq!(writable(&args), vec![real(&root)]);
+        assert!(args.iter().any(|a| a == "--unshare-pid"));
+        assert!(args.iter().any(|a| a == "--new-session"));
         let chdir = args.iter().position(|a| a == "--chdir").unwrap();
         assert_eq!(args[chdir + 1], real(&outside));
         // Nor is `/` itself.
-        let args = build_bwrap_args("/bin/sh", &[], Path::new("/"), &root, true);
+        let args = build_bwrap_args("/bin/sh", &[], Path::new("/"), &root, None, true);
         assert_eq!(writable(&args), vec![real(&root)]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn dot_git_is_mounted_read_only_for_repos_and_worktrees() {
+        let dir = tempfile::tempdir().unwrap();
+        // Main-folder repo (.git directory)
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let args = build_bwrap_args("/bin/sh", &[], &repo, &repo, None, true);
+        let ro = readonly(&args);
+        let git_real = real(&repo.join(".git"));
+        assert!(
+            ro.contains(&git_real),
+            "missing ro-bind for .git dir: {ro:?}"
+        );
+        let bind_pos = args.iter().position(|a| a == "--bind").unwrap();
+        let git_pos = args.iter().rposition(|a| a == &git_real).unwrap();
+        assert!(git_pos > bind_pos);
+
+        // Worktree (.git regular file)
+        let wt = dir.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join(".git"), "gitdir: /tmp/admin\n").unwrap();
+        let args = build_bwrap_args("/bin/sh", &[], &wt, &wt, None, true);
+        assert!(readonly(&args).contains(&real(&wt.join(".git"))));
+        assert_eq!(writable(&args), vec![real(&wt)]);
+    }
+
+    #[test]
+    fn mentions_read_only_matches_posix_node_and_go() {
+        assert!(mentions_read_only(
+            "cannot create /x: Read-only file system"
+        ));
+        assert!(mentions_read_only(
+            "Error: EROFS: read-only file system, open '/x'"
+        ));
+        assert!(mentions_read_only("open /x: read-only file system"));
+        assert!(mentions_read_only("failed with EROFS"));
+        assert!(!mentions_read_only("Permission denied"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn session_cache_dir_is_bound_writable_and_sets_toolchain_envs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("wt");
+        let cache = dir.path().join("cache");
+        std::fs::create_dir_all(&root).unwrap();
+        let prepared = prepare_cache_dir(&cache).unwrap();
+        let args = build_bwrap_args("/bin/sh", &[], &root, &root, Some(&prepared), true);
+        assert_eq!(writable(&args), vec![real(&root), real(&cache)]);
+        for (var, sub) in CACHE_SUBDIRS {
+            let pos = args
+                .windows(3)
+                .position(|w| w[0] == "--setenv" && w[1] == var)
+                .unwrap_or_else(|| panic!("missing --setenv {var}: {args:?}"));
+            assert_eq!(args[pos + 2], prepared.join(sub).to_string_lossy());
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -311,7 +505,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         for target in [&admin, &other] {
             std::fs::write(root.join(".git"), format!("gitdir: {}\n", target.display())).unwrap();
-            let args = build_bwrap_args("/bin/sh", &[], &root, &root, true);
+            let args = build_bwrap_args("/bin/sh", &[], &root, &root, None, true);
             assert_eq!(writable(&args), vec![real(&root)], "gitdir {target:?}");
         }
     }
@@ -320,9 +514,9 @@ mod tests {
     #[test]
     fn no_network_unshares_it() {
         let dir = tempfile::tempdir().unwrap();
-        let off = build_bwrap_args("/bin/sh", &[], dir.path(), dir.path(), false);
+        let off = build_bwrap_args("/bin/sh", &[], dir.path(), dir.path(), None, false);
         assert!(off.iter().any(|a| a == "--unshare-net"));
-        let on = build_bwrap_args("/bin/sh", &[], dir.path(), dir.path(), true);
+        let on = build_bwrap_args("/bin/sh", &[], dir.path(), dir.path(), None, true);
         assert!(!on.iter().any(|a| a == "--unshare-net"));
     }
 
@@ -345,11 +539,21 @@ mod tests {
         assert!(!dir.path().starts_with("/tmp"));
         let worktree = dir.path().join("wt");
         let outside = dir.path().join("main");
-        std::fs::create_dir_all(&worktree).unwrap();
+        let cache = dir.path().join("cache");
+        std::fs::create_dir_all(worktree.join(".git/hooks")).unwrap();
+        std::fs::create_dir_all(worktree.join(".git/info")).unwrap();
+        std::fs::write(worktree.join(".git/config"), "[core]\n").unwrap();
         std::fs::create_dir_all(&outside).unwrap();
-        let run = |cwd: &Path, script: String| {
-            let (prog, args, active) =
-                wrap("/bin/sh", vec!["-c".into(), script], cwd, &worktree, ON).unwrap();
+        let run = |cwd: &Path, cache_opt: Option<&Path>, script: String| {
+            let (prog, args, active) = wrap(
+                "/bin/sh",
+                vec!["-c".into(), script],
+                cwd,
+                &worktree,
+                cache_opt,
+                ON,
+            )
+            .unwrap();
             assert!(active);
             std::process::Command::new(&prog)
                 .args(&args)
@@ -360,15 +564,100 @@ mod tests {
         };
 
         // Writing inside the root succeeds.
-        assert_eq!(run(&worktree, "echo ok > inside.txt".into()), Some(0));
+        assert_eq!(
+            run(&worktree, Some(&cache), "echo ok > inside.txt".into()),
+            Some(0)
+        );
         assert_eq!(
             std::fs::read_to_string(worktree.join("inside.txt")).unwrap(),
             "ok\n"
         );
+        // Per-session cache persists across commands.
+        assert_eq!(
+            run(
+                &worktree,
+                Some(&cache),
+                "echo cached > \"$npm_config_cache/item\"".into()
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            run(
+                &worktree,
+                Some(&cache),
+                "test \"$(cat \"$npm_config_cache/item\")\" = cached".into()
+            ),
+            Some(0)
+        );
+        // PID namespace isolation: host process (our own PID) is not visible in /proc.
+        let host_pid = std::process::id();
+        assert_ne!(
+            run(&worktree, None, format!("test -d /proc/{host_pid}")),
+            Some(0),
+            "host PID {host_pid} should not be visible inside --unshare-pid sandbox"
+        );
+        // Main-folder .git cannot be written, replaced, or renamed (`mv .git .git.old` -> EBUSY).
+        assert_ne!(
+            run(&worktree, None, "echo bad >> .git/config".into()),
+            Some(0)
+        );
+        assert_ne!(run(&worktree, None, "mv .git .git.old".into()), Some(0));
+        assert_ne!(
+            run(
+                &worktree,
+                None,
+                "echo '#!/bin/sh' > .git/hooks/pre-commit".into()
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            std::fs::read_to_string(worktree.join(".git/config")).unwrap(),
+            "[core]\n"
+        );
+        assert!(!worktree.join(".git/hooks/pre-commit").exists());
+        assert!(!worktree.join(".git.old").exists());
+        // Worktree `.git` gitfile cannot be overwritten or removed inside the sandbox.
+        let wt_file = dir.path().join("wt-gitfile");
+        std::fs::create_dir_all(&wt_file).unwrap();
+        std::fs::write(wt_file.join(".git"), "gitdir: /nonexistent\n").unwrap();
+        let (prog, args, active) = wrap(
+            "/bin/sh",
+            vec!["-c".into(), "rm .git || echo bad > .git".into()],
+            &wt_file,
+            &wt_file,
+            None,
+            ON,
+        )
+        .unwrap();
+        assert!(active);
+        let st = std::process::Command::new(&prog)
+            .args(&args)
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(!st.success());
+        assert_eq!(
+            std::fs::read_to_string(wt_file.join(".git")).unwrap(),
+            "gitdir: /nonexistent\n"
+        );
+        // Writable root `/` is always refused.
+        assert!(
+            wrap(
+                "/bin/sh",
+                vec!["-c".into(), "true".into()],
+                Path::new("/"),
+                Path::new("/"),
+                None,
+                ON,
+            )
+            .is_err()
+        );
+
         // The folder outside is there (seen) but read-only: exit 3 would mean it was hidden.
         let target = outside.join("escaped.txt");
         let code = run(
             &worktree,
+            None,
             format!(
                 "test -d '{}' || exit 3; echo bad > '{}'",
                 outside.display(),
@@ -380,6 +669,7 @@ mod tests {
         // Starting in that folder doesn't make it writable either.
         let code = run(
             &outside,
+            None,
             "pwd >/dev/null || exit 3; echo bad > here.txt".into(),
         );
         assert!(!matches!(code, Some(0) | Some(3)), "{code:?}");

@@ -83,13 +83,14 @@ export function TrustCards({ directory, className }: { directory: string; classN
   )
 }
 
-const KIND_ORDER: TrustKind[] = ["hooks", "mcp", "formatter", "permissions", "remote"]
+const KIND_ORDER: TrustKind[] = ["hooks", "mcp", "formatter", "permissions", "remote", "lsp"]
 const HEADING: Record<TrustKind, string> = {
   hooks: "Hooks",
   mcp: "MCP servers",
   formatter: "Formatters",
   permissions: "Changes to your rules",
   remote: "What it downloads",
+  lsp: "Language servers",
 }
 
 /**
@@ -101,13 +102,20 @@ export const WHEN_DOWNLOADED =
   "The app downloads these when you open this project and again when its config changes. Repositories are updated at most once a day."
 
 /** What allowing does, by what it is about: the card's question names each that waits. */
-const DOES = { run: "run commands", rules: "change your rules", fetch: "download files" } as const
+const DOES = {
+  run: "run commands",
+  rules: "change your rules",
+  fetch: "download files",
+  lsp: "run language servers",
+} as const
 const doesOf = (kind: TrustKind): keyof typeof DOES =>
-  kind === "permissions" ? "rules" : kind === "remote" ? "fetch" : "run"
+  kind === "permissions" ? "rules" : kind === "remote" ? "fetch" : kind === "lsp" ? "lsp" : "run"
 
 /** "Let this project run commands, change your rules and download files?" for what waits. */
 function question(items: TrustItem[]) {
-  const does = (["run", "rules", "fetch"] as const).filter((d) => items.some((i) => doesOf(i.kind) === d)).map((d) => DOES[d])
+  const does = (["run", "rules", "fetch", "lsp"] as const)
+    .filter((d) => items.some((i) => doesOf(i.kind) === d))
+    .map((d) => DOES[d])
   const list = does.length > 1 ? `${does.slice(0, -1).join(", ")} and ${does[does.length - 1]}` : does[0]
   return `Let this project ${list}?`
 }
@@ -118,6 +126,8 @@ function consequence(items: TrustItem[]) {
   if (does.size > 1) return "None of this applies until you allow it. Allow only if you trust this project."
   if (does.has("rules")) return "These change what the agent may do without asking you. Allow only if you trust this project."
   if (does.has("fetch")) return `${WHEN_DOWNLOADED} Allow only if you trust this project.`
+  if (does.has("lsp"))
+    return "Language servers run this project’s own config, plugins, and build tooling on edited files. Allow only if you trust this project."
   return "Its config starts these on this computer once you allow them. Allow only if you trust this project."
 }
 
@@ -329,7 +339,9 @@ function Entries({ kind, entries }: { kind: TrustKind; entries: TrustEntry[] }) 
         // Rules and downloads are said as sentences, with the rule's or the address's own text in them.
         const sentence = kind === "permissions" ? ruleText(e.command, e.label) : kind === "remote" ? remoteText(e) : null
         // A rule's detail is the agent file it comes from: the card already names its file.
-        const parts = e.detail && kind !== "permissions" ? detailParts(e.detail) : []
+        // An LSP entry's detail is the resolved binary path: keep it verbatim in monospace.
+        const lspPath = kind === "lsp" ? e.detail : null
+        const parts = e.detail && kind !== "permissions" && kind !== "lsp" ? detailParts(e.detail) : []
         const replaces = parts[0]?.startsWith(REPLACES)
         const rest = replaces ? parts.slice(1) : parts
         return (
@@ -360,9 +372,10 @@ function Entries({ kind, entries }: { kind: TrustKind; entries: TrustEntry[] }) 
             {/* Under the row, the width of the card: a long value (a header, an environment
                 variable) wraps here and never squeezes the command. A shorter limit can weaken a
                 guard, a header can carry a key: said where it is decided. */}
-            {(replaces || rest.length > 0) && (
+            {(replaces || rest.length > 0 || lspPath) && (
               <span className="col-span-3 -mt-1 flex min-w-0 flex-col gap-0.5 pb-0.5">
                 {replaces && <span className="text-dense text-warning">Replaces your own server named {e.label}</span>}
+                {lspPath && <span className="text-2xs font-mono break-all text-muted">{lspPath}</span>}
                 {rest.length > 0 && (
                   <span className="text-2xs break-all whitespace-pre-wrap text-muted">{rest.join(" · ")}</span>
                 )}

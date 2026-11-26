@@ -22,15 +22,18 @@ pub enum TrustKind {
     Permissions,
     /// What the app downloads for the project: `instructions` URLs and git `references`.
     Remote,
+    /// Installed language servers matching this project's files.
+    Lsp,
 }
 
 impl TrustKind {
-    pub const ALL: [TrustKind; 5] = [
+    pub const ALL: [TrustKind; 6] = [
         TrustKind::Hooks,
         TrustKind::Mcp,
         TrustKind::Formatter,
         TrustKind::Permissions,
         TrustKind::Remote,
+        TrustKind::Lsp,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -40,6 +43,7 @@ impl TrustKind {
             TrustKind::Formatter => "formatter",
             TrustKind::Permissions => "permissions",
             TrustKind::Remote => "remote",
+            TrustKind::Lsp => "lsp",
         }
     }
 
@@ -581,6 +585,28 @@ pub fn remote_section(document: &Map<String, Value>) -> Option<(String, Vec<Trus
                 detail: None,
             }),
     );
+    Some((digest, entries))
+}
+
+/// The installed language servers matching a project folder: their digest and entries; `None`
+/// when no installed server applies. The digest covers server ids and commands (not absolute
+/// paths), so upgrading a toolchain in `PATH` keeps approval while a newly applicable server
+/// (e.g. a newly added `Cargo.toml`) asks again.
+pub fn lsp_section(servers: &[crate::lsp::ProjectServer]) -> Option<(String, Vec<TrustEntry>)> {
+    if servers.is_empty() {
+        return None;
+    }
+    let digest = digest(&Value::Array(
+        servers.iter().map(|s| json!([s.id, s.command])).collect(),
+    ));
+    let entries = servers
+        .iter()
+        .map(|s| TrustEntry {
+            label: s.label.into(),
+            command: s.command.clone(),
+            detail: Some(s.path.display().to_string()),
+        })
+        .collect();
     Some((digest, entries))
 }
 

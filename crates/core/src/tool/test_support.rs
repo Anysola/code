@@ -116,7 +116,7 @@ impl SessionHost for TestSession {
 /// A database outside the test directory, so it never shows up in listings.
 struct TestHost {
     db: crate::storage::Db,
-    config: Arc<crate::config::Config>,
+    config: Mutex<Arc<crate::config::Config>>,
     _dir: tempfile::TempDir,
 }
 
@@ -125,7 +125,7 @@ impl TestHost {
         let dir = tempfile::tempdir().expect("temp dir");
         TestHost {
             db: crate::storage::Db::open(&dir.path().join("test.db")).expect("test database"),
-            config: Arc::default(),
+            config: Mutex::new(Arc::default()),
             _dir: dir,
         }
     }
@@ -141,7 +141,7 @@ impl crate::codemode::Host for TestHost {
     }
 
     fn config(&self) -> Arc<crate::config::Config> {
-        self.config.clone()
+        self.config.lock().unwrap().clone()
     }
 }
 
@@ -150,6 +150,13 @@ pub struct TestContext {
     pub gate: Arc<RecordingGate>,
     pub notifier: Arc<RecordingNotifier>,
     pub session: Arc<TestSession>,
+    host: Arc<TestHost>,
+}
+
+impl TestContext {
+    pub fn set_config(&self, config: crate::config::Config) {
+        *self.host.config.lock().unwrap() = Arc::new(config);
+    }
 }
 
 /// A context whose session directory and project worktree are `dir`, with home and the data dir
@@ -158,6 +165,7 @@ pub fn context(dir: &Path) -> TestContext {
     let gate = Arc::new(RecordingGate::default());
     let notifier = Arc::new(RecordingNotifier::default());
     let session = Arc::new(TestSession::default());
+    let host = Arc::new(TestHost::new());
     let home = dir.join(".home");
     let paths = Paths::isolated(home);
     let ctx = ToolContext {
@@ -178,7 +186,7 @@ pub fn context(dir: &Path) -> TestContext {
         locks: Arc::new(PathLocks::default()),
         notifier: notifier.clone(),
         web_search: Arc::new(NoSearch),
-        host: Arc::new(TestHost::new()),
+        host: host.clone(),
         session: session.clone(),
         hooks: Default::default(),
     };
@@ -187,6 +195,7 @@ pub fn context(dir: &Path) -> TestContext {
         gate,
         notifier,
         session,
+        host,
     }
 }
 

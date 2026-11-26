@@ -56,6 +56,11 @@ impl Core {
         let tree = self.shared.db.session_tree(session_id)?;
         let deleted = self.shared.db.delete_session(session_id)?;
         self.shared.usage.forget(&tree);
+        for id in &tree {
+            if let Some(cache) = self.shared.paths.sandbox_cache_dir(id) {
+                let _ = std::fs::remove_dir_all(cache);
+            }
+        }
         Ok(deleted)
     }
 

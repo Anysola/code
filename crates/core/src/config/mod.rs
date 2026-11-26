@@ -128,9 +128,13 @@ pub struct Config {
     /// Files of user and managed documents the loader read, and the `ANYSOLA_CONFIG` file even
     /// when it does not exist yet: writing them changes what runs without asking.
     pub own_documents: Vec<PathBuf>,
-    /// The `mcp` and `formatter` sections of project documents, with the decision on each (see
-    /// [`crate::trust`]); those not approved were not applied.
+    /// The `mcp`, `formatter`, `permissions`, `remote`, and `lsp` sections waiting for or holding
+    /// project approval (see [`crate::trust`]); those not approved were not applied.
     pub trust: Vec<crate::trust::Section>,
+    /// Language server ids approved for this project (`TrustKind::Lsp` decision is `Some(true)`).
+    approved_lsp: Vec<&'static str>,
+    /// Language server ids already represented in this config's `TrustKind::Lsp` section.
+    detected_lsp: Vec<&'static str>,
     /// Project documents whose `mcp` section was not applied.
     withheld_mcp: Vec<String>,
     /// `instructions` entries only project documents name: what they find must lie inside the
@@ -210,6 +214,21 @@ impl Config {
 
     pub fn models(&self) -> Option<&Map<String, Value>> {
         self.provider.get("models").and_then(Value::as_object)
+    }
+
+    /// Whether language server `id` (`"rust"`, `"typescript"`, …) is approved for this project.
+    pub fn lsp_server_allowed(&self, id: &str) -> bool {
+        self.approved_lsp.contains(&id)
+    }
+
+    /// Whether language server `id` is already covered by this config's `TrustKind::Lsp` section.
+    pub fn lsp_server_detected(&self, id: &str) -> bool {
+        self.detected_lsp.contains(&id)
+    }
+
+    /// Language server ids approved for this project.
+    pub fn approved_lsp(&self) -> &[&'static str] {
+        &self.approved_lsp
     }
 
     /// The MCP servers to run, in config order (see [`mcp`]).
@@ -663,8 +682,11 @@ pub struct LoadOptions {
     pub remote: Option<Value>,
     pub api_url: String,
     /// The decisions on project documents' sections ([`crate::trust::Decisions::read`]). The
-    /// default holds none: no project MCP server or formatter is applied.
+    /// default holds none: no project MCP server, formatter, or language server is applied.
     pub trust: crate::trust::Decisions,
+    /// Additional language server ids seen on edits in this project (e.g. a deeply nested file
+    /// not seen in the initial top-level scan) so they join the project's `TrustKind::Lsp` item.
+    pub lsp_discovered: Vec<&'static str>,
 }
 
 /// Directories walked upward from `start`: through home (inclusive) when `start` is inside home,
@@ -949,7 +971,7 @@ impl Loader<'_> {
                     TrustKind::Formatter => withheld.formatter = true,
                     TrustKind::Permissions => withheld.permissions = true,
                     TrustKind::Remote => withheld.remote = true,
-                    TrustKind::Hooks => {}
+                    TrustKind::Hooks | TrustKind::Lsp => {}
                 }
             }
             self.config.trust.push(Section {
@@ -1143,6 +1165,38 @@ pub fn load(paths: &Paths, directory: &Path, options: &LoadOptions) -> Config {
             "Ignoring the project's \"default_agent\" ({}): your own config chooses the agent.",
             crate::json::compact(project)
         ));
+    }
+    if !project_disabled
+        && !config_roots.contains(&resolve(directory))
+        && crate::lsp::enabled(config)
+    {
+        // Key LSP approval on the VCS root (the root language servers actually run against),
+        // falling back to `directory` outside Git; scan both when opened in a subfolder.
+        let opened = resolve(directory);
+        let project_root = resolve(
+            &crate::project::vcs_root(directory).unwrap_or_else(|| directory.to_path_buf()),
+        );
+        let extra_dir = (opened != project_root).then_some(opened.as_path());
+        let servers =
+            crate::lsp::project_servers(&project_root, extra_dir, &options.lsp_discovered);
+        if let Some((digest, entries)) = crate::trust::lsp_section(&servers) {
+            let path = project_root.display().to_string();
+            let decision = loader
+                .decisions
+                .of(&path, crate::trust::TrustKind::Lsp, &digest);
+            let ids: Vec<&'static str> = servers.iter().map(|s| s.id).collect();
+            if decision == Some(true) {
+                config.approved_lsp = ids.clone();
+            }
+            config.detected_lsp = ids;
+            config.trust.push(crate::trust::Section {
+                path,
+                kind: crate::trust::TrustKind::Lsp,
+                digest,
+                decision,
+                entries,
+            });
+        }
     }
     loader.config
 }

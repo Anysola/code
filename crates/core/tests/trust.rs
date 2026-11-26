@@ -542,7 +542,13 @@ fn trust_items_list_every_kind_of_a_document_in_order() {
             .iter()
             .map(|i| i.kind)
             .collect::<Vec<_>>(),
-        TrustKind::ALL
+        [
+            TrustKind::Hooks,
+            TrustKind::Mcp,
+            TrustKind::Formatter,
+            TrustKind::Permissions,
+            TrustKind::Remote,
+        ]
     );
 }
 

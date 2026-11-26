@@ -23,6 +23,7 @@ pub struct Finished {
     pub exit: Option<i32>,
     pub signal: Option<String>,
     pub timeout: bool,
+    pub sandboxed: bool,
 }
 
 impl Finished {
@@ -32,6 +33,7 @@ impl Finished {
         ended: Ended,
         limits: OutputLimits,
         timeout_ms: u64,
+        sandboxed: bool,
     ) -> io::Result<Finished> {
         let (output, truncated) = tail(file, ended.size, ended.newlines, limits)?;
         Ok(match ended.outcome {
@@ -41,6 +43,7 @@ impl Finished {
                 exit: code,
                 signal,
                 timeout: false,
+                sandboxed,
             },
             // The timeout won the race to record the outcome, so the kill's signal is not reported.
             Outcome::TimedOut => Finished {
@@ -51,6 +54,7 @@ impl Finished {
                 exit: None,
                 signal: None,
                 timeout: true,
+                sandboxed,
             },
         })
     }
@@ -67,10 +71,19 @@ impl Finished {
             .map(|exit| format!("Exited with code {exit}"))
     }
 
-    /// The model-visible text blocks: the output, then the notice if any.
+    fn sandbox_note(&self) -> Option<String> {
+        (self.sandboxed
+            && self.exit.is_some_and(|exit| exit != 0)
+            && super::sandbox::mentions_read_only(&self.output))
+        .then(|| super::sandbox::READ_ONLY_NOTE.to_string())
+    }
+
+    /// The model-visible text blocks: the output, then the notice if any, and a sandbox hint on
+    /// read-only failures.
     pub fn content(&self) -> Vec<String> {
         std::iter::once(self.output.clone())
             .chain(self.notice())
+            .chain(self.sandbox_note())
             .collect()
     }
 
@@ -86,6 +99,9 @@ impl Finished {
         }
         if self.timeout {
             map.insert("timeout".into(), true.into());
+        }
+        if self.sandboxed {
+            map.insert("sandboxed".into(), true.into());
         }
         map
     }
@@ -247,6 +263,7 @@ mod tests {
             exit,
             signal: signal.map(String::from),
             timeout,
+            sandboxed: false,
         };
         let ok = finished(Some(0), None, false);
         assert_eq!(ok.content(), ["x"]);
@@ -258,6 +275,23 @@ mod tests {
             finished(Some(3), None, false).content(),
             ["x", "Exited with code 3"]
         );
+        let ro = Finished {
+            output: "sh: 1: cannot create /etc/x: Read-only file system".into(),
+            truncated: false,
+            exit: Some(2),
+            signal: None,
+            timeout: false,
+            sandboxed: true,
+        };
+        assert_eq!(
+            ro.content(),
+            [
+                "sh: 1: cannot create /etc/x: Read-only file system",
+                "Exited with code 2",
+                super::super::sandbox::READ_ONLY_NOTE,
+            ]
+        );
+        assert_eq!(ro.metadata().get("sandboxed"), Some(&Value::Bool(true)));
         let killed = finished(None, Some("SIGTERM"), false);
         assert_eq!(killed.content(), ["x", "Killed by SIGTERM"]);
         assert_eq!(

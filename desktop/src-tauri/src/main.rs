@@ -1153,7 +1153,16 @@ async fn delete_session(app: State<'_, App>, directory: String, session_id: Stri
     worktree::before_delete(core.as_ref(), &db, &app.terminals, &session_id).await?;
     let removed = match &core {
         Some(core) => core.delete_session(&session_id).map_err(text)?,
-        None => db.delete_session(&session_id).map_err(text)?,
+        None => {
+            let tree = db.session_tree(&session_id).unwrap_or_default();
+            let removed = db.delete_session(&session_id).map_err(text)?;
+            for id in &tree {
+                if let Some(cache) = app.paths.sandbox_cache_dir(id) {
+                    let _ = std::fs::remove_dir_all(cache);
+                }
+            }
+            removed
+        }
     };
     worktree::after_delete(&db, &session_id).await;
     Ok(json!(removed))

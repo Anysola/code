@@ -7,7 +7,7 @@ use std::path::Path;
 use anysola_core::config::jsonc;
 use anysola_core::paths::Paths;
 use serde_json::{Map, Value, json};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::{Answer, App, core_for, info, text};
 
@@ -109,8 +109,8 @@ fn values(data: &Map<String, Value>) -> Value {
         "autoCompact": bool_at(data, &["compaction", "auto"], true),
         "snapshots": bool_at(data, &["snapshots"], true),
         "shell": data.get("shell").and_then(Value::as_str).filter(|s| !s.is_empty()),
-        // Read as the core reads them: only `true` turns LSP on; the sandbox's value may be an object.
-        "lsp": data.get("lsp") == Some(&Value::Bool(true)),
+        // Read as the core reads them: LSP is on unless false (or non-bool); the sandbox's value may be an object.
+        "lsp": data.get("lsp").is_none_or(|v| v == &Value::Bool(true)),
         "sandbox": anysola_core::tool::shell::sandbox::SandboxConfig::from_value(data.get("sandbox")).enabled,
     })
 }
@@ -167,9 +167,27 @@ fn sandbox_value(current: Option<&Value>, on: bool) -> Option<Value> {
     }
 }
 
+/// Whether a legacy config document (`~/.config/opencode/...`) sets `"lsp"` to something other
+/// than `true`, so omitting `"lsp"` in `~/.anysola/config.json` would leave LSP disabled.
+fn legacy_lsp_disabled(paths: &Paths) -> bool {
+    let legacy = paths.legacy_config_dir();
+    let mut disabled = false;
+    for name in anysola_core::config::NAMES {
+        let file = legacy.join(name);
+        if let Ok(text) = std::fs::read_to_string(&file)
+            && let Some(data) = anysola_core::config::document(&text, &legacy, paths)
+            && let Some(val) = data.get("lsp")
+        {
+            disabled = val != &Value::Bool(true);
+        }
+    }
+    disabled
+}
+
 /// The file's text with the patch applied: only the keys present, a default value removing its
-/// key (a null `model` or `shell` too).
-fn apply(text: &str, patch: &Map<String, Value>) -> Result<String, String> {
+/// key (a null `model` or `shell` too). When `legacy_lsp_off` is true, enabling `lsp` writes
+/// `"lsp": true` explicitly so it overrides the legacy file.
+fn apply(text: &str, patch: &Map<String, Value>, legacy_lsp_off: bool) -> Result<String, String> {
     let sandbox_now = jsonc::parse(text)
         .ok()
         .and_then(|v| v.get("sandbox").cloned());
@@ -234,7 +252,12 @@ fn apply(text: &str, patch: &Map<String, Value>) -> Result<String, String> {
         put(&["shell"], shell.map(Value::from))?;
     }
     if let Some(on) = flag("lsp")? {
-        put(&["lsp"], on.then_some(json!(true)))?;
+        let value = if on {
+            legacy_lsp_off.then_some(json!(true))
+        } else {
+            Some(json!(false))
+        };
+        put(&["lsp"], value)?;
     }
     if let Some(on) = flag("sandbox")? {
         put(&["sandbox"], sandbox_value(sandbox_now.as_ref(), on))?;
@@ -257,6 +280,9 @@ fn answer(app: &App, core: &anysola_core::api::Core) -> Answer {
         }
     };
     let mut out = values(&data);
+    if !data.contains_key("lsp") && legacy_lsp_disabled(&app.paths) {
+        out["lsp"] = json!(false);
+    }
     let global = file.display().to_string();
     let legacy = app.paths.legacy_config_dir();
     let overridden: Vec<Value> = KEYS
@@ -319,11 +345,15 @@ pub async fn config_set(
     // One read-change-write of the global file at a time: two quick toggles keep both.
     let _writing = app.config_file.lock().await;
     let (before, _) = read(&app.paths)?;
-    let after = apply(&before, &patch)?;
+    let after = apply(&before, &patch, legacy_lsp_disabled(&app.paths))?;
     if after != before {
         write(&file, &after)?;
-        for (_, running) in app.cores_running().await {
+        let lsp_changed = patch.contains_key("lsp");
+        for (other, running) in app.cores_running().await {
             running.reload().await;
+            if lsp_changed {
+                let _ = handle.emit("core", json!({"type": "trust", "directory": other}));
+            }
         }
     }
     answer(&app, &core).map_err(text)
@@ -344,16 +374,21 @@ mod tests {
     #[test]
     fn writes_only_the_keys_given_and_drops_defaults() {
         let text = "{\n  // mine\n  \"shell\": \"zsh\",\n  \"experimental\": {\"todo\": true}\n}\n";
-        let out = apply(text, &patch(json!({"websearch": false}))).unwrap();
+        let out = apply(text, &patch(json!({"websearch": false})), false).unwrap();
         assert!(out.contains("// mine"));
         assert_eq!(
             parsed(&out),
             json!({"shell": "zsh", "experimental": {"todo": true}, "websearch": false})
         );
-        let out = apply(&out, &patch(json!({"todo": false, "websearch": true}))).unwrap();
+        let out = apply(
+            &out,
+            &patch(json!({"todo": false, "websearch": true})),
+            false,
+        )
+        .unwrap();
         assert_eq!(parsed(&out), json!({"shell": "zsh"}));
         assert!(out.contains("// mine"));
-        let out = apply(&out, &patch(json!({"shell": null}))).unwrap();
+        let out = apply(&out, &patch(json!({"shell": null})), false).unwrap();
         assert_eq!(parsed(&out), json!({}));
     }
 
@@ -365,6 +400,7 @@ mod tests {
                 json!({"model": "claude-haiku-5-5", "subagentDepth": 7, "shell": " /bin/fish ",
                           "autoCompact": false, "snapshots": false}),
             ),
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -375,10 +411,11 @@ mod tests {
         let back = apply(
             &out,
             &patch(json!({"model": null, "subagentDepth": 1, "autoCompact": true, "snapshots": true, "shell": ""})),
+            false,
         )
         .unwrap();
         assert_eq!(parsed(&back), json!({}));
-        assert!(apply("{}", &patch(json!({"todo": "yes"}))).is_err());
+        assert!(apply("{}", &patch(json!({"todo": "yes"})), false).is_err());
     }
 
     #[test]
@@ -386,7 +423,7 @@ mod tests {
         assert_eq!(
             values(&Map::new()),
             json!({"model": null, "websearch": true, "todo": false, "subagentDepth": 1,
-                   "autoCompact": true, "snapshots": true, "shell": null, "lsp": false,
+                   "autoCompact": true, "snapshots": true, "shell": null, "lsp": true,
                    "sandbox": false})
         );
         let data = patch(
@@ -399,32 +436,41 @@ mod tests {
         assert_eq!(v["subagentDepth"], 3);
     }
 
-    /// Both stay off unless the user turns them on; turning the sandbox off keeps the rest of
-    /// an object the user wrote.
+    /// LSP defaults on (gated per project by trust; turning off writes `false`, and turning on
+    /// writes `true` when legacy config has `false`), and the sandbox stays off unless turned on
+    /// (turning off keeps the rest of an object the user wrote).
     #[test]
     fn lsp_and_the_sandbox_are_the_users_to_turn_on() {
-        let on = apply("{}", &patch(json!({"lsp": true, "sandbox": true}))).unwrap();
-        assert_eq!(parsed(&on), json!({"lsp": true, "sandbox": true}));
-        let v = values(parsed(&on).as_object().unwrap());
+        let changed = apply("{}", &patch(json!({"lsp": false, "sandbox": true})), false).unwrap();
+        assert_eq!(parsed(&changed), json!({"lsp": false, "sandbox": true}));
+        let v = values(parsed(&changed).as_object().unwrap());
         assert_eq!(
             (v["lsp"].clone(), v["sandbox"].clone()),
-            (json!(true), json!(true))
+            (json!(false), json!(true))
         );
-        let off = apply(&on, &patch(json!({"lsp": false, "sandbox": false}))).unwrap();
-        assert_eq!(parsed(&off), json!({}));
-        // Only `true` counts for LSP, as in the core.
+        let back = apply(
+            &changed,
+            &patch(json!({"lsp": true, "sandbox": false})),
+            false,
+        )
+        .unwrap();
+        assert_eq!(parsed(&back), json!({}));
+        // Legacy `"lsp": false` present: enabling LSP writes `"lsp": true` explicitly to override.
+        let override_legacy = apply("{}", &patch(json!({"lsp": true})), true).unwrap();
+        assert_eq!(parsed(&override_legacy), json!({"lsp": true}));
+        // Non-boolean values disable LSP, matching the core.
         assert_eq!(values(&patch(json!({"lsp": "yes"})))["lsp"], false);
         let object = r#"{"sandbox": {"network": false}}"#;
         assert_eq!(values(&patch(parsed(object)))["sandbox"], true);
-        let off = apply(object, &patch(json!({"sandbox": false}))).unwrap();
+        let off = apply(object, &patch(json!({"sandbox": false})), false).unwrap();
         assert_eq!(
             parsed(&off),
             json!({"sandbox": {"network": false, "enabled": false}})
         );
         assert_eq!(values(parsed(&off).as_object().unwrap())["sandbox"], false);
-        let back = apply(&off, &patch(json!({"sandbox": true}))).unwrap();
+        let back = apply(&off, &patch(json!({"sandbox": true})), false).unwrap();
         assert_eq!(parsed(&back), json!({"sandbox": {"network": false}}));
-        assert!(apply("{}", &patch(json!({"lsp": 1}))).is_err());
+        assert!(apply("{}", &patch(json!({"lsp": 1})), false).is_err());
     }
 
     #[test]
@@ -468,10 +514,10 @@ mod tests {
         let v = values(&data);
         assert_eq!(v["snapshots"], false, "the 0.5.x name counts");
         assert_eq!(v["model"], "claude-haiku-5-5", "the object form counts");
-        let on = apply(&text, &patch(json!({"snapshots": true}))).unwrap();
+        let on = apply(&text, &patch(json!({"snapshots": true})), false).unwrap();
         assert_eq!(parsed(&on).get("snapshot"), None);
         assert_eq!(parsed(&on).get("snapshots"), None);
-        let off = apply(&text, &patch(json!({"snapshots": false}))).unwrap();
+        let off = apply(&text, &patch(json!({"snapshots": false})), false).unwrap();
         assert_eq!(parsed(&off).get("snapshot"), None);
         assert_eq!(parsed(&off)["snapshots"], false);
         std::fs::remove_dir_all(dir).unwrap();

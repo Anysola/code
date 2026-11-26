@@ -849,7 +849,7 @@ function Advanced({ directory }: { directory: string }) {
                 label="Language server diagnostics"
                 hint={
                   over("lsp") ??
-                  "After an edit the agent sees the errors a language server from your PATH reports; the server runs the project’s own config and plugins."
+                  "On for projects you allow; turn off to disable everywhere. Language servers run a project’s own config, plugins, and build tooling on edited files."
                 }
                 checked={c.lsp}
                 onChange={(lsp) => change({ lsp })}
@@ -865,7 +865,7 @@ function Advanced({ directory }: { directory: string }) {
                     (c.sandboxUnavailable ? (
                       `Experimental: shell commands could write only inside the session’s folder. ${c.sandboxUnavailable}`
                     ) : (
-                      "Experimental, Linux only: shell commands can write only inside the session’s folder, and Git commits don’t work in it."
+                      "Experimental, Linux only: shell commands, scheduled checks, and template commands run in a private PID/session namespace and write only inside the session’s folder (plus a session cache); .git stays read-only so Git commits don’t work inside it."
                     ))
                   )
                 }
@@ -876,6 +876,7 @@ function Advanced({ directory }: { directory: string }) {
               />
             </Group>
             <WorktreeSetup directory={directory} />
+            <ProjectLsp directory={directory} />
             <ProjectFormatters directory={directory} />
             {c.warnings.length > 0 && (
               <Group label="The config loader says">
@@ -935,6 +936,45 @@ function WorktreeSetup({ directory }: { directory: string }) {
           className="text-dense h-8 min-w-0 rounded-lg bg-default px-2.5 font-mono outline-none placeholder:text-field-placeholder focus-visible:status-focused-field"
         />
       </div>
+    </Group>
+  )
+}
+
+const LSP_HINT = {
+  waiting: "Waiting for your answer. Until then, no language server starts for this folder.",
+  allowed: "Allowed. Installed language servers report diagnostics on edited files in this folder.",
+  denied: "Not allowed. No language server starts for this folder.",
+}
+
+/** Installed language servers detected for this folder: they start only once allowed. */
+function ProjectLsp({ directory }: { directory: string }) {
+  const trust = useTrust(directory)
+  const items = (trust.data ?? []).filter((i) => i.kind === "lsp")
+  if (items.length === 0) return null
+  return (
+    <Group label="This project’s language servers">
+      {items.map((i) => (
+        <Fragment key={i.path}>
+          <TrustRow
+            item={i}
+            directory={directory}
+            label={<span className="font-mono text-xs break-all">{shortPath(i.path, directory)}</span>}
+            hint={LSP_HINT[i.decision ?? "waiting"]}
+          />
+          {i.entries.map((e, n) => (
+            <EntryRow
+              key={n}
+              scope={e.label}
+              text={
+                <span className="flex flex-col gap-0.5">
+                  <span className="font-mono text-xs break-all">{e.command}</span>
+                  {e.detail && <span className="text-2xs font-mono break-all text-muted">{e.detail}</span>}
+                </span>
+              }
+            />
+          ))}
+        </Fragment>
+      ))}
     </Group>
   )
 }

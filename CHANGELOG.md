@@ -4,6 +4,31 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.5.0 (2026-11-26)
+
+- **LSP diagnostics now use per-project approval (`TrustKind::Lsp`) and are on by default for approved projects.**
+  Opening a folder with matching installed language servers on `PATH` asks once before any server starts (because
+  language servers run the project's own config, plugins, and build tooling outside the shell sandbox). Revoking
+  approval or setting `"lsp": false` stops running servers immediately, and a new language ecosystem added to the
+  project asks again. Setting `"lsp": false` in your own or project config disables LSP without asking; a project
+  config still cannot set `"lsp": true` to override your own `"lsp": false`.
+- **Hardened Linux shell sandbox (still opt-in / experimental):**
+  - Isolates process visibility and terminal session (`--unshare-pid --new-session`, probed up front by `bwrap_path()`).
+  - Mounts `<root>/.git` itself read-only inside the sandbox (both main-folder `.git/` directories and worktree
+    `.git` gitfiles) so commands cannot edit, remove, or rename `.git` to poison git hooks or repository config.
+  - Gives each session a persistent writable cache directory (`~/.anysola/sandbox-cache/<session>`, removed when the
+    session is deleted) wired to `TMPDIR`, `XDG_CACHE_HOME`, `npm_config_cache`, `PIP_CACHE_DIR`, `GOCACHE`,
+    `GOMODCACHE`, and `UV_CACHE_DIR`.
+  - Extends the sandbox to scheduled `{run}` checks and command template ``!`cmd` `` placeholders.
+  - Surfaces `"sandboxed": true` in shell tool metadata and adds a concise hint when a failed sandboxed command hits
+    `Read-only file system`.
+- **Worktree Git defense-in-depth:** `verify_checkout` now also verifies `admin/commondir` resolves back to the
+  repository's common `.git` directory, and worktree tree snapshots (`session_tree`) run with
+  `-c core.fsmonitor=false -c core.hooksPath=/dev/null` (without disabling hooks on main-folder Apply commits).
+- **Desktop Settings & Trust UI:** Trust cards now cover language servers (`Language servers`), Settings › Advanced
+  shows a per-project `This project's language servers` trust group, and the global LSP toggle reflects the new
+  default.
+
 ## 1.4.3 (2026-11-26)
 
 - Hooks can name the shell they run in: `"shell": "powershell"` (or `bash`, `cmd`, a path) next to a hook's

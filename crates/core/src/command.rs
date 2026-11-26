@@ -296,6 +296,14 @@ pub fn substitute(template: &str, input: &str) -> String {
 /// What replaces a ``!`cmd` `` the session's permissions did not let run.
 pub const NOT_RUN: &str = "(not run: the session's permissions did not allow this shell command)";
 
+/// Sandbox parameters for ``!`cmd` `` placeholders.
+#[derive(Debug, Clone, Copy)]
+pub struct SandboxOptions<'a> {
+    pub writable_root: &'a Path,
+    pub config: crate::tool::shell::sandbox::SandboxConfig,
+    pub cache_dir: Option<&'a Path>,
+}
+
 /// Replaces every ``!`cmd` `` with the command's combined output (two at a time, the configured
 /// shell, run in `cwd`). With a `gate` (a project's command), each one is first a `shell`
 /// request to that session's permissions, as the shell tool makes it; one not allowed does not
@@ -306,6 +314,7 @@ pub async fn interpolate(
     cwd: &Path,
     env: &[(std::ffi::OsString, std::ffi::OsString)],
     gate: Option<&crate::tool::ToolContext>,
+    sandbox: SandboxOptions<'_>,
 ) -> Result<String, String> {
     static SHELL: OnceLock<Regex> = OnceLock::new();
     let pattern = regex(&SHELL, r"!`([^`]+)`");
@@ -334,6 +343,14 @@ pub async fn interpolate(
                 }
             }
             let (program, args) = crate::tool::shell::invocation(shell, &source);
+            let (program, args, sandboxed) = crate::tool::shell::sandbox::wrap(
+                &program,
+                args,
+                cwd,
+                sandbox.writable_root,
+                sandbox.cache_dir,
+                sandbox.config,
+            )?;
             let failed = |e: std::io::Error| {
                 format!(
                     "Shell interpolation failed for {}: {e}",
@@ -349,6 +366,11 @@ pub async fn interpolate(
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped());
+            if sandboxed {
+                command.env("ANYSOLA_SANDBOX", "1");
+            } else {
+                command.env_remove("ANYSOLA_SANDBOX");
+            }
             #[cfg(unix)]
             command.process_group(0);
             let mark = crate::children::mark_tokio(&mut command);
@@ -399,6 +421,10 @@ pub struct RenderEnv<'a> {
     pub mcp: Option<&'a dyn crate::mcp::Mcp>,
     /// The permissions ``!`cmd` `` of a project's command go through (see [`interpolate`]).
     pub gate: Option<&'a crate::tool::ToolContext>,
+    /// Shell sandbox config for ``!`cmd` `` placeholders.
+    pub sandbox: crate::tool::shell::sandbox::SandboxConfig,
+    /// Optional per-session writable cache dir for the sandbox.
+    pub sandbox_cache: Option<&'a Path>,
 }
 
 /// The prompt text a command produces from the user's arguments.
@@ -410,6 +436,8 @@ pub async fn render(command: &Command, input: &str, at: &RenderEnv<'_>) -> Resul
         env,
         mcp,
         gate,
+        sandbox,
+        sandbox_cache,
     } = *at;
     match &command.template {
         Template::Builtin(template) => Ok(append(
@@ -417,7 +445,19 @@ pub async fn render(command: &Command, input: &str, at: &RenderEnv<'_>) -> Resul
             input,
         )),
         Template::User(template) => {
-            interpolate(&substitute(template, input), shell, cwd, env, gate).await
+            interpolate(
+                &substitute(template, input),
+                shell,
+                cwd,
+                env,
+                gate,
+                SandboxOptions {
+                    writable_root: project,
+                    config: sandbox,
+                    cache_dir: sandbox_cache,
+                },
+            )
+            .await
         }
         Template::Goal => Ok(input.to_string()),
         Template::Mcp(prompt) => match mcp {
@@ -464,12 +504,18 @@ mod tests {
     async fn shell_interpolation() {
         let dir = tempfile::tempdir().unwrap();
         let env: Vec<_> = std::env::vars_os().collect();
+        let off = SandboxOptions {
+            writable_root: dir.path(),
+            config: crate::tool::shell::sandbox::SandboxConfig::from_value(None),
+            cache_dir: None,
+        };
         let text = interpolate(
             "a !`echo hi` b !`pwd`",
             Some("/bin/sh"),
             dir.path(),
             &env,
             None,
+            off,
         )
         .await
         .unwrap();

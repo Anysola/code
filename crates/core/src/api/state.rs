@@ -46,11 +46,13 @@ impl Loaded {
         remote: &Remote,
         previous: Option<&Loaded>,
         trust: crate::trust::Decisions,
+        lsp_discovered: &[&'static str],
     ) -> Loaded {
         let options = LoadOptions {
             remote: remote.body.clone(),
             api_url: gateway.base().to_string(),
             trust,
+            lsp_discovered: lsp_discovered.to_vec(),
         };
         let config = crate::config::load(paths, directory, &options);
         for warning in &config.warnings {
@@ -152,6 +154,13 @@ impl Shared {
         }
         let remote = self.remote();
         let previous = self.loaded();
+        let discovered: Vec<&'static str> = self
+            .lsp_discovered
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .copied()
+            .collect();
         let next = Loaded::load(
             &self.paths,
             &self.gateway,
@@ -159,6 +168,7 @@ impl Shared {
             &remote,
             Some(&previous),
             crate::trust::Decisions::read(&self.db),
+            &discovered,
         )
         .await;
         self.arm_watch(&next);
@@ -174,14 +184,22 @@ impl Shared {
             crate::hooks::undecided_with(&config.hooks, &self.db, &self.hooks.approved)
         };
         let hooks_changed = asked(&previous.config) != asked(&config);
-        let waiting = |config: &crate::config::Config| -> Vec<(String, String, String)> {
-            crate::trust::items_with(config, &self.db, &self.hooks.approved)
-                .into_iter()
-                .filter(|item| item.decision.is_none())
-                .map(|item| (item.path, item.kind.as_str().to_string(), item.digest))
-                .collect()
-        };
-        let trust_changed = waiting(&previous.config) != waiting(&config);
+        let trust_snapshot =
+            |config: &crate::config::Config| -> Vec<(String, String, String, Option<bool>, bool)> {
+                crate::trust::items_with(config, &self.db, &self.hooks.approved)
+                    .into_iter()
+                    .map(|item| {
+                        (
+                            item.path,
+                            item.kind.as_str().to_string(),
+                            item.digest,
+                            item.decision,
+                            item.standing,
+                        )
+                    })
+                    .collect()
+            };
+        let trust_changed = trust_snapshot(&previous.config) != trust_snapshot(&config);
         *self.loaded.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(next);
         self.applied.store(generation, Ordering::SeqCst);
         if hooks_changed {
@@ -190,6 +208,11 @@ impl Shared {
         if trust_changed {
             let _ = self.events.send(crate::events::Event::TrustChanged);
         }
+        // Stop any running language server that was revoked or disabled by the new config.
+        let approved_lsp = config.approved_lsp();
+        self.lsp
+            .shutdown_where(|id| !approved_lsp.contains(&id))
+            .await;
         if let Some(mcp) = self.mcp.get() {
             mcp.reconcile(config);
         }

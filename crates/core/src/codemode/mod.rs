@@ -91,6 +91,11 @@ pub trait Host: Send + Sync {
         None
     }
 
+    /// Notes an installed language server id encountered during an edit when it is not yet part of
+    /// the project's `TrustKind::Lsp` item (e.g. a brand-new or deeply nested source file), so a
+    /// config refresh surfaces the approval card without starting the server.
+    fn note_lsp_server(&self, _id: &'static str) {}
+
     fn mcp(&self) -> Option<std::sync::Arc<dyn crate::mcp::Mcp>> {
         None
     }

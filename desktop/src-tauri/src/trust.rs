@@ -255,20 +255,30 @@ mod tests {
             Value::Null,
             "only MCP servers replace"
         );
-        let items = [rules, remote];
+        let mut lsp = item("/p", TrustKind::Lsp, "l1", None);
+        lsp.entries = vec![TrustEntry {
+            label: "TypeScript / JavaScript".into(),
+            command: "typescript-language-server --stdio".into(),
+            detail: Some("/usr/bin/typescript-language-server".into()),
+        }];
+        let v = item_json(&lsp, &none);
+        assert_eq!(v["kind"], "lsp");
+        assert_eq!(v["path"], "/p");
+        let items = [rules, remote, lsp];
         assert_eq!(
             current(
                 &items,
                 &[
                     asked(agent, "permissions", "p1"),
-                    asked("/p/anysola.json", "remote", "r1")
+                    asked("/p/anysola.json", "remote", "r1"),
+                    asked("/p", "lsp", "l1"),
                 ]
             )
             .unwrap()
             .iter()
             .map(|(_, kind, _)| *kind)
             .collect::<Vec<_>>(),
-            [TrustKind::Permissions, TrustKind::Remote]
+            [TrustKind::Permissions, TrustKind::Remote, TrustKind::Lsp]
         );
         assert!(current(&items, &[asked(agent, "remote", "p1")]).is_err());
     }

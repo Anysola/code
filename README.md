@@ -92,16 +92,21 @@ reach any folder, MCP servers run with the main folder as their folder and aren'
 worktree shares the repository's branches and objects (it can move or push them).
 
 An experimental shell sandbox (Linux only, with bubblewrap) is off by default; `"sandbox": true` in
-`~/.anysola/config.json` turns it on (`{"network": false}` also cuts the network). It only limits where the
-agent's shell tool writes: just the session's folder (its worktree, or the main folder) is writable, everything
-else reads as usual and the network stays open. In a worktree session `git add`/`commit` don't work inside it,
-and package caches under your home folder can't be written. Everything else that runs commands is outside it:
-hooks, formatters, LSP servers, scheduled checks, MCP servers, shell placeholders in command templates, your own
-`!` commands, the worktree setup command and the embedded terminal. When it is on but can't start (bubblewrap
-missing, user namespaces restricted, or not Linux), shell commands are refused instead of run unconfined.
+`~/.anysola/config.json` turns it on (`{"network": false}` also cuts the network). It wraps the agent's shell tool,
+scheduled `{run}` checks, and ``!`cmd` `` template placeholders in a private PID and session namespace
+(`--unshare-pid --new-session`) with `/` read-only and only the session's folder (its worktree, or the main folder,
+with `.git` itself mounted read-only so it cannot be edited, removed, or renamed) plus a per-session cache folder
+(`XDG_CACHE_HOME`, `npm_config_cache`, `PIP_CACHE_DIR`, `GOCACHE`, `GOMODCACHE`, `UV_CACHE_DIR`, `TMPDIR`, cleaned
+up when the session is deleted) writable. Reads and the network stay open unless `"network": false`, and because
+`.git` is read-only `git add`/`commit` don't work inside the sandbox. Everything else that runs commands stays
+outside it: hooks, formatters, LSP servers, MCP servers, your own `!` commands, the worktree setup command, and the
+embedded terminal. When it is on but can't start (bubblewrap missing, user namespaces restricted, or not Linux),
+commands are refused instead of run unconfined.
 
-Post-edit LSP diagnostics are off by default too: a language server runs the project's own build tooling outside
-any sandbox and without asking. `"lsp": true` in `~/.anysola/config.json` turns them on.
+Post-edit LSP diagnostics are on by default for projects you approve: opening a folder with matching installed
+language servers asks for approval before starting any server (since language servers run a project's own config,
+plugins, and build tooling outside the shell sandbox). Adding a new language ecosystem asks again, revoking stops
+running servers immediately, and `"lsp": false` in your own or project config disables LSP without asking.
 
 A branch made from an older session (from before worktrees) starts from the main folder's current commit with
 only that session's own files as they were then; other uncommitted changes of the main folder aren't in it.

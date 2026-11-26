@@ -687,7 +687,7 @@ function config0(): AgentConfig {
           hooksShellDetected: "C:\\Program Files\\Git\\bin\\bash.exe",
         }
       : { shellDetected: "/usr/bin/zsh", hooksShellDetected: "/usr/bin/zsh" }),
-    lsp: false,
+    lsp: true,
     sandbox: false,
     // `?sandbox=off` shows the switch on a computer where bubblewrap can't start.
     sandboxUnavailable:
@@ -1268,6 +1268,13 @@ export function mockBridge(): Bridge {
       digest: "8f0a2c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6d8f0a",
       decision: trustScene === "remote-refused" ? "denied" : null,
     })
+  if (!empty && (trustScene === "lsp" || trustScene === "lsp-refused"))
+    sections.push({
+      path: WEB,
+      kind: "lsp",
+      digest: "1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d",
+      decision: trustScene === "lsp-refused" ? "denied" : null,
+    })
   if (!empty && (allScene || trustScene === "mcp")) {
     // A project with more than one server: one answer covers them all.
     servers = servers.filter((x) => x.name !== "playwright")
@@ -1329,7 +1336,9 @@ export function mockBridge(): Bridge {
         detail: h.timeout !== (h.event === "UserPromptSubmit" ? 30 : 600) ? `timeout ${h.timeout} s` : null,
       })),
     })),
-    ...sections.map((x) => ({
+    ...sections
+      .filter((x) => x.kind !== "lsp" || config.lsp)
+      .map((x) => ({
       ...x,
       standing: false,
       entries:
@@ -1378,6 +1387,11 @@ export function mockBridge(): Bridge {
                 { label: "instructions", command: "https://raw.githubusercontent.com/anysola/handbook/main/agents/web-team-rules.md", detail: null },
                 { label: "design-tokens", command: "https://github.com/anysola/design-tokens (branch main)", detail: null },
                 { label: "skills", command: "https://skills.anysola.example/teams/web/skills.zip", detail: null },
+              ]
+          : x.kind === "lsp"
+            ? [
+                { label: "TypeScript / JavaScript", command: "typescript-language-server --stdio", detail: "/usr/local/bin/typescript-language-server" },
+                { label: "Rust", command: "rust-analyzer", detail: "/usr/bin/rust-analyzer" },
               ]
           : trustScene === "formatter"
             ? [{ label: "formatter", command: "the built-in formatters", detail: null }]
@@ -2357,9 +2371,11 @@ export function mockBridge(): Bridge {
         return { ...a, fiveHour: a.fiveHour && { ...a.fiveHour, percent: 0 }, blockedBy: null }
       }),
     configGet: (_directory) => settle("configGet", () => config),
-    configSet: (_directory, patch) =>
+    configSet: (directory, patch) =>
       settle("configSet", () => {
+        const lspChanged = patch.lsp !== undefined && patch.lsp !== config.lsp
         config = { ...config, ...patch }
+        if (lspChanged) emit({ type: "trust", directory })
         return config
       }),
     mcpList: () => settle("mcpList", serversNow),

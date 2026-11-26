@@ -1231,12 +1231,31 @@ fn verify_worktree(row: &SessionWorktreeRow) -> Result<(), String> {
     anysola_core::worktree::verify_checkout(&top, Path::new(&row.directory))
 }
 
+/// Git config override that disables hooks portably (`NUL` on Windows, `/dev/null` on Unix).
+const NO_HOOKS: &str = if cfg!(windows) {
+    "core.hooksPath=NUL"
+} else {
+    "core.hooksPath=/dev/null"
+};
+
 /// The worktree's files as a tree (untracked non-ignored files included), without touching its
-/// index: a copy of it takes the changes.
+/// index: a copy of it takes the changes. Runs with `core.fsmonitor=false` and `NO_HOOKS` as
+/// defense-in-depth when inspecting the worktree.
 fn session_tree(worktree: &Path) -> Result<String, String> {
-    let index = read_git(worktree, &["rev-parse", "--git-path", "index"])
-        .map(|p| worktree.join(p))
-        .ok_or("Couldn’t read the worktree.")?;
+    let index = read_git(
+        worktree,
+        &[
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            NO_HOOKS,
+            "rev-parse",
+            "--git-path",
+            "index",
+        ],
+    )
+    .map(|p| worktree.join(p))
+    .ok_or("Couldn’t read the worktree.")?;
     let temp = std::env::temp_dir().join(format!(
         "anysola-index-{}-{}",
         std::process::id(),
@@ -1256,15 +1275,30 @@ fn session_tree(worktree: &Path) -> Result<String, String> {
     }
     let temp_name = temp.display().to_string();
     let result = (|| {
-        wgit(worktree, &["add", "-A", "--", "."])
-            .env("GIT_INDEX_FILE", temp_name.clone())
-            .timeout(git::COMMIT)
-            .ok()
-            .map_err(|f| git::explain(Op::Status, f))?;
-        wgit(worktree, &["write-tree"])
-            .env("GIT_INDEX_FILE", temp_name.clone())
-            .ok()
-            .map_err(|f| git::explain(Op::Status, f))
+        wgit(
+            worktree,
+            &[
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                NO_HOOKS,
+                "add",
+                "-A",
+                "--",
+                ".",
+            ],
+        )
+        .env("GIT_INDEX_FILE", temp_name.clone())
+        .timeout(git::COMMIT)
+        .ok()
+        .map_err(|f| git::explain(Op::Status, f))?;
+        wgit(
+            worktree,
+            &["-c", "core.fsmonitor=false", "-c", NO_HOOKS, "write-tree"],
+        )
+        .env("GIT_INDEX_FILE", temp_name.clone())
+        .ok()
+        .map_err(|f| git::explain(Op::Status, f))
     })();
     let _ = std::fs::remove_file(&temp);
     result
@@ -2456,7 +2490,20 @@ fn apply(
                 open.join(", ")
             ));
         }
-        run_git(worktree, &["add", "-A", "--", "."]).map_err(|f| git::explain(Op::Commit, f))?;
+        run_git(
+            worktree,
+            &[
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                NO_HOOKS,
+                "add",
+                "-A",
+                "--",
+                ".",
+            ],
+        )
+        .map_err(|f| git::explain(Op::Commit, f))?;
         identity_env(
             wgit(
                 worktree,
@@ -2658,7 +2705,20 @@ fn bring_base(row: &SessionWorktreeRow) -> Result<(Vec<String>, String), String>
     }
     let pending = read_git(worktree, &["status", "--porcelain"]).unwrap_or_default();
     if !pending.trim().is_empty() {
-        run_git(worktree, &["add", "-A", "--", "."]).map_err(|f| git::explain(Op::Commit, f))?;
+        run_git(
+            worktree,
+            &[
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                NO_HOOKS,
+                "add",
+                "-A",
+                "--",
+                ".",
+            ],
+        )
+        .map_err(|f| git::explain(Op::Commit, f))?;
         identity_env(
             wgit(
                 worktree,

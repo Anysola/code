@@ -70,6 +70,21 @@ impl Paths {
         self.data.join("shell").join(project_id)
     }
 
+    /// Root folder holding per-session writable cache directories for the Linux shell sandbox.
+    pub fn sandbox_cache_root(&self) -> PathBuf {
+        self.data.join("sandbox-cache")
+    }
+
+    /// Persistent writable cache directory for a session's sandboxed shell commands. Returns
+    /// `None` if `session_id` is empty or contains anything outside `[A-Za-z0-9_-]`.
+    pub fn sandbox_cache_dir(&self, session_id: &str) -> Option<PathBuf> {
+        let safe = !session_id.is_empty()
+            && session_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+        safe.then(|| self.sandbox_cache_root().join(session_id))
+    }
+
     pub fn tool_output_dir(&self) -> PathBuf {
         self.data.join("tool-output")
     }
@@ -302,5 +317,17 @@ mod tests {
         assert_eq!(plain_key("//?/C:/p/*"), "C:/p/*");
         assert_eq!(plain_key("//?/UNC/host/share/*"), "//host/share/*");
         assert_eq!(plain_key("/home/u/*"), "/home/u/*");
+    }
+
+    #[test]
+    fn sandbox_cache_dir_rejects_traversal() {
+        let paths = Paths::isolated(PathBuf::from("/home/u"));
+        assert_eq!(
+            paths.sandbox_cache_dir("ses_abc123"),
+            Some(PathBuf::from("/home/u/.anysola/sandbox-cache/ses_abc123"))
+        );
+        for bad in ["", ".", "..", "../escape", "a/b", "a\\b", "ses space"] {
+            assert_eq!(paths.sandbox_cache_dir(bad), None, "{bad:?}");
+        }
     }
 }

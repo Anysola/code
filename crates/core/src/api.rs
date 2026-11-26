@@ -182,6 +182,9 @@ pub(crate) struct Shared {
     pub budget_stops: std::sync::atomic::AtomicBool,
     pub hooks: crate::hooks::fire::State,
     pub lsp: Arc<crate::lsp::LspManager>,
+    /// Additional language server ids encountered on edits that were not seen in the initial
+    /// project scan, included on the next config reload so `TrustKind::Lsp` can ask about them.
+    pub lsp_discovered: Mutex<std::collections::HashSet<&'static str>>,
     /// The runtime the core started on: work a synchronous call starts runs there.
     pub runtime: tokio::runtime::Handle,
 }
@@ -205,6 +208,21 @@ impl crate::codemode::Host for Shared {
 
     fn lsp(&self) -> Option<Arc<crate::lsp::LspManager>> {
         Some(self.lsp.clone())
+    }
+
+    fn note_lsp_server(&self, id: &'static str) {
+        let config = self.loaded().config.clone();
+        if !crate::lsp::enabled(&config) || config.lsp_server_detected(id) {
+            return;
+        }
+        let inserted = self
+            .lsp_discovered
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id);
+        if inserted {
+            self.changes.mark();
+        }
     }
 
     fn mcp(&self) -> Option<Arc<dyn crate::mcp::Mcp>> {
@@ -299,7 +317,7 @@ impl Core {
         let gateway = Arc::new(Gateway::new(token));
         let remote = crate::gateway::config::fetch(&gateway, &db).await;
         let trust = crate::trust::Decisions::read(&db);
-        let loaded = Loaded::load(&paths, &gateway, directory, &remote, None, trust).await;
+        let loaded = Loaded::load(&paths, &gateway, directory, &remote, None, trust, &[]).await;
         let project = crate::project::identify(directory);
         let snapshots_on = project.vcs == Some("git")
             && loaded.config.get("snapshots") != Some(&Value::Bool(false));
@@ -361,6 +379,7 @@ impl Core {
             budget_stops: Default::default(),
             hooks: Default::default(),
             lsp: Arc::new(crate::lsp::LspManager::new()),
+            lsp_discovered: Mutex::default(),
             runtime: tokio::runtime::Handle::current(),
         });
         shared.arm_watch(&shared.loaded());

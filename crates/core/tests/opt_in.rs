@@ -1,8 +1,11 @@
-//! What only the user's own config turns on (1.4.2): the shell sandbox and LSP diagnostics. Both
-//! are off by default; a project document can't turn either on, and can only turn LSP off.
+//! Opt-in and project-trust boundaries: the shell sandbox is off by default and controlled only by
+//! user/managed config; LSP diagnostics are enabled by default ONLY for projects the user approves
+//! (`TrustKind::Lsp`), and `"lsp": false` disables them globally or per-project without asking.
 
 mod common;
 
+#[cfg(unix)]
+use anysola_core::api::TrustKind;
 use anysola_core::api::{Core, Prompt, Target};
 use anysola_core::session::TurnOptions;
 use anysola_testkit::sse::Stream;
@@ -128,6 +131,60 @@ fn a_project_cannot_turn_the_sandbox_on() {
     assert_eq!(ran.unwrap_or_default().trim(), "[]");
 }
 
+/// Template ``!`cmd` `` honors `"sandbox": true` (refused when unavailable; runs inside sandbox
+/// with `ANYSOLA_SANDBOX=1` when bwrap starts), and deleting a session removes its sandbox cache.
+#[cfg(unix)]
+#[test]
+fn template_interpolation_honors_sandbox_and_delete_cleans_cache() {
+    let gateway = anysola_testkit::FakeGateway::start(|request, _| text(request, "done"));
+    let env = env(&gateway.url);
+    env.home
+        .write(".anysola/config.json", r#"{"sandbox": true}"#);
+    env.home.write(
+        ".anysola/commands/probe.md",
+        "---\ndescription: probe\n---\nResult: !`echo [$ANYSOLA_SANDBOX]`\n",
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    let cache = core.paths().sandbox_cache_dir(&session.id).unwrap();
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(cache.join("marker"), "1").unwrap();
+
+    let outcome = runtime
+        .block_on(core.command(&session.id, "probe", "", TurnOptions::default()))
+        .unwrap();
+    if sandbox_starts() {
+        assert!(
+            matches!(outcome, anysola_core::session::Outcome::Succeeded),
+            "{outcome:?}"
+        );
+        let req = gateway
+            .messages()
+            .into_iter()
+            .rfind(|r| !r.is_title())
+            .expect("model request");
+        assert!(
+            req.json().to_string().contains("Result: [1]"),
+            "{}",
+            req.json()
+        );
+    } else {
+        match outcome {
+            anysola_core::session::Outcome::Failed(err) => {
+                assert!(err.message.contains("was not run"), "{}", err.message);
+            }
+            other => panic!("expected sandbox refusal, got {other:?}"),
+        }
+    }
+
+    assert!(core.delete_session(&session.id).unwrap());
+    assert!(
+        !cache.exists(),
+        "deleting a session must remove its sandbox cache directory"
+    );
+}
+
 /// A fake `typescript-language-server` first on `PATH` that only notes it was started.
 #[cfg(unix)]
 struct FakeServer {
@@ -175,15 +232,32 @@ impl Drop for FakeServer {
     }
 }
 
-/// Edits a `.ts` file with the given user and project config; whether a server was started.
 #[cfg(unix)]
-fn lsp_starts(user: Option<&str>, project: Option<&str>, warning: bool) -> bool {
+fn approve_lsp(core: &Core, runtime: &tokio::runtime::Runtime) -> bool {
+    let Some(item) = core
+        .trust_items()
+        .into_iter()
+        .find(|i| i.kind == TrustKind::Lsp)
+    else {
+        return false;
+    };
+    core.trust(&item.path, TrustKind::Lsp, &item.digest, true)
+        .unwrap();
+    runtime.block_on(core.reload());
+    true
+}
+
+/// Edits a `.ts` file with the given user/project config and optional LSP approval; returns
+/// whether a server was started.
+#[cfg(unix)]
+fn lsp_starts(user: Option<&str>, project: Option<&str>, approve: bool, warning: bool) -> bool {
     let gateway = once(
         "write",
         json!({"path": "a.ts", "content": "const a: number = 1\n"}),
     );
     let env = env(&gateway.url);
     let server = FakeServer::install(&env);
+    env.home.write("proj/package.json", r#"{"name": "p"}"#);
     if let Some(user) = user {
         env.home.write(".anysola/config.json", user);
     }
@@ -198,6 +272,12 @@ fn lsp_starts(user: Option<&str>, project: Option<&str>, warning: bool) -> bool 
         "{:?}",
         core.loaded().config.warnings
     );
+    if approve {
+        assert!(
+            approve_lsp(&core, &runtime),
+            "expected a TrustKind::Lsp item to approve"
+        );
+    }
     run_turn(&core, &runtime);
     assert!(env.home.project().join("a.ts").exists());
     let started = server.started();
@@ -207,22 +287,175 @@ fn lsp_starts(user: Option<&str>, project: Option<&str>, warning: bool) -> bool 
 
 #[cfg(unix)]
 #[test]
-fn lsp_is_off_unless_the_user_turns_it_on() {
-    assert!(!lsp_starts(None, None, false), "BREAK: on by default");
+fn lsp_waits_for_project_approval_and_honors_disable() {
+    // Default config, unapproved project: never starts.
     assert!(
-        !lsp_starts(None, Some(r#"{"lsp": true}"#), true),
-        "BREAK: a project turned LSP on"
+        !lsp_starts(None, None, false, false),
+        "BREAK: started in an unapproved project"
     );
+    // Explicit user `"lsp": true`, still unapproved: never starts.
     assert!(
-        !lsp_starts(Some(r#"{"lsp": "yes"}"#), None, false),
-        "BREAK: a non-boolean value turned LSP on"
+        !lsp_starts(Some(r#"{"lsp": true}"#), None, false, false),
+        "BREAK: user true bypassed project approval"
     );
+    // Project `"lsp": true` warns and never overrides user `"lsp": false`.
     assert!(
-        !lsp_starts(Some(r#"{"lsp": true}"#), Some(r#"{"lsp": false}"#), false),
-        "a project may turn it off"
+        !lsp_starts(
+            Some(r#"{"lsp": false}"#),
+            Some(r#"{"lsp": true}"#),
+            false,
+            true
+        ),
+        "BREAK: project true overrode user false"
     );
-    // The control: the user's own `true` does start it.
-    assert!(lsp_starts(Some(r#"{"lsp": true}"#), None, false));
+    // Non-boolean `"lsp": "yes"` is treated as disabled.
+    assert!(
+        !lsp_starts(Some(r#"{"lsp": "yes"}"#), None, false, false),
+        "BREAK: non-boolean value enabled LSP"
+    );
+    // Default config + project approval: starts without needing `"lsp": true` in user config.
+    assert!(
+        lsp_starts(None, None, true, false),
+        "expected approved project to start LSP by default"
+    );
+    // User `"lsp": false` or project `"lsp": false` suppresses the TrustKind::Lsp item and blocks
+    // LSP even if a previous decision existed in the database.
+    for (user, project) in [
+        (Some(r#"{"lsp": false}"#), None),
+        (None, Some(r#"{"lsp": false}"#)),
+    ] {
+        let gateway = once(
+            "write",
+            json!({"path": "a.ts", "content": "const a: number = 1\n"}),
+        );
+        let env = env(&gateway.url);
+        let server = FakeServer::install(&env);
+        env.home.write("proj/package.json", r#"{"name": "p"}"#);
+        let runtime = runtime();
+        // First open & approve.
+        let core = runtime.block_on(common::core(&env));
+        assert!(approve_lsp(&core, &runtime));
+        drop(core);
+        // Now disable via user or project config and reopen.
+        if let Some(u) = user {
+            env.home.write(".anysola/config.json", u);
+        }
+        if let Some(p) = project {
+            env.home.write("proj/anysola.json", p);
+        }
+        let core = runtime.block_on(common::core(&env));
+        assert!(
+            core.trust_items().iter().all(|i| i.kind != TrustKind::Lsp),
+            "disabled LSP must not ask for approval"
+        );
+        run_turn(&core, &runtime);
+        assert!(
+            !server.started(),
+            "BREAK: LSP started despite disable ({user:?}, {project:?})"
+        );
+        drop(core);
+    }
+}
+
+/// Revoking `TrustKind::Lsp` stops an already-running language server, and adding a new language
+/// ecosystem (`Cargo.toml` + `rust-analyzer`) invalidates the digest so the new server waits.
+#[cfg(unix)]
+#[test]
+fn revoking_lsp_stops_running_server_and_new_ecosystem_reprompts() {
+    use std::os::unix::fs::PermissionsExt;
+    let gateway = once("write", json!({"path": "a.ts", "content": "const a = 1\n"}));
+    let env = env(&gateway.url);
+    let mut server = ScriptedServer::install(&env, "");
+    env.home.write("proj/package.json", r#"{"name": "p"}"#);
+    // Put a fake rust-analyzer on PATH alongside typescript-language-server.
+    let fake_bin = env.home.home().join("fake-bin");
+    let rust_marker = env.home.home().join("rust-lsp-started");
+    let rust_bin = fake_bin.join("rust-analyzer");
+    std::fs::write(
+        &rust_bin,
+        format!("#!/bin/sh\necho started >> '{}'\n", rust_marker.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&rust_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let item = core
+        .trust_items()
+        .into_iter()
+        .find(|i| i.kind == TrustKind::Lsp)
+        .expect("LSP trust item");
+    assert_eq!(item.entries.len(), 1);
+    assert_eq!(item.entries[0].label, "TypeScript / JavaScript");
+    core.trust(&item.path, TrustKind::Lsp, &item.digest, true)
+        .unwrap();
+    runtime.block_on(core.reload());
+    run_turn(&core, &runtime);
+    assert_eq!(core.loaded().config.approved_lsp(), &["typescript"]);
+
+    // Revoking immediately shuts down the running TypeScript language server.
+    core.trust(&item.path, TrustKind::Lsp, &item.digest, false)
+        .unwrap();
+    runtime.block_on(core.reload());
+    assert!(core.loaded().config.approved_lsp().is_empty());
+
+    // Re-approve TypeScript, then add a Cargo.toml: digest changes so decision resets to None.
+    core.trust(&item.path, TrustKind::Lsp, &item.digest, true)
+        .unwrap();
+    runtime.block_on(core.reload());
+    env.home.write(
+        "proj/Cargo.toml",
+        "[package]\nname = \"p\"\nversion = \"0.1.0\"\n",
+    );
+    runtime.block_on(core.reload());
+    let updated = core
+        .trust_items()
+        .into_iter()
+        .find(|i| i.kind == TrustKind::Lsp)
+        .expect("updated LSP trust item");
+    assert_ne!(updated.digest, item.digest);
+    assert_eq!(updated.decision, None);
+    assert_eq!(updated.entries.len(), 2);
+    assert!(core.loaded().config.approved_lsp().is_empty());
+
+    core.shutdown();
+    drop(core);
+    drop(runtime);
+    server.finish();
+    assert!(server.lines("shutdown") >= 1, "{}", server.kept);
+    assert!(server.lines("exit") >= 1, "{}", server.kept);
+    assert!(!rust_marker.exists());
+}
+
+/// Editing a file outside the project root never runs LSP diagnostics on it (even when the
+/// opened project has approved LSP) and never adds its language to the project's trust digest.
+#[cfg(unix)]
+#[test]
+fn external_file_edit_never_starts_lsp_or_pollutes_project_trust() {
+    let outside = tempfile::tempdir().unwrap();
+    let external_ts = outside.path().join("untrusted.ts");
+    let gateway = once(
+        "write",
+        json!({"path": external_ts.display().to_string(), "content": "const x: number = 1\n"}),
+    );
+    let env = env(&gateway.url);
+    let server = FakeServer::install(&env);
+    env.home.write("proj/package.json", r#"{"name": "p"}"#);
+    // Allow external_directory + write so the edit itself succeeds.
+    env.home.write(
+        ".anysola/config.json",
+        r#"{"permissions": [{"action": "external_directory", "resource": "*", "effect": "allow"}]}"#,
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    assert!(approve_lsp(&core, &runtime));
+    run_turn(&core, &runtime);
+    assert!(external_ts.exists());
+    assert!(
+        !server.started(),
+        "BREAK: editing an external file started LSP for it"
+    );
+    drop(core);
 }
 
 /// A model that makes these calls one after another in one turn, then says done.
@@ -282,7 +515,6 @@ impl ScriptedServer {
         dirs.extend(old_path.iter().flat_map(std::env::split_paths));
         // SAFETY: the test holds the environment lock (`env`) until this is dropped.
         unsafe { std::env::set_var("PATH", std::env::join_paths(dirs).unwrap()) };
-        env.home.write(".anysola/config.json", r#"{"lsp": true}"#);
         ScriptedServer {
             log,
             old_path,
@@ -333,8 +565,10 @@ fn edit_results(mode: &str, writes: Vec<(&'static str, String)>) -> (Vec<String>
     let gateway = calls(script);
     let env = env(&gateway.url);
     let server = ScriptedServer::install(&env, mode);
+    env.home.write("proj/package.json", r#"{"name": "p"}"#);
     let runtime = runtime();
     let core = runtime.block_on(common::core(&env));
+    assert!(approve_lsp(&core, &runtime));
     let mut server = server;
     let (session, _) = core.open(&Target::New, false).unwrap();
     let (tx, rx) = std::sync::mpsc::channel();

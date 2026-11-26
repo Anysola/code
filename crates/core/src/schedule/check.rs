@@ -380,9 +380,24 @@ async fn run_shell(ctx: &ToolContext, condition: &Value, state: &Value) -> Outco
     if let Err(error) = crate::tool::shell::authorize(ctx, run, &shell, &target).await {
         return failed(error.message);
     }
-    let mut command = crate::console::tokio_command(&shell);
+    let sandbox_cfg =
+        crate::tool::shell::sandbox::SandboxConfig::from_value(ctx.host.config().get("sandbox"));
+    let cache_dir = ctx.paths.sandbox_cache_dir(&ctx.session_id);
+    let raw_args = crate::tool::shell::select::args(&shell, run);
+    let (program, args, sandboxed) = match crate::tool::shell::sandbox::wrap(
+        &shell,
+        raw_args,
+        &target.absolute,
+        &ctx.worktree,
+        cache_dir.as_deref(),
+        sandbox_cfg,
+    ) {
+        Ok(wrapped) => wrapped,
+        Err(error) => return failed(error),
+    };
+    let mut command = crate::console::tokio_command(&program);
     command
-        .args(crate::tool::shell::select::args(&shell, run))
+        .args(&args)
         .current_dir(&target.absolute)
         .env_clear()
         .envs(ctx.env.iter().cloned())
@@ -390,6 +405,11 @@ async fn run_shell(ctx: &ToolContext, condition: &Value, state: &Value) -> Outco
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
+    if sandboxed {
+        command.env("ANYSOLA_SANDBOX", "1");
+    } else {
+        command.env_remove("ANYSOLA_SANDBOX");
+    }
     #[cfg(unix)]
     command.process_group(0);
     let mark = crate::children::mark_tokio(&mut command);
@@ -828,5 +848,46 @@ mod tests {
             matches!(refused, Outcome::Checked { wake: true, .. }),
             "approved actions run: {refused:?}"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_checks_honor_sandbox_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let test = crate::tool::test_support::context(dir.path());
+        test.set_config(crate::config::Config::from_documents(&[
+            json!({"sandbox": true}),
+        ]));
+        let run = Run {
+            message_id: "msg_sb".into(),
+            now: 0,
+            checks: 0,
+        };
+        let check = json!({
+            "mode": "if",
+            "condition": {"type": "shell", "run": "echo \"[$ANYSOLA_SANDBOX]\""}
+        });
+        let outcome = evaluate(&test.ctx, &check, &Value::Null, &run).await;
+        #[cfg(target_os = "linux")]
+        let starts = crate::tool::shell::sandbox::bwrap_path().is_some();
+        #[cfg(not(target_os = "linux"))]
+        let starts = false;
+        if starts {
+            assert_eq!(
+                outcome,
+                Outcome::Checked {
+                    wake: true,
+                    state: Value::Null,
+                    message: Some("[1]".into()),
+                }
+            );
+        } else {
+            match outcome {
+                Outcome::Failed { error, .. } => {
+                    assert!(error.contains("was not run"), "{error}");
+                }
+                other => panic!("expected sandbox refusal, got {other:?}"),
+            }
+        }
     }
 }

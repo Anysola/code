@@ -6,10 +6,12 @@
 //! errors/warnings to append to the tool output. Diagnostics that aren't ready in time are not
 //! guessed: nothing is returned rather than an earlier version's.
 //!
-//! Off by default: only `"lsp": true` in the user's own (or managed) config turns it on, and a
-//! project document can only turn it off. A language server runs the project's build tooling
-//! (`cargo metadata`, build scripts, a workspace's own TypeScript), outside the shell sandbox and
-//! without the project approval its hooks or formatters wait for.
+//! Enabled by default for projects the user approves (`TrustKind::Lsp`): a project never starts a
+//! language server until the user allows it for that folder. Setting `"lsp": false` in user,
+//! managed, or project config disables it without asking; a project document can never set
+//! `"lsp": true` to override the user's `"lsp": false`. A language server runs the project's build
+//! tooling (`cargo metadata`, build scripts, a workspace's own TypeScript), outside the shell
+//! sandbox.
 //!
 //! Only well-known binaries resolved from `PATH` (absolute entries only) are spawned, never
 //! project-local executables under `node_modules/.bin` or `.venv/bin`, and never commands from
@@ -166,6 +168,242 @@ struct ServerSpec {
     language_id: &'static str,
     command: PathBuf,
     args: Vec<String>,
+}
+
+/// One installed language server that matches a project's files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectServer {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub command: String,
+    pub path: PathBuf,
+}
+
+/// Whether LSP diagnostics are enabled in config: on by default (absent or `true`), off when
+/// `"lsp": false` (or any non-boolean value).
+pub fn enabled(config: &crate::config::Config) -> bool {
+    config
+        .get("lsp")
+        .is_none_or(|value| value == &Value::Bool(true))
+}
+
+/// Folders skipped while scanning a project root for language markers.
+const SCAN_SKIP: [&str; 10] = [
+    ".git",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    ".venv",
+    "vendor",
+    ".next",
+    ".turbo",
+    "__pycache__",
+];
+
+/// Max directory entries examined at each scan level (sorted deterministically so one large
+/// folder cannot starve siblings or vary across filesystems).
+const ROOT_CAP: usize = 256;
+const SUBDIR_MAX: usize = 32;
+const PER_SUBDIR_CAP: usize = 64;
+const DEPTH2_SUBDIR_MAX: usize = 16;
+const DEPTH2_CAP: usize = 32;
+
+/// Resolves the installed language server for a canonical server id (`"clangd"`, `"go"`,
+/// `"python"`, `"rust"`, `"typescript"`), strictly from absolute `PATH` entries.
+fn resolve_server(id: &'static str) -> Option<ProjectServer> {
+    match id {
+        "clangd" => which_absolute("clangd").map(|path| ProjectServer {
+            id,
+            label: "C/C++",
+            command: "clangd".into(),
+            path,
+        }),
+        "go" => which_absolute("gopls").map(|path| ProjectServer {
+            id,
+            label: "Go",
+            command: "gopls".into(),
+            path,
+        }),
+        "python" => {
+            for (bin, cmd) in [
+                ("basedpyright-langserver", "basedpyright-langserver --stdio"),
+                ("pyright-langserver", "pyright-langserver --stdio"),
+                ("pylsp", "pylsp"),
+            ] {
+                if let Some(path) = which_absolute(bin) {
+                    return Some(ProjectServer {
+                        id,
+                        label: "Python",
+                        command: cmd.into(),
+                        path,
+                    });
+                }
+            }
+            None
+        }
+        "rust" => which_absolute("rust-analyzer").map(|path| ProjectServer {
+            id,
+            label: "Rust",
+            command: "rust-analyzer".into(),
+            path,
+        }),
+        "typescript" => which_absolute("typescript-language-server").map(|path| ProjectServer {
+            id,
+            label: "TypeScript / JavaScript",
+            command: "typescript-language-server --stdio".into(),
+            path,
+        }),
+        _ => None,
+    }
+}
+
+fn note_manifest_markers(name: &str, found: &mut HashSet<&'static str>) {
+    match name.to_ascii_lowercase().as_str() {
+        "cargo.toml" => {
+            found.insert("rust");
+        }
+        "package.json" | "tsconfig.json" | "jsconfig.json" => {
+            found.insert("typescript");
+        }
+        "pyproject.toml" | "pyrightconfig.json" | "setup.py" | "setup.cfg" | "requirements.txt" => {
+            found.insert("python");
+        }
+        "go.mod" | "go.work" => {
+            found.insert("go");
+        }
+        "compile_commands.json" | "cmakelists.txt" | ".clangd" => {
+            found.insert("clangd");
+        }
+        _ => {}
+    }
+}
+
+fn note_file_markers(name: &str, found: &mut HashSet<&'static str>) {
+    note_manifest_markers(name, found);
+    if let Some(ext) = Path::new(name).extension().and_then(|e| e.to_str()) {
+        match ext.to_ascii_lowercase().as_str() {
+            "ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs" => {
+                found.insert("typescript");
+            }
+            "py" | "pyi" => {
+                found.insert("python");
+            }
+            "go" => {
+                found.insert("go");
+            }
+            "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" => {
+                found.insert("clangd");
+            }
+            _ => {}
+        }
+    }
+}
+
+fn sorted_entries(dir: &Path) -> Vec<std::fs::DirEntry> {
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+    entries
+}
+
+fn scan_root(dir: &Path, matched: &mut HashSet<&'static str>) {
+    let mut subdirs = Vec::new();
+    for entry in sorted_entries(dir).into_iter().take(ROOT_CAP) {
+        let Ok(ft) = entry.file_type() else {
+            continue;
+        };
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if ft.is_dir() {
+            if !name.starts_with('.') && !SCAN_SKIP.contains(&name) && subdirs.len() < SUBDIR_MAX {
+                subdirs.push(entry.path());
+            }
+        } else if ft.is_file() || ft.is_symlink() {
+            note_file_markers(name, matched);
+        }
+    }
+    let mut depth2 = Vec::new();
+    for sub in subdirs {
+        if matched.len() == 5 {
+            break;
+        }
+        for entry in sorted_entries(&sub).into_iter().take(PER_SUBDIR_CAP) {
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if ft.is_dir() {
+                if !name.starts_with('.')
+                    && !SCAN_SKIP.contains(&name)
+                    && depth2.len() < DEPTH2_SUBDIR_MAX
+                {
+                    depth2.push(entry.path());
+                }
+            } else if ft.is_file() || ft.is_symlink() {
+                note_file_markers(name, matched);
+            }
+        }
+    }
+    for sub in depth2 {
+        if matched.len() == 5 {
+            break;
+        }
+        for entry in sorted_entries(&sub).into_iter().take(DEPTH2_CAP) {
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
+            if !(ft.is_file() || ft.is_symlink()) {
+                continue;
+            }
+            if let Some(name) = entry.file_name().to_str() {
+                note_manifest_markers(name, matched);
+            }
+        }
+    }
+}
+
+/// Installed language servers matching `root` (and optional `extra_dir` when opened inside a
+/// subfolder of `root`), deterministically scanned across root, depth-1 files/subdirs, and
+/// depth-2 project manifests, plus any `extra_ids` seen on edits, sorted stably by server id.
+pub fn project_servers(
+    root: &Path,
+    extra_dir: Option<&Path>,
+    extra_ids: &[&'static str],
+) -> Vec<ProjectServer> {
+    let mut matched: HashSet<&'static str> = extra_ids.iter().copied().collect();
+    if let Some(vcs) = crate::project::vcs_root(root)
+        && has_ancestor_file(&root.join("x"), &vcs, "Cargo.toml")
+    {
+        matched.insert("rust");
+    }
+    scan_root(root, &mut matched);
+    if let Some(extra) = extra_dir.filter(|d| *d != root) {
+        scan_root(extra, &mut matched);
+    }
+    // Stable canonical order so digests never depend on directory iteration order.
+    let mut out = Vec::new();
+    for id in ["clangd", "go", "python", "rust", "typescript"] {
+        if matched.contains(id)
+            && let Some(server) = resolve_server(id)
+        {
+            out.push(server);
+        }
+    }
+    out
+}
+
+/// The language server id that would handle `path` under `root`, if one is installed on `PATH`.
+pub fn server_id_for(root: &Path, path: &Path) -> Option<&'static str> {
+    detect_server(root, path).map(|spec| spec.id)
 }
 
 /// `which`, absolute results only: a relative `PATH` entry would be looked up from the app's
@@ -332,21 +570,48 @@ impl LspManager {
         text: &str,
         enabled: bool,
     ) -> Vec<Diagnostic> {
-        if !enabled {
-            return Vec::new();
-        }
+        self.diagnose_if(root, path, text, |_| enabled).await
+    }
+
+    /// Runs LSP diagnostics only if `allowed(server_id)` returns `true` — re-checked under the
+    /// startup lock both before and after spawning so a concurrent revocation or `"lsp": false`
+    /// cannot leave a freshly spawned server running.
+    pub async fn diagnose_if(
+        &self,
+        root: &Path,
+        path: &Path,
+        text: &str,
+        allowed: impl Fn(&str) -> bool,
+    ) -> Vec<Diagnostic> {
         let Some(spec) = detect_server(root, path) else {
             return Vec::new();
         };
-        self.diagnose_with(root, &spec, path, text).await
+        if !allowed(spec.id) {
+            return Vec::new();
+        }
+        self.diagnose_with_gate(root, &spec, path, text, &allowed)
+            .await
     }
 
+    #[cfg(test)]
     async fn diagnose_with(
         &self,
         root: &Path,
         spec: &ServerSpec,
         path: &Path,
         text: &str,
+    ) -> Vec<Diagnostic> {
+        self.diagnose_with_gate(root, spec, path, text, &|_| true)
+            .await
+    }
+
+    async fn diagnose_with_gate(
+        &self,
+        root: &Path,
+        spec: &ServerSpec,
+        path: &Path,
+        text: &str,
+        allowed: &impl Fn(&str) -> bool,
     ) -> Vec<Diagnostic> {
         let key = ServerKey {
             root: root.to_path_buf(),
@@ -358,7 +623,7 @@ impl LspManager {
             }
             lock(&self.broken).remove(&key);
         }
-        let Some(client) = self.get_or_start(&key, spec).await else {
+        let Some(client) = self.get_or_start(&key, spec, allowed).await else {
             return Vec::new();
         };
         match client.diagnose_file(path, spec.language_id, text).await {
@@ -407,11 +672,19 @@ impl LspManager {
         client.kill();
     }
 
-    async fn get_or_start(&self, key: &ServerKey, spec: &ServerSpec) -> Option<Arc<LspClient>> {
+    async fn get_or_start(
+        &self,
+        key: &ServerKey,
+        spec: &ServerSpec,
+        allowed: &impl Fn(&str) -> bool,
+    ) -> Option<Arc<LspClient>> {
         if let Some(client) = self.running(key) {
-            return Some(client);
+            return allowed(spec.id).then_some(client);
         }
         let _guard = self.starting.lock().await;
+        if !allowed(spec.id) {
+            return None;
+        }
         if let Some(client) = self.running(key) {
             return Some(client);
         }
@@ -446,6 +719,11 @@ impl LspManager {
                 return None;
             }
         };
+        // Re-check after async startup: if trust was revoked while initializing, stop at once.
+        if !allowed(spec.id) {
+            client.stop().await;
+            return None;
+        }
         lock(&self.clients).insert(key.clone(), client.clone());
         Some(client)
     }
@@ -481,6 +759,21 @@ impl LspManager {
                 .filter(|(_, c)| inside(&c.root_key))
                 .map(|(k, _)| k.clone())
                 .collect();
+            keys.iter().filter_map(|k| clients.remove(k)).collect()
+        };
+        let count = stopping.len();
+        futures_util::future::join_all(stopping.iter().map(|c| c.stop())).await;
+        count
+    }
+
+    /// Stops every running server whose id satisfies `stop_if` (for example after LSP trust is
+    /// revoked or `"lsp": false` is configured), serializing with in-flight startups so a server
+    /// mid-start cannot slip past.
+    pub async fn shutdown_where(&self, mut stop_if: impl FnMut(&str) -> bool) -> usize {
+        let _guard = self.starting.lock().await;
+        let stopping: Vec<Arc<LspClient>> = {
+            let mut clients = lock(&self.clients);
+            let keys: Vec<ServerKey> = clients.keys().filter(|k| stop_if(k.id)).cloned().collect();
             keys.iter().filter_map(|k| clients.remove(k)).collect()
         };
         let count = stopping.len();

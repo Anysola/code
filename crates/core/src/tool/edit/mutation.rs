@@ -135,9 +135,11 @@ pub(crate) async fn format(
     Some(file.text)
 }
 
-/// Runs LSP diagnostics on a written file if a matching language server is installed and the
-/// user's own (or managed) config sets `"lsp": true`: off by default, since a language server
-/// runs the project's build tooling (a project document can only turn it off).
+/// Runs LSP diagnostics on a written file inside the session's working root if LSP is enabled
+/// (`"lsp"` is not `false`), a matching language server is installed on `PATH`, and the user
+/// approved `TrustKind::Lsp` for this project (including that server). Files outside
+/// `ctx.worktree` (including symlinks leading outside) are never diagnosed, so approving one
+/// project never runs an untrusted folder's language tooling or pollutes this project's trust.
 pub(crate) async fn diagnose(
     ctx: &super::super::ToolContext,
     path: &Path,
@@ -145,8 +147,27 @@ pub(crate) async fn diagnose(
     text: &str,
 ) -> Option<String> {
     let lsp = ctx.host.lsp()?;
-    let enabled = ctx.host.config().get("lsp") == Some(&serde_json::Value::Bool(true));
-    let diags = lsp.diagnose(&ctx.worktree, path, text, enabled).await;
+    let real_path = crate::config::real_path(path);
+    let real_root = crate::config::real_path(&ctx.worktree);
+    if !real_path.starts_with(&real_root) {
+        return None;
+    }
+    let config = ctx.host.config();
+    if !crate::lsp::enabled(&config) {
+        return None;
+    }
+    let id = crate::lsp::server_id_for(&ctx.worktree, path)?;
+    if !config.lsp_server_allowed(id) {
+        ctx.host.note_lsp_server(id);
+        return None;
+    }
+    let host = &ctx.host;
+    let diags = lsp
+        .diagnose_if(&ctx.worktree, path, text, |server_id| {
+            let cfg = host.config();
+            crate::lsp::enabled(&cfg) && cfg.lsp_server_allowed(server_id)
+        })
+        .await;
     crate::lsp::format_diagnostics(resource, &diags)
 }
 

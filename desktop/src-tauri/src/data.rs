@@ -248,10 +248,19 @@ pub async fn delete_all_sessions(app: State<'_, App>) -> Answer {
             applying += 1;
             continue;
         }
-        // A running core also drops the session's usage it keeps in memory.
+        // A running core also drops the session's usage it keeps in memory and cleans sandbox cache.
         let removed = match &core {
             Some(core) => core.delete_session(&id).map_err(text)?,
-            None => db.delete_session(&id).map_err(text)?,
+            None => {
+                let tree = db.session_tree(&id).unwrap_or_default();
+                let removed = db.delete_session(&id).map_err(text)?;
+                for sid in &tree {
+                    if let Some(cache) = app.paths.sandbox_cache_dir(sid) {
+                        let _ = std::fs::remove_dir_all(cache);
+                    }
+                }
+                removed
+            }
         };
         crate::worktree::after_delete(&db, &id).await;
         if removed {

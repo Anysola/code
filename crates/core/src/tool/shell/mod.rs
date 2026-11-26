@@ -325,11 +325,14 @@ fn completed(finished: &Finished) -> ToolOutput {
     }
 }
 
-fn moved_to_background(id: &str, file: &Path) -> ToolOutput {
+fn moved_to_background(id: &str, file: &Path, sandboxed: bool) -> ToolOutput {
     let mut metadata = Map::new();
     metadata.insert("status".into(), "running".into());
     metadata.insert("truncated".into(), false.into());
     metadata.insert("shellID".into(), id.into());
+    if sandboxed {
+        metadata.insert("sandboxed".into(), true.into());
+    }
     ToolOutput {
         content: vec![
             ToolContent::text(format!(
@@ -347,6 +350,7 @@ struct Started {
     id: String,
     file: PathBuf,
     timeout: u64,
+    sandboxed: bool,
     running: Running,
 }
 
@@ -368,6 +372,7 @@ impl ShellTool {
         let id = crate::ids::shell();
         let file = directory.join(format!("{id}.out"));
         let sandbox_cfg = sandbox::SandboxConfig::from_value(ctx.host.config().get("sandbox"));
+        let cache_dir = ctx.paths.sandbox_cache_dir(&ctx.session_id);
         let raw_args = select::args(&shell, &input.command);
         // Asked for and unavailable: refused, never run unconfined.
         let (program, args, sandboxed) = sandbox::wrap(
@@ -375,10 +380,12 @@ impl ShellTool {
             raw_args,
             &target.absolute,
             &ctx.worktree,
+            cache_dir.as_deref(),
             sandbox_cfg,
         )
         .map_err(ToolError::unknown)?;
         let mut env = environment(ctx);
+        env.retain(|(k, _)| k != "ANYSOLA_SANDBOX");
         if sandboxed {
             env.push(("ANYSOLA_SANDBOX".into(), "1".into()));
         }
@@ -395,6 +402,7 @@ impl ShellTool {
             id,
             file,
             timeout,
+            sandboxed,
             running,
         })
     }
@@ -422,7 +430,7 @@ impl Tool for ShellTool {
             let input: Input = parse_input(self.name(), &def().input_schema, input)?;
             let started = self.start(&input, ctx).await?;
             if input.background == Some(true) {
-                let result = moved_to_background(&started.id, &started.file);
+                let result = moved_to_background(&started.id, &started.file, started.sandboxed);
                 notify_when_done(started, input.command, ctx);
                 return Ok(result);
             }
@@ -436,7 +444,7 @@ impl Tool for ShellTool {
                 Ok(()) = moved => {
                     drop(blocking);
                     started.running.clear_timeout();
-                    let result = moved_to_background(&started.id, &started.file);
+                    let result = moved_to_background(&started.id, &started.file, started.sandboxed);
                     notify_when_done(started, input.command, ctx);
                     return Ok(result);
                 }
@@ -444,6 +452,7 @@ impl Tool for ShellTool {
             let Started {
                 file,
                 timeout,
+                sandboxed,
                 running,
                 ..
             } = started;
@@ -452,7 +461,7 @@ impl Tool for ShellTool {
                 running.discard(&file);
                 return Err(ToolError::interrupted());
             };
-            let finished = Finished::read(&file, ended, ctx.limits, timeout)
+            let finished = Finished::read(&file, ended, ctx.limits, timeout, sandboxed)
                 .map_err(|e| ToolError::unknown(e.to_string()))?;
             Ok(completed(&finished))
         }
@@ -484,6 +493,7 @@ fn notify_when_done(started: Started, command: String, ctx: &ToolContext) {
             id,
             file,
             timeout,
+            sandboxed,
             mut running,
         } = started;
         let ended = running.wait().await;
@@ -498,7 +508,7 @@ fn notify_when_done(started: Started, command: String, ctx: &ToolContext) {
             .push((id.clone(), end));
         background().retain(|shell| shell.entry != entry);
         notifier.background_changed(&session_id);
-        let (state, text) = match Finished::read(&file, ended, limits, timeout) {
+        let (state, text) = match Finished::read(&file, ended, limits, timeout, sandboxed) {
             Ok(finished) => ("completed", finished.content().join("\n\n")),
             Err(error) => ("error", error.to_string()),
         };

@@ -230,13 +230,34 @@ pub(crate) fn git_sync(cwd: &Path, args: &[&str], env: &[(&str, &Path)]) -> Resu
 /// The checkout's current files (tracked and untracked, not ignored) as a tree, written with a
 /// copy of its index so the checkout's own index is untouched. With the checkout's git dir.
 pub(crate) fn current_tree(checkout: &Path) -> Option<(PathBuf, String)> {
-    let git_dir =
-        PathBuf::from(git_sync(checkout, &["rev-parse", "--absolute-git-dir"], &[]).ok()?);
+    let git_dir = PathBuf::from(
+        git_sync(
+            checkout,
+            &[
+                "-c",
+                "core.fsmonitor=false",
+                "rev-parse",
+                "--absolute-git-dir",
+            ],
+            &[],
+        )
+        .ok()?,
+    );
     let index = git_dir.join(format!("anysola-{}.index", crate::ids::part()));
     let _ = std::fs::copy(git_dir.join("index"), &index);
     let env = [("GIT_INDEX_FILE", index.as_path())];
-    let tree = git_sync(checkout, &["add", "-A", "--", "."], &env)
-        .and_then(|_| git_sync(checkout, &["write-tree"], &env));
+    let tree = git_sync(
+        checkout,
+        &["-c", "core.fsmonitor=false", "add", "-A", "--", "."],
+        &env,
+    )
+    .and_then(|_| {
+        git_sync(
+            checkout,
+            &["-c", "core.fsmonitor=false", "write-tree"],
+            &env,
+        )
+    });
     let _ = std::fs::remove_file(&index);
     Some((git_dir, tree.ok()?))
 }
@@ -368,7 +389,12 @@ pub fn verify_checkout(main_top: &Path, dir: &Path) -> Result<(), String> {
         .and_then(|l| l.strip_prefix("gitdir:"))
         .map(str::trim)
         .ok_or_else(changed)?;
-    let admin = real(&dir.join(admin));
+    let admin_raw = dir.join(admin);
+    let admin_meta = std::fs::symlink_metadata(&admin_raw).map_err(|_| changed())?;
+    if !admin_meta.is_dir() || admin_meta.file_type().is_symlink() {
+        return Err(changed());
+    }
+    let admin = real(&admin_raw);
     let common =
         git_sync(main_top, &["rev-parse", "--git-common-dir"], &[]).map_err(|_| changed())?;
     let common = real(&main_top.join(common));
@@ -376,8 +402,25 @@ pub fn verify_checkout(main_top: &Path, dir: &Path) -> Result<(), String> {
         return Err(changed());
     }
     // The admin folder names this worktree back (absolute, or relative to the admin folder).
-    let back = std::fs::read_to_string(admin.join("gitdir")).map_err(|_| changed())?;
+    let back_path = admin.join("gitdir");
+    if !std::fs::symlink_metadata(&back_path)
+        .is_ok_and(|m| m.is_file() && !m.file_type().is_symlink())
+    {
+        return Err(changed());
+    }
+    let back = std::fs::read_to_string(&back_path).map_err(|_| changed())?;
     if real(&admin.join(back.trim())) != real(&dot_git) {
+        return Err(changed());
+    }
+    // And `commondir` still leads back to the repository's own common dir (not a spoofed config).
+    let common_path = admin.join("commondir");
+    if !std::fs::symlink_metadata(&common_path)
+        .is_ok_and(|m| m.is_file() && !m.file_type().is_symlink())
+    {
+        return Err(changed());
+    }
+    let commondir = std::fs::read_to_string(&common_path).map_err(|_| changed())?;
+    if real(&admin.join(commondir.trim())) != common {
         return Err(changed());
     }
     Ok(())
@@ -522,5 +565,35 @@ mod tests {
         remove(&db, &id, &first, true).await.unwrap();
         assert!(!first.exists());
         assert_eq!(list(&db, &id).len(), 2);
+    }
+
+    #[tokio::test]
+    async fn verify_checkout_rejects_tampered_commondir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = crate::paths::canonicalize(tmp.path()).unwrap();
+        let project = root.join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        repo(&project);
+        let base = root.join("home/.anysola/worktree/abc");
+        let db = Db::open(&root.join("db.sqlite")).unwrap();
+        let info = crate::project::identify(&project);
+        db.upsert_project(&info).unwrap();
+        let paths = crate::paths::Paths::isolated(root.join("home"));
+        let wt = create(&db, &paths, &base, &info.id, &project, "wt")
+            .await
+            .unwrap();
+        assert!(verify_checkout(&project, &wt).is_ok());
+        // Tamper admin/commondir to point at a fake git common directory.
+        let fake_common = root.join("fake-git");
+        std::fs::create_dir_all(&fake_common).unwrap();
+        let dot_git = std::fs::read_to_string(wt.join(".git")).unwrap();
+        let admin = wt.join(dot_git.trim().strip_prefix("gitdir:").unwrap().trim());
+        std::fs::write(
+            admin.join("commondir"),
+            format!("{}\n", fake_common.display()),
+        )
+        .unwrap();
+        assert!(verify_checkout(&project, &wt).is_err());
+        drop(db);
     }
 }
