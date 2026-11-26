@@ -520,7 +520,7 @@ fn claim_setup(slot: &Slot) -> bool {
     true
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn run_setup(
     out: &Out,
     shell: Option<&str>,
