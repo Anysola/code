@@ -850,7 +850,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn shell_checks_honor_sandbox_config() {
         let dir = tempfile::tempdir().unwrap();

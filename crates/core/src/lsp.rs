@@ -593,7 +593,7 @@ impl LspManager {
             .await
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     async fn diagnose_with(
         &self,
         root: &Path,
