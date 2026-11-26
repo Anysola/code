@@ -41,6 +41,10 @@ libc = "0.2"
 # The user's and the machine's PATH, for an app started from the Start menu.
 windows-registry = "0.6"
 
+# Line numbers in backtraces without the full debug info: debug builds link faster and stay small.
+[profile.dev]
+debug = "line-tables-only"
+
 # Full LTO only for releases (release.yml sets it): branch builds stay quick.
 [profile.release]
 strip = true

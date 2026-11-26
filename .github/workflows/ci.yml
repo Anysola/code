@@ -1,6 +1,7 @@
 # CI on every push and pull request: format, lint and test the agent (crates/: core, mcp, testkit) and the desktop
-# app (desktop/: the window's types and build, then its Rust side). A branch push tests windows-x64; tags
-# and manual runs test the two platforms the app ships for, Windows x64 and Linux x64.
+# app (desktop/: the window's types and build, then its Rust side) on the two platforms the app ships for,
+# Windows x64 and Linux x64. The full test suites run here, not on a developer's machine. A last job builds
+# the app unbundled for Linux arm64 and keeps it as an artifact, to try a commit on an arm64 machine.
 
 name: ci
 
@@ -41,7 +42,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON((startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') && '[{"build":"linux-x64","os":"ubuntu-24.04"},{"build":"windows-x64","os":"windows-2025"}]' || '[{"build":"windows-x64","os":"windows-2025"}]') }}
+        include:
+          - { build: linux-x64, os: ubuntu-24.04 }
+          - { build: windows-x64, os: windows-2025 }
     name: test (${{ matrix.build }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -100,3 +103,45 @@ jobs:
         run: |
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
+
+  app:
+    # A debug build of the desktop app with the window inside, not an installer: desktop.yml builds those.
+    name: app (linux-arm64, debug)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+          key: app-linux-arm64
+          # A cache saved under a tag is readable from that tag alone.
+          save-if: ${{ github.ref_type == 'branch' }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Linux packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: npm ci
+      - name: App
+        # Types and the window's build run first, as tauri.conf.json's beforeBuildCommand.
+        run: npx tauri build --debug --no-bundle
+      - uses: actions/upload-artifact@v4
+        with:
+          name: anysola-code-app-linux-arm64-debug
+          if-no-files-found: error
+          retention-days: 14
+          path: desktop/src-tauri/target/debug/anysola-desktop

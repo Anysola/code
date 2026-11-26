@@ -16,7 +16,7 @@ may change. The `.sig` files are not uploaded; their contents are in the manifes
 
 ## Before the tag
 
-1. `main` is green in `ci`, run by hand (Actions → ci → Run workflow) so Linux x64 is tested next to Windows x64.
+1. `main` is green in `ci` for the commit to be tagged; every push tests Windows x64 and Linux x64.
 2. Dry run: Actions → release → Run workflow. The `release` artifact holds exactly the four files above (the
    `assemble` job fails otherwise); check `latest-desktop.json` names both platforms.
 3. `CHANGELOG.md` has the version's entry (the release notes point to it).
