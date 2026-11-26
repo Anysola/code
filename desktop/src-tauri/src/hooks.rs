@@ -1077,6 +1077,7 @@ mod tests {
         std::fs::write(&file, &text).unwrap();
         pin_powershell_starters_at_start(&paths, Some(&db));
         assert_eq!(std::fs::read_to_string(&file).unwrap(), text);
+        drop(db);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
