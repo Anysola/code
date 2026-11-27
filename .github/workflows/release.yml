@@ -7,8 +7,9 @@
 #
 # Installed apps (1.0.6 and later) find an update through the version Admin marks latest and then
 # releases/download/v<latest>/latest-desktop.json, so the asset names, the manifest's shape and the signing key
-# must not change. Secrets: TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD (the updater key,
-# backed up with the server's files; desktop/src-tauri/tauri.conf.json holds its public half).
+# must not change. Secrets of the `release` environment: TAURI_SIGNING_PRIVATE_KEY and
+# TAURI_SIGNING_PRIVATE_KEY_PASSWORD (the updater key, backed up with the server's files;
+# desktop/src-tauri/tauri.conf.json holds its public half).
 
 name: release
 
@@ -55,6 +56,9 @@ jobs:
           - { build: linux-x64, os: ubuntu-24.04, bundles: "appimage,deb" }
     name: desktop (${{ matrix.build }})
     runs-on: ${{ matrix.os }}
+    # The updater key lives in this environment, which only main (dry runs) and v* tags may use:
+    # a workflow pushed to any other branch cannot read it.
+    environment: release
     defaults:
       run:
         shell: bash
