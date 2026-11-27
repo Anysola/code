@@ -2,6 +2,11 @@
 # app (desktop/: the window's types and build, then its Rust side) on the two platforms the app ships for,
 # Windows x64 and Linux x64. The full test suites run here, not on a developer's machine. A last job builds
 # the app unbundled for Linux arm64 and keeps it as an artifact, to try a commit on an arm64 machine.
+#
+# Runners: the Linux x64 jobs run on Avrea (avrea.com), where the test job takes about a third of the time it
+# does on GitHub's runner. Windows and arm64 stay on GitHub's own: the repository is public, so they cost
+# nothing there, and on Avrea they are billed at eight to nine times the Linux rate. To go back, put
+# `ubuntu-24.04` where an `avrea-ubuntu-24.04-*` label is.
 
 name: ci
 
@@ -25,7 +30,7 @@ env:
 
 jobs:
   fmt:
-    runs-on: ubuntu-24.04
+    runs-on: avrea-ubuntu-24.04-2-vcpu
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,7 +48,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { build: linux-x64, os: ubuntu-24.04 }
+          - { build: linux-x64, os: avrea-ubuntu-24.04-8-vcpu-16gb }
           - { build: windows-x64, os: windows-2025 }
     name: test (${{ matrix.build }})
     runs-on: ${{ matrix.os }}
@@ -83,7 +88,11 @@ jobs:
         # instead of a skip.
         if: runner.os == 'Linux'
         run: |
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # The knob exists only where AppArmor restricts user namespaces (GitHub's image); a runner
+          # without it has nothing to lift, and ANYSOLA_REQUIRE_BWRAP still fails a bwrap that can't start.
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
           echo "ANYSOLA_REQUIRE_BWRAP=1" >> "$GITHUB_ENV"
 
       - name: Agent (clippy)
