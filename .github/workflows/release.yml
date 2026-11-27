@@ -60,13 +60,13 @@ jobs:
         shell: bash
         working-directory: desktop
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, 2026-11-27
         with:
           toolchain: ${{ env.RUST_VERSION }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
       - name: Linux packages
@@ -97,7 +97,7 @@ jobs:
             cp $b/deb/*.deb "$out/anysola-code-desktop-linux-x64.deb"
           fi
           ls -la "$out"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: desktop-${{ matrix.build }}
           path: dist-desktop
@@ -108,7 +108,7 @@ jobs:
     needs: [version, desktop]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: desktop-*
           path: desktop
@@ -136,7 +136,7 @@ jobs:
           cd ../release
           ls -la
           test "$(ls | sort | tr '\n' ' ')" = "anysola-code-desktop-linux-x64.AppImage anysola-code-desktop-linux-x64.deb anysola-code-desktop-windows-x64-setup.exe latest-desktop.json "
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release
           path: release
@@ -149,7 +149,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release
           path: release

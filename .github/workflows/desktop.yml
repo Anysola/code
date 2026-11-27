@@ -1,6 +1,7 @@
 # Installers of a branch for Windows (NSIS, per-user) and Linux (AppImage, .deb), kept as workflow
-# artifacts to be tried on a real machine; ci.yml runs the checks. Not code-signed yet: Windows shows
-# SmartScreen's "unknown publisher" on first run.
+# artifacts to be tried on a real machine; ci.yml runs the checks. Actions here and in release.yml are
+# pinned to a commit: a moved tag would run in the job that holds the signing key. Not code-signed
+# yet: Windows shows SmartScreen's "unknown publisher" on first run.
 name: desktop
 
 on:
@@ -40,19 +41,19 @@ jobs:
         shell: bash
         working-directory: desktop
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, 2026-11-27
         with:
           toolchain: ${{ env.RUST_VERSION }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: desktop/src-tauri
           key: desktop-${{ matrix.build }}
           # A cache saved under a tag is readable from that tag alone.
           save-if: ${{ github.ref_type == 'branch' }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
           cache: npm
@@ -64,13 +65,11 @@ jobs:
           sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - run: npm ci
       - name: Installer
-        env:
-          # Signs the updater artifacts; the key is the one tauri.conf.json's pubkey checks.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         # Types and the window's build run first, as tauri.conf.json's beforeBuildCommand.
-        run: npx tauri build --bundles ${{ matrix.bundles }}
-      - uses: actions/upload-artifact@v4
+        # No updater artifacts: they need the signing key, which only release.yml gets, so a
+        # branch push can't reach it.
+        run: npx tauri build --bundles ${{ matrix.bundles }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: anysola-code-desktop-${{ matrix.build }}
           if-no-files-found: error
