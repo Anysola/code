@@ -252,6 +252,29 @@ pub(crate) fn force_kill(pid: u32) {
         .status();
 }
 
+/// [`force_kill`] that never waits: the kill is started and left to finish on its own. For
+/// drops that must not hold up their thread (a SessionEnd pass running out of time on exit).
+#[cfg(unix)]
+pub(crate) fn force_kill_detached(pid: u32) {
+    force_kill(pid);
+}
+
+/// [`force_kill`] that never waits: `taskkill` is started, not waited for, so a drop on the
+/// exit path (`RunEvent::Exit` blocks on the runtime) costs the time to start a process, not
+/// the time the kill takes.
+#[cfg(windows)]
+pub(crate) fn force_kill_detached(pid: u32) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let _ = std::process::Command::new("taskkill")
+        .args(["/pid", &pid.to_string(), "/T", "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
+
 #[cfg(unix)]
 fn signal_name(status: ExitStatus) -> Option<String> {
     use std::os::unix::process::ExitStatusExt;

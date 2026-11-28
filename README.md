@@ -45,8 +45,11 @@ row in which the subagent calls no tool; rounds with a tool call don't count), a
 compaction (matcher `auto`) can't be blocked, since the conversation could not go on, and a block is only shown.
 `Notification` (matcher `permission_prompt` or `question`) runs alongside the question, never answers it and never
 holds it up. `SessionEnd` runs when the app closes or signs you in or out, and when you delete a session (reason
-`other`); all of them together get 1.5 seconds, then they are stopped, and nothing they start in the background
-outlives them. `Notification` and `SessionEnd` can't block
+`other`), after nothing can refuse the delete any more; all of them together get 1.5 seconds. Then each hook's
+process group is ended: on Linux and macOS that takes what it left in the background (a `&` job, a double fork),
+but not a process that leaves the group itself (`setsid`, a service it starts). On Windows the hook's process tree
+is ended; what it started outside that tree ends only when the app exits (its job), not when a session is deleted.
+`Notification` and `SessionEnd` can't block
 anything; their exit code 2 shows stderr to you.
 
 Hooks run in your `shell` setting; without one, on Windows in Git Bash when it is installed (so
@@ -140,10 +143,13 @@ session here…") takes a file written by Export: it becomes a new session, with
 project, else the open folder, else your default folder. Nothing in the file carries permissions, settings, hooks
 or approvals, and snapshots from another machine are not taken, so an imported session can't revert files. What a
 later request sends from it is rebuilt from checked values (images are checked as attached ones and limited per
-file). `/memory <note>` adds a line to the project's `AGENTS.md` (in a worktree session, the worktree's) or to your
+file), and what the file says came from a hook or a subagent shows as "From the imported file", never as the app's
+own note. ArrowUp brings back earlier messages, but a `/` line brought back (or put back by a rewind) runs nothing
+on Enter until you change it, so a command in an imported history never runs by accident. `/memory <note>` adds a line to the project's `AGENTS.md` (in a worktree session, the worktree's) or to your
 own `~/.anysola/AGENTS.md`, whichever you pick; `/memory` alone opens either in your editor. When the project's
 `AGENTS.md` is a link, the note goes to the file it links to only if that is an `AGENTS.md` or `CLAUDE.md` of the
-same checkout outside Git's data and not a file the agent's tools always ask about. Ctrl G jumps to any of the
+same checkout outside Git's data and not a file the agent's tools always ask about; a project `AGENTS.md` that is a
+hard link (a second name for another file) takes no note. A `/memory` or `/btw` line is never sent as a message. Ctrl G jumps to any of the
 session's messages, Ctrl Shift ↑ / ↓ to the previous or next.
 
 ## Usage limits

@@ -11,8 +11,10 @@ branch.
   `last_assistant_message`), `PreCompact` (matcher `manual` or `auto`; may block `/compact`, never an automatic
   compaction, where a block is shown as a notice), `Notification` (matcher `permission_prompt` or `question`; runs
   alongside the ask without delaying or answering it) and `SessionEnd` (when the app closes, signs in or out, or a
-  session is deleted; reason `other`; all SessionEnd hooks share 1.5 seconds, then they are stopped,
-  with whatever they started in the background). The app's exit
+  session is deleted, once nothing can refuse the delete; reason `other`; all SessionEnd hooks share 1.5 seconds,
+  then each hook's process group is ended: on Linux and macOS with its `&` jobs and double forks, not a process
+  that left the group with `setsid`; on Windows its process tree, and anything else it started only at app exit).
+  The app's exit
   waits that much longer for them. A tool hook's `continue: false` in a subagent now also skips its stop hooks.
 - **Project hooks approved before 1.6 are asked about again when they configure one of the new events**: 1.5
   ignored those events, so its approval never covered them. Until you approve the file again, none of its hooks
@@ -40,19 +42,26 @@ branch.
   checked values: media types from the bytes (never the data URI's), no blank text blocks, no row that lowers to
   nothing, the first turn a user one, token counts and times clamped, title without invisible or reordering
   characters. The import runs off the window's thread; closing the app, or starting another import, cancels one in
-  progress.
+  progress. Rows the window would show in the app's own voice are neutral: what the file says a hook or a
+  subagent wrote shows as "From the imported file", and imported errors, failed compactions and command chips are
+  not taken. A refusal never quotes the file. Imported PDFs are checked by their header only, as attached ones are.
 - **Notes (`/memory`):** `/memory <note>` offers the project's and your own `AGENTS.md`; Enter adds the note as a
   line to the one picked (the project file is at the root of the session's checkout, a worktree session's own) and
   a notice says where it went. `/memory` alone opens either file in your editor. When the project's `AGENTS.md` is
   a link, it is followed only to an `AGENTS.md`/`CLAUDE.md` of the checkout that isn't in Git's data or a file the
   agent's tools always ask about, and the note is written into that file. A worktree that is gone is not made again
-  for a note.
+  for a note. A project `AGENTS.md` that is a hard link takes no note. A `/memory` or `/btw` line (leading spaces,
+  a dismissed menu, a pasted block) is never sent to the model as a message.
+- **Recalled text runs no command:** ArrowUp brings back earlier messages (an imported session's too), and a rewind
+  puts one back, but a `/` line put there that way opens no menu and runs nothing on Enter until you change it.
 - **Go to message:** Ctrl G (or "Go to message…" in the palette) lists the session's messages, newest first, to
   filter and jump to; Ctrl Shift ↑ / ↓ move to the previous or next one. The view lets go of the bottom there.
 - **A `/compact` your PreCompact hook refuses** now says so with the hook's reason; before, it ended silently.
 - The tool row for notebook edits shows the cell's diff like any file change.
 - Hooks that time out or are interrupted no longer leave members of their process group that ignored SIGTERM, and a
-  hook run dropped while its output drains (a SessionEnd pass out of time) kills its group.
+  hook run dropped while its output drains (a SessionEnd pass out of time) kills its group, without waiting for the
+  kill (on Windows `taskkill` is started, not waited for, so exit keeps its grace).
+- Links to files in a `/btw` answer open in the editor like the transcript's.
 
 ## 1.5.0 (2026-11-26)
 

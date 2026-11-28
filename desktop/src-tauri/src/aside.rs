@@ -32,15 +32,8 @@ pub async fn aside(
             message: "Type a question after /btw.".into(),
         }));
     }
-    let core = match core_for(&handle, &app, &directory).await {
-        Ok(core) => core,
-        Err(message) => {
-            return Ok(error_json(&AsideError {
-                kind: AsideKind::Other,
-                message,
-            }));
-        }
-    };
+    // Registered before the folder's core is awaited: closing the card while it starts cancels
+    // this question too (and no request goes out).
     let n = ASKED.fetch_add(1, Ordering::Relaxed);
     let cancel = CancellationToken::new();
     // A newer question replaces the one in flight: that one ends as cancelled.
@@ -52,13 +45,25 @@ pub async fn aside(
     {
         before.cancel();
     }
-    let answer = core.aside(&session_id, &question, &cancel).await;
-    {
+    let forget = || {
         let mut asides = app.asides.lock().unwrap_or_else(|e| e.into_inner());
         if asides.get(&session_id).is_some_and(|(at, _)| *at == n) {
             asides.remove(&session_id);
         }
-    }
+    };
+    let core = match core_for(&handle, &app, &directory).await {
+        Ok(core) => core,
+        Err(message) => {
+            forget();
+            return Ok(error_json(&AsideError {
+                kind: AsideKind::Other,
+                message,
+            }));
+        }
+    };
+    // `Core::aside` returns `cancelled` at once for a token cancelled meanwhile.
+    let answer = core.aside(&session_id, &question, &cancel).await;
+    forget();
     Ok(match answer {
         Ok(text) => json!({"text": text}),
         Err(error) => error_json(&error),

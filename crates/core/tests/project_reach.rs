@@ -1591,3 +1591,47 @@ fn a_project_note_follows_a_link_only_to_an_instruction_file_of_the_checkout() {
     assert!(core.add_memory(None, MemoryScope::Project, &big).is_err());
     assert!(!link.exists());
 }
+
+/// `/memory` (review 2, R2): a project `AGENTS.md` that is a hard link (here to `.git/config`) is
+/// not written; the personal file is unaffected.
+#[cfg(unix)]
+#[test]
+fn a_project_note_refuses_a_hard_linked_instruction_file() {
+    use anysola_core::api::MemoryScope;
+    let gateway = FakeGateway::start(|request, _| text(request, "ok"));
+    let env = env(&gateway.url);
+    let project = env.home.project();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&project)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let runtime = runtime();
+    let core: Core = runtime.block_on(common::core(&env));
+    let config = project.join(".git/config");
+    let before = std::fs::read_to_string(&config).unwrap();
+    std::fs::hard_link(&config, project.join("AGENTS.md")).unwrap();
+    let error = core
+        .add_memory(None, MemoryScope::Project, "remember")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("hard link"), "{error}");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), before);
+    let status = std::process::Command::new("git")
+        .args(["status"])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+    assert!(status.status.success());
+    // A plain project file and the personal one still take notes.
+    std::fs::remove_file(project.join("AGENTS.md")).unwrap();
+    core.add_memory(None, MemoryScope::Project, "one").unwrap();
+    core.add_memory(None, MemoryScope::Personal, "two").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(project.join("AGENTS.md")).unwrap(),
+        "- one\n"
+    );
+}

@@ -195,8 +195,15 @@ function trigger(text: string, caret: number): { kind: "/" | "@"; query: string;
 
 const ICON = { action: SquareSlash, command: SquareSlash, skill: Sparkles, file: FileText, folder: Folder, memory: FileText }
 
-/** `/memory`, then a space: its two files are the menu, and what follows is the note. */
+/** `/memory`, then a space: its two files are the menu, and what follows is the note (matched
+ * on the text with its leading spaces trimmed, as `/btw` and commands are). */
 const MEMORY = /^\/memory\s([\s\S]*)$/
+
+/** A line that names `/memory` or `/btw`: never sent as a message, whatever path Enter takes. */
+const OWN_COMMAND = /^\/(memory|btw)(\s|$)/
+
+/** Why a recalled `/` line doesn't run on Enter. */
+const RECALLED = "This line came back from before, so Enter doesn’t run it. Change it, or type it again, to run it."
 
 /** The menu `dismissed` marker for `/memory`'s files (a trigger's is where it starts). */
 const MEMORY_MENU = -1
@@ -354,6 +361,8 @@ export function Composer({ open }: { open: Open }) {
   const key = draftKey(open)
   const draft = useStore((s) => s.drafts[key] ?? EMPTY_DRAFT)
   const text = draft.text
+  // A `/` line the user didn't type here (recalled, put back) opens no menu and runs nothing.
+  const inert = !!draft.recalled && text.trimStart().startsWith("/")
   const files = draft.files
   const pasted = draft.pasted
   const setText = (t: string) => setDraft(key, { text: t })
@@ -452,8 +461,8 @@ export function Composer({ open }: { open: Open }) {
     loadPalette()
   }, [loadPalette])
 
-  const typed = trigger(text, caret)
-  const note = MEMORY.exec(text)
+  const typed = inert ? null : trigger(text, caret)
+  const note = inert ? null : MEMORY.exec(text.trimStart())
   const menuOpen = typed !== null ? dismissed !== typed.start : note !== null && dismissed !== MEMORY_MENU
   // `/memory`'s files: read as its menu opens, for the session (its worktree's file) or the folder.
   const memoryOpen = note !== null
@@ -596,7 +605,7 @@ export function Composer({ open }: { open: Open }) {
   }
 
   const clear = () => {
-    setDraft(key, { text: "", files: [], pasted: [] })
+    setDraft(key, { text: "", files: [], pasted: [], recalled: false })
     setCaret(0)
     setProblem(null)
     setRecall(null)
@@ -614,7 +623,7 @@ export function Composer({ open }: { open: Open }) {
   const recallTo = (n: number | null) => {
     setRecall(n)
     const t = n === null ? "" : history[n]
-    setText(t)
+    setDraft(key, { text: t, recalled: n !== null })
     requestAnimationFrame(() => {
       const el = area.current
       if (!el) return
@@ -625,6 +634,10 @@ export function Composer({ open }: { open: Open }) {
 
   const submit = () => {
     if (empty) return
+    if (inert) {
+      setProblem(RECALLED)
+      return
+    }
     if (blocked) {
       setProblem("Sending waits for your limit to reset.")
       return
@@ -640,7 +653,13 @@ export function Composer({ open }: { open: Open }) {
       void askAside(question)
       return
     }
-    // `/memory` goes through its menu; Enter with the menu put away brings it back.
+    // `/memory` goes through its menu; Enter with the menu put away brings it back. A bare
+    // `/memory` (no space yet) gets its space, which opens the menu.
+    if (!note && /^\/memory$/.test(text.trim())) {
+      setText("/memory ")
+      setDismissed(null)
+      return
+    }
     if (note) {
       setDismissed(null)
       if (memory === "failed") {
@@ -673,6 +692,12 @@ export function Composer({ open }: { open: Open }) {
       }
     }
     const full = [text, ...pasted.map((p) => p.text)].filter((t) => t.trim()).join("\n\n")
+    // Whatever path got here (a dismissed menu, a pasted chip), `/memory` and `/btw` lines are
+    // never sent to the model as a message.
+    if (OWN_COMMAND.test(full.trimStart())) {
+      setProblem("/memory and /btw lines aren’t sent as messages. Type the note or question after them in the box.")
+      return
+    }
     const skills = (pal?.skills ?? [])
       .map((s) => s.name)
       .filter((name) => new RegExp(`(^|\\s)@${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=\\s|$)`).test(full))
@@ -763,7 +788,9 @@ export function Composer({ open }: { open: Open }) {
             askedAt.current = Date.now()
           }}
           onChange={(e) => {
-            setText(e.target.value)
+            // Typed (or edited) here: no longer recalled.
+            setDraft(key, { text: e.target.value, recalled: false })
+            if (problem === RECALLED) setProblem(null)
             setCaret(e.target.selectionStart)
             setDismissed(null)
             setRecall(null)

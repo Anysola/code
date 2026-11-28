@@ -103,7 +103,17 @@ export type Pasted = { id: number; text: string }
  * the user goes elsewhere. `stamp` changes when the store puts text back (a rewind, a message
  * that didn't send), so the composer moves the caret to its end.
  */
-export type Draft = { text: string; files: Attachment[]; comments: Comment[]; pasted: Pasted[]; stamp: number }
+export type Draft = {
+  text: string
+  files: Attachment[]
+  comments: Comment[]
+  pasted: Pasted[]
+  stamp: number
+  /** The text was put there for the user (ArrowUp history, a rewind or a message that didn't
+   * send), not typed in this window, and is unchanged since: a `/` line in it runs nothing on
+   * Enter (an imported session's history must not run commands). */
+  recalled?: boolean
+}
 
 export const EMPTY_DRAFT: Draft = { text: "", files: [], comments: [], pasted: [], stamp: 0 }
 
@@ -466,6 +476,7 @@ let stamps = 0
 function restoreDraft(key: string, back: { text: string; files?: Attachment[]; comments?: Comment[] }) {
   setDraft(key, (d) => ({
     text: d.text.trim() && back.text.trim() ? `${back.text}\n\n${d.text}` : back.text || d.text,
+    recalled: d.recalled || !!back.text.trim(),
     files: [...(back.files ?? []), ...d.files],
     comments: [...(back.comments ?? []), ...d.comments.filter((c) => !back.comments?.some((b) => b.id === c.id))],
     stamp: ++stamps,
@@ -2797,8 +2808,17 @@ export async function importSession(directory?: string) {
     await loadSessions()
     await openSession(state.sessions.find((r) => r.id === row.id) ?? row)
   } catch (e) {
-    set({ notice: message(e) })
+    // The refusal may quote what the file holds: one line, bounded, nothing that draws nothing
+    // or reorders text; and no button from an earlier notice.
+    set({ notice: plainLine(message(e), 300), noticeLink: null })
   }
+}
+
+/** `text` as one bounded line: controls, bidirectional and zero-width characters out. */
+function plainLine(text: string, max: number) {
+  // eslint-disable-next-line no-control-regex
+  const flat = text.replace(/[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]+/g, " ").replace(/\s+/g, " ").trim()
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
 }
 
 /** Where `/memory` notes go for the open view (its session's checkout, or the folder). */

@@ -2018,3 +2018,38 @@ fn a_timed_out_hook_leaves_nothing_behind() {
         "a member that ignored SIGTERM outlived the timeout"
     );
 }
+
+/// Review 2 (R3): what SessionEnd stops is the hook's process group, a double fork included; a
+/// helper another event's hook detaches (output redirected) is left alone, as documented.
+#[test]
+fn session_end_stops_a_double_fork_and_other_hooks_keep_detached_helpers() {
+    let gateway = FakeGateway::start(|request, _| text(request, "hi"));
+    let env = env(&gateway.url);
+    let forked = env.home.home().join("doublefork");
+    let helper = env.home.home().join("helper");
+    user_config(
+        &env,
+        json!({"hooks": {
+            "SessionEnd": [{"hooks": [{"type": "command", "command": format!(
+                "(sh -c 'sleep 3; touch {}' >/dev/null 2>&1 < /dev/null &) ; sleep 0.3", quote(&forked))}]}],
+            "UserPromptSubmit": [{"hooks": [{"type": "command", "command": format!(
+                "(sleep 2; touch {}) >/dev/null 2>&1 & exit 0", quote(&helper))}]}]
+        }}),
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("hello"), TurnOptions::default()))
+        .unwrap();
+    runtime.block_on(core.end_all_sessions());
+    std::thread::sleep(Duration::from_secs(4));
+    assert!(
+        !forked.exists(),
+        "a double fork stays in the group and ends with it"
+    );
+    assert!(
+        helper.exists(),
+        "a UserPromptSubmit helper that let go of its output runs on"
+    );
+}

@@ -231,34 +231,8 @@ pub async fn delete_all_sessions(app: State<'_, App>) -> Answer {
     // Of `kept`: the ones whose changes were being applied (not a running turn).
     let mut applying = 0;
     let all = db.all_root_sessions().map_err(text)?;
-    // SessionEnd hooks of the sessions about to go (those a running core started), every
-    // folder at once, while their folders are still there.
-    let mut ending: Vec<(anysola_core::api::Core, Vec<String>)> = Vec::new();
-    for (id, directory, held) in &all {
-        let directory = crate::worktree::folder_of(&db, directory, id);
-        let Some(core) = app.running(&directory).await else {
-            continue;
-        };
-        if *held || core.is_busy(id) {
-            continue;
-        }
-        match ending
-            .iter_mut()
-            .find(|(c, _)| c.directory() == core.directory())
-        {
-            Some((_, ids)) => ids.push(id.clone()),
-            None => ending.push((core, vec![id.clone()])),
-        }
-    }
-    let ends: Vec<_> = ending
-        .into_iter()
-        .map(|(core, ids)| {
-            tauri::async_runtime::spawn(async move { core.end_sessions(&ids).await })
-        })
-        .collect();
-    for end in ends {
-        let _ = end.await;
-    }
+    // First what may refuse: held or busy sessions, and worktrees being applied, are kept.
+    let mut going: Vec<(String, Option<anysola_core::api::Core>)> = Vec::new();
     for (id, directory, held) in all {
         // A worktree session's core is its main folder's.
         let directory = crate::worktree::folder_of(&db, &directory, &id);
@@ -277,6 +251,31 @@ pub async fn delete_all_sessions(app: State<'_, App>) -> Answer {
             applying += 1;
             continue;
         }
+        going.push((id, core));
+    }
+    // SessionEnd hooks of the sessions nothing refused (those a running core started), every
+    // folder at once.
+    let mut ending: Vec<(anysola_core::api::Core, Vec<String>)> = Vec::new();
+    for (id, core) in &going {
+        let Some(core) = core else { continue };
+        match ending
+            .iter_mut()
+            .find(|(c, _)| c.directory() == core.directory())
+        {
+            Some((_, ids)) => ids.push(id.clone()),
+            None => ending.push((core.clone(), vec![id.clone()])),
+        }
+    }
+    let ends: Vec<_> = ending
+        .into_iter()
+        .map(|(core, ids)| {
+            tauri::async_runtime::spawn(async move { core.end_sessions(&ids).await })
+        })
+        .collect();
+    for end in ends {
+        let _ = end.await;
+    }
+    for (id, core) in going {
         // A running core also drops the session's usage it keeps in memory and cleans sandbox cache.
         let removed = match &core {
             Some(core) => core.delete_session(&id).map_err(text)?,

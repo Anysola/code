@@ -9,7 +9,7 @@ import { useState } from "react"
 import type { AsideErrorKind } from "./bridge"
 import { editBudget } from "./chrome"
 import { askAside, closeAside, notify, useStore, type Aside, type Open } from "./store"
-import { Prose } from "./transcript"
+import { InSession, Prose } from "./transcript"
 import { btn, Spinner, Tooltip } from "./ui"
 
 /** One line for each reason there is no answer; null keeps the core's own words. */
@@ -32,7 +32,11 @@ function focusComposer() {
 export function AsideCard({ open }: { open: Open }) {
   const aside = useStore((s) => (open.sessionId ? (s.asides[open.sessionId] ?? null) : null))
   if (!aside || !open.sessionId) return null
-  return <Card key={aside.n} aside={aside} sessionId={open.sessionId} />
+  return (
+    <InSession open={open}>
+      <Card key={aside.n} aside={aside} sessionId={open.sessionId} />
+    </InSession>
+  )
 }
 
 function Card({ aside, sessionId }: { aside: Aside; sessionId: string }) {

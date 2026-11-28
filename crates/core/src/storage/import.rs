@@ -159,9 +159,29 @@ fn decode<T: serde::de::DeserializeOwned>(
     n: usize,
     kind: &str,
 ) -> Result<T, ImportError> {
-    serde_json::from_value(value)
-        .map_err(|e| invalid(format!("message {} ({kind}) is not valid: {e}", n + 1)))
+    // serde's words quote the file (any length, any wording): a fixed sentence instead.
+    serde_json::from_value(value).map_err(|_| {
+        invalid(format!(
+            "message {} ({}) has a field that is missing or of the wrong type.",
+            n + 1,
+            shown_kind(kind)
+        ))
+    })
 }
+
+/// A row kind as a refusal may quote it: known kinds only.
+fn shown_kind(kind: &str) -> &str {
+    match kind {
+        "user" | "assistant" | "synthetic" | "skill" | "shell" | "compaction"
+        | "agent-switched" | "idle" => kind,
+        _ => "unknown",
+    }
+}
+
+/// The description every imported synthetic row gets: what the file says a row is (a hook's
+/// note, a subagent's result) is not shown as the app's own words; the window shows these as
+/// imported text.
+pub const IMPORTED: &str = "Imported";
 
 fn base64_ok(data: &str) -> bool {
     base64::engine::general_purpose::STANDARD
@@ -336,9 +356,7 @@ impl Rebuild<'_> {
                 extra.insert("skills".into(), json!(skills));
             }
         }
-        if let Some(Value::String(command)) = data.extra.get("command") {
-            extra.insert("command".into(), json!(command));
-        }
+        // `command` is not kept: the window would show the row as a command the user ran here.
         UserData {
             time: self.created(data.time),
             text: data.text,
@@ -465,7 +483,12 @@ impl Rebuild<'_> {
             raw_finish: data.raw_finish,
             cost: None,
             tokens: self.tokens(data.tokens),
-            error: data.error.map(|e| self.error(e)),
+            // Only an interruption is kept, in the app's own words: an imported error would be
+            // shown as the app's, with its retry.
+            error: data
+                .error
+                .filter(|e| e.kind == "aborted")
+                .map(|_| SessionError::new("aborted", "Step interrupted")),
             extra: Map::new(),
         }
     }
@@ -508,11 +531,6 @@ impl Rebuild<'_> {
             data.get("reason").and_then(Value::as_str)
         {
             out["reason"] = json!(reason);
-        }
-        if let Some(error) = data.get("error")
-            && let Ok(error) = serde_json::from_value::<SessionError>(error.clone())
-        {
-            out["error"] = encode(&self.error(error));
         }
         Ok(out)
     }
@@ -669,7 +687,7 @@ pub fn prepare_with(bytes: &[u8], cancel: &CancellationToken) -> Result<Prepared
                 let d = SyntheticData {
                     time: rebuild.created(d.time),
                     text: d.text,
-                    description: d.description,
+                    description: Some(IMPORTED.into()),
                     extra: Map::new(),
                 };
                 (encode(&d), true)
@@ -704,7 +722,9 @@ pub fn prepare_with(bytes: &[u8], cancel: &CancellationToken) -> Result<Prepared
             }
             "compaction" => {
                 let d: CompactionData = decode(data, n, &kind)?;
-                if d.status != "completed" && d.status != "failed" {
+                // A failed one never reaches the model; the window would show its error in the
+                // app's words.
+                if d.status != "completed" {
                     continue;
                 }
                 // `keepID` must name a row kept before this one: history reads the rows from
@@ -727,7 +747,7 @@ pub fn prepare_with(bytes: &[u8], cancel: &CancellationToken) -> Result<Prepared
                     model: d.model,
                     summary: d.summary,
                     native: None,
-                    error: d.error.map(|e| rebuild.error(e)),
+                    error: None,
                     cost: None,
                     tokens: rebuild.tokens(d.tokens),
                     metadata: keep.map(|id| json!({"keepID": id})),

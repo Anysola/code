@@ -217,3 +217,27 @@ fn a_side_question_says_why_it_has_no_answer() {
         "rate_limit"
     );
 }
+
+/// Review 2 (R9): a question cancelled before it starts (the card closed while the folder's
+/// core was starting) sends nothing and records nothing.
+#[test]
+fn a_side_question_cancelled_before_it_starts_makes_no_call() {
+    let gateway = FakeGateway::start(|request, _| text(request, "hi"));
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("hello"), TurnOptions::default()))
+        .unwrap();
+    let calls = gateway.messages().len();
+    let spent = core.usage(&session.id).total;
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let error = runtime
+        .block_on(core.aside(&session.id, "what now?", &cancel))
+        .unwrap_err();
+    assert_eq!(error.kind, AsideKind::Cancelled);
+    assert_eq!(gateway.messages().len(), calls, "no request");
+    assert_eq!(core.usage(&session.id).total, spent, "no usage");
+}

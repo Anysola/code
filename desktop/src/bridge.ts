@@ -243,6 +243,8 @@ export type Item =
   | { kind: "error"; id: string; message: string; errorKind?: ErrorKind; retry?: boolean }
   /** A marker in the session, such as a compaction. */
   | { kind: "note"; id: string; text: string; failed: boolean }
+  /** Context an imported session's file holds (what was a hook's or a subagent's note there): shown as the file's text, never in the app's words. */
+  | { kind: "imported"; id: string; text: string }
 
 export type ModelOption = { id: string; name: string; note: string | null; efforts: string[]; images: boolean }
 

@@ -91,6 +91,17 @@ function blocks(items: Item[]): Block[] {
 type Where = { directory: string; files: string; sessionId: string | null; live: boolean }
 const WhereContext = createContext<Where>({ directory: "", files: "", sessionId: null, live: false })
 
+/** Text of the session shown outside its transcript (a `/btw` answer): file links in it open as
+ * the transcript's do, from where the session works. */
+export function InSession({ open, children }: { open: Open; children: ReactNode }) {
+  const files = useStore((s) => workDir(open, s))
+  const where = useMemo(
+    () => ({ directory: open.directory, files, sessionId: open.sessionId, live: false }),
+    [open.directory, files, open.sessionId]
+  )
+  return <WhereContext.Provider value={where}>{children}</WhereContext.Provider>
+}
+
 /** Kinds of failure that sending again won't fix. */
 const FINAL = new Set(["limit", "auth", "model", "elsewhere"])
 
@@ -579,6 +590,13 @@ const Entry = memo(function Entry({ item, directory }: { item: Exclude<Item, Use
           <span className="h-px flex-1 bg-separator" />
           {item.text}
           <span className="h-px flex-1 bg-separator" />
+        </div>
+      )
+    case "imported":
+      return (
+        <div className="text-dense rounded-lg border border-separator px-3 py-2 text-muted">
+          <p className="pb-0.5 text-xs">From the imported file</p>
+          <p className="line-clamp-4 break-words whitespace-pre-wrap select-text">{item.text}</p>
         </div>
       )
     case "error":

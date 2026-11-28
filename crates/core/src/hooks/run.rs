@@ -92,7 +92,9 @@ impl Drop for Group {
     fn drop(&mut self) {
         if self.live {
             exec::unregister(self.pid);
-            exec::force_kill(self.pid);
+            // Never waited for: a drop must not hold up its thread (on Windows `taskkill` would,
+            // once per hook, past the exit's grace).
+            exec::force_kill_detached(self.pid);
         } else if self.draining {
             self.kill_leftovers();
         }

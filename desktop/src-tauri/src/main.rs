@@ -1177,12 +1177,13 @@ async fn delete_session(app: State<'_, App>, directory: String, session_id: Stri
     if core.as_ref().is_some_and(|core| core.is_busy(&session_id)) {
         return Err("Stop the session before deleting it.".into());
     }
-    // SessionEnd hooks while its folder (a worktree's too) is still there.
+    // Its worktree and branch go with it (what holds the folder open ends first).
+    worktree::before_delete(core.as_ref(), &db, &app.terminals, &session_id).await?;
+    // SessionEnd hooks only now that nothing refuses the delete (a worktree session's run from
+    // its main folder or home: the worktree is let go).
     if let Some(core) = &core {
         core.end_sessions(std::slice::from_ref(&session_id)).await;
     }
-    // Its worktree and branch go with it (what holds the folder open ends first).
-    worktree::before_delete(core.as_ref(), &db, &app.terminals, &session_id).await?;
     let removed = match &core {
         Some(core) => core.delete_session(&session_id).map_err(text)?,
         None => {

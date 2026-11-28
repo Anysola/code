@@ -189,12 +189,40 @@ fn append_note(path: &Path, inside: Option<&Path>, line: &str) -> Result<(), Cor
             .write_all(line.as_bytes())
             .map_err(|e| fail(format!("Can’t write {shown}: {e}")));
     }
-    let current = crate::paths::read_text(path, crate::paths::TEXT_CAP).map_err(|reason| {
-        fail(match reason {
-            crate::paths::Unread::Io(e) => format!("Can’t read {shown}: {e}"),
-            _ => format!("{shown} isn’t a text file of at most 4 MiB, so no note was added."),
-        })
-    })?;
+    // Everything below goes by the opened file: what is checked is what is written.
+    let mut file = options
+        .read(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| fail(format!("Can’t write {shown}: {e}")))?;
+    let meta = file
+        .metadata()
+        .map_err(|e| fail(format!("Can’t read {shown}: {e}")))?;
+    let not_text = || {
+        fail(format!(
+            "{shown} isn’t a text file of at most 4 MiB, so no note was added."
+        ))
+    };
+    if !meta.is_file() {
+        return Err(not_text());
+    }
+    // A project file with another name elsewhere (a hard link: to `.git/config`, a hook's
+    // script) is not written: its other names are not checked.
+    if inside.is_some() && link_count(&file).is_none_or(|n| n > 1) {
+        return Err(fail(format!(
+            "{shown} is also another file (a hard link), so no note was added."
+        )));
+    }
+    if meta.len() > crate::paths::TEXT_CAP {
+        return Err(not_text());
+    }
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(
+        &mut std::io::Read::take(&mut file, crate::paths::TEXT_CAP + 1),
+        &mut bytes,
+    )
+    .map_err(|e| fail(format!("Can’t read {shown}: {e}")))?;
+    let current = String::from_utf8(bytes).map_err(|_| not_text())?;
     let separator = if current.is_empty() || current.ends_with('\n') {
         ""
     } else {
@@ -203,12 +231,34 @@ fn append_note(path: &Path, inside: Option<&Path>, line: &str) -> Result<(), Cor
     if (current.len() + separator.len() + line.len()) as u64 > crate::paths::TEXT_CAP {
         return Err(too_large());
     }
-    let mut file = options
-        .append(true)
-        .open(path)
-        .map_err(|e| fail(format!("Can’t write {shown}: {e}")))?;
     file.write_all(format!("{separator}{line}").as_bytes())
         .map_err(|e| fail(format!("Can’t write {shown}: {e}")))
+}
+
+/// How many names (hard links) the open file has; `None` when that can't be read.
+fn link_count(file: &std::fs::File) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        file.metadata().ok().map(|m| m.nlink())
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+        };
+        // SAFETY: a zeroed plain-data struct the call fills in.
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: the handle is open for the call's whole length and `info` is writable.
+        let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) };
+        (ok != 0).then_some(u64::from(info.nNumberOfLinks))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = file;
+        None
+    }
 }
 
 /// A hung `!` command must not hold the composer forever.
@@ -301,6 +351,14 @@ impl Core {
         cancel: &CancellationToken,
     ) -> Result<String, AsideError> {
         const INSTRUCTIONS: &str = "The user is asking a quick side question about the conversation so far. Answer directly and concisely in markdown from what you already know. Do not call any tools and do not take any actions.";
+        // Cancelled before it started (the card closed while the folder's core was starting):
+        // no request, no usage.
+        if cancel.is_cancelled() {
+            return Err(AsideError {
+                kind: AsideKind::Cancelled,
+                message: "The side question was cancelled.".into(),
+            });
+        }
         let session = self
             .session(session_id)
             .map_err(|e| AsideError::other(e.to_string()))?
@@ -308,11 +366,12 @@ impl Core {
         let prompt = format!("{INSTRUCTIONS}\n\n{question}");
         let how = crate::session::step::OneShot { aside: true };
         let answer = tokio::select! {
-            answer = crate::session::step::generate_with(&self.shared, &session, &prompt, how) => answer,
+            biased;
             _ = cancel.cancelled() => return Err(AsideError {
                 kind: AsideKind::Cancelled,
                 message: "The side question was cancelled.".into(),
             }),
+            answer = crate::session::step::generate_with(&self.shared, &session, &prompt, how) => answer,
         };
         match answer {
             Ok(text) if text.trim().is_empty() => Err(AsideError {
