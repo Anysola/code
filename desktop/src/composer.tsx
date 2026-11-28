@@ -212,6 +212,26 @@ function sharedStart(a: string, b: string) {
   return n
 }
 
+/** The span `[from, to)` of `before` that an edit to `after` replaced (empty for an insertion):
+ * what the two share at the start and at the end is outside it. */
+function editedSpan(before: string, after: string): { from: number; to: number } {
+  const from = sharedStart(before, after)
+  let end = 0
+  const room = Math.min(before.length, after.length) - from
+  while (end < room && before[before.length - 1 - end] === after[after.length - 1 - end]) end++
+  return { from, to: before.length - end }
+}
+
+/** Whether an edit (`span` of the old text) changed the command word at `[start, end)`: text
+ * added or removed before or after it (spaces, a newline) only moves it. */
+function touches(span: { from: number; to: number }, start: number, end: number) {
+  return span.from === span.to ? span.from > start && span.from < end : span.from < end && span.to > start
+}
+
+/** Why Enter picked nothing in a menu. */
+const PICK = "Pick a row with the arrows or Tab, or click it: this box holds text from before, so Enter doesn’t pick one."
+const PICK_BARE = "Pick a command with the arrows or Tab, or type its name."
+
 /** The menu `dismissed` marker for `/memory`'s files (a trigger's is where it starts). */
 const MEMORY_MENU = -1
 
@@ -386,6 +406,8 @@ export function Composer({ open }: { open: Open }) {
   /** How far back ArrowUp went through the sent messages; null when not recalling. */
   const [recall, setRecall] = useState<number | null>(null)
   const area = useRef<HTMLTextAreaElement>(null)
+  /** The selection before the latest edit: a select-all replace is the user's own text. */
+  const selected = useRef({ from: 0, to: 0 })
   const picker = useRef<HTMLInputElement>(null)
   const running = isRunning(open)
   const asideShown = useStore((s) => !!open.sessionId && !!s.asides[open.sessionId])
@@ -805,16 +827,24 @@ export function Composer({ open }: { open: Open }) {
             // The command word put there stays inert until an edit touches it (or the line is
             // typed again): an edit elsewhere in the box changes nothing about it.
             const next = e.target.value
+            // Everything in the box replaced (select all, then type or paste): the user's own text.
+            const replaced = text.length > 0 && selected.current.from === 0 && selected.current.to >= text.length
             const before = draft.head ? commandHead(text) : null
             const kept =
-              !!before && sharedStart(text, next) >= before.end && commandHead(next)?.word === draft.head
-            setDraft(key, { text: next, head: kept ? draft.head : undefined })
-            if (problem === RECALLED && !kept) setProblem(null)
+              !replaced &&
+              !!before &&
+              !touches(editedSpan(text, next), before.end - before.word.length, before.end) &&
+              commandHead(next)?.word === draft.head
+            setDraft(key, replaced ? { text: next, head: undefined, recalled: false } : { text: next, head: kept ? draft.head : undefined })
+            if ((problem === RECALLED && !kept) || problem === PICK || problem === PICK_BARE) setProblem(null)
             setCaret(e.target.selectionStart)
             setDismissed(null)
             setRecall(null)
           }}
-          onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
+          onSelect={(e) => {
+            setCaret(e.currentTarget.selectionStart)
+            selected.current = { from: e.currentTarget.selectionStart, to: e.currentTarget.selectionEnd }
+          }}
           onPaste={(e) => {
             // Excel and Word put a picture of the cells next to their text: the text is what was meant.
             const pastedText = e.clipboardData.getData("text/plain")
@@ -845,6 +875,8 @@ export function Composer({ open }: { open: Open }) {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault()
                 if (active >= 0) pick(rows[Math.min(active, rows.length - 1)])
+                // Never a silent Enter: say why nothing was picked.
+                else setProblem(fromBefore ? PICK : PICK_BARE)
                 return
               }
             }

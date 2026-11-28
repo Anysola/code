@@ -1,7 +1,9 @@
 //! Scheduled prompts (`experimental.schedules`): a prompt that wakes its session once, at a
-//! time, every interval or on a cron, optionally gated by a shell or Code Mode check. Schedules
-//! fire only while some `anysola` process runs; the `schedule:leader` lease lets one process of
-//! a project fire them.
+//! time, every interval or on a cron, optionally gated by a shell or Code Mode check. A schedule
+//! fires only from the core of its session's folder (its project, that folder or one of its
+//! worktrees: [`ScheduleScope`]), under that folder's config; while that folder has no core
+//! running it waits, and fires (as its missed-run rule says) once one does. The
+//! `schedule:leader:<project>:<folder>` lease lets one core of a folder fire them.
 
 pub mod check;
 pub mod time;
@@ -14,7 +16,7 @@ use serde_json::{Value, json};
 use tokio::sync::Notify;
 
 use crate::api::Shared;
-use crate::storage::{Db, Guard, ScheduleRow};
+use crate::storage::{Db, Guard, ScheduleRow, ScheduleScope};
 use crate::tool::ToolContext;
 use check::Outcome;
 use time::Cron;
@@ -56,10 +58,10 @@ pub fn enabled(config: &crate::config::Config) -> bool {
         == Some(true)
 }
 
-/// The lease key: one leader per project, since each process drives its own project's sessions
-/// under that project's config.
-fn leader_key(project_id: &str) -> String {
-    format!("schedule:leader:{project_id}")
+/// The lease key: one leader per project and folder, since each folder's core drives its own
+/// sessions under that folder's config (see [`ScheduleScope`]).
+fn leader_key(scope: &ScheduleScope) -> String {
+    format!("schedule:leader:{}:{}", scope.project, scope.folder)
 }
 
 fn millis(value: &str) -> Result<i64, String> {
@@ -358,6 +360,9 @@ fn reload(db: &Db, id: &str) -> Result<ScheduleRow, String> {
 struct Loop {
     shared: Weak<Shared>,
     db: Arc<Db>,
+    /// The sessions this core fires the schedules of: its project's, in its folder. Another
+    /// folder's wait until that folder's core runs.
+    scope: ScheduleScope,
     key: String,
     owner: String,
 }
@@ -368,9 +373,14 @@ pub(crate) async fn run(shared: Weak<Shared>) {
     let Some(strong) = shared.upgrade() else {
         return;
     };
+    let scope = ScheduleScope {
+        project: strong.project.id.clone(),
+        folder: strong.directory.display().to_string(),
+    };
     let me = Loop {
         db: strong.db.clone(),
-        key: leader_key(&strong.project.id),
+        key: leader_key(&scope),
+        scope,
         owner: format!("{}:{}", std::process::id(), crate::ids::part()),
         shared,
     };
@@ -393,7 +403,7 @@ pub(crate) async fn run(shared: Weak<Shared>) {
 impl Loop {
     /// One pass; returns how long to sleep.
     async fn round(&self, leading: &mut bool) -> i64 {
-        let active = self.db.schedules_active().unwrap_or(false);
+        let active = self.db.schedules_active(&self.scope).unwrap_or(false);
         if !active {
             if *leading {
                 *leading = false;
@@ -411,7 +421,7 @@ impl Loop {
             self.rewake();
         }
         self.tick(now).await;
-        match self.db.schedule_next_due(now) {
+        match self.db.schedule_next_due(&self.scope, now) {
             Ok(Some(at)) => (at - crate::time::now_ms() as i64).clamp(0, MAX_SLEEP),
             _ => MAX_SLEEP,
         }
@@ -428,7 +438,7 @@ impl Loop {
         let Some(shared) = self.shared.upgrade() else {
             return;
         };
-        for session in self.db.schedule_unclaimed().unwrap_or_default() {
+        for session in self.db.schedule_unclaimed(&self.scope).unwrap_or_default() {
             crate::api::wake(&shared, &session);
         }
     }
@@ -437,7 +447,7 @@ impl Loop {
         let Some(shared) = self.shared.upgrade() else {
             return;
         };
-        for row in self.db.schedules_due(now).unwrap_or_default() {
+        for row in self.db.schedules_due(&self.scope, now).unwrap_or_default() {
             if !self.claim(crate::time::now_ms() as i64) {
                 return;
             }

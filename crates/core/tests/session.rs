@@ -670,3 +670,28 @@ fn a_session_held_for_delete_starts_no_turn() {
         "a refused delete opens the session again"
     );
 }
+
+/// Review 4 (M4): a second hold on a session being deleted is refused, so a refused delete can't
+/// reopen it under another that goes on.
+#[test]
+fn a_session_can_be_held_for_delete_once() {
+    let gateway = FakeGateway::start(|request, _| text(request, "ok"));
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    let first = core.hold_for_delete(&session.id).unwrap();
+    assert!(matches!(
+        core.hold_for_delete(&session.id),
+        Err(anysola_core::api::CoreError::Deleting)
+    ));
+    // The refused second hold changed nothing: the first still holds.
+    let refused =
+        runtime.block_on(core.prompt(&session.id, prompt("hello"), TurnOptions::default()));
+    assert!(matches!(
+        refused,
+        Err(anysola_core::api::CoreError::Deleting)
+    ));
+    drop(first);
+    assert!(core.hold_for_delete(&session.id).is_ok());
+}

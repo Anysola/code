@@ -17,7 +17,7 @@ pub use import::ImportError;
 pub use inbox::InboxRow;
 pub use instruction::{InstructionState, Values};
 pub use permission::SavedPermission;
-pub use schedule::{Guard, ScheduleRow};
+pub use schedule::{Guard, ScheduleRow, ScheduleScope};
 pub use transfer::{SessionSummary, sanitize};
 pub use worktree::{SessionWorktreeRow, WorktreeState};
 

@@ -94,3 +94,80 @@ fn a_schedule_fires_into_its_session() {
     assert_eq!(fired.next_due_at, None);
     core.shutdown();
 }
+
+/// Review 4 (M3): a folder's schedules fire only from that folder's core, under its config. With
+/// folder A's core running, B's scheduled turn never runs from A (not while B's delete hold
+/// stands either), and when it runs it runs under B's config.
+#[test]
+fn a_schedule_fires_only_from_its_own_folders_core() {
+    let gateway = FakeGateway::start(reply);
+    let env = env(&gateway.url);
+    let a = env.home.project();
+    let b = env.home.home().join("other");
+    std::fs::create_dir_all(&b).unwrap();
+    std::fs::write(
+        a.join("opencode.json"),
+        r#"{"experimental":{"schedules":true}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        b.join("opencode.json"),
+        r#"{"experimental":{"schedules":true},"agent":{"build":{"prompt":"B-CONFIG agent prompt"}}}"#,
+    )
+    .unwrap();
+    let runtime = runtime();
+    let core_a = runtime
+        .block_on(anysola_core::api::Core::start(&a))
+        .unwrap();
+    let core_b = runtime
+        .block_on(anysola_core::api::Core::start(&b))
+        .unwrap();
+    let remind = || Prompt {
+        text: "remind me".into(),
+        ..Default::default()
+    };
+    let woken = |session: &str| {
+        gateway.messages().into_iter().find(|r| {
+            let last = last_message(r);
+            // The schedule's own prompt, not the tool result that echoes it.
+            !r.is_title()
+                && last.contains("wake up now")
+                && !last.contains("tool_result")
+                && r.header("x-opencode-session-id") == Some(session)
+        })
+    };
+
+    // Held for delete in B: the schedule's time comes, A's core is running, no turn starts.
+    let (held, _) = core_b.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core_b.prompt(&held.id, remind(), TurnOptions::default()))
+        .unwrap();
+    assert_eq!(core_b.db().schedules(Some(&held.id)).unwrap().len(), 1);
+    let hold = core_b.hold_for_delete(&held.id).unwrap();
+    std::thread::sleep(Duration::from_secs(4));
+    assert!(
+        woken(&held.id).is_none(),
+        "no core ran the held session's scheduled turn"
+    );
+    drop(hold);
+
+    // Unheld: it fires, from B, under B's config.
+    let (session, _) = core_b.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core_b.prompt(&session.id, remind(), TurnOptions::default()))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let request = loop {
+        if let Some(request) = woken(&session.id) {
+            break request;
+        }
+        assert!(Instant::now() < deadline, "B's schedule never fired");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(
+        request.body.contains("B-CONFIG agent prompt"),
+        "the scheduled turn ran under B's config"
+    );
+    core_a.shutdown();
+    core_b.shutdown();
+}

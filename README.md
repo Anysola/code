@@ -145,9 +145,10 @@ or approvals, and snapshots from another machine are not taken, so an imported s
 later request sends from it is rebuilt from checked values (images are checked as attached ones and limited per
 file), and what the file says came from a hook or a subagent shows as "From the imported file", never as the app's
 own note. ArrowUp brings back earlier messages, and a rewind puts one back. A `/` line brought back that way runs
-nothing on Enter for as long as its command word is the one brought back, also after a restart and after edits
-elsewhere in the box: to run it, type its command word again. And while the box holds text that was put there, a
-menu opens with no row picked, so Enter alone picks nothing. A command in an imported history never runs by
+nothing on Enter for as long as its command word is the one brought back, also after a restart, a redo, and edits
+elsewhere in the box (spaces or new lines before it included): to run it, type its command word again, or replace
+everything in the box. And while the box holds text that was put there, a menu opens with no row picked: Enter alone
+picks nothing and says so. A command in an imported history never runs by
 accident. `/memory <note>` adds a line to the project's `AGENTS.md` (in a worktree session, the worktree's) or to your
 own `~/.anysola/AGENTS.md`, whichever you pick; `/memory` alone opens either in your editor. When the project's
 `AGENTS.md` is a link, the note goes to the file it links to only if that is an `AGENTS.md` or `CLAUDE.md` of the

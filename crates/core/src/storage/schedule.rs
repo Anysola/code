@@ -42,6 +42,20 @@ pub enum Guard {
     Any,
 }
 
+/// Whose schedules a scheduler fires: the sessions of one project that work in one folder (the
+/// folder's core), worktree sessions of that folder included. Each folder's core runs its own
+/// sessions under that folder's config; another folder's are not its to start.
+#[derive(Debug, Clone)]
+pub struct ScheduleScope {
+    pub project: String,
+    pub folder: String,
+}
+
+/// `schedule` rows of the scope (`?2` project, `?3` folder): the row's session is of the project
+/// and works in the folder or in one of the folder's worktrees.
+const SCOPED: &str = "EXISTS (SELECT 1 FROM session s WHERE s.id = schedule.session_id AND s.project_id = ?2 \
+     AND (s.directory = ?3 OR EXISTS (SELECT 1 FROM session_worktree w WHERE w.folder = ?3 AND w.directory = s.directory)))";
+
 const COLUMNS: &str = "id, session_id, name, action, \"check\", \"when\", tz, status, next_due_at, ends_at, \
     remaining_runs, run_count, checks, failures, last_fired_at, last_message_id, last_outcome, retry_at, \
     state, time_created, time_updated";
@@ -202,46 +216,59 @@ impl Db {
         })
     }
 
-    /// Active rows due by `now` whose retry time has come, earliest first.
-    pub fn schedules_due(&self, now: i64) -> Result<Vec<ScheduleRow>> {
+    /// Active rows of `scope`'s sessions due by `now` whose retry time has come, earliest first.
+    pub fn schedules_due(&self, scope: &ScheduleScope, now: i64) -> Result<Vec<ScheduleRow>> {
         self.with(|c| {
             let mut statement = c.prepare(&format!(
                 "SELECT {COLUMNS} FROM schedule WHERE status = 'active' AND next_due_at <= ?1 \
-                 AND (retry_at IS NULL OR retry_at <= ?1) ORDER BY next_due_at"
+                 AND (retry_at IS NULL OR retry_at <= ?1) AND {SCOPED} ORDER BY next_due_at"
             ))?;
-            statement.query_map([now], read)?.collect()
+            statement
+                .query_map(params![now, scope.project, scope.folder], read)?
+                .collect()
         })
     }
 
-    /// The earliest due time after `from` among active rows.
-    pub fn schedule_next_due(&self, from: i64) -> Result<Option<i64>> {
+    /// The earliest due time after `from` among `scope`'s active rows.
+    pub fn schedule_next_due(&self, scope: &ScheduleScope, from: i64) -> Result<Option<i64>> {
         self.with(|c| {
             c.query_row(
-                "SELECT MIN(next_due_at) FROM schedule WHERE status = 'active' AND next_due_at > ?1",
-                [from],
+                &format!(
+                    "SELECT MIN(next_due_at) FROM schedule WHERE status = 'active' AND next_due_at > ?1 AND {SCOPED}"
+                ),
+                params![from, scope.project, scope.folder],
                 |r| r.get(0),
             )
         })
     }
 
-    pub fn schedules_active(&self) -> Result<bool> {
+    /// Whether `scope` has an active schedule.
+    pub fn schedules_active(&self, scope: &ScheduleScope) -> Result<bool> {
         self.with(|c| {
             c.query_row(
-                "SELECT EXISTS (SELECT 1 FROM schedule WHERE status = 'active')",
-                [],
+                &format!(
+                    "SELECT EXISTS (SELECT 1 FROM schedule WHERE status = 'active' AND ?1 IS NULL AND {SCOPED})"
+                ),
+                params![Option::<i64>::None, scope.project, scope.folder],
                 |r| r.get(0),
             )
         })
     }
 
-    /// Sessions whose last scheduled prompt still waits in their inbox.
-    pub fn schedule_unclaimed(&self) -> Result<Vec<String>> {
+    /// `scope`'s sessions whose last scheduled prompt still waits in their inbox.
+    pub fn schedule_unclaimed(&self, scope: &ScheduleScope) -> Result<Vec<String>> {
         self.with(|c| {
-            let mut statement = c.prepare(
+            let mut statement = c.prepare(&format!(
                 "SELECT DISTINCT schedule.session_id FROM schedule \
-                 JOIN inbox ON inbox.id = schedule.last_message_id WHERE schedule.session_id IS NOT NULL",
-            )?;
-            statement.query_map([], |r| r.get(0))?.collect()
+                 JOIN inbox ON inbox.id = schedule.last_message_id \
+                 WHERE schedule.session_id IS NOT NULL AND ?1 IS NULL AND {SCOPED}"
+            ))?;
+            statement
+                .query_map(
+                    params![Option::<i64>::None, scope.project, scope.folder],
+                    |r| r.get(0),
+                )?
+                .collect()
         })
     }
 

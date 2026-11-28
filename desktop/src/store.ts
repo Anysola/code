@@ -1585,7 +1585,13 @@ export async function redo() {
     rewound.delete(sessionId)
     const now = state.drafts[sessionId]?.text
     if (text && now === text) setDraft(sessionId, { text: "", stamp: ++stamps })
-    else if (text && now?.startsWith(`${text}\n\n`)) setDraft(sessionId, { text: now.slice(text.length + 2), stamp: ++stamps })
+    else if (text && now?.startsWith(`${text}\n\n`)) {
+      const rest = now.slice(text.length + 2)
+      // What leads now was in the box before the rewind: in a box that held text put there, its
+      // command word (a recalled `/cmd`) is inert again.
+      const recalled = !!state.drafts[sessionId]?.recalled
+      setDraft(sessionId, { text: rest, head: recalled ? commandHead(rest)?.word : undefined, stamp: ++stamps })
+    }
   } catch (e) {
     set({ notice: message(e) })
   }

@@ -1114,11 +1114,17 @@ impl Core {
         if turns.contains_key(session_id) {
             return Err(CoreError::Working);
         }
-        self.shared
+        // One hold per session: a second delete of it (one refused later would reopen the
+        // session under the other) is refused.
+        let fresh = self
+            .shared
             .deleting
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(session_id.to_string());
+        if !fresh {
+            return Err(CoreError::Deleting);
+        }
         drop(turns);
         Ok(DeleteHold {
             shared: self.shared.clone(),
