@@ -129,6 +129,8 @@ export type Typed =
   | { kind: "input"; replacesAll: boolean }
   /** The user picked a menu row with the arrows, Tab or a click. */
   | { kind: "pick" }
+  /** The user clicked one of the app's own starter prompts (fixed text); it replaces the box. */
+  | { kind: "starter" }
 
 export const EMPTY_DRAFT: Draft = { text: "", files: [], comments: [], pasted: [], stamp: 0 }
 
@@ -492,7 +494,7 @@ export function setDraft(key: string, patch: Partial<Draft> | ((d: Draft) => Par
     if ("text" in change) {
       if (!next.text) next.untyped = false
       else if (!typed) next.untyped = true
-      else if (typed.kind === "input" && typed.replacesAll) next.untyped = false
+      else if (typed.kind === "starter" || (typed.kind === "input" && typed.replacesAll)) next.untyped = false
     }
     if (!next.text) next.untyped = false
     const drafts = { ...s.drafts }
@@ -2312,7 +2314,7 @@ export async function setupRun(h: Here) {
 /** Puts text in the open view's composer (a starter prompt); what the user typed is replaced. */
 export function fillComposer(text: string) {
   const open = state.open
-  if (open) setDraft(draftKey(open), { text, pasted: [], stamp: ++stamps })
+  if (open) setDraft(draftKey(open), { text, pasted: [], stamp: ++stamps }, { kind: "starter" })
 }
 
 /** Adds text after what the open view's composer holds ("Ask the agent to resolve"). */

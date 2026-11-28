@@ -219,6 +219,9 @@ const TYPED_INPUT = new Set([
   "insertFromPaste",
   "insertFromPasteAsQuotation",
   "insertCompositionText",
+  // WebKit reports a dead-key or IME commit this way (and removes the preedit with the next one).
+  "insertFromComposition",
+  "deleteCompositionText",
   "insertReplacementText",
   "deleteContentBackward",
   "deleteContentForward",
@@ -898,7 +901,9 @@ export function Composer({ open }: { open: Open }) {
               }
               if (e.key === "Tab") {
                 e.preventDefault()
-                pick(rows[Math.max(0, Math.min(active, rows.length - 1))])
+                // With no row lit, Tab lights the first one; it picks only a row the user can see lit.
+                if (active < 0) setActive(0)
+                else pick(rows[Math.min(active, rows.length - 1)])
                 return
               }
               if (e.key === "Enter" && !e.shiftKey) {
