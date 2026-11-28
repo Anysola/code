@@ -242,6 +242,10 @@ const pricingItems: Item[] = [
 /** A failed step's words, stored with it and said by the turn's `failed`. */
 const UNAVAILABLE = "Anysola Code is temporarily unavailable. Try again shortly."
 
+/** The core's words for a summary the model declined; `?state=failed&kind=declined&summary=1` ends the turn that way. */
+const DECLINED_SUMMARY =
+  "Claude Haiku 5.5 declined to summarize this conversation, citing cybersecurity, so nothing was compacted. If the session can’t go on without it, start a new one."
+
 /** The core's words for a prompt the model declined (`session::refusal`). */
 const DECLINED_PROMPT =
   "Claude Haiku 5.5 declined to answer this message, citing cybersecurity. It won’t be sent again in this session; rephrase it, or start a new session if this keeps happening."
@@ -1037,7 +1041,13 @@ export function mockBridge(): Bridge {
   const kind = (new URLSearchParams(location.search).get("kind") ?? undefined) as ErrorKind | undefined
   // The model declined the last message: it reads as not sent again, and the step's stored error
   // shows under it (as a failed step's does).
-  if (state === "failed" && kind === "declined") {
+  if (state === "failed" && kind === "declined" && new URLSearchParams(location.search).has("summary")) {
+    // The turn ended in a compaction the model declined: the note says it, the turn's line stays quiet.
+    transcripts.set("ses_pricing", [
+      ...transcripts.get("ses_pricing")!,
+      { kind: "note", id: "c9", text: `Couldn’t compact: ${DECLINED_SUMMARY}`, failed: true, errorKind: "declined" },
+    ])
+  } else if (state === "failed" && kind === "declined") {
     const list = transcripts.get("ses_pricing")!
     const last = list.map((i) => i.kind).lastIndexOf("user")
     transcripts.set("ses_pricing", [
@@ -1889,7 +1899,9 @@ export function mockBridge(): Bridge {
                       : kind === "elsewhere"
                         ? "This session is running in another Anysola Code app."
                         : kind === "declined"
-                          ? DECLINED_PROMPT
+                          ? new URLSearchParams(location.search).has("summary")
+                            ? DECLINED_SUMMARY
+                            : DECLINED_PROMPT
                           : UNAVAILABLE,
           })
         if (state === "hooks")

@@ -1656,6 +1656,8 @@ function StatusLine({ open, waiting, streaming }: { open: Open; waiting: boolean
       if (status.errorKind && BANNERED.has(status.errorKind)) return null
       // The failed step's error, read back with the transcript, already says it right above.
       if (last?.kind === "error" && last.message === status.error) return null
+      // The same for a summary the model declined: its note (`Couldn’t compact: …`) says it.
+      if (status.errorKind === "declined" && last?.kind === "note" && last.failed && last.errorKind === "declined") return null
       // The user's own hook said no: their rule at work, not a failure. The line says the text is
       // back only when it is (a queued message the window can't tell apart isn't).
       if (status.hook)
