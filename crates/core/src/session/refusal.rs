@@ -132,29 +132,37 @@ fn signed_thinking(step: &AssistantData) -> bool {
     })
 }
 
-/// The input a reply at `at` answered directly: the user and synthetic messages right before it
-/// (a prompt, the notes steered with it, a hook's context, a background completion), back to the
-/// previous step or the end of the previous turn. Instruction updates recorded on the way and a
-/// compaction at the start of the turn (its kept text holds the prompt; [`super::compaction::
-/// history`] rebuilds it without what is left out) are stepped over and stay.
+/// The prompt a reply at `at` answered directly, with what came with it: from the oldest of the
+/// user messages right before the reply (a prompt and the notes steered with it) to the reply,
+/// with the synthetic messages among them (a hook's context for the prompt). What came before the
+/// prompt stays: a background completion, a plan reminder, a hook's session context. Instruction
+/// updates and a compaction at the start of the turn (its kept text holds the prompt;
+/// [`super::compaction::history`] rebuilds it without what is left out) are stepped over and
+/// stay. Empty when the reply answered no user message (a later step of the turn, a turn a
+/// completion woke): then only the reply is left out.
 fn answered<M: Borrow<Message>>(messages: &[M], at: usize) -> Vec<usize> {
-    let mut out = Vec::new();
+    let mut run = Vec::new();
     for before in (0..at).rev() {
         match messages[before].borrow() {
-            Message::User(_) | Message::Synthetic(_) => out.push(before),
+            Message::User(_) | Message::Synthetic(_) => run.push(before),
             Message::System(_) | Message::Compaction(_) => {}
             _ => break,
         }
     }
-    out
+    let oldest = run
+        .iter()
+        .rposition(|i| matches!(messages[*i].borrow(), Message::User(_)));
+    match oldest {
+        Some(oldest) => run.truncate(oldest + 1),
+        None => run.clear(),
+    }
+    run
 }
 
 /// Whether a declined reply at `at` (with nothing in it) answered a message the person sent: then
 /// that message is what was declined, and it is left out from now on.
 pub fn answers_prompt<M: Borrow<Message>>(messages: &[M], at: usize) -> bool {
-    answered(messages, at)
-        .into_iter()
-        .any(|i| matches!(messages[i].borrow(), Message::User(_)))
+    !answered(messages, at).is_empty()
 }
 
 /// The messages every request leaves out (true at their index): each declined reply with nothing
@@ -305,17 +313,34 @@ mod tests {
     #[test]
     fn what_came_with_the_prompt_goes_with_it() {
         // A steered note promoted with the prompt, a hook's context after it, an instruction update
-        // recorded before the step: the update stays, the rest goes.
+        // recorded before the step: the update stays, the rest goes. What came before the prompt
+        // (a background completion, a plan reminder, a session-start hook's context) stays.
         let messages = vec![
             answer("earlier"),
             idle(),
+            synthetic("background subagent done"),
+            synthetic("plan reminder"),
+            system(),
             user("queued"),
             user("steered"),
             synthetic("hook context"),
             system(),
             declined(),
         ];
-        assert_eq!(left(&messages), vec![2, 3, 4, 6]);
+        assert_eq!(left(&messages), vec![5, 6, 7, 9]);
+        assert!(answers_prompt(&messages, 9));
+    }
+
+    #[test]
+    fn a_turn_a_completion_woke_keeps_its_input() {
+        let messages = vec![
+            answer("earlier"),
+            idle(),
+            synthetic("background shell done"),
+            declined(),
+        ];
+        assert_eq!(left(&messages), vec![3]);
+        assert!(!answers_prompt(&messages, 3));
     }
 
     #[test]
@@ -353,14 +378,14 @@ mod tests {
             None,
         );
         assert_eq!(left(&[user("go"), partial]), Vec::<usize>::new());
-        // A continuation note before it is input, not the person's message.
+        // A continuation note before it is no message of the person's: it stays.
         let messages = vec![
             user("go"),
             answer("cut"),
             synthetic("Continue."),
             declined(),
         ];
-        assert_eq!(left(&messages), vec![2, 3]);
+        assert_eq!(left(&messages), vec![3]);
         assert!(!answers_prompt(&messages, 3));
     }
 

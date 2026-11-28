@@ -239,6 +239,9 @@ const pricingItems: Item[] = [
   tool("t7", "shell", "pnpm --filter @anysola/web test pricing", { status: "running" }),
 ]
 
+/** A failed step's words, stored with it and said by the turn's `failed`. */
+const UNAVAILABLE = "Anysola Code is temporarily unavailable. Try again shortly."
+
 /** The core's words for a prompt the model declined (`session::refusal`). */
 const DECLINED_PROMPT =
   "Claude Haiku 5.5 declined to answer this message, citing cybersecurity. It won’t be sent again in this session; rephrase it, or start a new session if this keeps happening."
@@ -1032,15 +1035,21 @@ export function mockBridge(): Bridge {
       transcripts.get("ses_pricing")!.map((i) => (i.kind === "user" && i.id === "m1" ? { ...i, elapsed: 3 * 60_000 + 5_000 } : i))
     )
   const kind = (new URLSearchParams(location.search).get("kind") ?? undefined) as ErrorKind | undefined
-  // The model declined the last message: it reads as not sent again.
+  // The model declined the last message: it reads as not sent again, and the step's stored error
+  // shows under it (as a failed step's does).
   if (state === "failed" && kind === "declined") {
     const list = transcripts.get("ses_pricing")!
     const last = list.map((i) => i.kind).lastIndexOf("user")
-    transcripts.set(
-      "ses_pricing",
-      list.slice(0, last + 1).map((i, n) => (n === last && i.kind === "user" ? { ...i, declined: true } : i))
-    )
+    transcripts.set("ses_pricing", [
+      ...list.slice(0, last + 1).map((i, n) => (n === last && i.kind === "user" ? { ...i, declined: true } : i)),
+      { kind: "error", id: "a9:error", message: DECLINED_PROMPT, errorKind: "declined", retry: false },
+    ])
   }
+  if (state === "failed" && (!kind || kind === "other"))
+    transcripts.set("ses_pricing", [
+      ...transcripts.get("ses_pricing")!,
+      { kind: "error", id: "a9:error", message: UNAVAILABLE, errorKind: "other", retry: true },
+    ])
   const BUSY = ["hook-blocked-queued", "crowded", "approval", "gone", "running", "question", "long", "queue", "background", "context", "updating", "closing", "restored"]
   /** Sessions with a turn running, and what waits in their queues. */
   const running = new Set<string>(BUSY.includes(state) ? ["ses_pricing"] : [])
@@ -1881,7 +1890,7 @@ export function mockBridge(): Bridge {
                         ? "This session is running in another Anysola Code app."
                         : kind === "declined"
                           ? DECLINED_PROMPT
-                          : "Anysola Code is temporarily unavailable. Try again shortly.",
+                          : UNAVAILABLE,
           })
         if (state === "hooks")
           setTimeout(
