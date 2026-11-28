@@ -144,12 +144,10 @@ project, else the open folder, else your default folder. Nothing in the file car
 or approvals, and snapshots from another machine are not taken, so an imported session can't revert files. What a
 later request sends from it is rebuilt from checked values (images are checked as attached ones and limited per
 file), and what the file says came from a hook or a subagent shows as "From the imported file", never as the app's
-own note. ArrowUp brings back earlier messages, and a rewind puts one back. A `/` line brought back that way runs
-nothing on Enter for as long as its command word is the one brought back, also after a restart, a redo, and edits
-elsewhere in the box (spaces or new lines before it included): to run it, type its command word again, or replace
-everything in the box. And while the box holds text that was put there, a menu opens with no row picked: Enter alone
-picks nothing and says so. A command in an imported history never runs by
-accident. `/memory <note>` adds a line to the project's `AGENTS.md` (in a worktree session, the worktree's) or to your
+own note. While the message box holds any text you didn't type or paste into it (brought back with ArrowUp,
+put back by a rewind or a message that didn't send, restored after a restart, or brought back by undo or redo), a
+`/` line in it runs nothing on Enter and menus open with no row picked (Enter says why), until you clear the box or
+replace all of it by typing or pasting. Pasting counts as typing, so pasted text can run a command. `/memory <note>` adds a line to the project's `AGENTS.md` (in a worktree session, the worktree's) or to your
 own `~/.anysola/AGENTS.md`, whichever you pick; `/memory` alone opens either in your editor. When the project's
 `AGENTS.md` is a link, the note goes to the file it links to only if that is an `AGENTS.md` or `CLAUDE.md` of the
 same checkout outside Git's data and not a file the agent's tools always ask about; a project `AGENTS.md` that is a

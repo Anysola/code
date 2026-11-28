@@ -51,10 +51,30 @@ pub struct ScheduleScope {
     pub folder: String,
 }
 
-/// `schedule` rows of the scope (`?2` project, `?3` folder): the row's session is of the project
-/// and works in the folder or in one of the folder's worktrees.
-const SCOPED: &str = "EXISTS (SELECT 1 FROM session s WHERE s.id = schedule.session_id AND s.project_id = ?2 \
-     AND (s.directory = ?3 OR EXISTS (SELECT 1 FROM session_worktree w WHERE w.folder = ?3 AND w.directory = s.directory)))";
+/// `schedule` rows of the scope's project (`?2`); the folder is matched after, in [`folder_key`]
+/// form ([`Db::scoped_sessions`]).
+const SCOPED: &str = "EXISTS (SELECT 1 FROM session s WHERE s.id = schedule.session_id AND s.project_id = ?2) AND ?3 IS NOT NULL";
+
+/// One folder however it is spelled: trailing separators off, and on Windows `/` as `\` and
+/// lower case (the desktop shell keys its cores the same way). Folders compare equal only in this
+/// form, and only exactly (never as a prefix).
+pub fn folder_key(path: &str) -> String {
+    folder_key_for(path, cfg!(windows))
+}
+
+fn folder_key_for(path: &str, windows: bool) -> String {
+    let trimmed = path.trim_end_matches(['/', '\\']);
+    let trimmed = if trimmed.is_empty() || trimmed.ends_with(':') {
+        path
+    } else {
+        trimmed
+    };
+    if windows {
+        trimmed.replace('/', "\\").to_lowercase()
+    } else {
+        trimmed.to_string()
+    }
+}
 
 const COLUMNS: &str = "id, session_id, name, action, \"check\", \"when\", tz, status, next_due_at, ends_at, \
     remaining_runs, run_count, checks, failures, last_fired_at, last_message_id, last_outcome, retry_at, \
@@ -216,9 +236,38 @@ impl Db {
         })
     }
 
+    /// The sessions of `scope`: of its project, working in its folder or in a worktree of it,
+    /// folders compared in [`folder_key`] form.
+    pub fn scoped_sessions(
+        &self,
+        scope: &ScheduleScope,
+    ) -> Result<std::collections::HashSet<String>> {
+        let folder = folder_key(&scope.folder);
+        let rows: Vec<(String, String, Option<String>)> = self.with(|c| {
+            let mut statement = c.prepare(
+                "SELECT s.id, s.directory, w.folder FROM session s \
+                 LEFT JOIN session_worktree w ON w.directory = s.directory WHERE s.project_id = ?1",
+            )?;
+            statement
+                .query_map([&scope.project], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect()
+        })?;
+        Ok(rows
+            .into_iter()
+            .filter(|(_, directory, worktree_of)| {
+                folder_key(directory) == folder
+                    || worktree_of
+                        .as_deref()
+                        .is_some_and(|f| folder_key(f) == folder)
+            })
+            .map(|(id, _, _)| id)
+            .collect())
+    }
+
     /// Active rows of `scope`'s sessions due by `now` whose retry time has come, earliest first.
     pub fn schedules_due(&self, scope: &ScheduleScope, now: i64) -> Result<Vec<ScheduleRow>> {
-        self.with(|c| {
+        let mine = self.scoped_sessions(scope)?;
+        let rows: Vec<ScheduleRow> = self.with(|c| {
             let mut statement = c.prepare(&format!(
                 "SELECT {COLUMNS} FROM schedule WHERE status = 'active' AND next_due_at <= ?1 \
                  AND (retry_at IS NULL OR retry_at <= ?1) AND {SCOPED} ORDER BY next_due_at"
@@ -226,38 +275,54 @@ impl Db {
             statement
                 .query_map(params![now, scope.project, scope.folder], read)?
                 .collect()
-        })
+        })?;
+        Ok(rows
+            .into_iter()
+            .filter(|r| r.session_id.as_ref().is_some_and(|id| mine.contains(id)))
+            .collect())
     }
 
     /// The earliest due time after `from` among `scope`'s active rows.
     pub fn schedule_next_due(&self, scope: &ScheduleScope, from: i64) -> Result<Option<i64>> {
-        self.with(|c| {
-            c.query_row(
-                &format!(
-                    "SELECT MIN(next_due_at) FROM schedule WHERE status = 'active' AND next_due_at > ?1 AND {SCOPED}"
-                ),
-                params![from, scope.project, scope.folder],
-                |r| r.get(0),
-            )
-        })
+        let mine = self.scoped_sessions(scope)?;
+        let rows: Vec<(String, i64)> = self.with(|c| {
+            let mut statement = c.prepare(&format!(
+                "SELECT session_id, next_due_at FROM schedule WHERE status = 'active' AND next_due_at > ?1 AND {SCOPED}"
+            ))?;
+            statement
+                .query_map(params![from, scope.project, scope.folder], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })?
+                .collect()
+        })?;
+        Ok(rows
+            .into_iter()
+            .filter(|(id, _)| mine.contains(id))
+            .map(|(_, at)| at)
+            .min())
     }
 
     /// Whether `scope` has an active schedule.
     pub fn schedules_active(&self, scope: &ScheduleScope) -> Result<bool> {
-        self.with(|c| {
-            c.query_row(
-                &format!(
-                    "SELECT EXISTS (SELECT 1 FROM schedule WHERE status = 'active' AND ?1 IS NULL AND {SCOPED})"
-                ),
-                params![Option::<i64>::None, scope.project, scope.folder],
-                |r| r.get(0),
-            )
-        })
+        let mine = self.scoped_sessions(scope)?;
+        let ids: Vec<String> = self.with(|c| {
+            let mut statement = c.prepare(&format!(
+                "SELECT session_id FROM schedule WHERE status = 'active' AND ?1 IS NULL AND {SCOPED}"
+            ))?;
+            statement
+                .query_map(
+                    params![Option::<i64>::None, scope.project, scope.folder],
+                    |r| r.get(0),
+                )?
+                .collect()
+        })?;
+        Ok(ids.iter().any(|id| mine.contains(id)))
     }
 
     /// `scope`'s sessions whose last scheduled prompt still waits in their inbox.
     pub fn schedule_unclaimed(&self, scope: &ScheduleScope) -> Result<Vec<String>> {
-        self.with(|c| {
+        let mine = self.scoped_sessions(scope)?;
+        let ids: Vec<String> = self.with(|c| {
             let mut statement = c.prepare(&format!(
                 "SELECT DISTINCT schedule.session_id FROM schedule \
                  JOIN inbox ON inbox.id = schedule.last_message_id \
@@ -269,7 +334,8 @@ impl Db {
                     |r| r.get(0),
                 )?
                 .collect()
-        })
+        })?;
+        Ok(ids.into_iter().filter(|id| mine.contains(id)).collect())
     }
 
     pub fn message_exists(&self, id: &str) -> Result<bool> {
@@ -344,5 +410,33 @@ mod tests {
         assert!(!db.lease_claim(key, "a", 91_000, 60_000).unwrap());
         db.lease_release(key, "b").unwrap();
         assert!(db.lease_claim(key, "a", 92_000, 60_000).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    #[test]
+    fn folders_compare_in_one_form_and_only_exactly() {
+        assert_eq!(folder_key_for("/a/proj/", false), "/a/proj");
+        assert_eq!(
+            folder_key_for("/a/proj", false),
+            folder_key_for("/a/proj//", false)
+        );
+        assert_ne!(
+            folder_key_for("/a/proj2", false),
+            folder_key_for("/a/proj", false)
+        );
+        assert_ne!(
+            folder_key_for("/a/Proj", false),
+            folder_key_for("/a/proj", false)
+        );
+        assert_eq!(
+            folder_key_for("C:/Code/Proj\\", true),
+            folder_key_for("c:\\code\\proj", true)
+        );
+        assert_eq!(folder_key_for("C:\\", true), "c:\\");
+        assert_eq!(folder_key_for("/", false), "/");
     }
 }

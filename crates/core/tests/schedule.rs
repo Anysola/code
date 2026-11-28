@@ -171,3 +171,80 @@ fn a_schedule_fires_only_from_its_own_folders_core() {
     core_a.shutdown();
     core_b.shutdown();
 }
+
+/// Review 5 (P2): a folder spelled another way (here with a trailing separator) is the same
+/// folder: its schedules fire from a core opened with either spelling.
+#[test]
+fn a_schedule_fires_from_its_folder_however_it_is_spelled() {
+    const LATER: &str = r#"return await tools.opencode.schedule_create({ name: "later", when: { in: "4 seconds" }, prompt: "wake up later" })"#;
+    let gateway = FakeGateway::start(|request, _| {
+        let last = last_message(request);
+        if request.is_title() || last.contains("tool_result") {
+            return text(request, "ok");
+        }
+        if last.contains("wake up later") {
+            return text(request, "woken");
+        }
+        let model = request.json()["model"].as_str().unwrap().to_string();
+        Reply::Sse {
+            body: Stream::new()
+                .tool("toolu_1", "execute", json!({"code": LATER}))
+                .finish(&model, Some(1)),
+        }
+    });
+    let env = env(&gateway.url);
+    let folder = env.home.project();
+    std::fs::write(
+        folder.join("opencode.json"),
+        r#"{"experimental":{"schedules":true}}"#,
+    )
+    .unwrap();
+    // A git repository: its project is the same however the folder is spelled (a plain folder's
+    // project id is its path as given, so another spelling is another project).
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&folder)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let runtime = runtime();
+    let first = runtime
+        .block_on(anysola_core::api::Core::start(&folder))
+        .unwrap();
+    let (session, _) = first.open(&Target::New, false).unwrap();
+    let prompt = Prompt {
+        text: "remind me later".into(),
+        ..Default::default()
+    };
+    runtime
+        .block_on(first.prompt(&session.id, prompt, TurnOptions::default()))
+        .unwrap();
+    assert_eq!(first.db().schedules(Some(&session.id)).unwrap().len(), 1);
+    first.shutdown();
+    drop(first);
+    let spelled = std::path::PathBuf::from(format!("{}/", folder.display()));
+    let second = runtime
+        .block_on(anysola_core::api::Core::start(&spelled))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let woken = gateway.messages().into_iter().any(|r| {
+            let last = last_message(&r);
+            !r.is_title()
+                && last.contains("wake up later")
+                && !last.contains("tool_result")
+                && r.header("x-opencode-session-id") == Some(session.id.as_str())
+        });
+        if woken {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the schedule never fired from the other spelling"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    second.shutdown();
+}

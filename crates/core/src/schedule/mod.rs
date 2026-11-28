@@ -61,7 +61,12 @@ pub fn enabled(config: &crate::config::Config) -> bool {
 /// The lease key: one leader per project and folder, since each folder's core drives its own
 /// sessions under that folder's config (see [`ScheduleScope`]).
 fn leader_key(scope: &ScheduleScope) -> String {
-    format!("schedule:leader:{}:{}", scope.project, scope.folder)
+    // The folder in its one form: two spellings of it elect one leader.
+    format!(
+        "schedule:leader:{}:{}",
+        scope.project,
+        crate::storage::folder_key(&scope.folder)
+    )
 }
 
 fn millis(value: &str) -> Result<i64, String> {

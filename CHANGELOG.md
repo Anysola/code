@@ -52,18 +52,19 @@ branch.
   agent's tools always ask about, and the note is written into that file. A worktree that is gone is not made again
   for a note. A project `AGENTS.md` that is a hard link takes no note. A `/memory` or `/btw` line (leading spaces,
   a dismissed menu, a pasted block, an edited message, a retry of one) is never sent to the model as a message.
-- **Recalled text runs no command:** ArrowUp brings back earlier messages (an imported session's too), and a rewind
-  puts one back, but a `/` line put there that way opens no menu and runs nothing on Enter for as long as its command
-  word is the one put there (kept across a restart, a redo, and edits elsewhere in the box, spaces or new lines before
-  it included; type the command word again, or replace everything in the box, to run it). While the box holds text
-  that was put there, a menu opens with no row picked: Enter alone picks nothing, and says why.
+- **Text you didn't type runs no command:** while the message box holds any text you didn't type or paste into it
+  (brought back with ArrowUp, put back by a rewind or a message that didn't send, restored after a restart, or
+  brought back by undo or redo: an imported session's history included), a `/` line in it runs nothing on Enter and
+  menus open with no row picked (Enter says why), until you clear the box or replace all of it by typing or pasting.
+  Pasting counts as typing.
 - **Deleting a session closes it to new turns** from the first check until its row is gone: a running session is
   refused (or kept, by Delete all) before anything is let go, and nothing (a prompt, a background job's completion,
   a schedule) can start it between its SessionEnd hooks and the delete. A session is held for one delete at a time.
 - **Scheduled prompts (`experimental.schedules`) fire only from their own folder's core.** Before, a scheduled
   turn could be started by another open folder, under that folder's settings (its agents, permission rules and
   hooks), and past a delete in progress in its own folder; it no longer can. A schedule whose folder isn't open
-  waits and fires, by its missed-run rule, once that folder's core runs.
+  waits and fires, by its missed-run rule, once that folder's core runs. The folder matches however it is spelled
+  (a trailing separator; on Windows, letter case and slashes).
 - **Go to message:** Ctrl G (or "Go to message…" in the palette) lists the session's messages, newest first, to
   filter and jump to; Ctrl Shift ↑ / ↓ move to the previous or next one. The view lets go of the bottom there.
 - **A `/compact` your PreCompact hook refuses** now says so with the hook's reason; before, it ended silently.

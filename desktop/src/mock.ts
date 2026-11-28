@@ -1957,6 +1957,8 @@ export function mockBridge(): Bridge {
       }
     },
     async runCommand(_directory, { sessionId }) {
+      // For tests: a command ran.
+      console.debug("mock runCommand")
       const id = sessionId ?? "ses_pricing"
       running.add(id)
       emit({ type: "started", sessionId: id })
@@ -1964,6 +1966,8 @@ export function mockBridge(): Bridge {
       return { sessionId: id }
     },
     async compact(_directory, sessionId) {
+      // For tests: a compaction ran.
+      console.debug("mock compact", sessionId)
       if (overBudget(sessionId)) return void (await budgetStop(sessionId))
       void compactNow(sessionId)
     },
@@ -2743,6 +2747,8 @@ export function mockBridge(): Bridge {
     memoryFiles: (directory) =>
       settle("memoryFiles", () => ({ project: `${directory.replace(/\/$/, "")}/AGENTS.md`, personal: `${HOME}/.anysola/AGENTS.md` })),
     async addMemory(directory, _sessionId, scope, text) {
+      // For tests: a note was added.
+      console.debug("mock addMemory", scope, text)
       await wait(200)
       if (params.get("memory") === "fail")
         throw new Error(`${directory}/AGENTS.md links outside its project (${HOME}/notes/agents.md), so no note was added.`)

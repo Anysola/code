@@ -28,7 +28,6 @@ import {
   addMemory,
   askAside,
   closeAside,
-  commandHead,
   memoryFiles,
   OWN_COMMAND,
   OWN_COMMAND_SAID,
@@ -58,6 +57,7 @@ import {
   workDir,
   type Mode,
   type Open,
+  type Typed,
 } from "./store"
 import { anyLayer, btn, cn, Popover, Spinner, Tooltip } from "./ui"
 import { PlaceChip } from "./worktree"
@@ -202,30 +202,45 @@ const ICON = { action: SquareSlash, command: SquareSlash, skill: Sparkles, file:
  * on the text with its leading spaces trimmed, as `/btw` and commands are). */
 const MEMORY = /^\/memory\s([\s\S]*)$/
 
-/** Why a recalled `/` line doesn't run on Enter. */
-const RECALLED = "This line came back from before, so Enter doesn’t run it. Type its command again to run it."
+/** Why a `/` line not typed here doesn't run on Enter. */
+const RECALLED =
+  "This line wasn’t typed here (it came back from before), so Enter doesn’t run it. Select all and type it, or clear the box and type it, to run it."
 
-/** How many characters two texts share from the start. */
-function sharedStart(a: string, b: string) {
-  let n = 0
-  while (n < a.length && n < b.length && a[n] === b[n]) n++
-  return n
-}
+/**
+ * The `inputType`s (Input Events Level 2) that count as the user typing in the message box:
+ * text insertion, paste, composition (IME, dead keys) and deletion. Anything else, an unknown
+ * or missing type included, is not typed: undo and redo (`historyUndo`, `historyRedo`), drop
+ * (`insertFromDrop`, `deleteByDrag`), yank, transpose, formatting. Fail closed.
+ */
+const TYPED_INPUT = new Set([
+  "insertText",
+  "insertLineBreak",
+  "insertParagraph",
+  "insertFromPaste",
+  "insertFromPasteAsQuotation",
+  "insertCompositionText",
+  "insertReplacementText",
+  "deleteContentBackward",
+  "deleteContentForward",
+  "deleteContent",
+  "deleteWordBackward",
+  "deleteWordForward",
+  "deleteSoftLineBackward",
+  "deleteSoftLineForward",
+  "deleteEntireSoftLine",
+  "deleteHardLineBackward",
+  "deleteHardLineForward",
+  "deleteByCut",
+])
 
-/** The span `[from, to)` of `before` that an edit to `after` replaced (empty for an insertion):
- * what the two share at the start and at the end is outside it. */
-function editedSpan(before: string, after: string): { from: number; to: number } {
-  const from = sharedStart(before, after)
-  let end = 0
-  const room = Math.min(before.length, after.length) - from
-  while (end < room && before[before.length - 1 - end] === after[after.length - 1 - end]) end++
-  return { from, to: before.length - end }
-}
-
-/** Whether an edit (`span` of the old text) changed the command word at `[start, end)`: text
- * added or removed before or after it (spaces, a newline) only moves it. */
-function touches(span: { from: number; to: number }, start: number, end: number) {
-  return span.from === span.to ? span.from > start && span.from < end : span.from < end && span.to > start
+/** `localStorage["anysola.debugInput"] = "1"`: each edit of the message box is logged with its
+ * `inputType` and the origin it got (for checking what a webview reports, in the Web Inspector). */
+function debugInput(...args: unknown[]) {
+  try {
+    if (localStorage.getItem("anysola.debugInput") === "1") console.debug("composer input", ...args)
+  } catch {
+    // No storage: no log.
+  }
 }
 
 /** Why Enter picked nothing in a menu. */
@@ -388,12 +403,16 @@ export function Composer({ open }: { open: Open }) {
   const key = draftKey(open)
   const draft = useStore((s) => s.drafts[key] ?? EMPTY_DRAFT)
   const text = draft.text
-  // A `/` line the user didn't type here (recalled, put back) opens no menu and runs nothing
-  // while its command word is the one put there.
-  const inert = !!draft.head && commandHead(text)?.word === draft.head
+  // The one reader of the draft's origin: while text not typed here is in the box (recalled,
+  // put back, restored, moved, undone), a `/` line runs nothing on Enter and no menu row starts
+  // picked.
+  const untyped = !!draft.untyped
+  const untypedSlash = untyped && text.trimStart().startsWith("/")
   const files = draft.files
   const pasted = draft.pasted
-  const setText = (t: string) => setDraft(key, { text: t })
+  /** The app's own writes (a menu row inserted, `/memory`'s space): `typed` when the user's pick
+   * or Enter on their typed text caused it. */
+  const setText = (t: string, typed?: Typed) => setDraft(key, { text: t }, typed)
   const [caret, setCaret] = useState(0)
   const [problem, setProblem] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
@@ -406,8 +425,18 @@ export function Composer({ open }: { open: Open }) {
   /** How far back ArrowUp went through the sent messages; null when not recalling. */
   const [recall, setRecall] = useState<number | null>(null)
   const area = useRef<HTMLTextAreaElement>(null)
-  /** The selection before the latest edit: a select-all replace is the user's own text. */
-  const selected = useRef({ from: 0, to: 0 })
+  /** What the latest `beforeinput` of the box saw: its type and the selection it replaces. */
+  const beforeInput = useRef<{ inputType: string; from: number; to: number; length: number } | null>(null)
+  useEffect(() => {
+    const el = area.current
+    if (!el) return
+    const onBefore = (e: Event) => {
+      const input = e as InputEvent
+      beforeInput.current = { inputType: input.inputType ?? "", from: el.selectionStart, to: el.selectionEnd, length: el.value.length }
+    }
+    el.addEventListener("beforeinput", onBefore)
+    return () => el.removeEventListener("beforeinput", onBefore)
+  }, [])
   const picker = useRef<HTMLInputElement>(null)
   const running = isRunning(open)
   const asideShown = useStore((s) => !!open.sessionId && !!s.asides[open.sessionId])
@@ -491,8 +520,8 @@ export function Composer({ open }: { open: Open }) {
     loadPalette()
   }, [loadPalette])
 
-  const typed = inert ? null : trigger(text, caret)
-  const note = inert ? null : MEMORY.exec(text.trimStart())
+  const typed = trigger(text, caret)
+  const note = MEMORY.exec(text.trimStart())
   const menuOpen = typed !== null ? dismissed !== typed.start : note !== null && dismissed !== MEMORY_MENU
   // `/memory`'s files: read as its menu opens, for the session (its worktree's file) or the folder.
   const memoryOpen = note !== null
@@ -603,12 +632,12 @@ export function Composer({ open }: { open: Open }) {
   // `/memory` while its files are read.
   const menuShown = menuOpen && (rows.length > 0 || typed?.kind === "@" || (note !== null && !typed && memory !== "failed"))
   // A bare `/` has no row picked: Enter there must not run whatever comes first.
-  // In a box that held text put there (recalled, put back), no row is picked either: Enter alone
-  // picks nothing; the arrows, Tab or a click do.
-  const fromBefore = !!draft.recalled
+  // With text not typed here in the box no row is picked: Enter alone picks nothing (and says
+  // so); the arrows, Tab or a click do.
+  const noteOpen = note !== null
   useEffect(
-    () => setActive(fromBefore || (typed?.kind === "/" && !typed.query) ? -1 : 0),
-    [typed?.kind, typed?.query, note !== null, fromBefore]
+    () => setActive(untyped || (typed?.kind === "/" && !typed.query) ? -1 : 0),
+    [typed?.kind, typed?.query, noteOpen, untyped]
   )
 
   const pick = (r: Row) => {
@@ -616,14 +645,14 @@ export function Composer({ open }: { open: Open }) {
     if (r.kind === "memory") return r.run?.()
     if (!typed) return
     if (r.run) {
-      setText("")
+      setText("", { kind: "pick" })
       setCaret(0)
       r.run()
       return
     }
     const next = text.slice(0, typed.start) + r.insert + text.slice(caret)
     const at = typed.start + r.insert.length
-    setText(next)
+    setText(next, { kind: "pick" })
     setCaret(at)
     requestAnimationFrame(() => area.current?.setSelectionRange(at, at))
   }
@@ -641,7 +670,7 @@ export function Composer({ open }: { open: Open }) {
   }
 
   const clear = () => {
-    setDraft(key, { text: "", files: [], pasted: [], recalled: false, head: undefined })
+    setDraft(key, { text: "", files: [], pasted: [] })
     setCaret(0)
     setProblem(null)
     setRecall(null)
@@ -659,7 +688,8 @@ export function Composer({ open }: { open: Open }) {
   const recallTo = (n: number | null) => {
     setRecall(n)
     const t = n === null ? "" : history[n]
-    setDraft(key, { text: t, recalled: n !== null, head: n !== null ? commandHead(t)?.word : undefined })
+    // Recalled, not typed.
+    setDraft(key, { text: t })
     requestAnimationFrame(() => {
       const el = area.current
       if (!el) return
@@ -670,7 +700,7 @@ export function Composer({ open }: { open: Open }) {
 
   const submit = () => {
     if (empty) return
-    if (inert) {
+    if (untypedSlash) {
       setProblem(RECALLED)
       return
     }
@@ -692,7 +722,8 @@ export function Composer({ open }: { open: Open }) {
     // `/memory` goes through its menu; Enter with the menu put away brings it back. A bare
     // `/memory` (no space yet) gets its space, which opens the menu.
     if (!note && /^\/memory$/.test(text.trim())) {
-      setText("/memory ")
+      // The user's Enter on their own line: as typed as it was.
+      setText("/memory ", { kind: "pick" })
       setDismissed(null)
       return
     }
@@ -824,27 +855,25 @@ export function Composer({ open }: { open: Open }) {
             askedAt.current = Date.now()
           }}
           onChange={(e) => {
-            // The command word put there stays inert until an edit touches it (or the line is
-            // typed again): an edit elsewhere in the box changes nothing about it.
+            // Typed only for an input event whose type is on the allowlist; anything else (undo,
+            // redo, drop, an unknown type) leaves the box flagged as not typed.
             const next = e.target.value
-            // Everything in the box replaced (select all, then type or paste): the user's own text.
-            const replaced = text.length > 0 && selected.current.from === 0 && selected.current.to >= text.length
-            const before = draft.head ? commandHead(text) : null
-            const kept =
-              !replaced &&
-              !!before &&
-              !touches(editedSpan(text, next), before.end - before.word.length, before.end) &&
-              commandHead(next)?.word === draft.head
-            setDraft(key, replaced ? { text: next, head: undefined, recalled: false } : { text: next, head: kept ? draft.head : undefined })
-            if ((problem === RECALLED && !kept) || problem === PICK || problem === PICK_BARE) setProblem(null)
+            const native = e.nativeEvent as InputEvent
+            const inputType = typeof native.inputType === "string" ? native.inputType : ""
+            const seen = beforeInput.current
+            beforeInput.current = null
+            const allowed = TYPED_INPUT.has(inputType)
+            const replacesAll =
+              allowed && (text.length === 0 || (!!seen && seen.inputType === inputType && seen.from === 0 && seen.to >= text.length && seen.length === text.length))
+            const origin: Typed | undefined = allowed ? { kind: "input", replacesAll } : undefined
+            debugInput(inputType || "(none)", origin ? (replacesAll ? "typed, replaces all" : "typed") : "not typed")
+            setDraft(key, { text: next }, origin)
+            if (problem === RECALLED || problem === PICK || problem === PICK_BARE) setProblem(null)
             setCaret(e.target.selectionStart)
             setDismissed(null)
             setRecall(null)
           }}
-          onSelect={(e) => {
-            setCaret(e.currentTarget.selectionStart)
-            selected.current = { from: e.currentTarget.selectionStart, to: e.currentTarget.selectionEnd }
-          }}
+          onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
           onPaste={(e) => {
             // Excel and Word put a picture of the cells next to their text: the text is what was meant.
             const pastedText = e.clipboardData.getData("text/plain")
@@ -876,7 +905,7 @@ export function Composer({ open }: { open: Open }) {
                 e.preventDefault()
                 if (active >= 0) pick(rows[Math.min(active, rows.length - 1)])
                 // Never a silent Enter: say why nothing was picked.
-                else setProblem(fromBefore ? PICK : PICK_BARE)
+                else setProblem(untyped ? PICK : PICK_BARE)
                 return
               }
             }

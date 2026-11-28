@@ -109,14 +109,11 @@ export type Draft = {
   comments: Comment[]
   pasted: Pasted[]
   stamp: number
-  /** Text was put there for the user (ArrowUp history, a rewind, a message that didn't send)
-   * since the box was last empty: a menu then opens with no row picked, so Enter alone picks
-   * nothing. */
-  recalled?: boolean
-  /** The command word (`/memory`, `/deploy`) such text began with, while it is still the one
-   * that was put there (an edit that touches it, or a retyped line, clears it): the line runs
-   * nothing on Enter. An imported session's history must not run commands. */
-  head?: string
+  /** The box holds text that was not typed in it (fail closed: every write of `text` that is not
+   * a typed edit sets this, see `setDraft`). While set, a `/` line runs nothing on Enter and menus
+   * open with no row picked. Cleared only by a typed edit that empties the box or replaces all of
+   * it. Kept with the draft across restarts (a restored draft is not typed either). */
+  untyped?: boolean
 }
 
 /** A line that names `/memory` or `/btw`: never sent as a message, whatever path it takes. */
@@ -125,11 +122,13 @@ export const OWN_COMMAND = /^\/(memory|btw)(\s|$)/
 /** Why such a line wasn't sent. */
 export const OWN_COMMAND_SAID = "/memory and /btw lines aren’t sent as messages. Type the note or question after them in the message box."
 
-/** The command word a text begins with (after spaces) and where it ends. */
-export function commandHead(text: string): { word: string; end: number } | null {
-  const m = /^(\s*)(\/\S+)/.exec(text)
-  return m ? { word: m[2], end: m[1].length + m[2].length } : null
-}
+/** How a write of the draft's text came about: only these two count as the user typing. */
+export type Typed =
+  /** An `input` event of the message box whose `inputType` is on `TYPED_INPUT`;
+   * `replacesAll`: it replaced the box's whole content (or the box was empty). */
+  | { kind: "input"; replacesAll: boolean }
+  /** The user picked a menu row with the arrows, Tab or a click. */
+  | { kind: "pick" }
 
 export const EMPTY_DRAFT: Draft = { text: "", files: [], comments: [], pasted: [], stamp: 0 }
 
@@ -403,20 +402,20 @@ export function draftKey(open: { sessionId: string | null; directory: string }) 
 }
 
 /** Only the text outlives the window: images can be megabytes, comments point at a diff. Stored
- * as `{ text, at, recalled?, head? }` (whether text in it was put there, not typed: it must stay
- * so across a restart); older versions stored the text alone. */
+ * as `{ text, at, untyped? }`; older versions stored the text alone. Text read back here was not
+ * typed in this window: it comes back flagged `untyped`, whatever was stored. */
 function readDrafts(): Record<string, Draft> {
   try {
     const raw = JSON.parse(localStorage.getItem(DRAFTS_KEY) ?? "{}") as Record<string, unknown>
     const out: Record<string, Draft> = {}
     const now = Date.now()
     for (const [k, v] of Object.entries(raw)) {
-      const o = v && typeof v === "object" ? (v as { text?: unknown; at?: unknown; recalled?: unknown; head?: unknown }) : null
+      const o = v && typeof v === "object" ? (v as { text?: unknown; at?: unknown }) : null
       const text = typeof v === "string" ? v : typeof o?.text === "string" ? o.text : ""
       const at = typeof o?.at === "number" ? o.at : now
       if (!text || (k.startsWith("new:") && now - at > DRAFT_DAYS * 86_400_000)) continue
-      const head = typeof o?.head === "string" && commandHead(text)?.word === o.head ? o.head : undefined
-      out[k] = { ...EMPTY_DRAFT, text, recalled: o?.recalled === true || !!head, head }
+      // Restored, not typed (the one writer that builds drafts rather than going through `setDraft`).
+      out[k] = { ...EMPTY_DRAFT, text, untyped: true }
       draftAt.set(k, at)
     }
     return out
@@ -431,7 +430,7 @@ let saveTimer: ReturnType<typeof setTimeout> | undefined
 function writeDrafts() {
   clearTimeout(saveTimer)
   saveTimer = undefined
-  const texts: Record<string, { text: string; at: number; recalled?: boolean; head?: string }> = {}
+  const texts: Record<string, { text: string; at: number; untyped?: boolean }> = {}
   for (const [k, d] of Object.entries(state.drafts)) {
     // A folded paste is part of what was typed.
     const text = [d.text, ...d.pasted.map((p) => p.text)].filter((t) => t.trim()).join("\n\n")
@@ -439,8 +438,7 @@ function writeDrafts() {
       texts[k] = {
         text,
         at: draftAt.get(k) ?? Date.now(),
-        ...(d.recalled ? { recalled: true } : {}),
-        ...(d.head ? { head: d.head } : {}),
+        ...(d.untyped ? { untyped: true } : {}),
       }
   }
   try {
@@ -480,16 +478,23 @@ function pruneDrafts(sessions: SessionRow[]) {
   })
 }
 
-/** Changes one draft; one left empty is dropped. */
-export function setDraft(key: string, patch: Partial<Draft> | ((d: Draft) => Partial<Draft>)) {
+/**
+ * Changes one draft; one left empty is dropped. The one writer of a draft's text: `typed` says
+ * the user typed it (see `Typed`); without it a new `text` is not typed and flags the draft
+ * `untyped` (fail closed). A typed edit keeps the flag unless it empties the box or replaces all
+ * of it; an empty box holds nothing, so no flag. `untyped` can't be patched in from outside.
+ */
+export function setDraft(key: string, patch: Partial<Draft> | ((d: Draft) => Partial<Draft>), typed?: Typed) {
   set((s) => {
     const d = s.drafts[key] ?? EMPTY_DRAFT
-    const next = { ...d, ...(typeof patch === "function" ? patch(d) : patch) }
-    // An empty box holds nothing that was put there.
-    if (!next.text.trim()) {
-      next.recalled = false
-      next.head = undefined
+    const change = typeof patch === "function" ? patch(d) : patch
+    const next = { ...d, ...change, untyped: d.untyped }
+    if ("text" in change) {
+      if (!next.text) next.untyped = false
+      else if (!typed) next.untyped = true
+      else if (typed.kind === "input" && typed.replacesAll) next.untyped = false
     }
+    if (!next.text) next.untyped = false
     const drafts = { ...s.drafts }
     const blank = !next.text && !next.files.length && !next.comments.length && !next.pasted.length
     if (blank) delete drafts[key]
@@ -503,40 +508,29 @@ let stamps = 0
 
 /** Puts text back into a draft (with its images and comments), after what is there already. */
 function restoreDraft(key: string, back: { text: string; files?: Attachment[]; comments?: Comment[] }) {
+  // Put back, not typed: the draft is flagged.
   setDraft(key, (d) => ({
     text: d.text.trim() && back.text.trim() ? `${back.text}\n\n${d.text}` : back.text || d.text,
-    recalled: d.recalled || !!back.text.trim(),
-    // The text put back leads: its command word is the box's.
-    head: back.text.trim() ? commandHead(back.text)?.word : d.head,
     files: [...(back.files ?? []), ...d.files],
     comments: [...(back.comments ?? []), ...d.comments.filter((c) => !back.comments?.some((b) => b.id === c.id))],
     stamp: ++stamps,
   }))
 }
 
-/** A draft that moves with its view: a new session's, once the session exists. */
+/** A draft that moves with its view: a new session's, once the session exists. Not typed: the
+ * moved text arrives flagged, through `setDraft`. */
 function moveDraft(from: string, to: string) {
-  if (from === to || !state.drafts[from]) return
-  set((s) => {
-    const drafts = { ...s.drafts }
-    const d = drafts[from]
-    delete drafts[from]
-    const into = drafts[to]
-    drafts[to] = into
-      ? {
-          ...into,
-          text: [into.text, d.text].filter(Boolean).join("\n\n"),
-          files: [...into.files, ...d.files],
-          comments: [...into.comments, ...d.comments],
-          pasted: [...into.pasted, ...d.pasted],
-          // What was put there stays so, wherever it moves.
-          recalled: into.recalled || d.recalled,
-          head: into.text.trim() ? into.head : d.head,
-        }
-      : d
-    draftAt.set(to, Date.now())
-    return { drafts }
+  const d = state.drafts[from]
+  if (from === to || !d) return
+  const into = state.drafts[to]
+  setDraft(to, {
+    text: into ? [into.text, d.text].filter(Boolean).join("\n\n") : d.text,
+    files: [...(into?.files ?? []), ...d.files],
+    comments: [...(into?.comments ?? []), ...d.comments],
+    pasted: [...(into?.pasted ?? []), ...d.pasted],
+    stamp: d.stamp,
   })
+  setDraft(from, { ...EMPTY_DRAFT })
 }
 
 /** Updates the open view; with a target, only while that session (or that view) is open. */
@@ -1586,11 +1580,8 @@ export async function redo() {
     const now = state.drafts[sessionId]?.text
     if (text && now === text) setDraft(sessionId, { text: "", stamp: ++stamps })
     else if (text && now?.startsWith(`${text}\n\n`)) {
-      const rest = now.slice(text.length + 2)
-      // What leads now was in the box before the rewind: in a box that held text put there, its
-      // command word (a recalled `/cmd`) is inert again.
-      const recalled = !!state.drafts[sessionId]?.recalled
-      setDraft(sessionId, { text: rest, head: recalled ? commandHead(rest)?.word : undefined, stamp: ++stamps })
+      // The app's write, not typed: flagged.
+      setDraft(sessionId, { text: now.slice(text.length + 2), stamp: ++stamps })
     }
   } catch (e) {
     set({ notice: message(e) })
