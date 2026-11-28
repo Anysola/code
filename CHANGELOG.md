@@ -55,7 +55,7 @@ branch.
 - **Text you didn't type runs no command:** while the message box holds any text you didn't type or paste into it
   (brought back with ArrowUp, put back by a rewind or a message that didn't send, restored after a restart, or
   brought back by undo or redo: an imported session's history included), a `/` line in it runs nothing on Enter and
-  menus open with no row picked (Enter says why), until you clear the box or replace all of it by typing or pasting.
+  no command menu opens (Enter says why), until you clear the box or replace all of it by typing or pasting.
   Pasting counts as typing.
 - **Deleting a session closes it to new turns** from the first check until its row is gone: a running session is
   refused (or kept, by Delete all) before anything is let go, and nothing (a prompt, a background job's completion,

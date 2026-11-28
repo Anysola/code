@@ -525,7 +525,11 @@ export function Composer({ open }: { open: Open }) {
 
   const typed = trigger(text, caret)
   const note = MEMORY.exec(text.trimStart())
-  const menuOpen = typed !== null ? dismissed !== typed.start : note !== null && dismissed !== MEMORY_MENU
+  // Text the box didn't get from typing opens no command menu at all: the arrows keep walking
+  // history, and nothing in it can be lit and picked by the keys that brought it back.
+  const commandMenu = typed !== null ? typed.kind === "/" : note !== null
+  const menuOpen =
+    !(untyped && commandMenu) && (typed !== null ? dismissed !== typed.start : note !== null && dismissed !== MEMORY_MENU)
   // `/memory`'s files: read as its menu opens, for the session (its worktree's file) or the folder.
   const memoryOpen = note !== null
   useEffect(() => {

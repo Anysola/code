@@ -146,7 +146,7 @@ later request sends from it is rebuilt from checked values (images are checked a
 file), and what the file says came from a hook or a subagent shows as "From the imported file", never as the app's
 own note. While the message box holds any text you didn't type or paste into it (brought back with ArrowUp,
 put back by a rewind or a message that didn't send, restored after a restart, or brought back by undo or redo), a
-`/` line in it runs nothing on Enter and menus open with no row picked (Enter says why), until you clear the box or
+`/` line in it runs nothing on Enter and opens no command menu (Enter says why), until you clear the box or
 replace all of it by typing or pasting. Pasting counts as typing, so pasted text can run a command. `/memory <note>` adds a line to the project's `AGENTS.md` (in a worktree session, the worktree's) or to your
 own `~/.anysola/AGENTS.md`, whichever you pick; `/memory` alone opens either in your editor. When the project's
 `AGENTS.md` is a link, the note goes to the file it links to only if that is an `AGENTS.md` or `CLAUDE.md` of the
