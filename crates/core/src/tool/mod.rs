@@ -11,6 +11,7 @@ mod search;
 pub mod edit;
 pub mod glob;
 pub mod grep;
+pub mod notebook;
 pub mod question;
 pub mod read;
 pub mod shell;
@@ -172,12 +173,25 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
+/// Whether the tool writes files (edit, write, notebook): it takes the file as `path`, and the
+/// protected-file asks, the plan agent's refusal message and hooks' `file_path` go by this. A
+/// unit test (`hooks::tool`) holds every built-in tool whose permission is `edit` to it, so a new
+/// writing tool can't be left out.
+pub fn writes_files(tool: &dyn Tool) -> bool {
+    tool.writes_files()
+}
+
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
 
     /// Permission action used to hide the whole tool (`write` shares `edit`).
     fn permission(&self) -> &str {
         self.name()
+    }
+
+    /// A built-in tool that writes the file named by its `path` (see [`writes_files`]).
+    fn writes_files(&self) -> bool {
+        false
     }
 
     /// `execute`, which runs Code Mode programs and goes last in the tool array.

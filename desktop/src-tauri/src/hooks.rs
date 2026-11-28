@@ -697,7 +697,10 @@ mod tests {
             })
             .is_err()
         };
-        assert!(bad("Notification", "x", None));
+        assert!(bad("TeammateIdle", "x", None));
+        for event in ["SubagentStop", "PreCompact", "Notification", "SessionEnd"] {
+            assert!(!bad(event, "x", None), "{event}");
+        }
         assert!(bad("Stop", " ", None));
         assert!(bad("Stop", "x", Some(0.0)));
     }
@@ -738,7 +741,7 @@ mod tests {
     #[test]
     fn ids_follow_what_the_core_runs() {
         let text = r#"{"hooks": {
-            "Notification": [{"hooks": [{"type": "command", "command": "skipped"}]}],
+            "TeammateIdle": [{"hooks": [{"type": "command", "command": "skipped"}]}],
             "PreToolUse": [{"hooks": [
                 {"type": "prompt", "prompt": "no"},
                 {"type": "command", "command": "a", "async": true},

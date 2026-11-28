@@ -481,10 +481,59 @@ pub fn capture_headers(capture: &Value) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Built-in tools added since the 0.5.1 captures, each with a tool it is always offered with
+/// (the same permission action): the captures can't hold them, so [`assert_request`] checks
+/// them apart and compares the rest byte for byte.
+const ADDED_SINCE_CAPTURE: &[(&str, &str)] = &[("notebook", "edit")];
+
+/// Checks the tools of [`ADDED_SINCE_CAPTURE`] in our request: each is there exactly when its
+/// companion is, with a definition, where the order of the tool array puts it (direct tools by
+/// name, `execute` last). Then takes them out of `body`.
+fn take_added_tools(name: &str, body: &mut Value) {
+    let Some(Value::Array(tools)) = body.get_mut("tools") else {
+        return;
+    };
+    let names: Vec<String> = tools
+        .iter()
+        .filter_map(|t| t["name"].as_str().map(str::to_string))
+        .collect();
+    for (added, with) in ADDED_SINCE_CAPTURE {
+        let present = names.iter().any(|n| n == added);
+        assert_eq!(
+            present,
+            names.iter().any(|n| n == with),
+            "{name}: {added} is offered exactly when {with} is: {names:?}"
+        );
+        if present {
+            let tool = tools.iter().find(|t| t["name"] == *added).unwrap();
+            assert!(
+                tool["description"].as_str().is_some_and(|d| !d.is_empty())
+                    && tool["input_schema"]["type"] == "object",
+                "{name}: {added} has a definition"
+            );
+            assert!(
+                tool.get("cache_control").is_none(),
+                "{name}: not the last tool"
+            );
+        }
+    }
+    let direct: Vec<&String> = names.iter().filter(|n| *n != "execute").collect();
+    let mut sorted = direct.clone();
+    sorted.sort();
+    assert_eq!(direct, sorted, "{name}: direct tools in name order");
+    tools.retain(|t| {
+        !ADDED_SINCE_CAPTURE
+            .iter()
+            .any(|(added, _)| t["name"] == *added)
+    });
+}
+
 /// Asserts body and headers equal after normalization, with a readable diff on failure.
 pub fn assert_request(name: &str, ours: &Recorded, capture: &Value, our_places: &Places) {
     let expected = normalize_body(&capture["body"], &capture_places(), true);
-    let actual = normalize_body(&ours.json(), our_places, false);
+    let mut body = ours.json();
+    take_added_tools(name, &mut body);
+    let actual = normalize_body(&body, our_places, false);
     if expected != actual {
         let e = serde_json::to_string_pretty(&expected).unwrap();
         let a = serde_json::to_string_pretty(&actual).unwrap();

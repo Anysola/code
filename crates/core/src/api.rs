@@ -10,7 +10,6 @@ use serde_json::{Value, json};
 
 use crate::time::now_ms;
 use tokio::sync::broadcast;
-use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::events::{Event, UsageSnapshot};
@@ -38,6 +37,7 @@ mod state;
 
 pub use crate::hooks::{HookDocument, HookInfo, HookScope};
 pub use crate::trust::{ConfiguredRule, TrustEntry, TrustItem, TrustKind};
+pub use front::{AsideError, AsideKind, MemoryFiles, MemoryScope};
 pub use isolate::{
     Checkout, Cleaned, Fallback, ForkRestore, Release, apply_stash_message,
     cleanup as cleanup_worktrees, clear_undo_mark, forget_deleted as forget_deleted_worktree,
@@ -46,6 +46,7 @@ pub use isolate::{
 pub(crate) use isolate::{TurnGate, turn_gate};
 pub use revert::file_diff_value;
 pub use state::Loaded;
+pub use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
@@ -74,6 +75,9 @@ pub enum CoreError {
     /// No models at all: not signed in, or the gateway refused the token or did not answer.
     #[error("{0}")]
     NoModels(String),
+    /// A note could not be added to an instruction file ([`Core::add_memory`]).
+    #[error("{0}")]
+    Memory(String),
     /// The session's own worktree is not in a state for this (a plain sentence).
     #[error("{0}")]
     Worktree(String),
@@ -383,6 +387,22 @@ impl Core {
             runtime: tokio::runtime::Handle::current(),
         });
         shared.arm_watch(&shared.loaded());
+        {
+            let weak = Arc::downgrade(&shared);
+            shared.asks.set_notify(Box::new(move |session_id, action| {
+                if let Some(shared) = weak.upgrade() {
+                    crate::hooks::fire::notification(
+                        &shared,
+                        session_id,
+                        crate::hooks::fire::Notice::Permission,
+                        format!(
+                            "Anysola Code needs your permission to use {}",
+                            crate::hooks::tool::claude_name(action)
+                        ),
+                    );
+                }
+            }));
+        }
         shared
             .hooks
             .approved
@@ -1234,6 +1254,7 @@ impl Core {
             token.cancel();
         }
         self.shared.asks.close();
+        self.shared.hooks.closing.cancel();
         self.shared.lsp.shutdown();
         crate::tool::shell::kill_background_shells();
         // The firing loop sees `closing` and releases its lease now rather than after a sleep.

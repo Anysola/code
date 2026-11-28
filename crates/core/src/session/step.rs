@@ -93,6 +93,7 @@ fn instructions(
     sources: &Loaded,
     session: &SessionRow,
     rules: &[crate::permission::Rule],
+    record: bool,
 ) -> Result<String, SessionError> {
     let directory = std::path::PathBuf::from(&session.directory);
     let checkout = shared.checkout_of(session);
@@ -135,6 +136,9 @@ fn instructions(
             .instruction_entries(&session.id)
             .map_err(|e| SessionError::new("unknown", e.to_string()))?,
     );
+    if !record {
+        return instructions::peek(&shared.db, &session.id, &sources);
+    }
     Ok(instructions::prepare(&shared.db, &session.id, &sources)?.baseline)
 }
 
@@ -152,6 +156,17 @@ fn context(
     shared: &Shared,
     session: &SessionRow,
     selection: &Selection,
+) -> Result<Context, SessionError> {
+    context_with(shared, session, selection, true)
+}
+
+/// The step context; `record`: instruction changes are recorded (as before a step) rather than
+/// only read.
+fn context_with(
+    shared: &Shared,
+    session: &SessionRow,
+    selection: &Selection,
+    record: bool,
 ) -> Result<Context, SessionError> {
     let rules = selection.agent.permissions.clone();
     let sources = &selection.sources;
@@ -192,7 +207,7 @@ fn context(
         Some(system) => system.clone(),
         None => format!("{}\n\n{ANTHROPIC_PROMPT}", default_system(&names)),
     };
-    let block2 = instructions(shared, sources, session, &rules)?;
+    let block2 = instructions(shared, sources, session, &rules, record)?;
     let system = vec![
         block0,
         identity(&selection.model.name, &selection.model.id),
@@ -460,10 +475,28 @@ fn generate_error(error: ApiError) -> GenerateError {
     }
 }
 
+/// How a one-shot request treats the session.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct OneShot {
+    /// Leave out assistant steps that have not completed (a turn running now): their tool calls
+    /// have no results yet, which the provider refuses. Instruction changes are only read, not
+    /// recorded: nothing is written to the session.
+    pub aside: bool,
+}
+
 pub(crate) async fn generate(
     shared: &Arc<Shared>,
     session: &SessionRow,
     prompt: &str,
+) -> Result<String, GenerateError> {
+    generate_with(shared, session, prompt, OneShot { aside: false }).await
+}
+
+pub(crate) async fn generate_with(
+    shared: &Arc<Shared>,
+    session: &SessionRow,
+    prompt: &str,
+    how: OneShot,
 ) -> Result<String, GenerateError> {
     // The goal reviewer and cache warming spend the budget like a turn.
     if shared.budget_spent(&session.id) {
@@ -479,8 +512,14 @@ pub(crate) async fn generate(
         &selection.sources.config,
         super::warming::Request::KeepAlive,
     );
-    let ctx = context(shared, session, &selection)?;
-    let history = compaction::history(shared, &session.id).messages;
+    let ctx = context_with(shared, session, &selection, !how.aside)?;
+    let mut history = compaction::history(shared, &session.id).messages;
+    if how.aside {
+        history.retain(|message| match message {
+            Message::Assistant(step) => step.time.completed.is_some(),
+            _ => true,
+        });
+    }
     let target = Target {
         provider: &selection.reference.provider,
         id: &selection.model.id,
@@ -1504,14 +1543,16 @@ fn handle(
 /// The tool a call names (`bash` runs as `shell`): our name and the one hooks match.
 const GLOBAL_CONFIG: &str = "This call changes Anysola Code's own configuration, data or hook scripts, or Git's data, which needs the user's approval, and nobody can approve it here.";
 
-/// An `edit` or `write` of a file that changes what runs without asking: a global or user config
-/// document, the database ([`crate::config::Config::protects`]), or a script a hook runs.
-fn writes_global_config(anysola: &str, input: &Value, ctx: &ToolContext) -> bool {
-    if !matches!(anysola, "edit" | "write") {
+/// A call of a file-writing tool (every tool whose permission is `edit`: edit, write, notebook)
+/// on a file that changes what runs without asking: a global or user config document, the
+/// database ([`crate::config::Config::protects`]), or a script a hook runs. A writing tool
+/// without a `path` string is treated as such a write: it always asks.
+fn writes_global_config(tool: &dyn Tool, input: &Value, ctx: &ToolContext) -> bool {
+    if !crate::tool::writes_files(tool) {
         return false;
     }
     let Some(path) = input.get("path").and_then(Value::as_str) else {
-        return false;
+        return true;
     };
     let target = crate::tool::access::resolve_path(ctx, path);
     ctx.host.config().protects(&ctx.paths, &target)
@@ -1585,7 +1626,11 @@ async fn call(
         None => input,
     };
     let mut ctx = ctx;
-    if writes_global_config(&anysola, &input, &ctx) {
+    let writer = tools
+        .iter()
+        .find(|t| t.name() == anysola)
+        .is_some_and(|tool| writes_global_config(tool.as_ref(), &input, &ctx));
+    if writer {
         // Config files outside the project decide what runs unattended (hooks, rules): changing
         // them is always the user's call, saved "always" rules notwithstanding.
         match ctx.permissions.asking() {
@@ -1699,7 +1744,7 @@ async fn execute(
         Err(error)
             if ctx.agent == "plan"
                 && error.kind == ToolErrorKind::Blocked
-                && matches!(tool.name(), "edit" | "write" | "patch") =>
+                && crate::tool::writes_files(tool.as_ref()) =>
         {
             Err(ToolError::execution(format!(
                 "Cannot use {} to modify files outside the Plan directory: {}",

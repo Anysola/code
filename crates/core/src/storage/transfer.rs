@@ -1,11 +1,10 @@
-//! Session listing, deletion and the `session export` / `session import` transfer format:
+//! Session listing, deletion and the `session export` format (imported by `import.rs`):
 //! `{info, messages}` with 0.5.1's `Session.Info` and message shapes.
 
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Map, Value, json};
 
-use super::{Db, Result, json as compact, parse};
-use crate::time::now_ms;
+use super::{Db, Result, parse};
 
 /// One row of `session list`.
 #[derive(Debug, Clone, PartialEq)]
@@ -16,17 +15,6 @@ pub struct SessionSummary {
     pub directory: String,
     pub time_created: u64,
     pub time_updated: u64,
-}
-
-/// Why an import was refused.
-#[derive(Debug, thiserror::Error)]
-pub enum ImportError {
-    #[error("the session already exists")]
-    Conflict,
-    #[error("the parent session does not exist")]
-    MissingParent,
-    #[error(transparent)]
-    Storage(#[from] super::StorageError),
 }
 
 /// A JSON number as `JSON.stringify` writes it: integral values without a fraction.
@@ -409,106 +397,6 @@ impl Db {
         let mut export = json!({"info": info, "messages": messages});
         js_numbers(&mut export);
         Ok(Some(export))
-    }
-
-    /// Imports `{info, messages}` into `project`/`directory`; returns the session id. The caller
-    /// validated the shape.
-    pub fn import_session(
-        &self,
-        data: &Value,
-        project: &crate::project::Project,
-        directory: &str,
-    ) -> std::result::Result<String, ImportError> {
-        let info = &data["info"];
-        let id = info["id"].as_str().unwrap_or_default().to_string();
-        if self.session(&id)?.is_some() {
-            return Err(ImportError::Conflict);
-        }
-        if let Some(parent) = info["parentID"].as_str()
-            && self.session(parent)?.is_none()
-        {
-            return Err(ImportError::MissingParent);
-        }
-        self.upsert_project(project)?;
-        let subpath = std::path::Path::new(directory)
-            .strip_prefix(&project.worktree)
-            .map(|p| p.to_string_lossy().replace('\\', "/"))
-            .unwrap_or_default();
-        let time = &info["time"];
-        let at = |key: &str| time[key].as_i64();
-        let idle = at("idle");
-        let busy = idle.zip(at("busy")).map(|(i, b)| i.min(b));
-        let viewed = idle.zip(at("viewed")).map(|(i, v)| i.min(v));
-        let outcome = idle.and(info["outcome"].as_str());
-        let tokens = &info["tokens"];
-        let token = |v: &Value| v.as_i64().unwrap_or(0);
-        let optional = |key: &str| info.get(key).filter(|v| !v.is_null()).map(compact);
-        let messages: Vec<&Value> = data["messages"]
-            .as_array()
-            .map(|m| {
-                m.iter()
-                    .filter(|m| settled(m["type"].as_str().unwrap_or_default(), m))
-                    .collect()
-            })
-            .unwrap_or_default();
-        self.with(|c| {
-            let tx = c.transaction()?;
-            tx.execute(
-                "INSERT INTO session (id, project_id, parent_id, slug, directory, path, title, version, metadata,
-                    cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write,
-                    permission, agent, model, time_created, time_updated, time_busy, time_idle, idle_outcome,
-                    time_viewed, time_archived)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
-                    ?21, ?22, ?23, ?24, ?25)",
-                params![
-                    id,
-                    project.id,
-                    info["parentID"].as_str(),
-                    crate::slug::create(),
-                    directory,
-                    subpath,
-                    info["title"].as_str().unwrap_or_default(),
-                    crate::version::session_version(),
-                    optional("metadata"),
-                    info["cost"].as_f64().unwrap_or(0.0),
-                    token(&tokens["input"]),
-                    token(&tokens["output"]),
-                    token(&tokens["reasoning"]),
-                    token(&tokens["cache"]["read"]),
-                    token(&tokens["cache"]["write"]),
-                    optional("permissions"),
-                    info["agent"].as_str(),
-                    optional("model"),
-                    at("created").unwrap_or(0),
-                    now_ms() as i64,
-                    busy,
-                    idle,
-                    outcome,
-                    viewed,
-                    idle.and(at("archived")),
-                ],
-            )?;
-            for (index, message) in messages.iter().enumerate() {
-                let mut fields = message.as_object().cloned().unwrap_or_default();
-                let message_id = fields.shift_remove("id").unwrap_or_default();
-                let kind = fields.shift_remove("type").unwrap_or_default();
-                let created = message["time"]["created"].as_i64().unwrap_or(0);
-                tx.execute(
-                    "INSERT INTO message (id, session_id, seq, type, time_created, time_updated, data)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)",
-                    params![
-                        message_id.as_str(),
-                        id,
-                        index as i64 + 1,
-                        kind.as_str(),
-                        created,
-                        compact(&Value::Object(fields))
-                    ],
-                )?;
-            }
-            tx.commit()
-        })?;
-        Ok(id)
     }
 }
 

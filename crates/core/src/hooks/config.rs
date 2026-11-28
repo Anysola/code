@@ -34,7 +34,8 @@ pub fn parse(value: &Value, source: &str, warnings: &mut Vec<String>) -> Vec<Han
     for (name, groups) in events {
         let Some(event) = Event::parse(name) else {
             warnings.push(format!(
-                "Ignoring {name} hooks in {source}: this version runs PreToolUse, PostToolUse, UserPromptSubmit, Stop and SessionStart hooks."
+                "Ignoring {name} hooks in {source}: this version runs {} hooks.",
+                super::EVENTS.map(Event::as_str).join(", ")
             ));
             continue;
         };
@@ -175,6 +176,17 @@ pub fn digest(value: &Value) -> String {
     hex::encode(Sha256::digest(canonical(value).as_bytes()))
 }
 
+/// The digest a project document's hooks are approved under: [`digest`], except for a document
+/// with a hook for an event 1.6.0 added. 1.5 ignored those events, so its approval never covered
+/// them: such a document gets a digest no earlier version wrote, and is asked about again.
+pub fn document_digest(value: &Value, handlers: &[Handler]) -> String {
+    if !handlers.iter().any(|h| h.event.added_in_1_6()) {
+        return digest(value);
+    }
+    let salted = format!("anysola-hooks-1.6\n{}", canonical(value));
+    hex::encode(Sha256::digest(salted.as_bytes()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,7 +203,8 @@ mod tests {
                 {"type": "command"},
             ]}],
             "UserPromptSubmit": [{"matcher": "ignored(", "hooks": [{"type": "command", "command": "u"}]}],
-            "Notification": [{"hooks": [{"type": "command", "command": "n"}]}],
+            "TeammateIdle": [{"hooks": [{"type": "command", "command": "t"}]}],
+            "Notification": [{"matcher": "permission_prompt", "hooks": [{"type": "command", "command": "n"}]}],
             "Stop": [{"hooks": [{"type": "command", "command": "s", "timeout": 0}]}],
         });
         let mut warnings = Vec::new();
@@ -205,11 +218,23 @@ mod tests {
             [
                 (Event::PreToolUse, "./guard.sh", 30),
                 (Event::UserPromptSubmit, "u", 30),
+                (Event::Notification, "n", 600),
                 (Event::Stop, "s", 600),
             ]
         );
         assert_eq!(warnings.len(), 5, "{warnings:?}");
-        assert!(warnings.iter().any(|w| w.contains("Notification")));
+        let unknown = warnings
+            .iter()
+            .find(|w| w.contains("TeammateIdle"))
+            .expect("an unknown event is named");
+        for event in super::super::EVENTS {
+            assert!(unknown.contains(event.as_str()), "{unknown}");
+        }
+        assert!(
+            !warnings
+                .iter()
+                .any(|w| w.starts_with("Ignoring Notification"))
+        );
         assert!(warnings.iter().any(|w| w.contains("prompt")));
         assert!(warnings.iter().any(|w| w.contains("\"async\"")));
         assert!(warnings.iter().any(|w| w.contains("\"args\"")));
@@ -236,6 +261,22 @@ mod tests {
         assert_eq!(shells, [Some("powershell".into()), None, None, None]);
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("\"c\""));
+    }
+
+    #[test]
+    fn documents_with_events_new_in_1_6_get_a_digest_1_5_never_approved() {
+        let old = json!({"Stop": [{"hooks": [{"type": "command", "command": "x"}]}],
+            "Bogus": [{"hooks": [{"type": "command", "command": "y"}]}]});
+        let mut warnings = Vec::new();
+        let handlers = parse(&old, "a.json", &mut warnings);
+        assert_eq!(document_digest(&old, &handlers), digest(&old), "unchanged");
+        for event in ["SubagentStop", "PreCompact", "Notification", "SessionEnd"] {
+            let mut new = old.clone();
+            new[event] = json!([{"hooks": [{"type": "command", "command": "z"}]}]);
+            let handlers = parse(&new, "a.json", &mut warnings);
+            assert_ne!(document_digest(&new, &handlers), digest(&new), "{event}");
+            assert_eq!(document_digest(&new, &handlers).len(), 64);
+        }
     }
 
     #[test]

@@ -1444,3 +1444,507 @@ fn hooks_see_the_file_a_symlink_points_to() {
     assert_eq!(std::fs::read_to_string(&outside).unwrap(), "original");
     assert!(last(&model_requests(&gateway)[1]).contains("only inside the project"));
 }
+
+// ---- 1.6.0: SubagentStop, PreCompact, Notification, SessionEnd, NotebookEdit ----
+
+/// A root session that runs one `general` subagent; the subagent answers `child done`.
+fn root_with_a_subagent() -> FakeGateway {
+    FakeGateway::start(|request, _| {
+        if request.is_title() {
+            return text(request, "title");
+        }
+        let child = request.header("x-opencode-parent-session-id").is_some();
+        if child {
+            return text(request, "child done");
+        }
+        if !last(request).contains("tool_result") {
+            return call(
+                request,
+                "subagent",
+                json!({"agent": "general", "description": "Look", "prompt": "look"}),
+            );
+        }
+        text(request, "done")
+    })
+}
+
+#[test]
+fn subagent_stop_keeps_a_subagent_going_once_and_stop_stays_the_roots() {
+    let gateway = root_with_a_subagent();
+    let env = env(&gateway.url);
+    let payloads = env.home.home().join("payloads");
+    let count = env.home.home().join("count");
+    let explore = env.home.home().join("explore");
+    let stop = env.home.home().join("stop");
+    let command = format!(
+        "cat >> {payloads}; echo >> {payloads}; \
+         if [ ! -f {count} ]; then touch {count}; echo 'check again' >&2; exit 2; fi",
+        payloads = quote(&payloads),
+        count = quote(&count),
+    );
+    user_config(
+        &env,
+        json!({"hooks": hooks(&[
+            ("SubagentStop", Some("general"), &command),
+            ("SubagentStop", Some("explore"), &format!("touch {}", quote(&explore))),
+            ("Stop", None, &format!("cat >> {}", quote(&stop))),
+        ])}),
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    let outcome = runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    assert_eq!(outcome, Outcome::Succeeded);
+    let lines: Vec<Value> = std::fs::read_to_string(&payloads)
+        .unwrap()
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 2, "blocked once, then let go: {lines:?}");
+    let child = &core.children(&session.id).unwrap()[0];
+    for (line, active) in lines.iter().zip([false, true]) {
+        assert_eq!(line["hook_event_name"], "SubagentStop");
+        assert_eq!(line["stop_hook_active"], active);
+        assert_eq!(line["agent_id"], child.0.as_str());
+        assert_eq!(line["agent_type"], "general");
+        assert_eq!(line["session_id"], session.id.as_str(), "the root's id");
+        assert_eq!(line["last_assistant_message"], "child done");
+    }
+    let child_requests: Vec<Recorded> = model_requests(&gateway)
+        .into_iter()
+        .filter(|r| r.header("x-opencode-parent-session-id").is_some())
+        .collect();
+    assert_eq!(child_requests.len(), 2);
+    assert!(last(&child_requests[1]).contains("check again"));
+    // The continuation ran with the subagent's own tools, not more.
+    assert_eq!(
+        child_requests[0].json()["tools"],
+        child_requests[1].json()["tools"]
+    );
+    assert!(!explore.exists(), "the matcher is the agent type");
+    let stop = std::fs::read_to_string(&stop).unwrap();
+    assert!(stop.contains("\"hook_event_name\":\"Stop\""));
+    assert!(
+        !stop.contains("agent_id"),
+        "Stop is the root's only: {stop}"
+    );
+}
+
+#[test]
+fn pre_compact_blocks_a_manual_compaction_but_never_an_automatic_one() {
+    let gateway = FakeGateway::start(move |request, _| {
+        if request.is_title() {
+            return text(request, "title");
+        }
+        if request.body.contains("You MUST summarize") {
+            return text(request, "## Objective\n- x");
+        }
+        if request.body.contains("<conversation-checkpoint>") || !request.body.contains("BIG") {
+            return text(request, "ok");
+        }
+        Reply::Json {
+            status: 400,
+            body: json!({"type": "error", "error": {"type": "invalid_request_error", "message": "prompt is too long: 1000001 tokens > 1000000 maximum"}}),
+            headers: vec![],
+        }
+    });
+    let env = env(&gateway.url);
+    let triggers = env.home.home().join("triggers");
+    let command = format!(
+        "grep -o '\"trigger\":\"[a-z]*\",\"custom_instructions\":null' >> {}; echo 'not now' >&2; exit 2",
+        quote(&triggers)
+    );
+    user_config(
+        &env,
+        json!({"hooks": hooks(&[("PreCompact", None, &command)])}),
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let mut events = core.subscribe();
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("hello"), TurnOptions::default()))
+        .unwrap();
+    let rows = |core: &Core| core.db().messages(&session.id).unwrap();
+    let before = rows(&core).len();
+    let outcome = runtime.block_on(core.compact(&session.id)).unwrap();
+    match outcome {
+        Outcome::Failed(error) => {
+            assert_eq!(error.kind, anysola_core::hooks::BLOCKED);
+            assert_eq!(error.message, "not now");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(rows(&core).len(), before, "nothing written");
+    assert!(drain_events(&mut events).iter().any(|e| matches!(
+        e,
+        Event::Hook { outcome: HookOutcome::Blocked, event, message, .. }
+            if event == "PreCompact" && message == "not now"
+    )));
+    assert!(
+        !model_requests(&gateway)
+            .iter()
+            .any(|r| r.body.contains("You MUST summarize"))
+    );
+    // The provider refuses the prompt as too long: the overflow compaction goes ahead anyway.
+    let outcome = runtime
+        .block_on(core.prompt(&session.id, prompt("BIG"), TurnOptions::default()))
+        .unwrap();
+    assert_eq!(outcome, Outcome::Succeeded);
+    assert!(
+        rows(&core)
+            .iter()
+            .any(|r| r.kind == "compaction" && r.data["status"] == "completed")
+    );
+    let events = drain_events(&mut events);
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::Hook { outcome: HookOutcome::Notice, event, message, .. }
+            if event == "PreCompact" && message.contains("can't be blocked") && message.contains("not now")
+    )), "{events:?}");
+    assert!(!events.iter().any(|e| matches!(
+        e,
+        Event::Hook {
+            outcome: HookOutcome::Blocked,
+            ..
+        }
+    )));
+    let triggers = std::fs::read_to_string(&triggers).unwrap();
+    assert_eq!(
+        triggers.lines().collect::<Vec<_>>(),
+        [
+            "\"trigger\":\"manual\",\"custom_instructions\":null",
+            "\"trigger\":\"auto\",\"custom_instructions\":null"
+        ]
+    );
+}
+
+#[test]
+fn notification_hooks_run_while_the_user_is_asked_and_cannot_answer() {
+    let gateway = FakeGateway::start(|request, _| {
+        if request.is_title() || last(request).contains("tool_result") {
+            return text(request, "done");
+        }
+        if last(request).contains("ask me") {
+            return call(
+                request,
+                "question",
+                json!({"questions": [{"question": "Which one?", "header": "Pick", "options": [{"label": "A", "description": "a"}]}]}),
+            );
+        }
+        call(
+            request,
+            "write",
+            json!({"path": "made.txt", "content": "x"}),
+        )
+    });
+    let env = env(&gateway.url);
+    let permission = env.home.home().join("permission");
+    let question = env.home.home().join("question");
+    let allow = json!({"hookSpecificOutput": {"hookEventName": "Notification",
+        "permissionDecision": "allow"}, "decision": "approve"})
+    .to_string();
+    user_config(
+        &env,
+        json!({"hooks": hooks(&[
+            ("Notification", Some("permission_prompt"), &format!("cat > {}.tmp; mv {0}.tmp {0}", quote(&permission))),
+            ("Notification", Some("question"), &format!("cat > {}.tmp; mv {0}.tmp {0}", quote(&question))),
+            ("Notification", None, &format!("echo '{allow}'")),
+        ])}),
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    core.set_permission_floor(&session.id, anysola_core::session::gate::Floor::Changes)
+        .unwrap();
+    let mut events = core.subscribe();
+    let answering = core.clone();
+    let files = (permission.clone(), question.clone());
+    let answered = runtime.spawn(async move {
+        let mut seen = 0;
+        while let Ok(event) = events.recv().await {
+            let (request, file, permission) = match &event {
+                Event::PermissionAsked { request_id, .. } => (request_id.clone(), &files.0, true),
+                Event::QuestionAsked { request_id, .. } => (request_id.clone(), &files.1, false),
+                _ => continue,
+            };
+            // The hook runs while the ask is still open, and answers nothing.
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while !file.exists() && Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            assert!(
+                answering.pending_requests().iter().any(|e| matches!(e,
+                    Event::PermissionAsked { request_id, .. } | Event::QuestionAsked { request_id, .. }
+                        if *request_id == request)),
+                "still asked"
+            );
+            if permission {
+                answering.reply_permission(&request, Answer::Reject(Some("no".into())));
+            } else {
+                answering.reply_question(
+                    &request,
+                    anysola_core::tool::question::QuestionReply::Dismissed(None),
+                );
+            }
+            seen += 1;
+            if seen == 2 {
+                return;
+            }
+        }
+    });
+    runtime
+        .block_on(core.prompt(&session.id, prompt("write"), TurnOptions::default()))
+        .unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("ask me"), TurnOptions::default()))
+        .unwrap();
+    runtime.block_on(answered).unwrap();
+    assert!(
+        !env.home.project().join("made.txt").exists(),
+        "an allow never answers"
+    );
+    let permission = read_json(&permission);
+    assert_eq!(permission["hook_event_name"], "Notification");
+    assert_eq!(permission["notification_type"], "permission_prompt");
+    assert_eq!(
+        permission["message"],
+        "Anysola Code needs your permission to use Edit"
+    );
+    let question = read_json(&question);
+    assert_eq!(question["notification_type"], "question");
+    assert_eq!(
+        question["message"],
+        "Anysola Code has a question for you: Which one?"
+    );
+}
+
+#[test]
+fn session_end_runs_once_per_started_session_within_its_budget() {
+    let gateway = FakeGateway::start(|request, _| text(request, "hi"));
+    let env = env(&gateway.url);
+    let ends = env.home.home().join("ends");
+    let pid = env.home.home().join("pid");
+    let late = env.home.home().join("late");
+    let slow = format!(
+        "echo $$ > {}; sleep 30; touch {}",
+        quote(&pid),
+        quote(&late)
+    );
+    user_config(
+        &env,
+        json!({"hooks": hooks(&[
+            ("SessionEnd", Some("other"), &format!("cat >> {ends}; echo >> {ends}", ends = quote(&ends))),
+            ("SessionEnd", None, &slow),
+        ])}),
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (started, _) = core.open(&Target::New, false).unwrap();
+    let (deleted, _) = core.open(&Target::New, false).unwrap();
+    let (idle, _) = core.open(&Target::New, false).unwrap();
+    for id in [&started.id, &deleted.id] {
+        runtime
+            .block_on(core.prompt(id, prompt("hello"), TurnOptions::default()))
+            .unwrap();
+    }
+    let lines = || -> Vec<Value> {
+        std::fs::read_to_string(&ends)
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    };
+    // Deleting a session ends it first.
+    let at = Instant::now();
+    runtime.block_on(core.end_sessions(std::slice::from_ref(&deleted.id)));
+    assert!(at.elapsed() < Duration::from_secs(3), "{:?}", at.elapsed());
+    core.delete_session(&deleted.id).unwrap();
+    assert_eq!(lines().len(), 1);
+    assert_eq!(lines()[0]["session_id"], deleted.id.as_str());
+    assert_eq!(lines()[0]["reason"], "other");
+    assert_eq!(lines()[0]["hook_event_name"], "SessionEnd");
+    // The app stops the core: every session it started, the never-started one not.
+    let at = Instant::now();
+    runtime.block_on(core.end_all_sessions());
+    assert!(at.elapsed() < Duration::from_secs(3), "{:?}", at.elapsed());
+    let ended: Vec<String> = lines()
+        .iter()
+        .map(|l| l["session_id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ended, [deleted.id.clone(), started.id.clone()]);
+    assert!(!ended.contains(&idle.id));
+    runtime.block_on(core.end_all_sessions());
+    assert_eq!(lines().len(), 2, "once per session");
+    // The slow hook was killed at the budget.
+    let pid: i32 = std::fs::read_to_string(&pid)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    wait_for("the slow hook to be killed", || unsafe {
+        libc::kill(pid, 0) != 0
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(!late.exists());
+}
+
+#[test]
+fn a_project_document_approved_before_1_6_is_asked_again_for_its_new_events() {
+    let gateway = FakeGateway::start(|request, _| text(request, "hi"));
+    let env = env(&gateway.url);
+    let marker = env.home.home().join("ended");
+    let value = hooks(&[
+        ("Stop", None, "true"),
+        ("SessionEnd", None, &format!("touch {}", quote(&marker))),
+    ]);
+    env.home
+        .write("proj/anysola.json", &json!({"hooks": value}).to_string());
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let document = core.hook_documents().remove(0);
+    // What 1.5 recorded when the user approved this file: the digest of the whole value.
+    let old = anysola_core::hooks::config::digest(&value);
+    assert_ne!(document.digest, old);
+    core.trust_hooks(&document.path, &old, true).unwrap();
+    assert_eq!(core.hook_documents()[0].decision, None, "asked again");
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("hello"), TurnOptions::default()))
+        .unwrap();
+    runtime.block_on(core.end_all_sessions());
+    assert!(!marker.exists(), "unapproved content runs nothing");
+}
+
+#[test]
+fn notebook_edits_are_file_writes_to_hooks_and_the_protected_files() {
+    let notebook = "{\n \"cells\": [\n  {\n   \"cell_type\": \"code\",\n   \"execution_count\": null,\n   \"id\": \"a1\",\n   \"metadata\": {},\n   \"outputs\": [],\n   \"source\": [\n    \"x = 1\"\n   ]\n  }\n ],\n \"metadata\": {},\n \"nbformat\": 4,\n \"nbformat_minor\": 5\n}\n";
+    // Hooks see Claude Code's NotebookEdit with the file it writes.
+    let gateway = calls_once(
+        "notebook",
+        json!({"path": "n.ipynb", "cellId": "a1", "source": "x = 2"}),
+    );
+    let env = env(&gateway.url);
+    std::fs::write(env.home.project().join("n.ipynb"), notebook).unwrap();
+    let seen = env.home.home().join("seen");
+    user_config(
+        &env,
+        json!({"hooks": hooks(&[("PreToolUse", Some("NotebookEdit"), &format!("cat > {}", quote(&seen)))])}),
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    let seen = read_json(&seen);
+    let file = anysola_core::paths::canonicalize(env.home.project())
+        .unwrap()
+        .join("n.ipynb")
+        .display()
+        .to_string();
+    assert_eq!(seen["tool_name"], "NotebookEdit");
+    assert_eq!(seen["tool_input"]["file_path"], file.as_str());
+    assert_eq!(seen["tool_input"]["notebook_path"], file.as_str());
+    assert_eq!(seen["tool_input"]["cell_id"], "a1");
+    assert!(
+        std::fs::read_to_string(env.home.project().join("n.ipynb"))
+            .unwrap()
+            .contains("\"x = 2\"")
+    );
+    drop(core);
+    drop(env);
+
+    // A protected file (here: an agent definition folder, and Git's data) is always asked, even
+    // with an allow-everything rule.
+    for target in [".anysola/agent/n.ipynb", "proj/sub/.git/n.ipynb"] {
+        use common::{env, runtime};
+        let path: Arc<std::sync::OnceLock<String>> = Arc::default();
+        let shared = path.clone();
+        let gateway = FakeGateway::start(move |request, _| {
+            if request.is_title() || last(request).contains("tool_result") {
+                return text(request, "done");
+            }
+            call(
+                request,
+                "notebook",
+                json!({"path": shared.get().unwrap(), "index": 0, "source": "evil"}),
+            )
+        });
+        let env = env(&gateway.url);
+        let file = env.home.write(target, notebook);
+        path.set(file.display().to_string()).unwrap();
+        user_config(
+            &env,
+            json!({"permissions": [{"action": "*", "resource": "*", "effect": "allow"}]}),
+        );
+        let runtime = runtime();
+        let core = runtime.block_on(common::core(&env));
+        let (session, _) = core.open(&Target::New, false).unwrap();
+        let mut events = core.subscribe();
+        let answering = core.clone();
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = asked.clone();
+        runtime.spawn(async move {
+            while let Ok(event) = events.recv().await {
+                if let Event::PermissionAsked {
+                    request_id, action, ..
+                } = event
+                {
+                    recorded.lock().unwrap().push(action);
+                    answering.reply_permission(&request_id, Answer::Reject(Some("no".into())));
+                }
+            }
+        });
+        runtime
+            .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+            .unwrap();
+        assert!(!asked.lock().unwrap().is_empty(), "{target}: asked");
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            notebook,
+            "{target}"
+        );
+    }
+}
+
+#[test]
+fn the_plan_agent_cannot_change_a_notebook() {
+    let gateway = calls_once(
+        "notebook",
+        json!({"path": "n.ipynb", "index": 0, "source": "x = 2"}),
+    );
+    let env = env(&gateway.url);
+    let notebook = "{\"cells\": [{\"cell_type\": \"code\", \"metadata\": {}, \"outputs\": [], \"source\": \"x = 1\"}], \"metadata\": {}, \"nbformat\": 4, \"nbformat_minor\": 4}";
+    std::fs::write(env.home.project().join("n.ipynb"), notebook).unwrap();
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    core.select_agent(&session.id, "plan").unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    let parts = tool_parts(&core, &session.id);
+    match &parts[0] {
+        (name, ToolState::Error { error, .. }) => {
+            assert_eq!(name, "notebook");
+            assert!(
+                error
+                    .message
+                    .starts_with("Cannot use notebook to modify files outside the Plan directory"),
+                "{}",
+                error.message
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        std::fs::read_to_string(env.home.project().join("n.ipynb")).unwrap(),
+        notebook
+    );
+}

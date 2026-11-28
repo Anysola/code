@@ -119,7 +119,7 @@ fn todo_list_follows_the_latest_call() {
         .remove("eager_input_streaming");
     assert_eq!(ours.to_string(), expected.to_string());
     assert_eq!(
-        tool_names(&main[0])[8..],
+        tool_names(&main[0])[9..],
         ["todowrite", "webfetch", "websearch", "write", "execute"]
     );
     assert!(

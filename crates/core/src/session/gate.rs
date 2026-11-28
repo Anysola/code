@@ -241,11 +241,16 @@ struct Pending {
 }
 
 /// Pending asks of every session in this process, in the order they were asked.
+/// Told about each ask once it is shown: `(session id, action)`.
+pub type AskNotify = Box<dyn Fn(&str, &str) + Send + Sync>;
+
 pub struct Asks {
     db: Arc<Db>,
     events: broadcast::Sender<Event>,
     pending: Mutex<Vec<Pending>>,
     closed: AtomicBool,
+    /// Notification hooks (set by the core that owns these asks).
+    notify: std::sync::OnceLock<AskNotify>,
 }
 
 impl Asks {
@@ -255,7 +260,13 @@ impl Asks {
             events,
             pending: Mutex::default(),
             closed: AtomicBool::new(false),
+            notify: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Sets what is told about each new ask; only the first call counts.
+    pub fn set_notify(&self, notify: AskNotify) {
+        let _ = self.notify.set(notify);
     }
 
     fn replied(&self, pending: &Pending, reply: PermissionReply) {
@@ -438,6 +449,7 @@ impl PermissionGate for RuleGate {
                     scope: self.scope.clone(),
                     answer,
                 });
+            let action = request.action.clone();
             let _ = self.asks.events.send(Event::PermissionAsked {
                 session_id: self.session_id.clone(),
                 request_id: id.clone(),
@@ -446,6 +458,10 @@ impl PermissionGate for RuleGate {
                 save: request.save,
                 metadata: request.metadata,
             });
+            // After the event: a Notification hook never holds up the ask.
+            if let Some(notify) = self.asks.notify.get() {
+                notify(&self.session_id, &action);
+            }
             let _forget = Forget {
                 asks: &self.asks,
                 id,

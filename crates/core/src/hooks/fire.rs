@@ -129,6 +129,29 @@ impl Context {
         extra: Map<String, Value>,
         cancel: &CancellationToken,
     ) -> Fired {
+        self.fire_as(event, names, extra, cancel, true).await
+    }
+
+    /// [`Context::fire`] where nothing can be blocked or stopped (an automatic compaction): a
+    /// hook that tries is reported as a notice.
+    pub async fn fire_unblockable(
+        &self,
+        event: Event,
+        names: &[&str],
+        extra: Map<String, Value>,
+        cancel: &CancellationToken,
+    ) -> Fired {
+        self.fire_as(event, names, extra, cancel, false).await
+    }
+
+    async fn fire_as(
+        &self,
+        event: Event,
+        names: &[&str],
+        extra: Map<String, Value>,
+        cancel: &CancellationToken,
+        blocks: bool,
+    ) -> Fired {
         let hooks = &self.config.hooks;
         if hooks
             .documents
@@ -184,6 +207,11 @@ impl Context {
                     },
                     None => output::interpret(event, &ran),
                 };
+            let verdict = if blocks {
+                verdict
+            } else {
+                unblockable(event, verdict)
+            };
             self.record(event, handler, verdict, &mut fired);
         }
         fired
@@ -263,6 +291,27 @@ impl Context {
     }
 }
 
+/// A verdict whose block or stop cannot be honoured: both become a notice saying so.
+fn unblockable(event: Event, mut verdict: Verdict) -> Verdict {
+    let refused = verdict.block.take().or(verdict.stop.take());
+    if let Some(reason) = refused {
+        let reason = if reason.is_empty() {
+            "no reason given".to_string()
+        } else {
+            reason
+        };
+        let note = format!(
+            "A {} hook asked to block this automatic compaction, which can't be blocked: {reason}",
+            event.as_str()
+        );
+        verdict.notice = Some(match verdict.notice.take() {
+            Some(notice) => format!("{notice}\n{note}"),
+            None => note,
+        });
+    }
+    verdict
+}
+
 /// Where hooks run: the first of `candidates` that still exists (the session directory may have
 /// been moved or deleted; a guard that cannot start would let the call through), else the system
 /// temp directory.
@@ -294,9 +343,11 @@ pub(crate) struct State {
     pub approved: Arc<super::Approved>,
     /// Sessions this process fired SessionStart for (or decided not to).
     started: Mutex<HashSet<String>>,
-    /// Root sessions whose turn a tool hook ended with `continue: false`: their Stop hooks do not
-    /// run for that turn.
+    /// Sessions whose turn a tool hook ended with `continue: false`: their Stop (SubagentStop)
+    /// hooks do not run for that turn.
     stopped: Mutex<HashSet<String>>,
+    /// Cancelled when the core shuts down: Notification hooks still running are killed.
+    pub closing: CancellationToken,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -609,15 +660,14 @@ pub(crate) fn turn_started(shared: &Shared, session_id: &str) {
     lock(&shared.hooks.stopped).remove(session_id);
 }
 
-/// Remembers that a tool hook ended a root session's turn with `continue: false`.
+/// Remembers that a tool hook ended a session's turn with `continue: false`.
 pub(crate) fn mark_stopped(shared: &Shared, session: &SessionRow) {
-    if session.parent_id.is_none() {
-        lock(&shared.hooks.stopped).insert(session.id.clone());
-    }
+    lock(&shared.hooks.stopped).insert(session.id.clone());
 }
 
-/// Stop hooks, when a root session's turn ended successfully and the session would go idle.
-/// Returns whether a hook keeps the turn going: its reasons were admitted as a steer.
+/// Stop hooks when a root session's turn ended successfully and the session would go idle,
+/// SubagentStop hooks when a subagent's did. Returns whether a hook keeps the turn going: its
+/// reasons were admitted as a steer (to the subagent's own session, whose rules still hold).
 pub(crate) async fn stop(
     shared: &Arc<Shared>,
     session_id: &str,
@@ -631,7 +681,12 @@ pub(crate) async fn stop(
     let Ok(Some(session)) = shared.db.session(session_id) else {
         return false;
     };
-    if session.parent_id.is_some() || !wanted(shared, &shared.loaded().config, Event::Stop) {
+    let event = if session.parent_id.is_some() {
+        Event::SubagentStop
+    } else {
+        Event::Stop
+    };
+    if !wanted(shared, &shared.loaded().config, event) {
         return false;
     }
     if let Some(mark) = &rounds.mark {
@@ -648,7 +703,12 @@ pub(crate) async fn stop(
         "last_assistant_message".into(),
         json!(last_assistant_message(&shared.db, session_id)),
     );
-    let fired = context.fire(Event::Stop, &[], extra, cancel).await;
+    if event == Event::SubagentStop {
+        extra.insert("agent_transcript_path".into(), json!(""));
+    }
+    let names = [context.agent.clone()];
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let fired = context.fire(event, &names, extra, cancel).await;
     let reasons: Vec<String> = fired.block.into_iter().chain(fired.context).collect();
     if cancel.is_cancelled() || fired.stop.is_some() || reasons.is_empty() {
         *rounds = StopRounds::default();
@@ -657,11 +717,12 @@ pub(crate) async fn stop(
     if rounds.idle >= STOP_ROUNDS {
         *rounds = StopRounds::default();
         let message = format!(
-            "Stop hooks kept the turn going {STOP_ROUNDS} times in a row without a tool call, so the turn ended."
+            "{} hooks kept the turn going {STOP_ROUNDS} times in a row without a tool call, so the turn ended.",
+            event.as_str()
         );
         let _ = shared.events.send(CoreEvent::Hook {
             session_id: session_id.to_string(),
-            event: Event::Stop.as_str().to_string(),
+            event: event.as_str().to_string(),
             command: String::new(),
             outcome: HookOutcome::Notice,
             message,
@@ -683,6 +744,129 @@ pub(crate) async fn stop(
             true
         }
         Err(_) => false,
+    }
+}
+
+/// PreCompact, before a compaction starts (`manual`: `/compact`; `auto`: the context is full or
+/// the provider refused the prompt as too long). Returns the reason when hooks block a manual
+/// compaction; an automatic one can't be blocked (the session could not go on), so a block there
+/// is only a notice.
+pub(crate) async fn pre_compact(
+    shared: &Arc<Shared>,
+    session: &SessionRow,
+    manual: bool,
+    cancel: &CancellationToken,
+) -> Option<String> {
+    if !wanted(shared, &shared.loaded().config, Event::PreCompact) {
+        return None;
+    }
+    let trigger = if manual { "manual" } else { "auto" };
+    let context = Context::of(shared, session);
+    let mut extra = Map::new();
+    extra.insert("trigger".into(), json!(trigger));
+    extra.insert("custom_instructions".into(), Value::Null);
+    if !manual {
+        context
+            .fire_unblockable(Event::PreCompact, &[trigger], extra, cancel)
+            .await;
+        return None;
+    }
+    let fired = context
+        .fire(Event::PreCompact, &[trigger], extra, cancel)
+        .await;
+    if cancel.is_cancelled() {
+        return None;
+    }
+    let mut reasons = fired.block;
+    if let Some(stop) = fired.stop {
+        reasons.push(if stop.is_empty() {
+            "A PreCompact hook stopped the compaction".into()
+        } else {
+            stop
+        });
+    }
+    (!reasons.is_empty()).then(|| reasons.join("\n"))
+}
+
+/// What a Notification hook says the user is asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Notice {
+    Permission,
+    Question,
+}
+
+/// Notification hooks for something the user must answer now. They run on their own and are
+/// never waited for: the ask is already shown. They end with the core.
+pub(crate) fn notification(
+    shared: &Arc<Shared>,
+    session_id: &str,
+    notice: Notice,
+    message: String,
+) {
+    if shared.closing.load(std::sync::atomic::Ordering::Relaxed)
+        || !wanted(shared, &shared.loaded().config, Event::Notification)
+    {
+        return;
+    }
+    let Ok(Some(session)) = shared.db.session(session_id) else {
+        return;
+    };
+    let shared = shared.clone();
+    let runtime = shared.runtime.clone();
+    runtime.spawn(async move {
+        let kind = match notice {
+            Notice::Permission => "permission_prompt",
+            Notice::Question => "question",
+        };
+        let context = Context::of(&shared, &session);
+        let message: String = message.chars().take(1000).collect();
+        let mut extra = Map::new();
+        extra.insert("message".into(), json!(message));
+        extra.insert("notification_type".into(), json!(kind));
+        let closing = shared.hooks.closing.clone();
+        context
+            .fire(Event::Notification, &[kind], extra, &closing)
+            .await;
+    });
+}
+
+/// SessionEnd for these sessions that started in this process (see [`session_start`]; the others
+/// are skipped), each once, all at the same time and within [`super::SESSION_END_BUDGET`]
+/// together: hooks still running then are killed. `reason` is Claude Code's (`other`).
+pub(crate) async fn session_end(shared: &Arc<Shared>, ids: Option<&[String]>, reason: &str) {
+    let ending: Vec<String> = {
+        let mut started = lock(&shared.hooks.started);
+        match ids {
+            Some(ids) => ids
+                .iter()
+                .filter(|id| started.remove(*id))
+                .cloned()
+                .collect(),
+            None => started.drain().collect(),
+        }
+    };
+    if ending.is_empty() || !wanted(shared, &shared.loaded().config, Event::SessionEnd) {
+        return;
+    }
+    let contexts: Vec<Context> = ending
+        .iter()
+        .filter_map(|id| shared.db.session(id).ok().flatten())
+        .map(|session| Context::of(shared, &session))
+        .collect();
+    let cancel = CancellationToken::new();
+    let names = [reason];
+    let runs = contexts.iter().map(|context| {
+        let mut extra = Map::new();
+        extra.insert("reason".into(), json!(reason));
+        context.fire(Event::SessionEnd, &names, extra, &cancel)
+    });
+    // Past the budget the runs are dropped, which kills each hook's process group.
+    let all = futures_util::future::join_all(runs);
+    if tokio::time::timeout(super::SESSION_END_BUDGET, all)
+        .await
+        .is_err()
+    {
+        crate::log::warn("SessionEnd hooks ran out of time and were stopped", &[]);
     }
 }
 

@@ -523,3 +523,46 @@ async fn other_file_kinds_are_not_read() {
         )
     );
 }
+
+#[tokio::test]
+async fn a_notebook_reads_as_its_cells_and_pages_like_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let cell = |i: usize| {
+        json!({"cell_type": "code", "execution_count": i, "id": format!("c{i}"), "metadata": {},
+            "outputs": [{"output_type": "display_data", "metadata": {},
+                "data": {"image/png": "iVBORw0KGgo".repeat(1000)}}],
+            "source": [format!("x = {i}\n"), "print(x)"]})
+    };
+    let notebook = json!({"cells": (0..3).map(cell).collect::<Vec<_>>(), "metadata": {},
+        "nbformat": 4, "nbformat_minor": 5});
+    write(
+        dir.path(),
+        "n.ipynb",
+        serde_json::to_string_pretty(&notebook).unwrap(),
+    );
+    let whole = text(dir.path(), json!({"path": "n.ipynb"})).await;
+    assert!(whole.starts_with("Read file n.ipynb, lines 1-"), "{whole}");
+    assert!(whole.contains("--- cell 1 · id c1 · code · executed [1]\n"));
+    assert!(whole.contains("x = 1\n"));
+    assert!(whole.contains("[image/png output]"));
+    assert!(!whole.contains("iVBOR"));
+    let page = text(
+        dir.path(),
+        json!({"path": "n.ipynb", "offset": 3, "limit": 2}),
+    )
+    .await;
+    assert!(
+        page.starts_with("Read file n.ipynb, lines 3-4\n3: --- cell 0"),
+        "{page}"
+    );
+    assert!(
+        page.ends_with("[Output truncated. Continue reading with offset: 5]"),
+        "{page}"
+    );
+    // Not a notebook: the text, as before.
+    write(dir.path(), "x.ipynb", "{\"cells\": 1}\n");
+    assert_eq!(
+        text(dir.path(), json!({"path": "x.ipynb"})).await,
+        "Read file x.ipynb, lines 1-1\n1: {\"cells\": 1}"
+    );
+}

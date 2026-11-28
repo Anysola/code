@@ -131,6 +131,17 @@ pub fn unrunnable(
     Some(format!("{reason}{hint}"))
 }
 
+impl Event {
+    /// Whether exit code 2 or `decision: "block"` means a block (for PreCompact: of a manual
+    /// compaction only, see `fire::pre_compact`). The others show exit 2's stderr as a notice.
+    pub fn can_block(self) -> bool {
+        !matches!(
+            self,
+            Event::SessionStart | Event::Notification | Event::SessionEnd
+        )
+    }
+}
+
 pub fn interpret(event: Event, ran: &Ran) -> Verdict {
     let mut verdict = Verdict::default();
     let (code, stdout, stderr) = match ran {
@@ -168,7 +179,7 @@ pub fn interpret(event: Event, ran: &Ran) -> Verdict {
             } else {
                 cap(reason)
             };
-            if event == Event::SessionStart {
+            if !event.can_block() {
                 verdict.notice = Some(reason);
             } else {
                 verdict.block = Some(reason);
@@ -206,6 +217,10 @@ pub fn interpret(event: Event, ran: &Ran) -> Verdict {
         Stdout::Json(map) => map,
     };
     verdict.notice = text(&map, "systemMessage");
+    if matches!(event, Event::Notification | Event::SessionEnd) {
+        // They never block, stop or add anything for the model: only a message for the user.
+        return verdict;
+    }
     if map.get("continue") == Some(&Value::Bool(false)) {
         verdict.stop = Some(text(&map, "stopReason").unwrap_or_default());
     }
@@ -241,7 +256,9 @@ pub fn interpret(event: Event, ran: &Ran) -> Verdict {
                 _ => {}
             }
         }
-        if let Some(context) = text(specific, "additionalContext") {
+        if let Some(context) = text(specific, "additionalContext")
+            && event != Event::PreCompact
+        {
             verdict.context.push(context);
         }
     }
@@ -366,6 +383,63 @@ mod tests {
             &json(json!({"suppressOutput": true})),
         );
         assert!(prompt.context.is_empty());
+    }
+
+    #[test]
+    fn notification_and_session_end_only_ever_show_a_message() {
+        let json = |value: Value| exited(0, &value.to_string(), "");
+        for event in [Event::Notification, Event::SessionEnd] {
+            let two = interpret(event, &exited(2, "", "no"));
+            assert_eq!(two.block, None);
+            assert_eq!(two.notice.as_deref(), Some("no"));
+            assert_eq!(
+                interpret(event, &exited(0, "plain", "")),
+                Verdict::default()
+            );
+            let everything = json(json!({"decision": "block", "reason": "r",
+                "continue": false, "stopReason": "s", "systemMessage": "hi",
+                "hookSpecificOutput": {"hookEventName": event.as_str(), "additionalContext": "c",
+                    "permissionDecision": "deny"}}));
+            let verdict = interpret(event, &everything);
+            assert_eq!(
+                verdict,
+                Verdict {
+                    notice: Some("hi".into()),
+                    ..Verdict::default()
+                },
+                "{event:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn pre_compact_and_subagent_stop_block_like_stop() {
+        for event in [Event::PreCompact, Event::SubagentStop] {
+            assert_eq!(
+                interpret(event, &exited(2, "", "not now")).block.as_deref(),
+                Some("not now")
+            );
+            let block = json!({"decision": "block", "reason": "later"}).to_string();
+            assert_eq!(
+                interpret(event, &exited(0, &block, "")).block.as_deref(),
+                Some("later")
+            );
+            // Plain stdout is not context for the model.
+            assert!(interpret(event, &exited(0, "text", "")).context.is_empty());
+        }
+        let context = json!({"hookSpecificOutput": {"hookEventName": "PreCompact",
+            "additionalContext": "c"}})
+        .to_string();
+        assert!(
+            interpret(Event::PreCompact, &exited(0, &context, ""))
+                .context
+                .is_empty()
+        );
+        let context = context.replace("PreCompact", "SubagentStop");
+        assert_eq!(
+            interpret(Event::SubagentStop, &exited(0, &context, "")).context,
+            ["c"]
+        );
     }
 
     #[test]

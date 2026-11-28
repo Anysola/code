@@ -17,6 +17,7 @@ pub fn claude_name(anysola: &str) -> String {
         "websearch" => "WebSearch",
         "subagent" => "Agent",
         "question" => "AskUserQuestion",
+        "notebook" => "NotebookEdit",
         other => other,
     }
     .to_string()
@@ -37,6 +38,12 @@ pub(crate) fn resolver(ctx: &crate::tool::ToolContext) -> impl Fn(&str) -> Strin
     }
 }
 
+/// Our tools that take a file as `path`: hooks get it as `file_path`. Every file-writing tool
+/// ([`crate::tool::writes_files`]) is one (a test holds the built-ins to it).
+pub fn takes_file(anysola: &str) -> bool {
+    matches!(anysola, "edit" | "write" | "read" | "notebook")
+}
+
 /// The input hooks see: ours with Claude Code's keys added (`file_path` is `path` made absolute
 /// by `resolve`).
 pub fn input(anysola: &str, input: &Value, resolve: impl Fn(&str) -> String) -> Value {
@@ -53,6 +60,12 @@ pub fn input(anysola: &str, input: &Value, resolve: impl Fn(&str) -> String) -> 
         ],
         "grep" => &[("include", "glob")],
         "subagent" => &[("agent", "subagent_type")],
+        "notebook" => &[
+            ("cellId", "cell_id"),
+            ("source", "new_source"),
+            ("cellType", "cell_type"),
+            ("mode", "edit_mode"),
+        ],
         _ => &[],
     };
     // Claude Code's keys always mirror ours, whatever the model put under those names: hooks
@@ -63,11 +76,20 @@ pub fn input(anysola: &str, input: &Value, resolve: impl Fn(&str) -> String) -> 
             None => out.remove(*to),
         };
     }
-    if matches!(anysola, "edit" | "write" | "read") {
-        match map.get("path").and_then(Value::as_str) {
-            Some(path) => out.insert("file_path".into(), json!(resolve(path))),
-            None => out.remove("file_path"),
+    if takes_file(anysola) {
+        let resolved = map.get("path").and_then(Value::as_str).map(&resolve);
+        // NotebookEdit's own key too, so Claude Code's notebook hooks read it.
+        let keys: &[&str] = if anysola == "notebook" {
+            &["file_path", "notebook_path"]
+        } else {
+            &["file_path"]
         };
+        for key in keys {
+            match &resolved {
+                Some(path) => out.insert((*key).into(), json!(path)),
+                None => out.remove(*key),
+            };
+        }
     }
     Value::Object(out)
 }
@@ -86,6 +108,40 @@ mod tests {
                 cwd.join(path).display().to_string()
             }
         })
+    }
+
+    #[test]
+    fn every_writing_tool_gives_hooks_its_file() {
+        let registry = crate::tool::registry::Registry::builtin();
+        let tools = registry.active(&[]);
+        // Every built-in tool with the `edit` permission writes files (namespace tools such as
+        // `opencode_worktree_remove` share the action but name no file).
+        for tool in tools.iter().filter(|t| t.hook_name().is_none()) {
+            if tool.permission() == "edit" {
+                assert!(crate::tool::writes_files(tool.as_ref()), "{}", tool.name());
+            }
+        }
+        let writers: Vec<String> = tools
+            .iter()
+            .filter(|t| crate::tool::writes_files(t.as_ref()))
+            .map(|t| t.name().to_string())
+            .collect();
+        assert_eq!(writers, ["edit", "notebook", "write"]);
+        for name in writers {
+            assert!(takes_file(&name), "{name}");
+        }
+        let cwd = Path::new("/work");
+        let notebook = input(
+            "notebook",
+            &json!({"path": "n.ipynb", "cellId": "a", "source": "x", "notebook_path": "planted"}),
+            cwd,
+        );
+        let expected = cwd.join("n.ipynb").display().to_string();
+        assert_eq!(notebook["file_path"], expected);
+        assert_eq!(notebook["notebook_path"], expected);
+        assert_eq!(notebook["cell_id"], "a");
+        assert_eq!(notebook["new_source"], "x");
+        assert_eq!(claude_name("notebook"), "NotebookEdit");
     }
 
     #[test]

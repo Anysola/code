@@ -55,6 +55,10 @@ pub(crate) type Answer = Result<Value, String>;
 const SESSION_LIST: u64 = 200;
 /// How long closing the window waits for MCP servers to stop.
 const EXIT_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+/// How long closing the window waits for the cores: their SessionEnd hooks (one shared budget,
+/// all cores at once) and then their stop.
+const CORES_GRACE: std::time::Duration =
+    EXIT_GRACE.saturating_add(anysola_core::hooks::SESSION_END_BUDGET);
 /// How long stopping a core waits for its interrupted turns to end.
 const STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
@@ -142,6 +146,19 @@ impl App {
         // Every folder's turns stop at once: their waits in `stop` overlap.
         for running in cells.iter().filter_map(|cell| cell.get()) {
             running.core.interrupt_all();
+        }
+        // SessionEnd hooks of every folder at once, within one budget (the core kills what
+        // still runs then), before anything is stopped.
+        let ends: Vec<_> = cells
+            .iter()
+            .filter_map(|cell| cell.get())
+            .map(|running| {
+                let core = running.core.clone();
+                tauri::async_runtime::spawn(async move { core.end_all_sessions().await })
+            })
+            .collect();
+        for end in ends {
+            let _ = end.await;
         }
         for cell in cells {
             if let Some(running) = cell.get() {
@@ -1149,6 +1166,10 @@ async fn delete_session(app: State<'_, App>, directory: String, session_id: Stri
     if core.as_ref().is_some_and(|core| core.is_busy(&session_id)) {
         return Err("Stop the session before deleting it.".into());
     }
+    // SessionEnd hooks while its folder (a worktree's too) is still there.
+    if let Some(core) = &core {
+        core.end_sessions(std::slice::from_ref(&session_id)).await;
+    }
     // Its worktree and branch go with it (what holds the folder open ends first).
     worktree::before_delete(core.as_ref(), &db, &app.terminals, &session_id).await?;
     let removed = match &core {
@@ -1415,7 +1436,7 @@ fn main() {
                 worktree::stop_all_setups();
                 app.terminals.close_all();
                 tauri::async_runtime::block_on(async {
-                    let _ = tokio::time::timeout(EXIT_GRACE, app.drop_cores()).await;
+                    let _ = tokio::time::timeout(CORES_GRACE, app.drop_cores()).await;
                 });
                 // Nobody is working in Anysola Code once it is closed.
                 if let Some(discord) = app.discord.get() {

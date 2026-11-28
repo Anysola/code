@@ -71,7 +71,7 @@ pub fn default_timeout(event: &str) -> u64 {
     }
 }
 
-/// The events 1.0.9 runs hooks for.
+/// The events hooks run for (the first five since 1.0.9, the last four since 1.6.0).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Event {
     PreToolUse,
@@ -79,7 +79,33 @@ pub enum Event {
     UserPromptSubmit,
     Stop,
     SessionStart,
+    /// `Stop` for a subagent's session: may keep it going, as `Stop` does a root session.
+    SubagentStop,
+    /// Before a compaction; may block a manual one only.
+    PreCompact,
+    /// The user has to answer something (a permission ask, a question). Never blocks.
+    Notification,
+    /// The app stops a session it started, or the session is deleted. Never blocks.
+    SessionEnd,
 }
+
+/// Every event, in the order the documentation lists them.
+pub const EVENTS: [Event; 9] = [
+    Event::PreToolUse,
+    Event::PostToolUse,
+    Event::UserPromptSubmit,
+    Event::Stop,
+    Event::SubagentStop,
+    Event::PreCompact,
+    Event::Notification,
+    Event::SessionStart,
+    Event::SessionEnd,
+];
+
+/// The time every SessionEnd hook of one pass shares, whatever its own `timeout`: the app is
+/// closing (or a session is deleted) and must not wait on them. Hooks still running then are
+/// killed.
+pub const SESSION_END_BUDGET: std::time::Duration = std::time::Duration::from_millis(1500);
 
 impl Event {
     pub fn parse(name: &str) -> Option<Event> {
@@ -89,6 +115,10 @@ impl Event {
             "UserPromptSubmit" => Event::UserPromptSubmit,
             "Stop" => Event::Stop,
             "SessionStart" => Event::SessionStart,
+            "SubagentStop" => Event::SubagentStop,
+            "PreCompact" => Event::PreCompact,
+            "Notification" => Event::Notification,
+            "SessionEnd" => Event::SessionEnd,
             _ => return None,
         })
     }
@@ -100,12 +130,28 @@ impl Event {
             Event::UserPromptSubmit => "UserPromptSubmit",
             Event::Stop => "Stop",
             Event::SessionStart => "SessionStart",
+            Event::SubagentStop => "SubagentStop",
+            Event::PreCompact => "PreCompact",
+            Event::Notification => "Notification",
+            Event::SessionEnd => "SessionEnd",
         }
     }
 
-    /// `UserPromptSubmit` and `Stop` run whatever their matcher says.
+    /// `UserPromptSubmit` and `Stop` run whatever their matcher says. The others match: a tool's
+    /// names, SessionStart's source, SubagentStop's agent type, PreCompact's trigger
+    /// (`manual`, `auto`), Notification's type (`permission_prompt`, `question`), SessionEnd's
+    /// reason (`other`), as Claude Code does.
     pub fn uses_matcher(self) -> bool {
         !matches!(self, Event::UserPromptSubmit | Event::Stop)
+    }
+
+    /// Since 1.6.0: a project document that configures one is asked about again (see
+    /// [`config::document_digest`]), since 1.5 approved it while ignoring the event.
+    pub fn added_in_1_6(self) -> bool {
+        matches!(
+            self,
+            Event::SubagentStop | Event::PreCompact | Event::Notification | Event::SessionEnd
+        )
     }
 }
 
@@ -672,7 +718,7 @@ pub(crate) fn apply(
     configured.documents.push(Document {
         path: path.to_string(),
         scope,
-        digest: config::digest(&value),
+        digest: config::document_digest(&value, &handlers),
         handlers,
     });
 }

@@ -34,6 +34,10 @@ impl Tool for WriteTool {
         "write"
     }
 
+    fn writes_files(&self) -> bool {
+        true
+    }
+
     fn permission(&self) -> &'static str {
         "edit"
     }

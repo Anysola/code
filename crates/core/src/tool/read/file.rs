@@ -116,16 +116,44 @@ pub(super) fn read(path: &Path, page: Page) -> Result<Content, ReadError> {
         let base64 = base64::engine::general_purpose::STANDARD.encode(&first);
         return Ok(Content::Media { mime, base64 });
     }
+    if is_notebook(path) && meta.len() <= crate::tool::notebook::VIEW_BYTES {
+        file.read_to_end(&mut first).map_err(io_error)?;
+        if let Some(view) = crate::tool::notebook::view(&first) {
+            let paged = view.len() > MAX_BYTES || page.offset.is_some() || page.limit.is_some();
+            if !paged {
+                let lines: Vec<String> = view.split('\n').map(clamp).collect();
+                return Ok(Content::Text(lines.join("\n")));
+            }
+            return text_page(BufReader::new(Cursor::new(view.into_bytes())), page);
+        }
+        // Not a notebook after all: read as text, from what is already in memory.
+        let paged = first.len() > MAX_BYTES || page.offset.is_some() || page.limit.is_some();
+        if !paged {
+            return whole_text(&first);
+        }
+        return text_page(BufReader::new(Cursor::new(first)), page);
+    }
     let paged = meta.len() > MAX_BYTES as u64 || page.offset.is_some() || page.limit.is_some();
     if !paged {
-        if first.contains(&0) {
-            return Err(ReadError::Binary);
-        }
-        let decoded = String::from_utf8_lossy(first.strip_prefix(BOM).unwrap_or(&first));
-        let lines: Vec<String> = decoded.split('\n').map(clamp).collect();
-        return Ok(Content::Text(lines.join("\n")));
+        return whole_text(&first);
     }
     text_page(BufReader::new(Cursor::new(first).chain(file)), page)
+}
+
+/// A whole small text file: every line clamped.
+fn whole_text(bytes: &[u8]) -> Result<Content, ReadError> {
+    if bytes.contains(&0) {
+        return Err(ReadError::Binary);
+    }
+    let decoded = String::from_utf8_lossy(bytes.strip_prefix(BOM).unwrap_or(bytes));
+    let lines: Vec<String> = decoded.split('\n').map(clamp).collect();
+    Ok(Content::Text(lines.join("\n")))
+}
+
+/// `.ipynb`, in any case: read shows its cells (see [`crate::tool::notebook::view`]).
+fn is_notebook(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("ipynb"))
 }
 
 /// PNG, JPEG, GIF, WebP and PDF are the readable media; anything else (BMP included) is text.

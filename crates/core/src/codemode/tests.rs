@@ -316,6 +316,7 @@ fn denied_execute_exposes_direct_tools() {
             "edit",
             "glob",
             "grep",
+            "notebook",
             "opencode_list_mcp_resources",
             "opencode_models",
             "opencode_read_mcp_resource",

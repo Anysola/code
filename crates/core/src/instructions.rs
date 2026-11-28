@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use crate::paths::Paths;
 
-pub use state::{Observed, Prepared, Source, prepare};
+pub use state::{Observed, Prepared, Source, peek, prepare};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstructionFile {

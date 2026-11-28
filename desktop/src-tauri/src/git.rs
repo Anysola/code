@@ -1273,8 +1273,10 @@ pub async fn suggest_commit_message(
             "Write a git commit message for the changes made in this session: a subject line \
              under 72 characters in the imperative mood, then, only if it helps, a blank line \
              and a short body. Reply with the message only, no code fences.",
+            &anysola_core::api::CancellationToken::new(),
         )
-        .await?;
+        .await
+        .map_err(|e| e.message)?;
     Ok(json!(answer.trim().trim_matches('`').trim()))
 }
 

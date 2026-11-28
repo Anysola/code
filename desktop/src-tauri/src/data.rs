@@ -230,7 +230,36 @@ pub async fn delete_all_sessions(app: State<'_, App>) -> Answer {
     let mut kept = 0;
     // Of `kept`: the ones whose changes were being applied (not a running turn).
     let mut applying = 0;
-    for (id, directory, held) in db.all_root_sessions().map_err(text)? {
+    let all = db.all_root_sessions().map_err(text)?;
+    // SessionEnd hooks of the sessions about to go (those a running core started), every
+    // folder at once, while their folders are still there.
+    let mut ending: Vec<(anysola_core::api::Core, Vec<String>)> = Vec::new();
+    for (id, directory, held) in &all {
+        let directory = crate::worktree::folder_of(&db, directory, id);
+        let Some(core) = app.running(&directory).await else {
+            continue;
+        };
+        if *held || core.is_busy(id) {
+            continue;
+        }
+        match ending
+            .iter_mut()
+            .find(|(c, _)| c.directory() == core.directory())
+        {
+            Some((_, ids)) => ids.push(id.clone()),
+            None => ending.push((core, vec![id.clone()])),
+        }
+    }
+    let ends: Vec<_> = ending
+        .into_iter()
+        .map(|(core, ids)| {
+            tauri::async_runtime::spawn(async move { core.end_sessions(&ids).await })
+        })
+        .collect();
+    for end in ends {
+        let _ = end.await;
+    }
+    for (id, directory, held) in all {
         // A worktree session's core is its main folder's.
         let directory = crate::worktree::folder_of(&db, &directory, &id);
         let core = app.running(&directory).await;

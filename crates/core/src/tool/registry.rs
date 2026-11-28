@@ -59,6 +59,7 @@ impl Registry {
             Arc::new(super::edit::EditTool),
             Arc::new(super::glob::GlobTool),
             Arc::new(super::grep::GrepTool),
+            Arc::new(super::notebook::NotebookTool),
             Arc::new(super::question::QuestionTool),
             Arc::new(super::read::ReadTool),
             Arc::new(super::shell::ShellTool),

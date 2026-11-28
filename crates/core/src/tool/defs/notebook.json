@@ -1,0 +1,45 @@
+{
+  "description": "Change one cell of a Jupyter notebook (.ipynb): replace its source, insert a new cell, or delete it. Name the cell by cellId, or by index (0-based) when it has no id, as read shows them. Everything else in the notebook is kept. Replacing a code cell's source clears its outputs.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Notebook to change"
+      },
+      "cellId": {
+        "type": "string",
+        "description": "Id of the cell to change (insert: the new cell goes after it)"
+      },
+      "index": {
+        "type": "integer",
+        "description": "0-based index of the cell, instead of cellId"
+      },
+      "mode": {
+        "type": "string",
+        "enum": [
+          "replace",
+          "insert",
+          "delete"
+        ],
+        "description": "Defaults to replace. Insert without a cell adds the new cell first."
+      },
+      "source": {
+        "type": "string",
+        "description": "The cell's new source (replace, insert)"
+      },
+      "cellType": {
+        "type": "string",
+        "enum": [
+          "code",
+          "markdown"
+        ],
+        "description": "Type of an inserted cell (default code), or a new type for the replaced cell"
+      }
+    },
+    "required": [
+      "path"
+    ],
+    "additionalProperties": false
+  }
+}

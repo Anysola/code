@@ -4,6 +4,36 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## 1.6.0 (unreleased)
+
+- **Four more hook events, in Claude Code's format:** `SubagentStop` (keeps a subagent going like `Stop`, same
+  8-round cap; matcher is the subagent's type; payload `agent_id`, `agent_type`, `stop_hook_active`,
+  `last_assistant_message`), `PreCompact` (matcher `manual` or `auto`; may block `/compact`, never an automatic
+  compaction, where a block is shown as a notice), `Notification` (matcher `permission_prompt` or `question`; runs
+  alongside the ask without delaying or answering it) and `SessionEnd` (when the app closes, signs in or out, or a
+  session is deleted; reason `other`; all SessionEnd hooks share 1.5 seconds, then they are stopped). The app's exit
+  waits that much longer for them. A tool hook's `continue: false` in a subagent now also skips its stop hooks.
+- **Project hooks approved before 1.6 are asked about again when they configure one of the new events**: 1.5
+  ignored those events, so its approval never covered them. Until you approve the file again, none of its hooks
+  run (its `PreToolUse` guards included), as for any project hook file that changed.
+- **Notebooks:** reading an `.ipynb` file shows its cells (index, id, type, source, shortened text outputs, image
+  placeholders) instead of raw JSON. New `notebook` tool (`NotebookEdit` to hooks, with `file_path` and
+  `notebook_path`) replaces, inserts or deletes one cell and writes only that cell anew: every other cell keeps its
+  exact bytes. It goes through every check a file edit does: it asks as an edit with a diff, it can't write
+  outside a worktree session's own folder, the plan agent can't use it, and it always asks for your config files,
+  hook scripts, the database and Git's data.
+- **Side questions (`/btw`, core):** a one-off answer from the session's context while a turn runs, cancellable,
+  with a reason when there is no answer (budget, rate limit, usage limit, too long, cancelled, no text). It sends
+  only completed steps, writes nothing to the session, and stops at a spent budget like every model call. Commit
+  message suggestions use the same path.
+- **Session import (core):** an export file becomes a new session with fresh ids and the conversation only. The
+  file is checked (at most 64 MiB, 20,000 messages, bounded nesting) before anything is written; permissions,
+  settings, parent, fork, revert, snapshots, signed reasoning, instruction updates, model and folder switches and
+  tool metadata that points at another machine are dropped, and images go through the same checks as attached
+  ones, so an imported session can be opened, forked and continued but can't revert files.
+- **Notes (`/memory`, core):** adds a line to the `AGENTS.md` at the root of the session's checkout (a worktree
+  session's own) or to `~/.anysola/AGENTS.md`; a link is followed only to a regular file inside the checkout.
+
 ## 1.5.0 (2026-11-26)
 
 - **LSP diagnostics now use per-project approval (`TrustKind::Lsp`) and are on by default for approved projects.**

@@ -3,6 +3,7 @@
 //! other processes respect.
 
 mod credential;
+pub mod import;
 mod inbox;
 mod instruction;
 mod permission;
@@ -12,11 +13,12 @@ mod schema;
 mod transfer;
 mod worktree;
 
+pub use import::ImportError;
 pub use inbox::InboxRow;
 pub use instruction::{InstructionState, Values};
 pub use permission::SavedPermission;
 pub use schedule::{Guard, ScheduleRow};
-pub use transfer::{ImportError, SessionSummary, sanitize};
+pub use transfer::{SessionSummary, sanitize};
 pub use worktree::{SessionWorktreeRow, WorktreeState};
 
 use std::path::Path;

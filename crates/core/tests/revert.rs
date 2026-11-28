@@ -140,3 +140,61 @@ fn revert_unrevert_commit() {
         .unwrap();
     assert_eq!(transcript(&last), vec!["user: again"]);
 }
+
+#[test]
+fn a_notebook_edit_is_captured_and_reverted() {
+    let gateway = FakeGateway::start(|request, _| {
+        let body = request.body.clone();
+        if request.is_title() || body.contains("tool_result") || !body.contains("change cell") {
+            return text(request, "done");
+        }
+        let model = request.json()["model"].as_str().unwrap().to_string();
+        Reply::Sse {
+            body: Stream::new()
+                .tool(
+                    "toolu_n",
+                    "notebook",
+                    json!({"path": "n.ipynb", "index": 0, "source": "x = 2"}),
+                )
+                .finish(&model, Some(1)),
+        }
+    });
+    let env = env(&gateway.url);
+    let project = env.home.project();
+    let original = "{\n \"cells\": [\n  {\n   \"cell_type\": \"code\",\n   \"execution_count\": 1,\n   \"metadata\": {},\n   \"outputs\": [],\n   \"source\": [\n    \"x = 1\"\n   ]\n  }\n ],\n \"metadata\": {},\n \"nbformat\": 4,\n \"nbformat_minor\": 4\n}\n";
+    std::fs::write(project.join("n.ipynb"), original).unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&project)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("change cell"), TurnOptions::default()))
+        .unwrap();
+    let changed = std::fs::read_to_string(project.join("n.ipynb")).unwrap();
+    assert!(changed.contains("\"x = 2\""), "{changed}");
+    assert!(changed.contains("\"execution_count\": null"));
+    let db = Db::open(&env.home.home().join(".anysola/anysola.db")).unwrap();
+    let rows = db.messages(&session.id).unwrap();
+    let step = rows.iter().find(|r| r.kind == "assistant").unwrap();
+    assert_eq!(step.data["snapshot"]["files"], json!(["n.ipynb"]));
+    let tool = &step.data["content"][0];
+    assert_eq!(tool["state"]["metadata"]["files"][0]["file"], "n.ipynb");
+    let user = rows.iter().find(|r| r.kind == "user").unwrap().id.clone();
+    core.revert(&session.id, &user).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(project.join("n.ipynb")).unwrap(),
+        original
+    );
+    core.unrevert(&session.id).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(project.join("n.ipynb")).unwrap(),
+        changed
+    );
+}

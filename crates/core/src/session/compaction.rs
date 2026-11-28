@@ -770,6 +770,13 @@ pub(crate) async fn compact(
             return Outcome::Skipped;
         }
     }
+    // PreCompact runs before anything is taken or written: a blocked `/compact` leaves the
+    // session (and a summary held for it) as it was.
+    if let Some(reason) =
+        crate::hooks::fire::pre_compact(shared, session, trigger == Trigger::Manual, cancel).await
+    {
+        return Outcome::Failed(SessionError::new(crate::hooks::BLOCKED, reason));
+    }
     let held = shared
         .precomputed
         .lock()

@@ -599,6 +599,16 @@ fn a_spent_budget_stops_every_model_call_until_it_is_raised() {
         budget,
         "/compact waits for the budget too"
     );
+    let aside = runtime.block_on(core.aside(
+        &capped.id,
+        "what now?",
+        &anysola_core::api::CancellationToken::new(),
+    ));
+    assert_eq!(
+        aside.map_err(|e| e.kind),
+        Err(anysola_core::api::AsideKind::Budget),
+        "/btw waits for the budget too"
+    );
     assert_eq!(calls(), before, "no model call once the budget is spent");
     // Each stop the user asked for says why (no `repeat` mark), the second prompt's too.
     let db = Db::open(&env.home.home().join(".anysola/anysola.db")).unwrap();

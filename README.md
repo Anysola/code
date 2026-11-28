@@ -34,9 +34,19 @@ and skills the same way. For compatibility, the 0.5.x names are still read: `ope
 ## Hooks
 
 Hooks are commands that run around the agent's work: `PreToolUse` and `PostToolUse` around each tool call,
-`UserPromptSubmit` when you send a message, `Stop` when the agent would stop, and `SessionStart`. The format is
-Claude Code's, so existing hook scripts work: the event comes as JSON on stdin, exit code 2 blocks with stderr as
-the reason, and JSON on stdout can add context or deny a call. Settings → Hooks adds, edits and removes them.
+`UserPromptSubmit` when you send a message, `Stop` when the agent would stop and `SubagentStop` when a subagent
+would, `PreCompact` before the conversation is compacted, `Notification` when you are asked something (a
+permission or a question), and `SessionStart` and `SessionEnd`. The format is Claude Code's, so existing hook
+scripts work: the event comes as JSON on stdin, exit code 2 blocks with stderr as the reason, and JSON on stdout can
+add context or deny a call. Settings → Hooks adds, edits and removes them.
+
+What each new event can do: `SubagentStop` keeps a subagent going like `Stop` does the agent (8 times in a row at
+most), and its matcher is the subagent's type. `PreCompact` can block a `/compact` (matcher `manual`); an automatic
+compaction (matcher `auto`) can't be blocked, since the conversation could not go on, and a block is only shown.
+`Notification` (matcher `permission_prompt` or `question`) runs alongside the question, never answers it and never
+holds it up. `SessionEnd` runs when the app closes or signs you in or out, and when you delete a session (reason
+`other`); all of them together get 1.5 seconds, then they are stopped. `Notification` and `SessionEnd` can't block
+anything; their exit code 2 shows stderr to you.
 
 Hooks run in your `shell` setting; without one, on Windows in Git Bash when it is installed (so
 `"$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh` works as written), else in the shell commands use. A hook can name its own with a
@@ -46,8 +56,9 @@ runs and can set its shell.
 
 Hooks only tighten: a hook can block a call or have you asked about it, never allow something your permissions
 would not. Hooks in `~/.anysola/config.json` run right away; a project's hooks run only once you approve them in
-the conversation, and again after they change. The agent's edit and write tools always ask before changing your
-config files, the files your hooks run and the app's database.
+the conversation, and again after they change. A project file approved in 1.5 or earlier that has hooks for one of
+the events added in 1.6 is asked about again. The agent's file tools (edit, write, notebook) always ask before
+changing your config files, the files your hooks run and the app's database.
 
 ## What a project can change
 
@@ -110,6 +121,23 @@ running servers immediately, and `"lsp": false` in your own or project config di
 
 A branch made from an older session (from before worktrees) starts from the main folder's current commit with
 only that session's own files as they were then; other uncommitted changes of the main folder aren't in it.
+
+## Notebooks
+
+The agent reads a Jupyter notebook (`.ipynb`) as its cells: each cell's index, id, type and source, with text
+outputs and error tracebacks shortened and images as a placeholder. It changes one cell at a time with the
+`notebook` tool (`NotebookEdit` to hooks): replace a cell's source, insert a cell, or delete one. The rest of the
+file is kept as it was, and replacing a code cell's source clears its outputs. It asks and is undone like any other
+file edit.
+
+## Side questions, import and notes
+
+`/btw <question>` asks about the session without adding to it, also while the agent is working: the answer comes
+from what the session already holds, uses no tools, and isn't stored. "Import session…" takes a file written by
+Export: it becomes a new session in the folder you choose, with the conversation only. Nothing in the file carries
+permissions, settings, hooks or approvals, and snapshots from another machine are not taken, so an imported
+session can't revert files. `/memory` adds a line to the project's `AGENTS.md` (in a worktree session, the
+worktree's) or to your own `~/.anysola/AGENTS.md`.
 
 ## Usage limits
 

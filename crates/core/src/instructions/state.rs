@@ -95,6 +95,25 @@ fn render_initial(sources: &[Source], values: &BTreeMap<String, Value>) -> Strin
         .join("\n\n")
 }
 
+/// The baseline [`prepare`] would give, without recording anything: a side question must not
+/// write to a session (whose turn may be running). Changes since the baseline are left for the
+/// next step to record.
+pub fn peek(db: &Db, session_id: &str, sources: &[Source]) -> Result<String, SessionError> {
+    match db.instruction_state(session_id).map_err(storage)? {
+        Some(state) => Ok(render_initial(sources, &load(db, &state.initial)?)),
+        None => {
+            let current: BTreeMap<String, Value> = sources
+                .iter()
+                .filter_map(|source| match &source.observed {
+                    Observed::Value(value) => Some((source.key.clone(), value.clone())),
+                    _ => None,
+                })
+                .collect();
+            Ok(render_initial(sources, &current))
+        }
+    }
+}
+
 /// Records what the sources show now. The first call stores the baseline; later calls record a
 /// `system` message when anything changed. Unavailable sources block only the first call.
 pub fn prepare(db: &Db, session_id: &str, sources: &[Source]) -> Result<Prepared, SessionError> {

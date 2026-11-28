@@ -38,6 +38,10 @@ impl Tool for EditTool {
         "edit"
     }
 
+    fn writes_files(&self) -> bool {
+        true
+    }
+
     fn definition(&self, _: &DefinitionEnv) -> ToolDefinition {
         let def = def();
         ToolDefinition {

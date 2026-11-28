@@ -10,7 +10,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use tokio::sync::Mutex;
 
-use crate::{Answer, App, EXIT_GRACE, text};
+use crate::{Answer, App, CORES_GRACE, EXIT_GRACE, text};
 
 const RELEASES: &str = "https://github.com/Anysola/code/releases";
 
@@ -113,18 +113,22 @@ pub async fn update_install(handle: AppHandle, pending: State<'_, Pending>) -> A
 /// whatever of ours is still running; the installer goes on.
 fn before_exit(handle: &AppHandle) {
     let worker = handle.clone();
-    // Setup commands 5 s, terminals 2 s, the cores and Discord a grace each.
-    bounded(EXIT_GRACE * 2 + Duration::from_secs(8), move || {
-        let app = worker.state::<App>();
-        crate::worktree::stop_all_setups();
-        app.terminals.close_all();
-        tauri::async_runtime::block_on(async {
-            let _ = tokio::time::timeout(EXIT_GRACE, app.drop_cores()).await;
-        });
-        if let Some(discord) = app.discord.get() {
-            discord.stop(EXIT_GRACE);
-        }
-    });
+    // Setup commands 5 s, terminals 2 s, the cores (SessionEnd hooks included) and Discord a
+    // grace each.
+    bounded(
+        CORES_GRACE + EXIT_GRACE + Duration::from_secs(8),
+        move || {
+            let app = worker.state::<App>();
+            crate::worktree::stop_all_setups();
+            app.terminals.close_all();
+            tauri::async_runtime::block_on(async {
+                let _ = tokio::time::timeout(CORES_GRACE, app.drop_cores()).await;
+            });
+            if let Some(discord) = app.discord.get() {
+                discord.stop(EXIT_GRACE);
+            }
+        },
+    );
     // What the plugin's own hook does, which this one replaces.
     handle.cleanup_before_exit();
 }

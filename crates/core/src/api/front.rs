@@ -1,16 +1,150 @@
 //! What the interactive UI reads besides prompting: the directory and project, recent sessions,
 //! a session's decoded messages, account routes, and `!` shell commands.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
+use tokio_util::sync::CancellationToken;
 
 use super::{Core, CoreError};
 use crate::gateway::account::{Method, Reply};
 use crate::session::message::{AssistantTime, Message, ShellData, ShellOutput};
 use crate::storage::SessionSummary;
+use crate::storage::{ImportError, SessionRow};
 use crate::time::now_ms;
+
+/// The instruction file a note is added to.
+const MEMORY_FILE: &str = "AGENTS.md";
+
+/// Where `/memory` notes go: see [`Core::memory_files`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryFiles {
+    /// `<root>/AGENTS.md`.
+    pub project: PathBuf,
+    /// `~/.anysola/AGENTS.md`.
+    pub personal: PathBuf,
+    /// The checkout the project file belongs to.
+    pub root: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryScope {
+    Project,
+    Personal,
+}
+
+/// Why a side question has no answer; `kind` as the window shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AsideKind {
+    /// The session's budget is spent.
+    Budget,
+    /// Too many requests at once (after the retries for calls that never ran).
+    RateLimit,
+    /// The account's 5-hour or weekly window is full.
+    UsageLimit,
+    /// The conversation does not fit the model.
+    TooLong,
+    Cancelled,
+    /// The model answered with no text (only a tool call, say).
+    Empty,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, thiserror::Error)]
+#[error("{message}")]
+pub struct AsideError {
+    pub kind: AsideKind,
+    pub message: String,
+}
+
+impl AsideError {
+    fn other(message: String) -> Self {
+        AsideError {
+            kind: AsideKind::Other,
+            message,
+        }
+    }
+
+    fn of(error: crate::gateway::error::SessionError) -> Self {
+        let kind = match error.kind.as_str() {
+            "budget" => AsideKind::Budget,
+            "provider.rate-limit" => AsideKind::RateLimit,
+            crate::gateway::error::USAGE_LIMIT_KIND => AsideKind::UsageLimit,
+            _ if error.status == Some(413) => AsideKind::TooLong,
+            _ => AsideKind::Other,
+        };
+        AsideError {
+            kind,
+            message: error.message,
+        }
+    }
+}
+
+/// Appends `line` to the instruction file `path` (see [`Core::add_memory`]); `inside`: the
+/// checkout a project file must stay in.
+fn append_note(path: &Path, inside: Option<&Path>, line: &str) -> Result<(), CoreError> {
+    use std::io::Write;
+    let fail = |what: String| CoreError::Memory(what);
+    let shown = path.display();
+    let existing = match std::fs::symlink_metadata(path) {
+        Ok(meta) => Some(meta),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(fail(format!("Can’t read {shown}: {e}"))),
+    };
+    let Some(meta) = existing else {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| fail(format!("Can’t create {shown}: {e}")))?;
+        }
+        // `create_new`: a link planted in the meantime is not followed.
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|e| fail(format!("Can’t create {shown}: {e}")))?;
+        return file
+            .write_all(line.as_bytes())
+            .map_err(|e| fail(format!("Can’t write {shown}: {e}")));
+    };
+    if meta.file_type().is_symlink()
+        && let Some(root) = inside
+    {
+        let real = std::fs::canonicalize(path)
+            .map_err(|e| fail(format!("Can’t follow the link {shown}: {e}")))?;
+        let root = crate::paths::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        if !real.starts_with(&root) {
+            return Err(fail(format!(
+                "{shown} links outside its project ({}), so no note was added.",
+                real.display()
+            )));
+        }
+    }
+    let current = crate::paths::read_text(path, crate::paths::TEXT_CAP).map_err(|reason| {
+        fail(match reason {
+            crate::paths::Unread::Io(e) => format!("Can’t read {shown}: {e}"),
+            _ => format!("{shown} isn’t a text file of at most 4 MiB, so no note was added."),
+        })
+    })?;
+    let separator = if current.is_empty() || current.ends_with('\n') {
+        ""
+    } else {
+        "\n"
+    };
+    if (current.len() + separator.len() + line.len()) as u64 > crate::paths::TEXT_CAP {
+        return Err(fail(format!(
+            "{shown} would be larger than 4 MiB, which instructions can’t be."
+        )));
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .map_err(|e| fail(format!("Can’t write {shown}: {e}")))?;
+    file.write_all(format!("{separator}{line}").as_bytes())
+        .map_err(|e| fail(format!("Can’t write {shown}: {e}")))
+}
 
 /// A hung `!` command must not hold the composer forever.
 const SHELL_TIMEOUT: Duration = Duration::from_secs(120);
@@ -91,23 +225,124 @@ impl Core {
         Ok(())
     }
 
-    /// `/btw`: a one-shot answer from the session's context; nothing is added to the session.
-    pub async fn aside(&self, session_id: &str, question: &str) -> Result<String, String> {
+    /// `/btw`: a one-shot answer to `question` from the session's context, also while a turn of
+    /// it runs. Nothing is written to the session (usage is recorded, as for any model call);
+    /// the request carries the session's tools unchanged (the cached prefix) but a tool call in
+    /// the answer is ignored. Cancelling `cancel` ends the request at once.
+    pub async fn aside(
+        &self,
+        session_id: &str,
+        question: &str,
+        cancel: &CancellationToken,
+    ) -> Result<String, AsideError> {
         const INSTRUCTIONS: &str = "The user is asking a quick side question about the conversation so far. Answer directly and concisely in markdown from what you already know. Do not call any tools and do not take any actions.";
         let session = self
             .session(session_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| CoreError::SessionNotFound.to_string())?;
+            .map_err(|e| AsideError::other(e.to_string()))?
+            .ok_or_else(|| AsideError::other(CoreError::SessionNotFound.to_string()))?;
         let prompt = format!("{INSTRUCTIONS}\n\n{question}");
-        match crate::session::step::generate(&self.shared, &session, &prompt).await {
+        let how = crate::session::step::OneShot { aside: true };
+        let answer = tokio::select! {
+            answer = crate::session::step::generate_with(&self.shared, &session, &prompt, how) => answer,
+            _ = cancel.cancelled() => return Err(AsideError {
+                kind: AsideKind::Cancelled,
+                message: "The side question was cancelled.".into(),
+            }),
+        };
+        match answer {
+            Ok(text) if text.trim().is_empty() => Err(AsideError {
+                kind: AsideKind::Empty,
+                message: "The model gave no answer. Try asking again.".into(),
+            }),
             Ok(text) => Ok(text.trim().to_string()),
-            Err(crate::session::step::GenerateError::Overflow) => {
-                Err("The conversation is too long for a side question.".into())
-            }
-            Err(crate::session::step::GenerateError::Failed(error)) => Err(error.message),
+            Err(crate::session::step::GenerateError::Overflow) => Err(AsideError {
+                kind: AsideKind::TooLong,
+                message: "The conversation is too long for a side question.".into(),
+            }),
+            Err(crate::session::step::GenerateError::Failed(error)) => Err(AsideError::of(error)),
         }
     }
 
+    /// SessionEnd hooks (`reason: "other"`) for these sessions, those of them that started in
+    /// this process: before they are deleted. Never blocks anything; waits at most
+    /// [`crate::hooks::SESSION_END_BUDGET`], then kills what still runs.
+    pub async fn end_sessions(&self, session_ids: &[String]) {
+        crate::hooks::fire::session_end(&self.shared, Some(session_ids), "other").await;
+    }
+
+    /// SessionEnd hooks for every session that started in this process, as the app stops this
+    /// core: at most [`crate::hooks::SESSION_END_BUDGET`] for all of them together.
+    pub async fn end_all_sessions(&self) {
+        crate::hooks::fire::session_end(&self.shared, None, "other").await;
+    }
+
+    /// Imports a session export (untrusted; see [`crate::storage::import`]) as a new root
+    /// session of this core's folder and announces it (`session.created`).
+    pub fn import_session(&self, bytes: &[u8]) -> Result<SessionRow, ImportError> {
+        let directory = self.shared.directory.display().to_string();
+        let row = self
+            .shared
+            .db
+            .import_session(bytes, &self.shared.project, &directory)?;
+        let _ = self
+            .shared
+            .events
+            .send(crate::events::Event::SessionCreated {
+                session_id: row.id.clone(),
+                parent_id: None,
+                title: row.title.clone(),
+            });
+        Ok(row)
+    }
+
+    /// [`Core::import_session`] of the file at `path` (a regular file of at most
+    /// [`crate::storage::import::MAX_FILE_BYTES`], read no further).
+    pub fn import_session_file(&self, path: &Path) -> Result<SessionRow, ImportError> {
+        let bytes = crate::storage::import::read_file(path)?;
+        self.import_session(&bytes)
+    }
+
+    /// The instruction files a note can go to: the project's `AGENTS.md` at the root of the
+    /// checkout the session works in (its own worktree for a worktree session; without a
+    /// session, this core's project), and the personal `~/.anysola/AGENTS.md`.
+    pub fn memory_files(&self, session_id: Option<&str>) -> Result<MemoryFiles, CoreError> {
+        let root = match session_id {
+            Some(id) => {
+                let session = self.session(id)?.ok_or(CoreError::SessionNotFound)?;
+                self.shared.checkout_of(&session).root
+            }
+            None => self.shared.project.worktree.clone(),
+        };
+        Ok(MemoryFiles {
+            project: root.join(MEMORY_FILE),
+            personal: self.shared.paths.data.join(MEMORY_FILE),
+            root,
+        })
+    }
+
+    /// Adds `text` as a line (`- text`) at the end of an instruction file (see
+    /// [`Core::memory_files`]), creating it when missing. The user asks for this, so nothing is
+    /// asked; the file must be what instruction files may be: a regular file (a project file
+    /// may be a link only to a regular file inside its checkout) of at most 4 MiB, in UTF-8.
+    /// Returns the file written.
+    pub fn add_memory(
+        &self,
+        session_id: Option<&str>,
+        scope: MemoryScope,
+        text: &str,
+    ) -> Result<PathBuf, CoreError> {
+        let files = self.memory_files(session_id)?;
+        let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if line.is_empty() {
+            return Err(CoreError::Memory("Write the note to add.".into()));
+        }
+        let (path, inside) = match scope {
+            MemoryScope::Project => (files.project, Some(files.root)),
+            MemoryScope::Personal => (files.personal, None),
+        };
+        append_note(&path, inside.as_deref(), &format!("- {line}\n"))?;
+        Ok(path)
+    }
     /// The project's other checkouts.
     pub fn worktrees(&self) -> Vec<crate::worktree::Worktree> {
         crate::worktree::list(&self.shared.db, &self.shared.project.id)
@@ -355,5 +590,59 @@ impl Core {
             metadata.insert(GRANTED.into(), json!(directories));
         }
         Ok(db.set_session_access(session_id, &granted, &metadata)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_note_is_a_line_at_the_end_of_a_regular_file_in_its_checkout() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("proj");
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("AGENTS.md");
+        append_note(&file, Some(&root), "- one\n").unwrap();
+        append_note(&file, Some(&root), "- two\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "- one\n- two\n");
+        std::fs::write(&file, "# Rules").unwrap();
+        append_note(&file, Some(&root), "- three\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "# Rules\n- three\n"
+        );
+        #[cfg(unix)]
+        {
+            // A link to a file in the checkout is written through (AGENTS.md -> CLAUDE.md).
+            let claude = root.join("CLAUDE.md");
+            std::fs::write(&claude, "c\n").unwrap();
+            let linked = root.join("sub/AGENTS.md");
+            std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(&claude, &linked).unwrap();
+            append_note(&linked, Some(&root), "- four\n").unwrap();
+            assert_eq!(std::fs::read_to_string(&claude).unwrap(), "c\n- four\n");
+            assert!(
+                std::fs::symlink_metadata(&linked)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            // A link out of the checkout, or to something that is not a regular file, is refused.
+            let outside = dir.path().join("config.json");
+            std::fs::write(&outside, "{}").unwrap();
+            let escape = root.join("x/AGENTS.md");
+            std::fs::create_dir_all(escape.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(&outside, &escape).unwrap();
+            assert!(append_note(&escape, Some(&root), "- no\n").is_err());
+            assert_eq!(std::fs::read_to_string(&outside).unwrap(), "{}");
+            let device = root.join("y/AGENTS.md");
+            std::fs::create_dir_all(device.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink("/dev/zero", &device).unwrap();
+            assert!(append_note(&device, None, "- no\n").is_err());
+        }
+        let folder = root.join("z/AGENTS.md");
+        std::fs::create_dir_all(&folder).unwrap();
+        assert!(append_note(&folder, Some(&root), "- no\n").is_err());
     }
 }
