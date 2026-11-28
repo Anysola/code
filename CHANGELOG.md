@@ -4,7 +4,7 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
-## 1.6.0
+## 1.6.0 (2026-11-28)
 
 - **Four more hook events, in Claude Code's format:** `SubagentStop` (keeps a subagent going like `Stop`, same
   cap of 8 rounds in a row without a tool call; matcher is the subagent's type; payload `agent_id`, `agent_type`, `stop_hook_active`,
