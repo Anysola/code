@@ -273,7 +273,7 @@ fn a_call_that_started_before_the_refusal_keeps_its_result() {
                 .tool(
                     "toolu_1",
                     "shell",
-                    json!({"command": "touch started-marker && sleep 30", "description": "slow"}),
+                    json!({"command": "echo ran > started-marker; sleep 30", "description": "slow"}),
                 )
                 .refusal(Some("cyber"))
                 .finish(&model(request), Some(1));
@@ -334,7 +334,7 @@ fn a_call_that_never_started_is_dropped_with_its_prompt() {
                     .tool(
                         "toolu_1",
                         "shell",
-                        json!({"command": "touch flagged-marker", "description": "flagged"}),
+                        json!({"command": "echo ran > flagged-marker", "description": "flagged"}),
                     )
                     .refusal(Some("cyber"))
                     .finish(&model(request), Some(1)),
@@ -343,7 +343,7 @@ fn a_call_that_never_started_is_dropped_with_its_prompt() {
         text(request, "ok")
     });
     let env = env(&gateway.url);
-    let runtime = runtime();
+    let runtime = one_thread();
     let core = runtime.block_on(common::core(&env));
     let (session, _) = core.open(&Target::New, false).unwrap();
     let outcome = runtime
@@ -427,7 +427,7 @@ fn a_refused_steps_shell_call_never_starts_in_40_runs() {
                     .tool(
                         "toolu_1",
                         "shell",
-                        json!({"command": format!("touch {name}"), "description": "touch"}),
+                        json!({"command": format!("echo ran > {name}"), "description": "touch"}),
                     )
                     .refusal(Some("cyber"))
                     .finish(&model(request), Some(1)),
@@ -484,7 +484,13 @@ fn a_stop_after_the_refusal_still_drops_the_step() {
         let id = session.id.clone();
         runtime.spawn(async move { core.prompt(&id, prompt("go"), TurnOptions::default()).await })
     };
-    std::thread::sleep(std::time::Duration::from_millis(1500));
+    // The request is in; its body (text and the refusal) is read at once, the end is held.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while turns(&gateway).is_empty() {
+        assert!(std::time::Instant::now() < deadline, "no request arrived");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(700));
     core.interrupt(&session.id);
     let outcome = runtime.block_on(turn).unwrap().unwrap();
     assert_eq!(failed(outcome).1, PROMPT_DECLINED);
