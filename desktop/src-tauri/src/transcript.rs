@@ -358,6 +358,12 @@ pub fn items(entries: Vec<Entry>, directory: &str) -> Vec<Value> {
                 }
             }
             Message::Compaction(data) => {
+                // The model declined the summary: the note says so for `retry`, which then does not
+                // send the turn's message again (the same fact the error rows carry).
+                let declined = data
+                    .error
+                    .as_ref()
+                    .is_some_and(|e| e.kind == anysola_core::session::refusal::KIND);
                 let (text, failed) = match data.status.as_str() {
                     "completed" => ("Compacted the conversation so far".to_string(), false),
                     "failed" => (
@@ -369,7 +375,11 @@ pub fn items(entries: Vec<Entry>, directory: &str) -> Vec<Value> {
                     ),
                     _ => ("Compacting the conversation…".to_string(), false),
                 };
-                out.push(json!({"kind": "note", "id": id, "text": text, "failed": failed}));
+                let mut note = json!({"kind": "note", "id": id, "text": text, "failed": failed});
+                if failed && declined {
+                    note["errorKind"] = json!("declined");
+                }
+                out.push(note);
             }
             _ => {}
         }
@@ -711,6 +721,31 @@ mod tests {
             errors[0]["retry"], false,
             "sent again, it would be declined again"
         );
+    }
+
+    #[test]
+    fn a_declined_summary_note_says_so() {
+        let compaction = |id: &str, kind: &str| {
+            entry(
+                id,
+                "compaction",
+                json!({"time": {"created": 1}, "status": "failed", "reason": "auto", "summary": "",
+                    "error": {"type": kind, "message": "declined to summarize"}}),
+            )
+        };
+        let items = items(
+            vec![
+                user("u1", 1_000),
+                compaction("c1", "provider.content-filter"),
+                user("u2", 2_000),
+                compaction("c2", "provider.transport"),
+            ],
+            "/p",
+        );
+        let note = |id: &str| items.iter().find(|i| i["id"] == id).unwrap().clone();
+        assert_eq!(note("c1")["failed"], true);
+        assert_eq!(note("c1")["errorKind"], "declined");
+        assert_eq!(note("c2").get("errorKind"), None);
     }
 
     #[test]

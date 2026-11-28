@@ -1623,7 +1623,12 @@ export async function retry() {
   if (!open) return
   const last = lastUser(open)
   const tail = open.items[open.items.length - 1]
+  // What the core decided shows in the rows: the message was left out as a declined prompt, or the
+  // turn ended in a compaction the model declined (a reopened session shows no live status).
+  const declined =
+    last?.declined === true || (tail?.kind === "note" && tail.failed && tail.errorKind === "declined")
   const refused =
+    declined ||
     (open.status.kind === "failed" && open.status.retry === false) ||
     (open.status.kind !== "failed" && tail?.kind === "error" && tail.retry === false)
   if (refused) {

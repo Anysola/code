@@ -245,7 +245,8 @@ export type Item =
   /** `retry`: sending again can work (false for a full limit, a missing model, a lost sign-in). */
   | { kind: "error"; id: string; message: string; errorKind?: ErrorKind; retry?: boolean }
   /** A marker in the session, such as a compaction. */
-  | { kind: "note"; id: string; text: string; failed: boolean }
+  /** `errorKind` `declined`: a compaction whose summary the model declined (its turn's message is not sent again). */
+  | { kind: "note"; id: string; text: string; failed: boolean; errorKind?: ErrorKind }
   /** Context an imported session's file holds (what was a hook's or a subagent's note there): shown as the file's text, never in the app's words. */
   | { kind: "imported"; id: string; text: string }
 
