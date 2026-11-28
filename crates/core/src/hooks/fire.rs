@@ -192,6 +192,7 @@ impl Context {
                     env: env.clone(),
                     input: input.clone(),
                     timeout: handler.timeout,
+                    leave_nothing: event == Event::SessionEnd,
                 },
                 cancel,
             )

@@ -7,11 +7,12 @@ branch.
 ## 1.6.0 (unreleased)
 
 - **Four more hook events, in Claude Code's format:** `SubagentStop` (keeps a subagent going like `Stop`, same
-  8-round cap; matcher is the subagent's type; payload `agent_id`, `agent_type`, `stop_hook_active`,
+  cap of 8 rounds in a row without a tool call; matcher is the subagent's type; payload `agent_id`, `agent_type`, `stop_hook_active`,
   `last_assistant_message`), `PreCompact` (matcher `manual` or `auto`; may block `/compact`, never an automatic
   compaction, where a block is shown as a notice), `Notification` (matcher `permission_prompt` or `question`; runs
   alongside the ask without delaying or answering it) and `SessionEnd` (when the app closes, signs in or out, or a
-  session is deleted; reason `other`; all SessionEnd hooks share 1.5 seconds, then they are stopped). The app's exit
+  session is deleted; reason `other`; all SessionEnd hooks share 1.5 seconds, then they are stopped,
+  with whatever they started in the background). The app's exit
   waits that much longer for them. A tool hook's `continue: false` in a subagent now also skips its stop hooks.
 - **Project hooks approved before 1.6 are asked about again when they configure one of the new events**: 1.5
   ignored those events, so its approval never covered them. Until you approve the file again, none of its hooks
@@ -20,7 +21,7 @@ branch.
 - **Notebooks:** reading an `.ipynb` file shows its cells (index, id, type, source, shortened text outputs, image
   placeholders) instead of raw JSON. New `notebook` tool (`NotebookEdit` to hooks, with `file_path` and
   `notebook_path`) replaces, inserts or deletes one cell and writes only that cell anew: every other cell keeps its
-  exact bytes. It goes through every check a file edit does: it asks as an edit with a diff, it can't write
+  exact bytes. A notebook with a top-level key written twice is refused, since readers disagree on which one counts. It goes through every check a file edit does: it asks as an edit with a diff, it can't write
   outside a worktree session's own folder, the plan agent can't use it, and it always asks for your config files,
   hook scripts, the database and Git's data.
 - **Side questions (`/btw <question>`):** a one-off answer from the session's context, also while a turn runs, in a
@@ -34,15 +35,24 @@ branch.
   only. The file is checked (at most 64 MiB, 20,000 messages, bounded nesting) before anything is written; permissions,
   settings, parent, fork, revert, snapshots, signed reasoning, instruction updates, model and folder switches and
   tool metadata that points at another machine are dropped, and images go through the same checks as attached
-  ones, so an imported session can be opened, forked and continued but can't revert files.
+  ones (size read from the header first, at most 64 images and 64 million pixels per file), so an imported session
+  can be opened, forked and continued but can't revert files. Everything a later request sends is rebuilt from
+  checked values: media types from the bytes (never the data URI's), no blank text blocks, no row that lowers to
+  nothing, the first turn a user one, token counts and times clamped, title without invisible or reordering
+  characters. The import runs off the window's thread; closing the app, or starting another import, cancels one in
+  progress.
 - **Notes (`/memory`):** `/memory <note>` offers the project's and your own `AGENTS.md`; Enter adds the note as a
   line to the one picked (the project file is at the root of the session's checkout, a worktree session's own) and
-  a notice says where it went. `/memory` alone opens either file in your editor. A link is followed only to a
-  regular file inside the checkout, and a worktree that is gone is not made again for a note.
+  a notice says where it went. `/memory` alone opens either file in your editor. When the project's `AGENTS.md` is
+  a link, it is followed only to an `AGENTS.md`/`CLAUDE.md` of the checkout that isn't in Git's data or a file the
+  agent's tools always ask about, and the note is written into that file. A worktree that is gone is not made again
+  for a note.
 - **Go to message:** Ctrl G (or "Go to message…" in the palette) lists the session's messages, newest first, to
   filter and jump to; Ctrl Shift ↑ / ↓ move to the previous or next one. The view lets go of the bottom there.
 - **A `/compact` your PreCompact hook refuses** now says so with the hook's reason; before, it ended silently.
 - The tool row for notebook edits shows the cell's diff like any file change.
+- Hooks that time out or are interrupted no longer leave members of their process group that ignored SIGTERM, and a
+  hook run dropped while its output drains (a SessionEnd pass out of time) kills its group.
 
 ## 1.5.0 (2026-11-26)
 

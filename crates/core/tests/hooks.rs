@@ -1957,3 +1957,64 @@ fn the_plan_agent_cannot_change_a_notebook() {
         notebook
     );
 }
+
+/// Review 1 (F6): what a SessionEnd hook leaves running dies with the budget, whether it holds
+/// the hook's output or let go of it.
+#[test]
+fn session_end_leaves_no_background_job_behind() {
+    let gateway = FakeGateway::start(|request, _| text(request, "hi"));
+    let env = env(&gateway.url);
+    let held = env.home.home().join("held");
+    let detached = env.home.home().join("detached");
+    user_config(
+        &env,
+        json!({"hooks": hooks(&[
+            ("SessionEnd", None, &format!("sleep 1.2; (sleep 3; touch {}) &", quote(&held))),
+            ("SessionEnd", None, &format!("(sleep 3; touch {}) >/dev/null 2>&1 &", quote(&detached))),
+        ])}),
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("hello"), TurnOptions::default()))
+        .unwrap();
+    let at = Instant::now();
+    runtime.block_on(core.end_all_sessions());
+    assert!(at.elapsed() < Duration::from_secs(3), "{:?}", at.elapsed());
+    std::thread::sleep(Duration::from_secs(4));
+    assert!(
+        !held.exists(),
+        "a job holding the hook's output outlived the budget"
+    );
+    assert!(
+        !detached.exists(),
+        "a detached job outlived its SessionEnd hook"
+    );
+}
+
+/// Review 1 (F6, same class): a hook that times out takes the members of its group that
+/// ignore SIGTERM with it.
+#[test]
+fn a_timed_out_hook_leaves_nothing_behind() {
+    let gateway = FakeGateway::start(|request, _| text(request, "hi"));
+    let env = env(&gateway.url);
+    let late = env.home.home().join("late");
+    let command = format!("(trap '' TERM; sleep 3; touch {}) & sleep 30", quote(&late));
+    user_config(
+        &env,
+        json!({"hooks": {"UserPromptSubmit": [{"hooks": [
+            {"type": "command", "command": command, "timeout": 1}]}]}}),
+    );
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("hello"), TurnOptions::default()))
+        .unwrap();
+    std::thread::sleep(Duration::from_secs(4));
+    assert!(
+        !late.exists(),
+        "a member that ignored SIGTERM outlived the timeout"
+    );
+}

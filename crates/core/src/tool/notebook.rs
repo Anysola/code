@@ -99,6 +99,10 @@ impl Notebook {
     pub(crate) fn parse(text: &str) -> Option<Notebook> {
         // Bounded before parsing: what `read` takes in is bounded by more than the file's size.
         crate::storage::import::within(text.as_bytes(), MAX_VALUES, 64).ok()?;
+        // A key there twice: the view and an edit could disagree on the cells.
+        if duplicate_key(text).is_some() {
+            return None;
+        }
         let value: Value = serde_json::from_str(text).ok()?;
         let object = value.as_object()?;
         if object.get("nbformat").and_then(Value::as_u64) != Some(4) {
@@ -339,8 +343,53 @@ fn value_end(bytes: &[u8], at: usize) -> Option<usize> {
     }
 }
 
-/// The cells' places in `text`, a notebook's JSON; `None` when it can't be read that way.
+/// The keys of the top-level object of `text`, decoded (`"cell\u0073"` is `cells`), in order;
+/// `None` when it is not an object.
+fn top_level_keys(text: &str) -> Option<Vec<String>> {
+    let bytes = text.as_bytes();
+    let mut at = skip_ws(bytes, 0);
+    if bytes.get(at) != Some(&b'{') {
+        return None;
+    }
+    at += 1;
+    let mut keys = Vec::new();
+    loop {
+        at = skip_ws(bytes, at);
+        match bytes.get(at)? {
+            b'}' => return Some(keys),
+            b',' => {
+                at += 1;
+                continue;
+            }
+            b'"' => {}
+            _ => return None,
+        }
+        let key_end = string_end(bytes, at)?;
+        keys.push(serde_json::from_str::<String>(&text[at..key_end]).ok()?);
+        at = skip_ws(bytes, key_end);
+        if bytes.get(at) != Some(&b':') {
+            return None;
+        }
+        at = value_end(bytes, skip_ws(bytes, at + 1))?;
+    }
+}
+
+/// A top-level key `text` has twice: JSON readers (and the cell view) take the last one, a
+/// splice would not know which to change.
+fn duplicate_key(text: &str) -> Option<String> {
+    let keys = top_level_keys(text)?;
+    keys.iter()
+        .enumerate()
+        .find(|(i, key)| keys[..*i].contains(key))
+        .map(|(_, key)| key.clone())
+}
+
+/// The cells' places in `text`, a notebook's JSON; `None` when it can't be read that way (or
+/// a top-level key is there twice).
 fn layout(text: &str) -> Option<Layout> {
+    if duplicate_key(text).is_some() {
+        return None;
+    }
     let bytes = text.as_bytes();
     let mut at = skip_ws(bytes, 0);
     if bytes.get(at) != Some(&b'{') {
@@ -359,13 +408,13 @@ fn layout(text: &str) -> Option<Layout> {
             _ => return None,
         }
         let key_end = string_end(bytes, at)?;
-        let key = &text[at..key_end];
+        let key = serde_json::from_str::<String>(&text[at..key_end]).ok()?;
         at = skip_ws(bytes, key_end);
         if bytes.get(at) != Some(&b':') {
             return None;
         }
         at = skip_ws(bytes, at + 1);
-        if key != "\"cells\"" {
+        if key != "cells" {
             at = value_end(bytes, at)?;
             continue;
         }
@@ -721,6 +770,11 @@ async fn edit(input: &Input, ctx: &ToolContext) -> ToolResult {
                 ReadFailure::NotUtf8 => fail(format!("File is not valid UTF-8: {path}")),
                 ReadFailure::Failed => failed(),
             })?;
+    if let Some(key) = duplicate_key(&original.text) {
+        return Err(fail(format!(
+            "{path} has the top-level key \"{key}\" more than once, so it is unclear which one to change. Remove the extra one first."
+        )));
+    }
     let mut notebook = Notebook::parse(&original.text).ok_or_else(|| {
         fail(format!(
             "{path} is not a Jupyter notebook in nbformat 4 that can be changed here (or it is too large). Use edit for other files."
@@ -1193,6 +1247,34 @@ mod tests {
         assert_eq!(&text[layout.close..=layout.close], "]");
         assert!(super::layout("[]").is_none());
         assert!(super::layout("{\"cells\": 3}").is_none());
+    }
+
+    /// Review 1 (F8): two top-level `cells` keys. Every JSON reader takes the last; a splice
+    /// would change the first. The view shows the raw text and the tool refuses.
+    #[tokio::test]
+    async fn a_notebook_with_a_key_twice_is_not_edited() {
+        let twice = "{\n \"cells\": [\n  {\"cell_type\": \"code\", \"metadata\": {}, \"outputs\": [], \"source\": [\"dead = 1\"]}\n ],\n \"cell\\u0073\": [\n  {\"cell_type\": \"code\", \"metadata\": {}, \"outputs\": [], \"source\": [\"live = 1\"]}\n ],\n \"metadata\": {},\n \"nbformat\": 4,\n \"nbformat_minor\": 4\n}\n";
+        assert_eq!(duplicate_key(twice).as_deref(), Some("cells"));
+        assert!(layout(twice).is_none());
+        assert!(
+            super::view(twice.as_bytes()).is_none(),
+            "read shows the text itself"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("n.ipynb"), twice).unwrap();
+        let (result, asked) = run(
+            dir.path(),
+            json!({"path": "n.ipynb", "index": 0, "source": "live = 2"}),
+        )
+        .await;
+        let error = result.unwrap_err().message;
+        assert!(error.contains("\"cells\" more than once"), "{error}");
+        assert!(asked.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("n.ipynb")).unwrap(),
+            twice
+        );
+        assert_eq!(duplicate_key(JUPYTER), None);
     }
 
     #[tokio::test]

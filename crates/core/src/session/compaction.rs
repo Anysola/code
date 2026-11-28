@@ -67,7 +67,7 @@ pub struct Estimate {
 
 impl Estimate {
     pub fn total(&self) -> u64 {
-        self.measured + self.estimated
+        self.measured.saturating_add(self.estimated)
     }
 }
 
@@ -215,14 +215,21 @@ fn request_tokens(system: &[String], tools: &[ToolDefinition], entries: &[Entry]
         + entries.iter().map(entry_tokens).sum::<u64>()
 }
 
+/// The prompt a response's usage reports. Saturating: stored counts (an imported session's
+/// too) may be anything.
+fn prompt_tokens(t: &Tokens) -> u64 {
+    t.input
+        .saturating_add(t.cache.read)
+        .saturating_add(t.cache.write)
+}
+
 /// The latest response whose token count describes this provider's prompt.
 fn anchor(messages: &[Message], provider: &str) -> Option<usize> {
     messages.iter().rposition(|m| match m {
         Message::Assistant(a) => {
             a.model.provider_id == provider
                 && a.error.is_none()
-                && a.tokens
-                    .is_some_and(|t| t.input + t.cache.read + t.cache.write > 0)
+                && a.tokens.is_some_and(|t| prompt_tokens(&t) > 0)
         }
         _ => false,
     })
@@ -253,11 +260,9 @@ pub fn estimate_prompt(
         lowered.remove(0);
     }
     Estimate {
-        measured: tokens.input
-            + tokens.cache.read
-            + tokens.cache.write
-            + tokens.output
-            + tokens.reasoning,
+        measured: prompt_tokens(&tokens)
+            .saturating_add(tokens.output)
+            .saturating_add(tokens.reasoning),
         estimated: lowered.iter().map(entry_tokens).sum(),
     }
 }
@@ -1013,11 +1018,7 @@ pub(crate) fn precompute(
     let Message::Assistant(anchor) = &loaded.messages[anchor_at] else {
         return;
     };
-    if anchor
-        .tokens
-        .map_or(0, |t| t.input + t.cache.read + t.cache.write)
-        < PRECOMPUTE_MIN_TOKENS
-    {
+    if anchor.tokens.map_or(0, |t| prompt_tokens(&t)) < PRECOMPUTE_MIN_TOKENS {
         return;
     }
     let mut precomputed = shared.precomputed.lock().unwrap_or_else(|e| e.into_inner());

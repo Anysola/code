@@ -29,6 +29,9 @@ pub struct Job<'a> {
     pub input: Vec<u8>,
     /// Seconds.
     pub timeout: u64,
+    /// Whatever the hook leaves running is killed once it exits, even a job that let go of its
+    /// output (SessionEnd: nothing of a session outlives its end).
+    pub leave_nothing: bool,
 }
 
 /// Kills the hook's process tree if its run is dropped before the hook was reaped (a Code Mode
@@ -36,6 +39,9 @@ pub struct Job<'a> {
 struct Group {
     pid: u32,
     live: bool,
+    /// The leader exited but what it started may still hold its pipes: until the output is
+    /// drained (and the group's leftovers killed), dropping the run kills the group.
+    draining: bool,
     _tracked: crate::teardown::Tracked,
     /// Its record until it is reaped (see `crate::children`).
     _ours: crate::children::Ours,
@@ -52,6 +58,7 @@ impl Group {
         Group {
             pid,
             live: true,
+            draining: false,
             _tracked: crate::teardown::track(format!("hook {pid} running: {command}")),
             _ours: crate::children::adopt_tokio(child, crate::children::Leads::Group, mark),
         }
@@ -61,6 +68,24 @@ impl Group {
         self.live = false;
         exec::unregister(self.pid);
     }
+
+    /// The leader exited on its own: its group is killed if the run is dropped before
+    /// [`Group::drained`] (a SessionEnd pass running out of time, an aborted call).
+    fn leader_exited(&mut self) {
+        self.reaped();
+        self.draining = true;
+    }
+
+    fn drained(&mut self) {
+        self.draining = false;
+    }
+
+    /// Whatever is left in the group (a job the hook put in the background), killed.
+    fn kill_leftovers(&self) {
+        // The group's id stays taken while any member lives, so this reaches only them.
+        #[cfg(unix)]
+        exec::signal_group(self.pid, libc::SIGKILL);
+    }
 }
 
 impl Drop for Group {
@@ -68,6 +93,8 @@ impl Drop for Group {
         if self.live {
             exec::unregister(self.pid);
             exec::force_kill(self.pid);
+        } else if self.draining {
+            self.kill_leftovers();
         }
     }
 }
@@ -134,20 +161,23 @@ pub async fn run(job: Job<'_>, cancel: &CancellationToken) -> Ran {
         () = tokio::time::sleep(timeout) => None,
         () = cancel.cancelled() => {
             exec::terminate(&mut child, pid).await;
+            // The leader is gone; a member that outlived SIGTERM is not left behind.
+            group.kill_leftovers();
             group.reaped();
             return Ran::Interrupted;
         }
     };
     let Some(status) = status else {
         exec::terminate(&mut child, pid).await;
+        group.kill_leftovers();
         group.reaped();
         return Ran::TimedOut {
             seconds: job.timeout,
         };
     };
-    group.reaped();
+    group.leader_exited();
     // Something the hook started may still hold its pipes: it gets a moment, then the group's
-    // leftovers are killed (a hook never outlives its run).
+    // leftovers are killed (a hook never outlives its run, nor a dropped one).
     let drained = tokio::time::timeout(PIPE_GRACE, async {
         let out = (&mut stdout).await.unwrap_or_default();
         let err = (&mut stderr).await.unwrap_or_default();
@@ -157,8 +187,7 @@ pub async fn run(job: Job<'_>, cancel: &CancellationToken) -> Ran {
     let (stdout, stderr) = match drained {
         Ok(both) => both,
         Err(_) => {
-            #[cfg(unix)]
-            exec::signal_group(pid, libc::SIGKILL);
+            group.kill_leftovers();
             let out = tokio::time::timeout(PIPE_GRACE, stdout).await;
             let err = tokio::time::timeout(PIPE_GRACE, stderr).await;
             (
@@ -167,6 +196,10 @@ pub async fn run(job: Job<'_>, cancel: &CancellationToken) -> Ran {
             )
         }
     };
+    if job.leave_nothing {
+        group.kill_leftovers();
+    }
+    group.drained();
     let ((stdout, cut), (stderr, _)) = (stdout, stderr);
     let code = status.and_then(|s| s.code());
     if cut && code == Some(0) {

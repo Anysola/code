@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use anysola_core::api::ConfiguredRule;
+use anysola_core::api::{CancellationToken, ConfiguredRule};
 use anysola_core::paths::Paths;
 use anysola_core::permission::Effect;
 use anysola_core::storage::Db;
@@ -363,7 +363,8 @@ pub async fn export_session(
 
 /// Asks for a session export and imports it as a new session of `directory`: through the
 /// folder's core when one runs (it announces the session), else straight into the database.
-/// Null when cancelled; the file is untrusted, and nothing is written when it is refused.
+/// Null when the picker is cancelled or the import is (by a newer one, or the app stopping its
+/// cores); the file is untrusted, and nothing is written when it is refused.
 #[tauri::command]
 pub async fn import_session(handle: AppHandle, app: State<'_, App>, directory: String) -> Answer {
     use tauri_plugin_dialog::DialogExt;
@@ -386,15 +387,48 @@ pub async fn import_session(handle: AppHandle, app: State<'_, App>, directory: S
     let path = path
         .into_path()
         .map_err(|_| "Choose a file on this computer.".to_string())?;
+    // One import at a time: a new one cancels the one in flight (which then resolves null, as
+    // a cancelled picker does). Stopping the cores or quitting cancels it too (`drop_cores`).
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let ticket = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let cancel = CancellationToken::new();
+    if let Some((_, previous)) = app
+        .import
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .replace((ticket, cancel.clone()))
+    {
+        previous.cancel();
+    }
     let core = app.running(&directory).await;
-    // Up to 64 MiB read and checked: off the async workers.
-    let row = tauri::async_runtime::spawn_blocking(move || match core {
-        Some(core) => core.import_session_file(&path),
-        None => anysola_core::storage::import::import_file(&db, &path, Path::new(&directory)),
-    })
-    .await
-    .map_err(text)?
-    .map_err(text)?;
+    let imported = match core {
+        // The core reads and checks the file on the blocking pool and announces the session.
+        Some(core) => core.import_session_file(&path, &cancel).await,
+        // Up to 64 MiB read and checked: off the async workers.
+        None => {
+            let cancel = cancel.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                anysola_core::storage::import::import_file(
+                    &db,
+                    &path,
+                    Path::new(&directory),
+                    &cancel,
+                )
+            })
+            .await
+            .map_err(text)?
+        }
+    };
+    {
+        let mut slot = app.import.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.as_ref().is_some_and(|(t, _)| *t == ticket) {
+            *slot = None;
+        }
+    }
+    let row = match imported {
+        Err(anysola_core::storage::ImportError::Cancelled) => return Ok(Value::Null),
+        other => other.map_err(text)?,
+    };
     Ok(crate::session_json(&row, None))
 }
 

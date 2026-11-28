@@ -106,7 +106,7 @@ fn export_matches_the_0_5_1_shape() {
 
 // ---- Import (1.6.0): the file is untrusted ----
 
-use anysola_core::api::{Core, Prompt, Target};
+use anysola_core::api::{CancellationToken, Core, Prompt, Target};
 use anysola_core::session::TurnOptions;
 use anysola_core::storage::ImportError;
 
@@ -189,9 +189,21 @@ fn rich() -> Value {
     })
 }
 
+/// Runs `work` to its end on a runtime of its own.
+fn block<F: std::future::Future>(work: F) -> F::Output {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(work)
+}
+
+fn import(core: &Core, bytes: Vec<u8>) -> Result<anysola_core::storage::SessionRow, ImportError> {
+    block(core.import_session(bytes, &CancellationToken::new()))
+}
+
 fn imported(core: &Core, file: &Value) -> anysola_core::storage::SessionRow {
-    core.import_session(file.to_string().as_bytes())
-        .expect("imported")
+    import(core, file.to_string().into_bytes()).expect("imported")
 }
 
 #[test]
@@ -421,7 +433,7 @@ fn hostile_files_are_refused_before_anything_is_written() {
     let sessions = |core: &Core| core.db().all_root_sessions().unwrap().len();
     let before = sessions(&core);
     let refused = |bytes: Vec<u8>| -> String {
-        match core.import_session(&bytes) {
+        match import(&core, bytes) {
             Err(error @ ImportError::Invalid(_)) | Err(error @ ImportError::TooLarge) => {
                 error.to_string()
             }
@@ -467,11 +479,11 @@ fn hostile_files_are_refused_before_anything_is_written() {
         .set_len(anysola_core::storage::import::MAX_FILE_BYTES + 1)
         .unwrap();
     assert!(matches!(
-        core.import_session_file(&big),
+        block(core.import_session_file(&big, &CancellationToken::new())),
         Err(ImportError::TooLarge)
     ));
     assert!(matches!(
-        core.import_session_file(&env.home.home()),
+        block(core.import_session_file(&env.home.home(), &CancellationToken::new())),
         Err(ImportError::Invalid(_))
     ));
     assert_eq!(sessions(&core), before, "nothing was written");
@@ -515,4 +527,251 @@ fn export_import_export_keeps_the_transcript() {
         assert_eq!(again["info"]["title"], file["info"]["title"]);
         assert_eq!(strip(again), strip(file));
     }
+}
+
+// ---- Review 1 (1.6.0): everything an imported session later sends is rebuilt ----
+
+fn model_json() -> Value {
+    json!({"id": "claude-sonnet-5-5", "providerID": "anysola"})
+}
+
+/// Imports `file`, runs one turn on it and returns the outcome and the turn's request.
+fn import_and_continue(file: Value) -> (Outcome, Value) {
+    // A summary when one is asked for (a huge imported count compacts first).
+    let gateway = FakeGateway::start(|request, n| {
+        if request.body.contains("You MUST summarize") {
+            let model = request.json()["model"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            return Reply::Sse {
+                body: Stream::new()
+                    .text("## Objective\n- keep going\n")
+                    .finish(&model, Some(1)),
+            };
+        }
+        answer(request, n)
+    });
+    let env = common::env(&gateway.url);
+    let runtime = common::runtime();
+    let core = runtime.block_on(common::core(&env));
+    let row = imported(&core, &file);
+    let outcome = runtime
+        .block_on(core.prompt(&row.id, prompt("go on"), TurnOptions::default()))
+        .unwrap();
+    let body = gateway
+        .messages()
+        .into_iter()
+        .rfind(|r| !r.is_title())
+        .expect("a request")
+        .json();
+    (outcome, body)
+}
+
+/// Every media block of a request: `(media_type, data)`.
+fn media_blocks(body: &Value) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    fn walk(value: &Value, out: &mut Vec<(String, String)>) {
+        match value {
+            Value::Object(map) => {
+                if let Some(source) = map.get("source")
+                    && let Some(media) = source["media_type"].as_str()
+                {
+                    out.push((
+                        media.to_string(),
+                        source["data"].as_str().unwrap_or("").into(),
+                    ));
+                }
+                map.values().for_each(|v| walk(v, out));
+            }
+            Value::Array(items) => items.iter().for_each(|v| walk(v, out)),
+            _ => {}
+        }
+    }
+    walk(&body["messages"], &mut out);
+    out
+}
+
+/// Every text block of a request.
+fn text_blocks(body: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    fn walk(value: &Value, out: &mut Vec<String>) {
+        match value {
+            Value::Object(map) => {
+                if map.get("type") == Some(&json!("text")) {
+                    out.push(map.get("text").and_then(Value::as_str).unwrap_or("").into());
+                }
+                map.values().for_each(|v| walk(v, out));
+            }
+            Value::Array(items) => items.iter().for_each(|v| walk(v, out)),
+            _ => {}
+        }
+    }
+    walk(&body["messages"], &mut out);
+    out
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+/// A PNG whose header says `width` x `height`, with no pixel data: what a reader learns from the
+/// header alone, cheaply.
+fn png_header_only(width: u32, height: u32) -> String {
+    use base64::Engine;
+    let mut ihdr = b"IHDR".to_vec();
+    ihdr.extend(width.to_be_bytes());
+    ihdr.extend(height.to_be_bytes());
+    ihdr.extend([8, 6, 0, 0, 0]);
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend(13u32.to_be_bytes());
+    png.extend(&ihdr);
+    png.extend(crc32(&ihdr).to_be_bytes());
+    png.extend(0u32.to_be_bytes());
+    png.extend(b"IEND");
+    png.extend(crc32(b"IEND").to_be_bytes());
+    base64::engine::general_purpose::STANDARD.encode(png)
+}
+
+#[test]
+fn imported_media_is_sent_with_its_checked_type_only() {
+    // F1: the data URI names another type than the checked one; an uppercase type skipped the
+    // tool-result image checks; a fake PDF.
+    let file = json!({"info": {"title": "t"}, "messages": [
+        {"id": "u", "type": "user", "time": {"created": 1}, "text": "hi"},
+        {"id": "a", "type": "assistant", "time": {"created": 1, "completed": 2}, "agent": "build",
+         "model": model_json(), "finish": "tool-calls", "content": [
+            {"type": "tool", "id": "x", "name": "read", "time": {"created": 1, "completed": 2},
+             "state": {"status": "completed", "input": {"path": "a.png"}, "content": [
+                {"type": "file", "uri": format!("data:text/html;base64,{PNG}"), "mime": "image/png"},
+                {"type": "file", "uri": format!("data:image/png;base64,{PNG}"), "mime": "IMAGE/PNG"},
+                {"type": "file", "uri": "data:application/pdf;base64,aGVsbG8=", "mime": "APPLICATION/PDF"},
+                {"type": "file", "uri": "data:image/png;base64,JVBERi0xLjQKJQ==", "mime": "application/pdf"}
+             ]}}
+        ]}
+    ]});
+    let (outcome, body) = import_and_continue(file);
+    assert_eq!(outcome, Outcome::Succeeded);
+    let media = media_blocks(&body);
+    assert!(media.len() >= 2, "{media:?}");
+    assert!(
+        media[..2].iter().all(|(m, d)| m == "image/png" && d == PNG),
+        "{media:?}"
+    );
+    // The real PDF goes as one where the model reads PDFs; the fake one never.
+    assert!(
+        media[2..].iter().all(|(m, _)| m == "application/pdf"),
+        "{media:?}"
+    );
+    assert!(!body.to_string().contains("aGVsbG8="));
+    assert!(!body.to_string().contains("text/html"));
+}
+
+#[test]
+fn an_imported_request_opens_on_a_user_turn_with_no_blank_block() {
+    // F2: a blank prompt (and blank synthetic and skill rows) before a step.
+    let file = json!({"info": {"title": "t"}, "messages": [
+        {"id": "u", "type": "user", "time": {"created": 1}, "text": "   "},
+        {"id": "s", "type": "synthetic", "time": {"created": 1}, "text": " "},
+        {"id": "k", "type": "skill", "time": {"created": 1}, "skill": "s", "name": "s", "text": ""},
+        {"id": "a", "type": "assistant", "time": {"created": 1, "completed": 2}, "agent": "build",
+         "model": model_json(), "finish": "stop", "content": [{"type": "text", "text": "I start the conversation"}]}
+    ]});
+    let (outcome, body) = import_and_continue(file);
+    assert_eq!(outcome, Outcome::Succeeded);
+    assert_eq!(body["messages"][0]["role"], "user");
+    assert!(!body.to_string().contains("I start the conversation"));
+    // F3: blank skill text and blank tool-result text are not sent.
+    let file = json!({"info": {"title": "t"}, "messages": [
+        {"id": "u", "type": "user", "time": {"created": 1}, "text": "hi",
+         "skills": [{"id": "s", "name": "s", "text": "", "mention": "@s"}]},
+        {"id": "a", "type": "assistant", "time": {"created": 1, "completed": 2}, "agent": "build",
+         "model": model_json(), "finish": "tool-calls", "content": [
+            {"type": "tool", "id": "x", "name": "read", "time": {"created": 1, "completed": 2},
+             "state": {"status": "completed", "input": {"path": "a"}, "content": [
+                {"type": "text", "text": ""},
+                {"type": "file", "uri": format!("data:image/png;base64,{PNG}"), "mime": "image/png"}
+             ]}},
+            {"type": "tool", "id": "y", "name": "read", "time": {"created": 1, "completed": 2},
+             "state": {"status": "completed", "input": {"path": "b"}, "content": [{"type": "text", "text": "  "}]}}
+        ]}
+    ]});
+    let (outcome, body) = import_and_continue(file);
+    assert_eq!(outcome, Outcome::Succeeded);
+    let texts = text_blocks(&body);
+    assert!(texts.iter().all(|t| !t.trim().is_empty()), "{texts:?}");
+    assert!(body.to_string().contains("(no output)"));
+}
+
+#[test]
+fn imported_images_are_bounded_before_they_are_decoded() {
+    use anysola_core::storage::import::prepare;
+    // F5: a header saying 13000 x 13000 (or more) is dropped without decoding it.
+    let huge: Vec<Value> = (0..40)
+        .map(|i| json!({"data": png_header_only(13_000, 13_000), "mime": "image/png", "source": {"type": "inline"}, "name": format!("{i}.png")}))
+        .collect();
+    let file = json!({"info": {}, "messages": [
+        {"type": "user", "time": {"created": 1}, "text": "hi", "files": huge}]});
+    let at = std::time::Instant::now();
+    let prepared = prepare(file.to_string().as_bytes()).unwrap();
+    assert!(
+        at.elapsed() < std::time::Duration::from_secs(5),
+        "{:?}",
+        at.elapsed()
+    );
+    assert!(
+        prepared.rows[0].data["files"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    // At most 64 images per import.
+    let many: Vec<Value> = (0..70)
+        .map(|i| json!({"data": PNG, "mime": "image/png", "source": {"type": "inline"}, "name": format!("{i}.png")}))
+        .collect();
+    let file = json!({"info": {}, "messages": [
+        {"type": "user", "time": {"created": 1}, "text": "hi", "files": many}]});
+    let prepared = prepare(file.to_string().as_bytes()).unwrap();
+    assert_eq!(prepared.rows[0].data["files"].as_array().unwrap().len(), 64);
+    // A cancelled import ends at once and writes nothing.
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    assert!(matches!(
+        anysola_core::storage::import::prepare_with(file.to_string().as_bytes(), &cancel),
+        Err(ImportError::Cancelled)
+    ));
+}
+
+#[test]
+fn imported_counts_times_and_titles_are_clamped() {
+    // F7: token counts past any sum; a time far in the future; a title that reorders text.
+    let file = json!({"info": {"title": "safe\u{202e}txt.exe\u{200b}"}, "messages": [
+        {"id": "u", "type": "user", "time": {"created": u64::MAX}, "text": "hi"},
+        {"id": "a", "type": "assistant", "time": {"created": 1, "completed": u64::MAX}, "agent": "build",
+         "model": model_json(), "finish": "stop", "content": [{"type": "text", "text": "ok"}],
+         "tokens": {"input": u64::MAX, "output": u64::MAX, "reasoning": 0, "cache": {"read": 1, "write": u64::MAX}}}
+    ]});
+    let prepared = anysola_core::storage::import::prepare(file.to_string().as_bytes()).unwrap();
+    assert_eq!(prepared.title, "safe txt.exe");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    assert!(prepared.rows[0].data["time"]["created"].as_u64().unwrap() <= now);
+    let tokens = &prepared.rows[1].data["tokens"];
+    assert_eq!(tokens["input"], 1_000_000_000u64);
+    assert_eq!(tokens["cache"]["write"], 1_000_000_000u64);
+    let (outcome, _) = import_and_continue(file);
+    assert_eq!(outcome, Outcome::Succeeded, "no overflow in the estimate");
 }

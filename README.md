@@ -40,12 +40,13 @@ permission or a question), and `SessionStart` and `SessionEnd`. The format is Cl
 scripts work: the event comes as JSON on stdin, exit code 2 blocks with stderr as the reason, and JSON on stdout can
 add context or deny a call. Settings → Hooks adds, edits and removes them.
 
-What each new event can do: `SubagentStop` keeps a subagent going like `Stop` does the agent (8 times in a row at
-most), and its matcher is the subagent's type. `PreCompact` can block a `/compact` (matcher `manual`); an automatic
+What each new event can do: `SubagentStop` keeps a subagent going like `Stop` does the agent (at most 8 times in a
+row in which the subagent calls no tool; rounds with a tool call don't count), and its matcher is the subagent's type. `PreCompact` can block a `/compact` (matcher `manual`); an automatic
 compaction (matcher `auto`) can't be blocked, since the conversation could not go on, and a block is only shown.
 `Notification` (matcher `permission_prompt` or `question`) runs alongside the question, never answers it and never
 holds it up. `SessionEnd` runs when the app closes or signs you in or out, and when you delete a session (reason
-`other`); all of them together get 1.5 seconds, then they are stopped. `Notification` and `SessionEnd` can't block
+`other`); all of them together get 1.5 seconds, then they are stopped, and nothing they start in the background
+outlives them. `Notification` and `SessionEnd` can't block
 anything; their exit code 2 shows stderr to you.
 
 Hooks run in your `shell` setting; without one, on Windows in Git Bash when it is installed (so
@@ -126,8 +127,8 @@ only that session's own files as they were then; other uncommitted changes of th
 
 The agent reads a Jupyter notebook (`.ipynb`) as its cells: each cell's index, id, type and source, with text
 outputs and error tracebacks shortened and images as a placeholder. It changes one cell at a time with the
-`notebook` tool (`NotebookEdit` to hooks): replace a cell's source, insert a cell, or delete one. The rest of the
-file is kept as it was, and replacing a code cell's source clears its outputs. It asks and is undone like any other
+`notebook` tool (`NotebookEdit` to hooks): replace a cell's source, insert a cell, or delete one. Every other cell
+keeps its exact bytes; a file with a top-level key written twice is not changed, and replacing a code cell's source clears its outputs. It asks and is undone like any other
 file edit.
 
 ## Side questions, import and notes
@@ -137,10 +138,13 @@ from what the session already holds, uses no tools, and shows in a card over the
 (Esc); it isn't stored. "Import session…" (the New session menu, the palette, or a project's menu as "Import
 session here…") takes a file written by Export: it becomes a new session, with the conversation only, in that
 project, else the open folder, else your default folder. Nothing in the file carries permissions, settings, hooks
-or approvals, and snapshots from another machine are not taken, so an imported session can't revert files.
-`/memory <note>` adds a line to the project's `AGENTS.md` (in a worktree session, the worktree's) or to your own
-`~/.anysola/AGENTS.md`, whichever you pick; `/memory` alone opens either in your editor. Ctrl G jumps to any of
-the session's messages, Ctrl Shift ↑ / ↓ to the previous or next.
+or approvals, and snapshots from another machine are not taken, so an imported session can't revert files. What a
+later request sends from it is rebuilt from checked values (images are checked as attached ones and limited per
+file). `/memory <note>` adds a line to the project's `AGENTS.md` (in a worktree session, the worktree's) or to your
+own `~/.anysola/AGENTS.md`, whichever you pick; `/memory` alone opens either in your editor. When the project's
+`AGENTS.md` is a link, the note goes to the file it links to only if that is an `AGENTS.md` or `CLAUDE.md` of the
+same checkout outside Git's data and not a file the agent's tools always ask about. Ctrl G jumps to any of the
+session's messages, Ctrl Shift ↑ / ↓ to the previous or next.
 
 ## Usage limits
 

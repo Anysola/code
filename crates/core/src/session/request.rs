@@ -38,9 +38,10 @@ pub fn output_limit(model: &Model, measured: u64, estimated: u64, headroom: f64)
     let limit = model.output.unwrap_or(DEFAULT_OUTPUT).min(OUTPUT_CAP);
     match model.context.filter(|c| *c > 0) {
         Some(context) => {
-            let room = (context as f64 * (1.0 - headroom)).floor() as i64
-                - measured as i64
-                - (estimated as f64 * 1.15).ceil() as i64;
+            // Saturating: a stored count (an imported session's) may be anything.
+            let room = ((context as f64 * (1.0 - headroom)).floor() as i64)
+                .saturating_sub(i64::try_from(measured).unwrap_or(i64::MAX))
+                .saturating_sub((estimated as f64 * 1.15).ceil() as i64);
             limit.min(room.max(1024) as u64)
         }
         None => limit,

@@ -67,7 +67,9 @@ fn user(data: &UserData, target: &Target) -> Option<Value> {
     let mut content = Vec::new();
     let skills = data.extra.get("skills").and_then(Value::as_array);
     for skill in skills.into_iter().flatten() {
-        if let Some(text) = skill.get("text").and_then(Value::as_str) {
+        if let Some(text) = skill.get("text").and_then(Value::as_str)
+            && !text.trim().is_empty()
+        {
             content.push(text_block(text));
         }
     }
@@ -104,10 +106,14 @@ fn tool_result_content(content: &[ToolContent], target: &Target) -> Value {
             .map(|item| match item {
                 ToolContent::Text { text } => text_block(text),
                 ToolContent::File { uri, mime, name } => {
-                    match (unsupported(mime, name.as_deref(), target), data_uri(uri)) {
+                    // The item's own (checked) type, never the one the data URI names; only
+                    // images and PDFs go as media.
+                    let mime = mime.to_ascii_lowercase();
+                    let media = mime.starts_with("image/") || mime == "application/pdf";
+                    match (unsupported(&mime, name.as_deref(), target), data_uri(uri)) {
                         (Some(text), _) => text_block(&text),
-                        (None, Some((mime, data))) => media_block(mime, data),
-                        (None, None) => text_block(&format!("[{mime} omitted]")),
+                        (None, Some((_, data))) if media => media_block(&mime, data),
+                        _ => text_block(&format!("[{mime} omitted]")),
                     }
                 }
             })

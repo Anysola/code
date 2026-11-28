@@ -1150,7 +1150,9 @@ export type Bridge = {
    * Asks for a session export (a JSON file, at most 64 MiB) and imports it as a new root session
    * of `directory` (a folder on this computer), with fresh ids and nothing that grants anything
    * (no rules, folders, worktree, budget). Works whether or not the folder's core runs; a
-   * `created` event may follow but only refreshes the list. Null when cancelled. Rejects with a
+   * `created` event may follow but only refreshes the list. Null when cancelled: the picker, or
+   * the import itself (a newer import, or the app stopping its cores, cancels one in flight;
+   * no notice). Rejects with a
    * finished sentence when the file isn't an export it can take; nothing is written then.
    */
   importSession(directory: string): Promise<SessionRow | null>

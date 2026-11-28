@@ -276,7 +276,7 @@ pub fn normalize_content(content: Vec<ToolContent>, limits: &Limits) -> Vec<Tool
             let ToolContent::File { uri, mime, name } = &item else {
                 return Some(item);
             };
-            if !mime.starts_with("image/") {
+            if !mime.to_ascii_lowercase().starts_with("image/") {
                 return Some(item);
             }
             let Some(data) = uri

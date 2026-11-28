@@ -1494,3 +1494,100 @@ fn ordinary_project_files_stay_inside_whatever_the_folder_spelling() {
         );
     }
 }
+
+/// `/memory` (review 1, F4): a project's `AGENTS.md` link is followed only to an instruction
+/// file of the checkout that isn't Git's data or always asked about; the note goes into the
+/// file it resolves to.
+#[cfg(unix)]
+#[test]
+fn a_project_note_follows_a_link_only_to_an_instruction_file_of_the_checkout() {
+    use anysola_core::api::MemoryScope;
+    let gateway = FakeGateway::start(|request, _| text(request, "ok"));
+    let env = env(&gateway.url);
+    let project = env.home.project();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&project)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let runtime = runtime();
+    let core: Core = runtime.block_on(common::core(&env));
+    let link = project.join("AGENTS.md");
+    let relink = |target: &str| {
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(target, &link).unwrap();
+    };
+    // Into Git's data: refused, untouched.
+    let config = project.join(".git/config");
+    let before = std::fs::read_to_string(&config).unwrap();
+    relink(".git/config");
+    assert!(
+        core.add_memory(None, MemoryScope::Project, "remember")
+            .is_err()
+    );
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), before);
+    // A CLAUDE.md in Git's data, or any other file by name: refused.
+    std::fs::write(project.join(".git/CLAUDE.md"), "x\n").unwrap();
+    relink(".git/CLAUDE.md");
+    assert!(
+        core.add_memory(None, MemoryScope::Project, "remember")
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.join(".git/CLAUDE.md")).unwrap(),
+        "x\n"
+    );
+    std::fs::write(project.join("notes.md"), "n\n").unwrap();
+    relink("notes.md");
+    assert!(
+        core.add_memory(None, MemoryScope::Project, "remember")
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.join("notes.md")).unwrap(),
+        "n\n"
+    );
+    // A file the agent always asks about (a hook's script), even named CLAUDE.md: refused.
+    let script = project.join("hooks/CLAUDE.md");
+    env.home.write("proj/hooks/CLAUDE.md", "#!/bin/sh\n");
+    env.home.write(
+        ".anysola/config.json",
+        &json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": format!("sh {}", script.display())}]}]}})
+            .to_string(),
+    );
+    let core: Core = runtime.block_on(common::core(&env));
+    relink("hooks/CLAUDE.md");
+    assert!(
+        core.add_memory(None, MemoryScope::Project, "remember")
+            .is_err()
+    );
+    assert_eq!(std::fs::read_to_string(&script).unwrap(), "#!/bin/sh\n");
+    // The usual link to CLAUDE.md: the note goes there, the link stays.
+    std::fs::write(project.join("CLAUDE.md"), "# Rules\n").unwrap();
+    relink("CLAUDE.md");
+    let written = core
+        .add_memory(None, MemoryScope::Project, "remember   this")
+        .unwrap();
+    assert_eq!(
+        written,
+        anysola_core::paths::canonicalize(project.join("CLAUDE.md")).unwrap()
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.join("CLAUDE.md")).unwrap(),
+        "# Rules\n- remember this\n"
+    );
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    // F10: a note over 4 MiB creates nothing.
+    std::fs::remove_file(&link).unwrap();
+    let big = "x ".repeat(3 << 20);
+    assert!(core.add_memory(None, MemoryScope::Project, &big).is_err());
+    assert!(!link.exists());
+}

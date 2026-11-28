@@ -83,18 +83,85 @@ impl AsideError {
     }
 }
 
-/// Appends `line` to the instruction file `path` (see [`Core::add_memory`]); `inside`: the
-/// checkout a project file must stay in.
+/// Whether a file is one the agent's file tools always ask about.
+type AlwaysAsked<'a> = &'a dyn Fn(&Path) -> bool;
+
+/// The names a project note may be written into when `AGENTS.md` is a link: instruction files.
+const NOTE_TARGETS: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
+
+/// The file a note to `path` is written into: `path` itself, or the regular file it links to.
+/// For a project note (`project`: the checkout's root, and whether a file is one the agent's
+/// file tools always ask about) a link is followed only to an instruction file by name inside
+/// the checkout, and neither the file nor that target may be Git's data or an always-asked file.
+fn note_target(
+    path: &Path,
+    project: Option<(&Path, AlwaysAsked<'_>)>,
+) -> Result<PathBuf, CoreError> {
+    let fail = |what: String| CoreError::Memory(what);
+    let shown = path.display();
+    let target = match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => path.to_path_buf(),
+        Err(e) => return Err(fail(format!("Can’t read {shown}: {e}"))),
+        Ok(meta) if meta.file_type().is_symlink() => {
+            let real = crate::paths::canonicalize(path)
+                .map_err(|e| fail(format!("Can’t follow the link {shown}: {e}")))?;
+            if let Some((root, _)) = project {
+                let root = crate::paths::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+                let named = real.file_name().is_some_and(|name| {
+                    NOTE_TARGETS
+                        .iter()
+                        .any(|n| name.to_string_lossy().eq_ignore_ascii_case(n))
+                });
+                if !real.starts_with(&root) || !named {
+                    return Err(fail(format!(
+                        "{shown} links to {}, which isn’t an instruction file (AGENTS.md or CLAUDE.md) of this project, so no note was added.",
+                        real.display()
+                    )));
+                }
+            }
+            real
+        }
+        Ok(_) => path.to_path_buf(),
+    };
+    if let Some((_, always_asked)) = project
+        && (crate::session::step::in_git_data(path)
+            || crate::session::step::in_git_data(&target)
+            || always_asked(path)
+            || always_asked(&target))
+    {
+        return Err(fail(format!(
+            "{} is Git’s data or a file the agent always asks about, so no note was added.",
+            target.display()
+        )));
+    }
+    Ok(target)
+}
+
+/// Appends `line` to the instruction file `path` (already resolved by [`note_target`]), or
+/// creates it: a regular UTF-8 file of at most 4 MiB, as instruction files must be. The file is
+/// opened without following a link, so one planted after the check is not written through.
+/// `inside`: the checkout a project file belongs to, which must still be there.
 fn append_note(path: &Path, inside: Option<&Path>, line: &str) -> Result<(), CoreError> {
     use std::io::Write;
     let fail = |what: String| CoreError::Memory(what);
     let shown = path.display();
-    let existing = match std::fs::symlink_metadata(path) {
-        Ok(meta) => Some(meta),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+    let too_large = || {
+        fail(format!(
+            "{shown} would be larger than 4 MiB, which instructions can’t be."
+        ))
+    };
+    let mut options = std::fs::OpenOptions::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let exists = match std::fs::symlink_metadata(path) {
+        Ok(_) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
         Err(e) => return Err(fail(format!("Can’t read {shown}: {e}"))),
     };
-    let Some(meta) = existing else {
+    if !exists {
         // A project file goes only into its checkout as it is: a worktree folder that is gone
         // must not come back as a plain folder holding a note.
         if let Some(root) = inside
@@ -105,12 +172,15 @@ fn append_note(path: &Path, inside: Option<&Path>, line: &str) -> Result<(), Cor
                 root.display()
             )));
         }
+        if line.len() as u64 > crate::paths::TEXT_CAP {
+            return Err(too_large());
+        }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| fail(format!("Can’t create {shown}: {e}")))?;
         }
-        // `create_new`: a link planted in the meantime is not followed.
-        let mut file = std::fs::OpenOptions::new()
+        // `create_new`: a file or link planted in the meantime is not written through.
+        let mut file = options
             .write(true)
             .create_new(true)
             .open(path)
@@ -118,19 +188,6 @@ fn append_note(path: &Path, inside: Option<&Path>, line: &str) -> Result<(), Cor
         return file
             .write_all(line.as_bytes())
             .map_err(|e| fail(format!("Can’t write {shown}: {e}")));
-    };
-    if meta.file_type().is_symlink()
-        && let Some(root) = inside
-    {
-        let real = std::fs::canonicalize(path)
-            .map_err(|e| fail(format!("Can’t follow the link {shown}: {e}")))?;
-        let root = crate::paths::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-        if !real.starts_with(&root) {
-            return Err(fail(format!(
-                "{shown} links outside its project ({}), so no note was added.",
-                real.display()
-            )));
-        }
     }
     let current = crate::paths::read_text(path, crate::paths::TEXT_CAP).map_err(|reason| {
         fail(match reason {
@@ -144,11 +201,9 @@ fn append_note(path: &Path, inside: Option<&Path>, line: &str) -> Result<(), Cor
         "\n"
     };
     if (current.len() + separator.len() + line.len()) as u64 > crate::paths::TEXT_CAP {
-        return Err(fail(format!(
-            "{shown} would be larger than 4 MiB, which instructions can’t be."
-        )));
+        return Err(too_large());
     }
-    let mut file = std::fs::OpenOptions::new()
+    let mut file = options
         .append(true)
         .open(path)
         .map_err(|e| fail(format!("Can’t write {shown}: {e}")))?;
@@ -287,13 +342,23 @@ impl Core {
     }
 
     /// Imports a session export (untrusted; see [`crate::storage::import`]) as a new root
-    /// session of this core's folder and announces it (`session.created`).
-    pub fn import_session(&self, bytes: &[u8]) -> Result<SessionRow, ImportError> {
-        let directory = self.shared.directory.display().to_string();
-        let row = self
-            .shared
-            .db
-            .import_session(bytes, &self.shared.project, &directory)?;
+    /// session of this core's folder and announces it (`session.created`). The work runs on the
+    /// blocking pool, bounded, and ends early with [`ImportError::Cancelled`] once `cancel` is.
+    pub async fn import_session(
+        &self,
+        bytes: Vec<u8>,
+        cancel: &CancellationToken,
+    ) -> Result<SessionRow, ImportError> {
+        let shared = self.shared.clone();
+        let cancel = cancel.clone();
+        let row = tokio::task::spawn_blocking(move || {
+            let directory = shared.directory.display().to_string();
+            shared
+                .db
+                .import_session(&bytes, &shared.project, &directory, &cancel)
+        })
+        .await
+        .map_err(|e| ImportError::Read(e.to_string()))??;
         let _ = self
             .shared
             .events
@@ -307,9 +372,16 @@ impl Core {
 
     /// [`Core::import_session`] of the file at `path` (a regular file of at most
     /// [`crate::storage::import::MAX_FILE_BYTES`], read no further).
-    pub fn import_session_file(&self, path: &Path) -> Result<SessionRow, ImportError> {
-        let bytes = crate::storage::import::read_file(path)?;
-        self.import_session(&bytes)
+    pub async fn import_session_file(
+        &self,
+        path: &Path,
+        cancel: &CancellationToken,
+    ) -> Result<SessionRow, ImportError> {
+        let path = path.to_path_buf();
+        let bytes = tokio::task::spawn_blocking(move || crate::storage::import::read_file(&path))
+            .await
+            .map_err(|e| ImportError::Read(e.to_string()))??;
+        self.import_session(bytes, cancel).await
     }
 
     /// The instruction files a note can go to: the project's `AGENTS.md` at the root of the
@@ -333,8 +405,9 @@ impl Core {
     /// Adds `text` as a line (`- text`) at the end of an instruction file (see
     /// [`Core::memory_files`]), creating it when missing. The user asks for this, so nothing is
     /// asked; the file must be what instruction files may be: a regular file (a project file
-    /// may be a link only to a regular file inside its checkout) of at most 4 MiB, in UTF-8.
-    /// Returns the file written.
+    /// may be a link only to an `AGENTS.md`/`CLAUDE.md` inside its checkout that isn't Git's data
+    /// or a file the agent's file tools always ask about) of at most 4 MiB, in UTF-8. Returns the
+    /// file written (a link's target).
     pub fn add_memory(
         &self,
         session_id: Option<&str>,
@@ -346,12 +419,40 @@ impl Core {
         if line.is_empty() {
             return Err(CoreError::Memory("Write the note to add.".into()));
         }
-        let (path, inside) = match scope {
-            MemoryScope::Project => (files.project, Some(files.root)),
-            MemoryScope::Personal => (files.personal, None),
+        let target = match scope {
+            MemoryScope::Personal => note_target(&files.personal, None)?,
+            MemoryScope::Project => {
+                let shared = &self.shared;
+                let loaded = self.loaded();
+                let directory = match session_id {
+                    Some(id) => self
+                        .session(id)?
+                        .map(|s| PathBuf::from(s.directory))
+                        .unwrap_or_else(|| files.root.clone()),
+                    None => shared.directory.clone(),
+                };
+                let places = crate::hooks::scripts::Places {
+                    home: &shared.paths.home,
+                    project: &files.root,
+                    session: &directory,
+                };
+                let guarded = crate::hooks::guarded_files(
+                    &loaded.config.hooks,
+                    &shared.db,
+                    &shared.hooks.approved,
+                    &places,
+                );
+                let always_asked = |file: &Path| {
+                    let real = crate::config::real_path(file);
+                    loaded.config.protects(&shared.paths, file)
+                        || guarded.iter().any(|g| crate::config::real_path(g) == real)
+                };
+                note_target(&files.project, Some((&files.root, &always_asked)))?
+            }
         };
-        append_note(&path, inside.as_deref(), &format!("- {line}\n"))?;
-        Ok(path)
+        let inside = (scope == MemoryScope::Project).then_some(files.root.as_path());
+        append_note(&target, inside, &format!("- {line}\n"))?;
+        Ok(target)
     }
     /// The project's other checkouts.
     pub fn worktrees(&self) -> Vec<crate::worktree::Worktree> {
@@ -608,52 +709,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_note_is_a_line_at_the_end_of_a_regular_file_in_its_checkout() {
+    fn a_note_is_a_line_at_the_end_of_a_regular_file() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("proj");
-        std::fs::create_dir_all(&root).unwrap();
-        let file = root.join("AGENTS.md");
-        append_note(&file, Some(&root), "- one\n").unwrap();
-        append_note(&file, Some(&root), "- two\n").unwrap();
+        let file = dir.path().join("proj/AGENTS.md");
+        append_note(&file, None, "- one\n").unwrap();
+        append_note(&file, None, "- two\n").unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "- one\n- two\n");
         std::fs::write(&file, "# Rules").unwrap();
-        append_note(&file, Some(&root), "- three\n").unwrap();
+        append_note(&file, None, "- three\n").unwrap();
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
             "# Rules\n- three\n"
         );
-        #[cfg(unix)]
-        {
-            // A link to a file in the checkout is written through (AGENTS.md -> CLAUDE.md).
-            let claude = root.join("CLAUDE.md");
-            std::fs::write(&claude, "c\n").unwrap();
-            let linked = root.join("sub/AGENTS.md");
-            std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
-            std::os::unix::fs::symlink(&claude, &linked).unwrap();
-            append_note(&linked, Some(&root), "- four\n").unwrap();
-            assert_eq!(std::fs::read_to_string(&claude).unwrap(), "c\n- four\n");
-            assert!(
-                std::fs::symlink_metadata(&linked)
-                    .unwrap()
-                    .file_type()
-                    .is_symlink()
-            );
-            // A link out of the checkout, or to something that is not a regular file, is refused.
-            let outside = dir.path().join("config.json");
-            std::fs::write(&outside, "{}").unwrap();
-            let escape = root.join("x/AGENTS.md");
-            std::fs::create_dir_all(escape.parent().unwrap()).unwrap();
-            std::os::unix::fs::symlink(&outside, &escape).unwrap();
-            assert!(append_note(&escape, Some(&root), "- no\n").is_err());
-            assert_eq!(std::fs::read_to_string(&outside).unwrap(), "{}");
-            let device = root.join("y/AGENTS.md");
-            std::fs::create_dir_all(device.parent().unwrap()).unwrap();
-            std::os::unix::fs::symlink("/dev/zero", &device).unwrap();
-            assert!(append_note(&device, None, "- no\n").is_err());
-        }
-        let folder = root.join("z/AGENTS.md");
+        // The 4 MiB cap holds when the file is created too.
+        let big = "x".repeat(crate::paths::TEXT_CAP as usize + 1);
+        let fresh = dir.path().join("fresh/AGENTS.md");
+        assert!(append_note(&fresh, None, &big).is_err());
+        assert!(!fresh.exists());
+        let folder = dir.path().join("z/AGENTS.md");
         std::fs::create_dir_all(&folder).unwrap();
-        assert!(append_note(&folder, Some(&root), "- no\n").is_err());
+        assert!(append_note(&folder, None, "- no\n").is_err());
         // A worktree that is gone is not made again as a plain folder for a note.
         let gone = dir.path().join("worktree");
         assert!(append_note(&gone.join("AGENTS.md"), Some(&gone), "- no\n").is_err());

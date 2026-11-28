@@ -114,6 +114,9 @@ pub(crate) struct App {
     /// Side questions in flight, by session: which ask it is, and its cancel.
     pub(crate) asides:
         std::sync::Mutex<HashMap<String, (u64, anysola_core::api::CancellationToken)>>,
+    /// The session import in flight, if any (which one it is, and its cancel): one at a time; a
+    /// new one, stopping the cores or quitting cancels it.
+    pub(crate) import: std::sync::Mutex<Option<(u64, anysola_core::api::CancellationToken)>>,
 }
 
 /// One key per folder however it is spelled: Windows hands the same folder over with either
@@ -146,6 +149,10 @@ impl App {
 
     /// A core reads the token when it starts: after signing in or out, start them afresh.
     pub(crate) async fn drop_cores(&self) {
+        // An import writing into a core's folder ends with it (and with the app).
+        if let Some((_, cancel)) = self.import.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            cancel.cancel();
+        }
         let cells: Vec<_> = self.cores.lock().await.drain().map(|(_, c)| c).collect();
         // Every folder's turns stop at once: their waits in `stop` overlap.
         for running in cells.iter().filter_map(|cell| cell.get()) {
@@ -1261,6 +1268,7 @@ fn main() {
             login: Mutex::default(),
             terminals: terminal::Manager::default(),
             asides: std::sync::Mutex::default(),
+            import: std::sync::Mutex::default(),
         })
         // Closing the window while turns run asks first; `quit` then stops them and exits. A
         // second close soon after does the same without the window, which may not be answering.

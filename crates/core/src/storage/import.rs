@@ -15,9 +15,13 @@
 //! - Nothing that points at this machine's state is kept: step snapshots (so revert and fork
 //!   have nothing to restore and touch no file), signed reasoning (`native`), subagent session
 //!   ids, background shell ids, and every tool metadata key but the few a transcript shows.
-//! - What a request would be refused for is fixed or dropped: tool names outside the API's
-//!   alphabet, non-object tool inputs, media that is not valid base64, steps before the first
-//!   user turn.
+//! - Everything a later request sends is rebuilt from checked values: tool names in the API's
+//!   alphabet, object inputs, images through the same checks as a prompt's (size read from the
+//!   header first, a per-import image budget) with their type taken from the bytes and the data
+//!   URI written anew, PDFs only when they are one, no blank text block, no row that lowers to
+//!   nothing, the first request turn a user one, token counts and times clamped.
+//! - The work is bounded (file size, values, depth, messages, images and pixels) and can be
+//!   cancelled; it blocks, so callers run it off their async threads.
 
 use std::io::Read;
 use std::path::Path;
@@ -27,10 +31,13 @@ use rusqlite::params;
 use serde_json::{Map, Value, json};
 
 use super::{Db, SessionRow, StorageError, json as compact};
+use tokio_util::sync::CancellationToken;
+
 use crate::gateway::error::SessionError;
 use crate::session::message::{
-    AgentSwitchedData, AssistantData, CompactionData, FileAttachment, InvokedSkill, Part,
-    ShellData, ShellOutput, SkillData, SyntheticData, ToolState, UserData, encode,
+    AgentSwitchedData, AssistantData, AssistantTime, Cache, CompactionData, Created,
+    FileAttachment, InvokedSkill, Part, PartTime, ShellData, ShellOutput, SkillData, SyntheticData,
+    Tokens, ToolState, UserData, encode,
 };
 use crate::tool::ToolContent;
 
@@ -55,6 +62,8 @@ pub enum ImportError {
     Invalid(String),
     #[error("Can’t read the file: {0}")]
     Read(String),
+    #[error("The import was cancelled.")]
+    Cancelled,
     #[error(transparent)]
     Storage(#[from] StorageError),
 }
@@ -176,91 +185,348 @@ fn is_pdf(data: &str) -> bool {
         .is_ok_and(|bytes| bytes.starts_with(b"%PDF-"))
 }
 
-/// A prompt's attachments as the model may get them: images through the same checks a prompt's
-/// images pass ([`crate::media::normalize`]: decodable, of a type the API takes, within size,
-/// converted or resized as there), PDFs only when they are one; what fails is dropped. Other
-/// types are kept (they are not sent).
-fn files(files: Option<Vec<FileAttachment>>) -> Option<Vec<FileAttachment>> {
-    let files = files?;
-    let limits = crate::media::Limits::from_config(None);
-    Some(
-        files
-            .into_iter()
-            .filter_map(|f| {
-                let mime = f.mime.to_ascii_lowercase();
-                let (mime, data) = if mime.starts_with("image/") {
-                    match crate::media::normalize(&f.mime, &f.data, &limits) {
-                        Ok(None) => (f.mime, f.data),
-                        Ok(Some(normalized)) => normalized,
-                        Err(_) => return None,
-                    }
-                } else if mime == "application/pdf" {
-                    if !is_pdf(&f.data) {
-                        return None;
-                    }
-                    (f.mime, f.data)
-                } else if mime.is_empty() || !base64_ok(&f.data) {
-                    return None;
-                } else {
-                    (f.mime, f.data)
-                };
-                Some(FileAttachment {
-                    data,
-                    mime,
-                    source: json!({"type": "inline"}),
-                    name: f.name,
-                    extra: Map::new(),
-                })
-            })
-            .collect(),
-    )
+/// Characters a title keeps: none that draw nothing or reorder text (controls, bidirectional
+/// overrides, zero-width characters), as hook commands are shown.
+fn visible(c: char) -> bool {
+    crate::hooks::display(c.encode_utf8(&mut [0; 4]))
+        .chars()
+        .count()
+        == 1
 }
 
-fn user(data: UserData) -> UserData {
-    let mut extra = Map::new();
-    if let Some(skills) = data.extra.get("skills")
-        && let Ok(skills) = serde_json::from_value::<Vec<InvokedSkill>>(skills.clone())
-        && !skills.is_empty()
-    {
-        extra.insert("skills".into(), json!(skills));
-    }
-    if let Some(Value::String(command)) = data.extra.get("command") {
-        extra.insert("command".into(), json!(command));
-    }
-    UserData {
-        time: data.time,
-        text: data.text,
-        files: files(data.files),
-        extra,
-    }
+/// Token counts a row may claim.
+const MAX_TOKENS: u64 = 1_000_000_000;
+/// Images per import, the pixels of one and of all of them: each image is decoded (and maybe
+/// resized) to be checked, so this bounds the import's time and memory. An image the app stores
+/// is at most 2000 x 2000 by default.
+const MAX_IMAGES: usize = 64;
+const MAX_IMAGE_PIXELS: u64 = 4096 * 4096;
+const MAX_TOTAL_PIXELS: u64 = 64_000_000;
+
+/// The state of one import: when it started (no time may be later), its image budget, and the
+/// caller's cancel.
+struct Rebuild<'a> {
+    now: u64,
+    images: usize,
+    pixels: u64,
+    limits: crate::media::Limits,
+    cancel: &'a CancellationToken,
 }
 
-/// A tool result's content as the model may get it: images as a tool's own images are
-/// ([`crate::media::normalize_content`]: what can't be sent is dropped with a note), PDFs only
-/// when they are one, any other file as a note (the request would carry it as an image).
-fn content(items: Vec<ToolContent>) -> Vec<ToolContent> {
-    let items: Vec<ToolContent> = items
-        .into_iter()
-        .map(|item| match item {
-            ToolContent::File { uri, mime, name } => {
-                let data = uri
-                    .strip_prefix("data:")
-                    .and_then(|rest| rest.split_once(";base64,"))
-                    .map(|(_, data)| data.to_string());
-                let image = mime.to_ascii_lowercase().starts_with("image/");
-                let pdf = mime.eq_ignore_ascii_case("application/pdf");
-                match data {
-                    Some(data) if image && base64_ok(&data) => {
-                        ToolContent::File { uri, mime, name }
-                    }
-                    Some(data) if pdf && is_pdf(&data) => ToolContent::File { uri, mime, name },
-                    _ => ToolContent::text(format!("[{mime} omitted]")),
-                }
+impl Rebuild<'_> {
+    fn at(&self, t: u64) -> u64 {
+        t.min(self.now)
+    }
+
+    fn created(&self, t: Created) -> Created {
+        Created {
+            created: self.at(t.created),
+        }
+    }
+
+    fn assistant_time(&self, t: AssistantTime) -> AssistantTime {
+        AssistantTime {
+            created: self.at(t.created),
+            streamed: t.streamed.map(|t| self.at(t)),
+            completed: t.completed.map(|t| self.at(t)),
+        }
+    }
+
+    fn part_time(&self, t: PartTime) -> PartTime {
+        PartTime {
+            created: self.at(t.created),
+            ran: t.ran.map(|t| self.at(t)),
+            completed: t.completed.map(|t| self.at(t)),
+        }
+    }
+
+    fn tokens(&self, t: Option<Tokens>) -> Option<Tokens> {
+        t.map(|t| {
+            let n = |v: u64| v.min(MAX_TOKENS);
+            Tokens {
+                input: n(t.input),
+                output: n(t.output),
+                reasoning: n(t.reasoning),
+                cache: Cache {
+                    read: n(t.cache.read),
+                    write: n(t.cache.write),
+                },
             }
-            text => text,
         })
-        .collect();
-    crate::media::normalize_content(items, &crate::media::Limits::from_config(None))
+    }
+
+    fn error(&self, e: SessionError) -> SessionError {
+        SessionError::new(&e.kind, e.message)
+    }
+
+    /// The image `data` as the model may get it: its size read from its header first (nothing
+    /// too large is decoded), within this import's budget, then through the checks a prompt's
+    /// images pass ([`crate::media::normalize`]: decodable, a type the API takes, resized as
+    /// there). `None`: dropped.
+    fn image(&mut self, data: &str) -> Option<(String, String)> {
+        if self.cancel.is_cancelled() || self.images >= MAX_IMAGES {
+            return None;
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .ok()?;
+        let (width, height) = image::ImageReader::new(std::io::Cursor::new(&bytes))
+            .with_guessed_format()
+            .ok()?
+            .into_dimensions()
+            .ok()?;
+        let pixels = u64::from(width) * u64::from(height);
+        if pixels == 0
+            || pixels > MAX_IMAGE_PIXELS
+            || self.pixels.saturating_add(pixels) > MAX_TOTAL_PIXELS
+        {
+            return None;
+        }
+        self.images += 1;
+        self.pixels += pixels;
+        // The type comes from the bytes: the declared one is not trusted.
+        match crate::media::normalize("", data, &self.limits) {
+            Ok(Some((mime, data))) => Some((mime, data)),
+            Ok(None) => None,
+            Err(_) => None,
+        }
+    }
+
+    /// A prompt's attachments as the model may get them: images as [`Rebuild::image`] gives
+    /// them, PDFs only when they are one, other types kept (they are not sent). The type is
+    /// lower case; the source is inline.
+    fn files(&mut self, files: Option<Vec<FileAttachment>>) -> Option<Vec<FileAttachment>> {
+        let files = files?;
+        Some(
+            files
+                .into_iter()
+                .filter_map(|f| {
+                    let mime = f.mime.trim().to_ascii_lowercase();
+                    let (mime, data) = if mime.starts_with("image/") {
+                        self.image(&f.data)?
+                    } else if mime == "application/pdf" {
+                        is_pdf(&f.data).then_some((mime, f.data))?
+                    } else if mime.is_empty() || !base64_ok(&f.data) {
+                        return None;
+                    } else {
+                        (mime, f.data)
+                    };
+                    Some(FileAttachment {
+                        data,
+                        mime,
+                        source: json!({"type": "inline"}),
+                        name: f.name,
+                        extra: Map::new(),
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    fn user(&mut self, data: UserData) -> UserData {
+        let mut extra = Map::new();
+        if let Some(skills) = data.extra.get("skills")
+            && let Ok(skills) = serde_json::from_value::<Vec<InvokedSkill>>(skills.clone())
+        {
+            let skills: Vec<InvokedSkill> = skills
+                .into_iter()
+                .filter(|s| !s.text.trim().is_empty())
+                .collect();
+            if !skills.is_empty() {
+                extra.insert("skills".into(), json!(skills));
+            }
+        }
+        if let Some(Value::String(command)) = data.extra.get("command") {
+            extra.insert("command".into(), json!(command));
+        }
+        UserData {
+            time: self.created(data.time),
+            text: data.text,
+            files: self.files(data.files),
+            extra,
+        }
+    }
+
+    /// A tool result's content as the model may get it, rebuilt from checked parts: blank text
+    /// dropped, images as [`Rebuild::image`] gives them (the data URI written anew from the
+    /// checked type, never the one it named), PDFs only when they are one, anything else a note.
+    fn content(&mut self, items: Vec<ToolContent>, completed: bool) -> Vec<ToolContent> {
+        let mut out: Vec<ToolContent> = items
+            .into_iter()
+            .filter_map(|item| match item {
+                ToolContent::Text { text } if text.trim().is_empty() => None,
+                ToolContent::Text { text } => Some(ToolContent::Text { text }),
+                ToolContent::File { uri, mime, name } => {
+                    let mime = mime.trim().to_ascii_lowercase();
+                    let data = uri
+                        .strip_prefix("data:")
+                        .and_then(|rest| rest.split_once(";base64,"))
+                        .map(|(_, data)| data.to_string());
+                    let omitted = || ToolContent::text(format!("[{mime} omitted]"));
+                    let file = |mime: String, data: String| ToolContent::File {
+                        uri: format!("data:{mime};base64,{data}"),
+                        mime,
+                        name: name.clone(),
+                    };
+                    Some(match data {
+                        Some(data) if mime.starts_with("image/") => match self.image(&data) {
+                            Some((mime, data)) => file(mime, data),
+                            None => omitted(),
+                        },
+                        Some(data) if mime == "application/pdf" && is_pdf(&data) => {
+                            file(mime.clone(), data)
+                        }
+                        _ => omitted(),
+                    })
+                }
+            })
+            .collect();
+        // A result is never empty, as a tool's own never is.
+        if out.is_empty() && completed {
+            out.push(ToolContent::text("(no output)"));
+        }
+        out
+    }
+
+    fn tool_state(&mut self, name: &str, state: ToolState) -> ToolState {
+        match state {
+            ToolState::Streaming { .. } => ToolState::Error {
+                input: json!({}),
+                error: interrupted(name),
+                content: Vec::new(),
+                metadata: Map::new(),
+            },
+            ToolState::Running { input, .. } => ToolState::Error {
+                input: object(input),
+                error: interrupted(name),
+                content: Vec::new(),
+                metadata: Map::new(),
+            },
+            ToolState::Completed {
+                input,
+                content: items,
+                metadata,
+            } => ToolState::Completed {
+                input: object(input),
+                content: self.content(items, true),
+                metadata: tool_metadata(metadata),
+            },
+            ToolState::Error {
+                input,
+                error,
+                content: items,
+                metadata,
+            } => ToolState::Error {
+                input: object(input),
+                error: self.error(error),
+                content: self.content(items, false),
+                metadata: tool_metadata(metadata),
+            },
+        }
+    }
+
+    fn assistant(&mut self, data: AssistantData) -> AssistantData {
+        let mut parts = Vec::new();
+        for part in data.content {
+            match part {
+                Part::Text { text, .. } => parts.push(Part::Text { text, native: None }),
+                Part::Reasoning { text, time, .. } => parts.push(Part::Reasoning {
+                    text,
+                    native: None,
+                    time: time.map(|t| self.part_time(t)),
+                }),
+                Part::Tool {
+                    name,
+                    executed,
+                    state,
+                    time,
+                    ..
+                } if tool_name_ok(&name) => {
+                    let state = self.tool_state(&name, state);
+                    parts.push(Part::Tool {
+                        id: format!("toolu_{}", crate::ids::part().trim_start_matches("prt_")),
+                        state,
+                        name,
+                        executed,
+                        native: None,
+                        time: self.part_time(time),
+                    });
+                }
+                Part::Tool { .. } => {}
+            }
+        }
+        AssistantData {
+            time: self.assistant_time(data.time),
+            agent: data.agent,
+            model: data.model,
+            content: parts,
+            snapshot: None,
+            finish: data.finish,
+            raw_finish: data.raw_finish,
+            cost: None,
+            tokens: self.tokens(data.tokens),
+            error: data.error.map(|e| self.error(e)),
+            extra: Map::new(),
+        }
+    }
+
+    fn shell(&self, data: ShellData) -> ShellData {
+        let metadata = data.metadata.as_ref().and_then(Value::as_object).map(|m| {
+            let mut kept = Map::new();
+            if let Some(Value::Bool(flag)) = m.get("background") {
+                kept.insert("background".into(), json!(flag));
+            }
+            if let Some(Value::Bool(flag)) = m.get("timedOut") {
+                kept.insert("timedOut".into(), json!(flag));
+            }
+            if let Some(exit) = m.get("exit").filter(|e| e.is_i64() || e.is_null()) {
+                kept.insert("exit".into(), exit.clone());
+            }
+            Value::Object(kept)
+        });
+        ShellData {
+            time: self.assistant_time(data.time),
+            command: data.command,
+            output: data.output.map(|o| ShellOutput { output: o.output }),
+            metadata,
+            extra: Map::new(),
+        }
+    }
+
+    fn idle(&self, data: &Map<String, Value>, n: usize) -> Result<Value, ImportError> {
+        let created = data
+            .get("time")
+            .and_then(|t| t.get("created"))
+            .and_then(Value::as_u64)
+            .ok_or_else(|| invalid(format!("message {} (idle) has no time.", n + 1)))?;
+        let outcome = match data.get("outcome").and_then(Value::as_str) {
+            Some(o @ ("succeeded" | "failed" | "interrupted")) => o,
+            _ => return Err(invalid(format!("message {} (idle) has no outcome.", n + 1))),
+        };
+        let mut out = json!({"time": {"created": self.at(created)}, "outcome": outcome});
+        if let Some(reason @ ("user" | "budget" | "declined" | "closed")) =
+            data.get("reason").and_then(Value::as_str)
+        {
+            out["reason"] = json!(reason);
+        }
+        if let Some(error) = data.get("error")
+            && let Ok(error) = serde_json::from_value::<SessionError>(error.clone())
+        {
+            out["error"] = encode(&self.error(error));
+        }
+        Ok(out)
+    }
+}
+
+/// Whether a user row lowers to anything the model gets (see `session::lower::user`).
+fn user_has_content(data: &UserData) -> bool {
+    !data.text.trim().is_empty()
+        || data.extra.contains_key("skills")
+        || data
+            .files
+            .iter()
+            .flatten()
+            .any(|f| f.mime.starts_with("image/") || f.mime == "application/pdf")
 }
 
 /// The tool metadata a transcript shows: the changed files' diffs and a few flags. Everything
@@ -309,134 +575,14 @@ fn interrupted(name: &str) -> SessionError {
     SessionError::new("aborted", format!("Tool execution interrupted: {name}"))
 }
 
-fn tool_state(name: &str, state: ToolState) -> ToolState {
-    match state {
-        ToolState::Streaming { .. } => ToolState::Error {
-            input: json!({}),
-            error: interrupted(name),
-            content: Vec::new(),
-            metadata: Map::new(),
-        },
-        ToolState::Running { input, .. } => ToolState::Error {
-            input: object(input),
-            error: interrupted(name),
-            content: Vec::new(),
-            metadata: Map::new(),
-        },
-        ToolState::Completed {
-            input,
-            content: items,
-            metadata,
-        } => ToolState::Completed {
-            input: object(input),
-            content: content(items),
-            metadata: tool_metadata(metadata),
-        },
-        ToolState::Error {
-            input,
-            error,
-            content: items,
-            metadata,
-        } => ToolState::Error {
-            input: object(input),
-            error: SessionError::new(&error.kind, error.message),
-            content: content(items),
-            metadata: tool_metadata(metadata),
-        },
-    }
-}
-
-fn assistant(data: AssistantData) -> AssistantData {
-    let parts = data
-        .content
-        .into_iter()
-        .filter_map(|part| match part {
-            Part::Text { text, .. } => Some(Part::Text { text, native: None }),
-            Part::Reasoning { text, time, .. } => Some(Part::Reasoning {
-                text,
-                native: None,
-                time,
-            }),
-            Part::Tool {
-                name,
-                executed,
-                state,
-                time,
-                ..
-            } => tool_name_ok(&name).then(|| Part::Tool {
-                id: format!("toolu_{}", crate::ids::part().trim_start_matches("prt_")),
-                state: tool_state(&name, state),
-                name,
-                executed,
-                native: None,
-                time,
-            }),
-        })
-        .collect();
-    AssistantData {
-        time: data.time,
-        agent: data.agent,
-        model: data.model,
-        content: parts,
-        snapshot: None,
-        finish: data.finish,
-        raw_finish: data.raw_finish,
-        cost: None,
-        tokens: data.tokens,
-        error: data.error.map(|e| SessionError::new(&e.kind, e.message)),
-        extra: Map::new(),
-    }
-}
-
-fn shell(data: ShellData) -> ShellData {
-    let metadata = data.metadata.as_ref().and_then(Value::as_object).map(|m| {
-        let mut kept = Map::new();
-        if let Some(Value::Bool(flag)) = m.get("background") {
-            kept.insert("background".into(), json!(flag));
-        }
-        if let Some(Value::Bool(flag)) = m.get("timedOut") {
-            kept.insert("timedOut".into(), json!(flag));
-        }
-        if let Some(exit) = m.get("exit").filter(|e| e.is_i64() || e.is_null()) {
-            kept.insert("exit".into(), exit.clone());
-        }
-        Value::Object(kept)
-    });
-    ShellData {
-        time: data.time,
-        command: data.command,
-        output: data.output.map(|o| ShellOutput { output: o.output }),
-        metadata,
-        extra: Map::new(),
-    }
-}
-
-fn idle(data: &Map<String, Value>, n: usize) -> Result<Value, ImportError> {
-    let created = data
-        .get("time")
-        .and_then(|t| t.get("created"))
-        .and_then(Value::as_u64)
-        .ok_or_else(|| invalid(format!("message {} (idle) has no time.", n + 1)))?;
-    let outcome = match data.get("outcome").and_then(Value::as_str) {
-        Some(o @ ("succeeded" | "failed" | "interrupted")) => o,
-        _ => return Err(invalid(format!("message {} (idle) has no outcome.", n + 1))),
-    };
-    let mut out = json!({"time": {"created": created}, "outcome": outcome});
-    if let Some(reason @ ("user" | "budget" | "declined" | "closed")) =
-        data.get("reason").and_then(Value::as_str)
-    {
-        out["reason"] = json!(reason);
-    }
-    if let Some(error) = data.get("error")
-        && let Ok(error) = serde_json::from_value::<SessionError>(error.clone())
-    {
-        out["error"] = encode(&SessionError::new(&error.kind, error.message));
-    }
-    Ok(out)
-}
-
 /// Validates and rebuilds a session export's rows (see the module docs). Nothing is written.
 pub fn prepare(bytes: &[u8]) -> Result<Prepared, ImportError> {
+    prepare_with(bytes, &CancellationToken::new())
+}
+
+/// [`prepare`], ending with [`ImportError::Cancelled`] once `cancel` is cancelled (checked
+/// between messages and before each image).
+pub fn prepare_with(bytes: &[u8], cancel: &CancellationToken) -> Result<Prepared, ImportError> {
     if bytes.len() as u64 > MAX_FILE_BYTES {
         return Err(ImportError::TooLarge);
     }
@@ -468,7 +614,7 @@ pub fn prepare(bytes: &[u8]) -> Result<Prepared, ImportError> {
         .and_then(Value::as_str)
         .map(|t| {
             t.chars()
-                .map(|c| if c.is_control() { ' ' } else { c })
+                .map(|c| if visible(c) { c } else { ' ' })
                 .collect::<String>()
                 .trim()
                 .chars()
@@ -478,11 +624,21 @@ pub fn prepare(bytes: &[u8]) -> Result<Prepared, ImportError> {
         .filter(|t: &String| !t.is_empty())
         .unwrap_or_else(|| "Imported session".into());
 
+    let mut rebuild = Rebuild {
+        now: crate::time::now_ms(),
+        images: 0,
+        pixels: 0,
+        limits: crate::media::Limits::from_config(None),
+        cancel,
+    };
     // Rows kept so far, with the file's id of each (for `keepID`).
     let mut rows: Vec<Row> = Vec::new();
     let mut ids: Vec<Option<String>> = Vec::new();
     let mut seen_user = false;
     for (n, message) in messages.into_iter().enumerate() {
+        if cancel.is_cancelled() {
+            return Err(ImportError::Cancelled);
+        }
         let Value::Object(mut fields) = message else {
             return Err(invalid(format!("message {} is not an object.", n + 1)));
         };
@@ -495,12 +651,23 @@ pub fn prepare(bytes: &[u8]) -> Result<Prepared, ImportError> {
             _ => return Err(invalid(format!("message {} has no type.", n + 1))),
         };
         let data = Value::Object(fields);
+        // `user_turn`: the row lowers to user-role content; a row that lowers to nothing is not
+        // kept (nor counted as the turn a request must open with).
         let (data, user_turn) = match kind.as_str() {
-            "user" => (encode(&user(decode::<UserData>(data, n, &kind)?)), true),
+            "user" => {
+                let d = rebuild.user(decode::<UserData>(data, n, &kind)?);
+                if !user_has_content(&d) {
+                    continue;
+                }
+                (encode(&d), true)
+            }
             "synthetic" => {
                 let d: SyntheticData = decode(data, n, &kind)?;
+                if d.text.trim().is_empty() {
+                    continue;
+                }
                 let d = SyntheticData {
-                    time: d.time,
+                    time: rebuild.created(d.time),
                     text: d.text,
                     description: d.description,
                     extra: Map::new(),
@@ -509,8 +676,11 @@ pub fn prepare(bytes: &[u8]) -> Result<Prepared, ImportError> {
             }
             "skill" => {
                 let d: SkillData = decode(data, n, &kind)?;
+                if d.text.trim().is_empty() {
+                    continue;
+                }
                 let d = SkillData {
-                    time: d.time,
+                    time: rebuild.created(d.time),
                     skill: d.skill,
                     name: d.name,
                     text: d.text,
@@ -525,10 +695,10 @@ pub fn prepare(bytes: &[u8]) -> Result<Prepared, ImportError> {
                 if d.time.completed.is_none() || !seen_user {
                     continue;
                 }
-                (encode(&assistant(d)), false)
+                (encode(&rebuild.assistant(d)), false)
             }
             "shell" => {
-                let d = shell(decode::<ShellData>(data, n, &kind)?);
+                let d = rebuild.shell(decode::<ShellData>(data, n, &kind)?);
                 let background = d.background();
                 (encode(&d), !background)
             }
@@ -546,7 +716,7 @@ pub fn prepare(bytes: &[u8]) -> Result<Prepared, ImportError> {
                 });
                 let completed = d.completed();
                 let d = CompactionData {
-                    time: d.time,
+                    time: rebuild.created(d.time),
                     status: d.status,
                     reason: if d.reason == "manual" {
                         "manual"
@@ -557,9 +727,9 @@ pub fn prepare(bytes: &[u8]) -> Result<Prepared, ImportError> {
                     model: d.model,
                     summary: d.summary,
                     native: None,
-                    error: d.error.map(|e| SessionError::new(&e.kind, e.message)),
+                    error: d.error.map(|e| rebuild.error(e)),
                     cost: None,
-                    tokens: d.tokens,
+                    tokens: rebuild.tokens(d.tokens),
                     metadata: keep.map(|id| json!({"keepID": id})),
                 };
                 (encode(&d), completed)
@@ -567,7 +737,7 @@ pub fn prepare(bytes: &[u8]) -> Result<Prepared, ImportError> {
             "agent-switched" => {
                 let d: AgentSwitchedData = decode(data, n, &kind)?;
                 let d = AgentSwitchedData {
-                    time: d.time,
+                    time: rebuild.created(d.time),
                     agent: d.agent,
                     previous: d.previous,
                     extra: Map::new(),
@@ -575,7 +745,7 @@ pub fn prepare(bytes: &[u8]) -> Result<Prepared, ImportError> {
                 (encode(&d), false)
             }
             "idle" => match &data {
-                Value::Object(map) => (idle(map, n)?, false),
+                Value::Object(map) => (rebuild.idle(map, n)?, false),
                 _ => continue,
             },
             // `system` (instruction updates, sent as system text), `location-switched` (a folder
@@ -591,19 +761,24 @@ pub fn prepare(bytes: &[u8]) -> Result<Prepared, ImportError> {
         });
         ids.push(original);
     }
+    if cancel.is_cancelled() {
+        return Err(ImportError::Cancelled);
+    }
     Ok(Prepared { title, rows })
 }
 
 impl Db {
     /// Imports a session export (`bytes`, see [`prepare`]) as a new root session of `project`
     /// in `directory`, in one transaction. Returns the new session.
+    /// Blocking (images are checked): call it off an async runtime's threads.
     pub fn import_session(
         &self,
         bytes: &[u8],
         project: &crate::project::Project,
         directory: &str,
+        cancel: &CancellationToken,
     ) -> Result<SessionRow, ImportError> {
-        let prepared = prepare(bytes)?;
+        let prepared = prepare_with(bytes, cancel)?;
         self.upsert_project(project)?;
         let now = crate::time::now_ms();
         let row = SessionRow {
@@ -659,10 +834,16 @@ impl Db {
 
 /// Imports the export at `path` into the database as a new root session of `directory` (its
 /// project is identified as a core would): for a front end without a running core there.
-pub fn import_file(db: &Db, path: &Path, directory: &Path) -> Result<SessionRow, ImportError> {
+/// Blocking: call it off an async runtime's threads (`spawn_blocking`).
+pub fn import_file(
+    db: &Db,
+    path: &Path,
+    directory: &Path,
+    cancel: &CancellationToken,
+) -> Result<SessionRow, ImportError> {
     let bytes = read_file(path)?;
     let project = crate::project::identify(directory);
-    db.import_session(&bytes, &project, &directory.display().to_string())
+    db.import_session(&bytes, &project, &directory.display().to_string(), cancel)
 }
 
 #[cfg(test)]
