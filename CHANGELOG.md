@@ -4,7 +4,7 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
-## Unreleased
+## 1.6.1 (2026-11-29)
 
 - **A declined answer is said, not swallowed:** when the model's safety checks decline a request, the turn fails
   with a line naming the model, the reason it gave (cybersecurity, biology, AI model development, the usage
