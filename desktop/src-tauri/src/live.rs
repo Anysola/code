@@ -319,6 +319,8 @@ fn body(name: &str) -> Option<(&'static str, bool)> {
     match name {
         "write" => Some(("content", true)),
         "edit" => Some(("newString", true)),
+        // A notebook cell's new source.
+        "notebook" => Some(("source", true)),
         // A Code Mode program is counted, not shown.
         "execute" => Some(("code", false)),
         _ => None,

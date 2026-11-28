@@ -361,6 +361,43 @@ pub async fn export_session(
     Ok(json!(path.display().to_string()))
 }
 
+/// Asks for a session export and imports it as a new session of `directory`: through the
+/// folder's core when one runs (it announces the session), else straight into the database.
+/// Null when cancelled; the file is untrusted, and nothing is written when it is refused.
+#[tauri::command]
+pub async fn import_session(handle: AppHandle, app: State<'_, App>, directory: String) -> Answer {
+    use tauri_plugin_dialog::DialogExt;
+    let db = app.db()?.clone();
+    if !Path::new(&directory).is_dir() {
+        return Err(format!("{directory} is not a folder on this computer."));
+    }
+    let (sender, picked) = tokio::sync::oneshot::channel();
+    handle
+        .dialog()
+        .file()
+        .set_title("Import session")
+        .add_filter("JSON", &["json"])
+        .pick_file(move |path| {
+            let _ = sender.send(path);
+        });
+    let Some(path) = picked.await.ok().flatten() else {
+        return Ok(Value::Null);
+    };
+    let path = path
+        .into_path()
+        .map_err(|_| "Choose a file on this computer.".to_string())?;
+    let core = app.running(&directory).await;
+    // Up to 64 MiB read and checked: off the async workers.
+    let row = tauri::async_runtime::spawn_blocking(move || match core {
+        Some(core) => core.import_session_file(&path),
+        None => anysola_core::storage::import::import_file(&db, &path, Path::new(&directory)),
+    })
+    .await
+    .map_err(text)?
+    .map_err(text)?;
+    Ok(crate::session_json(&row, None))
+}
+
 #[tauri::command]
 pub async fn about(handle: AppHandle) -> Answer {
     let os = match std::env::consts::OS {

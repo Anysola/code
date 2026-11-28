@@ -19,40 +19,98 @@ const CONFIG_FILE = "~/.anysola/config.json"
 // Words, shared with the conversation's card
 // ---------------------------------------------------------------------------
 
+/** The core's moments (`hooks::EVENTS`), in its order, with what a hook there can do. */
 const EVENTS: { id: HookEvent; label: string; note: string }[] = [
   { id: "PreToolUse", label: "Before a tool runs", note: "Can stop it" },
   { id: "PostToolUse", label: "After a tool runs", note: "Can tell the agent what it found" },
   { id: "UserPromptSubmit", label: "When you send a message", note: "Can stop it, or add context" },
   { id: "Stop", label: "When the agent finishes", note: "Can keep it working" },
+  { id: "SubagentStop", label: "When a subagent finishes", note: "Can keep it working" },
+  { id: "PreCompact", label: "Before compacting", note: "Can stop a /compact you run" },
+  { id: "Notification", label: "When the agent needs you", note: "Can’t stop anything" },
   { id: "SessionStart", label: "When a session starts", note: "Can add context" },
+  { id: "SessionEnd", label: "When a session ends", note: "Can’t stop anything" },
 ]
 
-/** What exit code 2 does at each moment. */
-const BLOCKS: Record<HookEvent, string> = {
+/** Why a file allowed before 1.6.0 is asked about again. */
+export const REASKED = "You allowed these before. This version also runs the ones marked new, so none of them run until you allow them again."
+
+/** The moments 1.6.0 added (core `Event::added_in_1_6`). */
+export const NEW_EVENTS = new Set<string>(["SubagentStop", "PreCompact", "Notification", "SessionEnd"])
+
+/** Every moment a hook can run at, for labels written as the core writes them. */
+export const HOOK_EVENTS = new Set<string>(EVENTS.map((e) => e.id))
+
+/** What exit code 2 does at each moment that can stop or steer something. */
+const BLOCKS: Record<Exclude<HookEvent, "Notification" | "SessionEnd">, string> = {
   PreToolUse: "stops the tool",
   PostToolUse: "tells the agent",
   UserPromptSubmit: "stops the message",
   Stop: "keeps the agent working",
+  SubagentStop: "keeps the subagent working",
+  PreCompact: "stops a /compact you run (an automatic one goes on)",
   SessionStart: "shows you a message",
+}
+
+/** The form's line on what a hook gets and what exit code 2 does. */
+function exitLine(event: HookEvent) {
+  const gets = "It gets the event as JSON on stdin."
+  const notice = "Exit code 2 shows what it prints on stderr as a notice."
+  if (event === "Notification") return `${gets} It can’t answer or stop anything. ${notice}`
+  if (event === "SessionEnd") return `It gets the event as JSON on stdin and has 1.5 seconds, shared by every SessionEnd hook. ${notice}`
+  return `${gets} Exit code 2 ${BLOCKS[event]}, and what it prints on stderr is the reason.`
 }
 
 export function defaultTimeout(event: HookEvent) {
   return event === "UserPromptSubmit" ? 30 : 600
 }
 
-const toolEvent = (e: HookEvent) => e === "PreToolUse" || e === "PostToolUse"
+/** SessionEnd's time is one budget for all of them, whatever a hook's own limit says. */
+const ownTime = (e: HookEvent) => e !== "SessionEnd"
 
-type Preset = "all" | "shell" | "files" | "startup" | "resume" | "custom"
+/** What a moment's matcher names: tools, how a session started, a subagent's type, what started a compaction, what the agent asks. */
+type Family = "tools" | "start" | "agent" | "compact" | "ask"
+
+function family(e: HookEvent): Family | null {
+  switch (e) {
+    case "PreToolUse":
+    case "PostToolUse":
+      return "tools"
+    case "SessionStart":
+      return "start"
+    case "SubagentStop":
+      return "agent"
+    case "PreCompact":
+      return "compact"
+    case "Notification":
+      return "ask"
+    default:
+      return null
+  }
+}
+
+type Preset = "all" | "shell" | "files" | "startup" | "resume" | "manual" | "auto" | "permission" | "question" | "custom"
 
 /** A matcher as one of the choices the form offers. */
 function preset(event: HookEvent, matcher: string | null): Preset {
   const m = (matcher ?? "").trim()
   if (m === "" || m === "*") return "all"
-  if (event === "SessionStart") return m === "startup" ? "startup" : m === "resume" ? "resume" : "custom"
-  const names = m.split(/[|,]/).map((n) => n.trim()).filter(Boolean).sort()
-  if (names.length === 1 && (names[0] === "Bash" || names[0] === "shell")) return "shell"
-  if (names.length === 2 && names[0] === "Edit" && names[1] === "Write") return "files"
-  return "custom"
+  switch (family(event)) {
+    case "start":
+      return m === "startup" ? "startup" : m === "resume" ? "resume" : "custom"
+    case "compact":
+      return m === "manual" ? "manual" : m === "auto" ? "auto" : "custom"
+    case "ask":
+      return m === "permission_prompt" ? "permission" : m === "question" ? "question" : "custom"
+    case "tools": {
+      const names = m.split(/[|,]/).map((n) => n.trim()).filter(Boolean).sort()
+      if (names.length === 1 && (names[0] === "Bash" || names[0] === "shell")) return "shell"
+      if (names.length === 2 && names[0] === "Edit" && names[1] === "Write") return "files"
+      return "custom"
+    }
+    default:
+      return "custom"
+  }
 }
 
 const PRESET_MATCHER: Record<Exclude<Preset, "custom">, string | null> = {
@@ -61,6 +119,10 @@ const PRESET_MATCHER: Record<Exclude<Preset, "custom">, string | null> = {
   files: "Edit|Write",
   startup: "startup",
   resume: "resume",
+  manual: "manual",
+  auto: "auto",
+  permission: "permission_prompt",
+  question: "question",
 }
 
 /** "Before shell commands", "When a session is reopened": when a hook runs, in a few words. */
@@ -89,6 +151,21 @@ export function when(event: HookEvent, matcher: string | null): ReactNode {
       if (p === "resume") return "When a session is reopened"
       if (p === "all") return "When a session starts"
       return <>When a session starts ({custom})</>
+    case "SubagentStop":
+      if (p === "all") return "When a subagent finishes"
+      return <>When a subagent finishes ({custom})</>
+    case "PreCompact":
+      if (p === "manual") return "Before a /compact you run"
+      if (p === "auto") return "Before an automatic compaction"
+      if (p === "all") return "Before compacting"
+      return <>Before compacting ({custom})</>
+    case "Notification":
+      if (p === "permission") return "When the agent asks for approval"
+      if (p === "question") return "When the agent asks a question"
+      if (p === "all") return "When the agent needs you"
+      return <>When the agent needs you ({custom})</>
+    case "SessionEnd":
+      return "When a session ends"
   }
 }
 
@@ -339,6 +416,15 @@ function HookList({ directory }: { directory: string }) {
   )
 }
 
+/** The custom matcher field, by what the moment's matcher names. */
+const CUSTOM: Record<Family, { placeholder: string; label: string; hint: string; missing: string }> = {
+  tools: { placeholder: "Bash|Edit|mcp__github__.*", label: "Tool names", hint: "Tool names separated by |, or a pattern.", missing: "Name the tools, like Bash or Edit|Write." },
+  start: { placeholder: "startup", label: "Session start", hint: "startup or resume.", missing: "Name the start, like startup." },
+  agent: { placeholder: "explore|general", label: "Subagent types", hint: "Subagent types separated by |, like general or explore.", missing: "Name the subagent type, like explore." },
+  compact: { placeholder: "manual", label: "Compaction", hint: "manual or auto.", missing: "Enter manual or auto." },
+  ask: { placeholder: "permission_prompt", label: "Request", hint: "permission_prompt or question.", missing: "Enter permission_prompt or question." },
+}
+
 type Shells = { path: string; windows: boolean }
 
 type StarterId = "block" | "lint" | "test"
@@ -440,8 +526,11 @@ function HookRow({
   defaultShell,
   onEdit,
   onList,
+  fresh = false,
 }: {
   hook: Hook
+  /** At a moment this version added, in a file asked about again for it: marked new. */
+  fresh?: boolean
   directory: string
   /** Where hooks without a shell of their own run (the group's heading says it). */
   defaultShell: string
@@ -456,8 +545,9 @@ function HookRow({
   const elsewhere = runsIn !== null && (own !== null || runsIn !== shellName(defaultShell))
   // One that doesn't run is quieter; the switch or its file's state above says why.
   const meta = [
+    fresh && "New",
     elsewhere && !missing && `In ${runsIn}`,
-    h.timeout !== defaultTimeout(h.event) && `Time limit ${h.timeout} s`,
+    ownTime(h.event) && h.timeout !== defaultTimeout(h.event) && `Time limit ${h.timeout} s`,
   ].filter(Boolean)
   const editable = !!h.id && !!onList
   return (
@@ -572,7 +662,9 @@ function ProjectFile({
             : f.decision === null
               ? f.standing
                 ? "These changed. The ones you allowed before keep running until you allow the change."
-                : "These run commands on this computer. Allow them only if you trust this project."
+                : f.reasked
+                  ? REASKED
+                  : "These run commands on this computer. Allow them only if you trust this project."
               : f.decision === "allowed"
                 ? off
                   ? "They run once hooks are back on."
@@ -604,7 +696,7 @@ function ProjectFile({
         )}
       </Row>
       {f.hooks.map((x, i) => (
-        <HookRow key={i} hook={x} directory={directory} defaultShell={defaultShell} />
+        <HookRow key={i} hook={x} directory={directory} defaultShell={defaultShell} fresh={f.decision === null && !!f.reasked && NEW_EVENTS.has(x.event)} />
       ))}
       {error && <p className="text-dense px-4 py-2.5 text-danger select-text">{error}</p>}
     </Group>
@@ -659,11 +751,12 @@ function HookForm({
     box.setSelectionRange(box.value.length, box.value.length)
   }, [])
 
-  const tools = toolEvent(event)
-  const matches = tools || event === "SessionStart"
+  const kind = family(event)
+  const tools = kind === "tools"
+  const matches = kind !== null
   const pick = (next: HookEvent) => {
-    // Tool names and session starts are different lists: a choice of one means nothing to the other.
-    if (toolEvent(next) !== tools || (next === "SessionStart") !== (event === "SessionStart")) {
+    // Each moment's matcher names something else: a choice for one means nothing to another.
+    if (family(next) !== kind) {
       setChoice("all")
       setCustom("")
     }
@@ -671,7 +764,7 @@ function HookForm({
   }
   const seconds = timeout.trim()
   const problems = {
-    custom: matches && choice === "custom" && !custom.trim() ? (tools ? "Name the tools, like Bash or Edit|Write." : "Name the start, like startup.") : null,
+    custom: matches && choice === "custom" && !custom.trim() ? CUSTOM[kind].missing : null,
     command: !command.trim() ? "Enter the command to run." : null,
     timeout: seconds && !/^[1-9]\d{0,5}$/.test(seconds) ? "A whole number of seconds." : null,
     shell: shell === "custom" && !customShell.trim() ? "Enter a shell’s name or path." : null,
@@ -685,7 +778,7 @@ function HookForm({
       event,
       matcher: !matches ? null : choice === "custom" ? custom.trim() : PRESET_MATCHER[choice],
       command: command.trim(),
-      timeout: seconds ? Number(seconds) : null,
+      timeout: seconds && ownTime(event) ? Number(seconds) : null,
       shell: shell === "default" ? null : shell === "custom" ? customShell.trim() : SHELL_VALUE[shell],
     }
     setSaving(true)
@@ -696,20 +789,38 @@ function HookForm({
       .finally(() => setSaving(false))
   }
 
-  const options: { id: Preset; label: string }[] = tools
-    ? [
-        { id: "all", label: "All tools" },
-        { id: "shell", label: "Shell commands" },
-        { id: "files", label: "File changes" },
-        { id: "custom", label: "Custom" },
-      ]
-    : [
-        { id: "all", label: "Any" },
-        { id: "startup", label: "New" },
-        { id: "resume", label: "Reopened" },
-      ]
-  // A session-start matcher the form has no word for stays as typed.
-  if (event === "SessionStart" && choice === "custom") options.push({ id: "custom", label: "Custom" })
+  const options: { id: Preset; label: string }[] =
+    kind === "tools"
+      ? [
+          { id: "all", label: "All tools" },
+          { id: "shell", label: "Shell commands" },
+          { id: "files", label: "File changes" },
+          { id: "custom", label: "Custom" },
+        ]
+      : kind === "agent"
+        ? [
+            { id: "all", label: "Any" },
+            { id: "custom", label: "By type" },
+          ]
+        : kind === "compact"
+          ? [
+              { id: "all", label: "Any" },
+              { id: "manual", label: "/compact" },
+              { id: "auto", label: "Automatic" },
+            ]
+          : kind === "ask"
+            ? [
+                { id: "all", label: "Any" },
+                { id: "permission", label: "Approvals" },
+                { id: "question", label: "Questions" },
+              ]
+            : [
+                { id: "all", label: "Any" },
+                { id: "startup", label: "New" },
+                { id: "resume", label: "Reopened" },
+              ]
+  // A matcher the form has no word for stays as typed.
+  if (choice === "custom" && !options.some((o) => o.id === "custom")) options.push({ id: "custom", label: "Custom" })
 
   // Windows' shells by name; elsewhere the default (every one reads POSIX) or one typed in.
   const shellOptions: { id: ShellChoice; label: string; title?: string }[] = [
@@ -746,18 +857,14 @@ function HookForm({
               <input
                 value={custom}
                 onChange={(e) => setCustom(e.target.value)}
-                placeholder={tools ? "Bash|Edit|mcp__github__.*" : "startup"}
-                aria-label={tools ? "Tool names" : "Session start"}
+                placeholder={CUSTOM[kind!].placeholder}
+                aria-label={CUSTOM[kind!].label}
                 spellCheck={false}
                 aria-invalid={tried && !!problems.custom}
                 className={cn(input, "font-mono")}
               />
               <span className={cn("text-2xs", tried && problems.custom ? "text-danger" : "text-muted")}>
-                {tried && problems.custom
-                  ? problems.custom
-                  : tools
-                    ? "Tool names separated by |, or a pattern."
-                    : "startup or resume."}
+                {tried && problems.custom ? problems.custom : CUSTOM[kind!].hint}
               </span>
             </span>
           </>
@@ -803,9 +910,8 @@ function HookForm({
           className={cn(input, "field-sizing-content h-auto max-h-40 min-h-16 resize-none py-2 font-mono leading-relaxed")}
         />
       </Field>
-      <p className="text-2xs -mt-2.5 leading-relaxed text-muted">
-        It gets the event as JSON on stdin. Exit code 2 {BLOCKS[event]}, and what it prints on stderr is the reason.
-      </p>
+      <p className="text-2xs -mt-2.5 leading-relaxed text-muted">{exitLine(event)}</p>
+      {ownTime(event) && (
       <label className="flex items-center gap-3">
         <span className="text-2xs text-muted">Time limit</span>
         <input
@@ -820,6 +926,7 @@ function HookForm({
           {tried && problems.timeout ? problems.timeout : "seconds"}
         </span>
       </label>
+      )}
       {error && <p className="text-dense text-danger select-text">{error}</p>}
       <div className="flex items-center gap-2">
         <span className="text-2xs mr-auto text-muted">

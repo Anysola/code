@@ -507,7 +507,7 @@ pub fn target(name: &str, input: &Value, directory: &str) -> String {
             .to_string()
     };
     let text = match name {
-        "read" | "edit" | "write" | "list" => field(&["filePath", "path"]),
+        "read" | "edit" | "write" | "list" | "notebook" => field(&["filePath", "path"]),
         "grep" | "glob" => field(&["pattern"]),
         "shell" | "bash" => field(&["command"]),
         "webfetch" => field(&["url"]),
@@ -570,6 +570,14 @@ mod tests {
         assert_eq!(
             target("shell", &json!({"command": "pnpm test"}), "/p"),
             "pnpm test"
+        );
+        assert_eq!(
+            target(
+                "notebook",
+                &json!({"path": "/p/web/n.ipynb", "cellId": "a1"}),
+                "/p/web"
+            ),
+            "n.ipynb"
         );
     }
 

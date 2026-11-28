@@ -15,24 +15,34 @@ branch.
   waits that much longer for them. A tool hook's `continue: false` in a subagent now also skips its stop hooks.
 - **Project hooks approved before 1.6 are asked about again when they configure one of the new events**: 1.5
   ignored those events, so its approval never covered them. Until you approve the file again, none of its hooks
-  run (its `PreToolUse` guards included), as for any project hook file that changed.
+  run (its `PreToolUse` guards included), as for any project hook file that changed. The approval card and
+  Settings › Hooks say so and mark the hooks at the new moments.
 - **Notebooks:** reading an `.ipynb` file shows its cells (index, id, type, source, shortened text outputs, image
   placeholders) instead of raw JSON. New `notebook` tool (`NotebookEdit` to hooks, with `file_path` and
   `notebook_path`) replaces, inserts or deletes one cell and writes only that cell anew: every other cell keeps its
   exact bytes. It goes through every check a file edit does: it asks as an edit with a diff, it can't write
   outside a worktree session's own folder, the plan agent can't use it, and it always asks for your config files,
   hook scripts, the database and Git's data.
-- **Side questions (`/btw`, core):** a one-off answer from the session's context while a turn runs, cancellable,
-  with a reason when there is no answer (budget, rate limit, usage limit, too long, cancelled, no text). It sends
-  only completed steps, writes nothing to the session, and stops at a spent budget like every model call. Commit
-  message suggestions use the same path.
-- **Session import (core):** an export file becomes a new session with fresh ids and the conversation only. The
-  file is checked (at most 64 MiB, 20,000 messages, bounded nesting) before anything is written; permissions,
+- **Side questions (`/btw <question>`):** a one-off answer from the session's context, also while a turn runs, in a
+  card over the message box (Copy, Esc closes it; a second `/btw` replaces the first). Nothing is stored in the
+  session. When there is no answer the card says why in one line (budget, too many requests, usage limit, too long,
+  no text). It sends only completed steps and stops at a spent budget like every model call. Commit message
+  suggestions use the same path.
+- **Session import ("Import session…" in the New session menu, a project's menu as "Import session here…", and the
+  palette):** a file written by Export becomes a new session, which opens. The palette and the New session menu
+  import into the open folder, else the default folder, else No project. It gets fresh ids and the conversation
+  only. The file is checked (at most 64 MiB, 20,000 messages, bounded nesting) before anything is written; permissions,
   settings, parent, fork, revert, snapshots, signed reasoning, instruction updates, model and folder switches and
   tool metadata that points at another machine are dropped, and images go through the same checks as attached
   ones, so an imported session can be opened, forked and continued but can't revert files.
-- **Notes (`/memory`, core):** adds a line to the `AGENTS.md` at the root of the session's checkout (a worktree
-  session's own) or to `~/.anysola/AGENTS.md`; a link is followed only to a regular file inside the checkout.
+- **Notes (`/memory`):** `/memory <note>` offers the project's and your own `AGENTS.md`; Enter adds the note as a
+  line to the one picked (the project file is at the root of the session's checkout, a worktree session's own) and
+  a notice says where it went. `/memory` alone opens either file in your editor. A link is followed only to a
+  regular file inside the checkout, and a worktree that is gone is not made again for a note.
+- **Go to message:** Ctrl G (or "Go to message…" in the palette) lists the session's messages, newest first, to
+  filter and jump to; Ctrl Shift ↑ / ↓ move to the previous or next one. The view lets go of the bottom there.
+- **A `/compact` your PreCompact hook refuses** now says so with the hook's reason; before, it ended silently.
+- The tool row for notebook edits shows the cell's diff like any file change.
 
 ## 1.5.0 (2026-11-26)
 

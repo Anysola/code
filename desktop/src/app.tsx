@@ -1,6 +1,7 @@
 import { ArrowDown, X } from "lucide-react"
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 
+import { AsideCard } from "./aside"
 import { askDiscard, checkUpdated, resumeDeletes, setReviewing, useChrome } from "./chrome"
 import { Composer, Tasks } from "./composer"
 import { BackgroundRow, Banner, CloseConfirm, ContextMeter, FaultScreen, ForkNote, QueueChips, WorktreeStrip } from "./conversation"
@@ -102,6 +103,7 @@ function Main() {
                 <WorktreeStrip open={open} />
                 <ForkNote open={open} />
                 <QueueChips open={open} />
+                <AsideCard open={open} />
                 <Composer open={open} />
                 <div className="mt-2 flex items-center gap-3 px-2">
                   <Place open={open} />
@@ -133,6 +135,9 @@ function Place({ open }: { open: Open }) {
   return <FooterPlace open={open} label={sameFolder(open.directory, scratch) ? "No project · runs in the app’s own folder" : open.directory} />
 }
 
+/** The last jump request a conversation took (a view opened later doesn't take it again). */
+let jumped = 0
+
 function Conversation({ open }: { open: Open }) {
   const all = useStore((s) => s.permissions)
   const permissions = useMemo(() => all.filter((p) => p.rootId === open.sessionId), [all, open.sessionId])
@@ -150,6 +155,8 @@ function Conversation({ open }: { open: Open }) {
   const [away, setAway] = useState<{ fresh: boolean } | null>(null)
   const size = useRef(0)
   const top = useRef(0)
+  /** Until when a jump's own scrolling runs: it isn't the reader coming back to the bottom. */
+  const jumping = useRef(0)
   // A chat opens at its latest turn and follows new output while the reader is at the bottom.
   useLayoutEffect(() => {
     const el = ref.current
@@ -183,6 +190,43 @@ function Conversation({ open }: { open: Open }) {
     setAway(null)
     el.scrollTo({ top: el.scrollHeight, behavior: document.documentElement.hasAttribute("data-reduce-motion") ? "auto" : "smooth" })
   }
+  // Go to message (the palette, Ctrl Shift ↑/↓): the view lets go of the bottom and moves there.
+  const request = useChrome((c) => c.jump)
+  useEffect(() => {
+    const el = ref.current
+    // A request is taken once, by the view open when it was made.
+    if (!request || !el || request.n <= jumped) return
+    jumped = request.n
+    // This conversation's own messages only: a subagent's sheet shows messages too.
+    const anchors = [...el.querySelectorAll<HTMLElement>("[data-message]")]
+    const top = (a: HTMLElement) => a.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop
+    // Where the reader is: where a jump puts a message (16 px under the top edge), so the one just
+    // jumped to counts as here and the next press moves on.
+    const at = el.scrollTop + 16
+    let target: HTMLElement | undefined
+    if (request.to === "previous") target = anchors.filter((a) => top(a) < at - 1).pop()
+    else if (request.to === "next") {
+      target = anchors.find((a) => top(a) > at + 1)
+      // Past the last message: back to the latest output.
+      if (!target) return jump()
+    } else target = anchors.find((a) => a.dataset.message === request.to)
+    if (!target) return
+    stick.current = false
+    jumping.current = Date.now() + 800
+    setAway((a) => a ?? { fresh: false })
+    const calm = document.documentElement.hasAttribute("data-reduce-motion")
+    el.scrollTo({ top: Math.max(0, top(target) - 16), behavior: calm ? "auto" : "smooth" })
+    // A moment of the hover tone on the message, so the eye finds it.
+    const bubble = target.querySelector<HTMLElement>("[data-bubble]") ?? target
+    bubble.setAttribute("data-jumped", "")
+    const t = setTimeout(() => bubble.removeAttribute("data-jumped"), 1200)
+    return () => {
+      clearTimeout(t)
+      bubble.removeAttribute("data-jumped")
+    }
+    // Each request once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request?.n])
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div
@@ -193,6 +237,7 @@ function Conversation({ open }: { open: Open }) {
           // follow and this event is output, not the reader moving away.
           const up = el.scrollTop < top.current - 1
           top.current = el.scrollTop
+          if (Date.now() < jumping.current) return
           if (el.scrollHeight - el.scrollTop - el.clientHeight < 48) stick.current = true
           else if (up) stick.current = false
           setAway((a) => (stick.current ? null : (a ?? { fresh: false })))

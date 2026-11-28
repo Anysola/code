@@ -9,6 +9,7 @@ import {
   Globe,
   ListTodo,
   MessageCircleQuestion,
+  NotebookPen,
   Pencil,
   Search,
   SquareTerminal,
@@ -267,7 +268,7 @@ function UserMessage({ item, actions, forkable }: { item: UserItem; actions: boo
   }
   if (editing)
     return (
-      <div className="rounded-2xl bg-surface-secondary/60 p-2">
+      <div data-message={item.id} className="rounded-2xl bg-surface-secondary/60 p-2">
         <textarea
           autoFocus
           value={draft}
@@ -315,8 +316,12 @@ function UserMessage({ item, actions, forkable }: { item: UserItem; actions: boo
       </div>
     )
   return (
-    <div className="group flex flex-col items-stretch">
-      <div className="rounded-2xl bg-surface-secondary/60 px-4 py-3 text-md leading-relaxed whitespace-pre-wrap">
+    // `data-message`: where Go to message (Ctrl G, Ctrl Shift ↑/↓) scrolls to.
+    <div data-message={item.id} className="group flex scroll-mt-4 flex-col items-stretch">
+      <div
+        data-bubble
+        className="rounded-2xl bg-surface-secondary/60 px-4 py-3 text-md leading-relaxed whitespace-pre-wrap transition-colors duration-500 data-jumped:bg-default-hover"
+      >
         {item.command ? (
           <div className="flex items-center gap-2">
             <SquareSlash className="size-3.5 shrink-0 text-muted" />
@@ -678,10 +683,10 @@ const keepUrl = (url: string) => url
 /** Markdown, parsed again only when its text changes (a streaming reply, not its neighbours).
  * A reply being written (`live`, its stream key) shows at an even pace instead of in the clumps
  * the text arrives in; the stored reply that takes its place goes on from where it was. */
-export const Prose = memo(function Prose({ text, live }: { text: string; live?: string }) {
+export const Prose = memo(function Prose({ text, live, dense = false }: { text: string; live?: string; dense?: boolean }) {
   const shown = useReveal(text, live)
   return (
-    <div className="prose-anysola text-md leading-relaxed text-foreground/90">
+    <div className={cn("prose-anysola leading-relaxed text-foreground/90", dense ? "text-sm" : "text-md")}>
       <Markdown remarkPlugins={PLUGINS} components={MARKDOWN} urlTransform={keepUrl}>
         {shown < text.length ? text.slice(0, shown) : text}
       </Markdown>
@@ -845,6 +850,7 @@ const icons: Record<string, typeof FileText> = {
   read: FileText,
   write: FilePlus2,
   edit: Pencil,
+  notebook: NotebookPen,
   list: FileText,
   grep: Search,
   glob: Search,
@@ -859,6 +865,8 @@ const verbs: Record<string, string> = {
   // Edits without a diff (older sessions' writes) still say what they did.
   write: "Wrote",
   edit: "Edited",
+  // A notebook's cell; its diff shows as the file's when it has one.
+  notebook: "Edited",
   list: "Listed",
   grep: "Searched",
   glob: "Found files",
@@ -913,7 +921,7 @@ function Explored({ tools }: { tools: Tool[] }) {
   )
 }
 
-const FILE_TOOLS = new Set(["read", "write", "edit", "list"])
+const FILE_TOOLS = new Set(["read", "write", "edit", "list", "notebook"])
 /** Lookups whose output is worth a look (the matches, the files found). */
 const OPENS = new Set(["grep", "glob", "websearch", "webfetch"])
 
@@ -959,6 +967,7 @@ const intents: Record<string, string> = {
   read: "Read",
   write: "Write",
   edit: "Edit",
+  notebook: "Edit",
   list: "List",
   grep: "Search",
   glob: "Find files",
@@ -1043,6 +1052,7 @@ function HookLine({ run }: { run: HookRun }) {
 const going: Record<string, string> = {
   write: "Writing",
   edit: "Editing",
+  notebook: "Editing",
   execute: "Running a script",
 }
 
@@ -1542,6 +1552,7 @@ function doing(items: Item[]): string | null {
     case "bash":
       return `Running${target}`
     case "edit":
+    case "notebook":
       return `Editing${target}`
     case "write":
       return `Writing${target}`
@@ -1616,9 +1627,11 @@ function StatusLine({ open, waiting, streaming }: { open: Open; waiting: boolean
             <Webhook className="mt-0.5 size-3.5 shrink-0 text-muted" strokeWidth={1.75} />
             <span className="flex min-w-0 flex-col gap-0.5">
               <span>
-                {status.back
-                  ? "A hook stopped this message. It’s back in the message box."
-                  : "A hook stopped a message, so it wasn’t sent."}
+                {status.hookEvent === "PreCompact"
+                  ? "A hook stopped this /compact. Nothing was summarized."
+                  : status.back
+                    ? "A hook stopped this message. It’s back in the message box."
+                    : "A hook stopped a message, so it wasn’t sent."}
               </span>
               <span className="max-h-40 overflow-y-auto whitespace-pre-wrap text-muted select-text">{status.error}</span>
             </span>

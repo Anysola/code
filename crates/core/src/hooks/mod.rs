@@ -212,6 +212,9 @@ pub struct Document {
     pub scope: HookScope,
     /// SHA-256 (hex) of the document's `hooks` value after variable substitution.
     pub digest: String,
+    /// The digest a version before 1.6.0 approved this same content under, when it differs from
+    /// `digest` (the document has hooks for a moment 1.6.0 added): see [`HookDocument::reasked`].
+    pub earlier: Option<String>,
     pub handlers: Vec<Handler>,
 }
 
@@ -295,6 +298,10 @@ pub struct HookDocument {
     /// An earlier approved version of this document's hooks runs in place of the listed content
     /// right now (in this process): the listed content changed and is undecided or refused.
     pub standing: bool,
+    /// Undecided only because it has hooks for a moment 1.6.0 added: a version before 1.6.0
+    /// approved this same content, which never covered those moments. None of it runs until it
+    /// is approved again (a front end says why it asks again).
+    pub reasked: bool,
 }
 
 const TRUST_PREFIX: &str = "hooks.trust:";
@@ -385,11 +392,16 @@ pub fn documents(configured: &Configured, db: &Db) -> Vec<HookDocument> {
         .map(|document| {
             let decision = decisions.of(document);
             let active = decisions.runs(configured, document);
+            let reasked = decision.is_none()
+                && document.earlier.as_deref().is_some_and(|earlier| {
+                    self::decision(db, &document.path, earlier) == Some(true)
+                });
             HookDocument {
                 path: document.path.clone(),
                 digest: document.digest.clone(),
                 decision,
                 standing: false,
+                reasked,
                 hooks: document
                     .handlers
                     .iter()
@@ -632,6 +644,7 @@ impl Approved {
                 digest,
                 hooks: Vec::new(),
                 standing: true,
+                reasked: false,
             })
             .collect();
         out.sort_by(|a, b| a.path.cmp(&b.path));
@@ -715,10 +728,13 @@ pub(crate) fn apply(
             ));
         }
     }
+    let digest = config::document_digest(&value, &handlers);
+    let earlier = Some(config::digest(&value)).filter(|old| *old != digest);
     configured.documents.push(Document {
         path: path.to_string(),
         scope,
-        digest: config::document_digest(&value, &handlers),
+        digest,
+        earlier,
         handlers,
     });
 }
@@ -734,6 +750,7 @@ mod tests {
             path: path.into(),
             scope,
             digest: config::digest(&value),
+            earlier: None,
             handlers: config::parse(&value, path, &mut warnings),
         }
     }

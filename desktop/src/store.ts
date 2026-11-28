@@ -8,7 +8,12 @@ import { clearStaleTerminals, handleTerminalEvent } from "./terminal"
 
 import {
   getBridge,
+  inTauri,
   type Account,
+  type AsideErrorKind,
+  type HookEvent,
+  type MemoryFiles,
+  type MemoryScope,
   type Attachment,
   type BackgroundCommand,
   type Bridge,
@@ -85,6 +90,8 @@ export type Status =
       /** The user's hook stopped a message; `back`: it is in the message box again. */
       hook?: boolean
       back?: boolean
+      /** The hook's moment, when it stopped something other than a message (`PreCompact`: a `/compact`). */
+      hookEvent?: HookEvent
     }
   | { kind: "stopped"; reason: "user" | "budget" | "declined" }
 
@@ -246,6 +253,20 @@ export type State = {
   setups: Record<string, SetupRun>
   /** Whether a folder's new sessions can get their own worktree (by `folderKey`), once read. */
   worktreeInfo: Record<string, WorktreeInfo>
+  /** Each session's side question (`/btw`), shown over its composer until closed; never stored. */
+  asides: Record<string, Aside>
+}
+
+/**
+ * A side question and how it stands. `n` tells it from the one it replaced: a late answer for an
+ * older one is dropped.
+ */
+export type Aside = {
+  n: number
+  question: string
+  state: "loading" | "done" | "error"
+  text: string | null
+  error: { kind: AsideErrorKind; message: string } | null
 }
 
 function readMode(): Mode {
@@ -315,6 +336,7 @@ let state: State = {
   worktrees: {},
   setups: {},
   worktreeInfo: {},
+  asides: {},
   pinned: readSet("anysola.pinned"),
   // Folded projects by folder key; older entries were stored as spelled.
   collapsed: new Set([...readSet("anysola.collapsed")].map(folderKey)),
@@ -598,6 +620,7 @@ export async function start() {
       void loadAccount()
       await prefsRead
       await loadSessions(true)
+      if (!inTauri) screenshotScenes()
     }
   } catch (e) {
     set({ auth: "signed-out", loginError: message(e) })
@@ -2646,7 +2669,15 @@ function onEvent(e: CoreEvent) {
       // Kept in that session's draft, open or not; the notice says so when it isn't.
       putBack(id)
       if (here) {
-        setOpen({ live: [], stopping: false, started: null, status: { kind: "failed", error: e.error, retry: false, errorKind: e.kind } }, id)
+        setOpen(
+          {
+            live: [],
+            stopping: false,
+            started: null,
+            status: { kind: "failed", error: e.error, retry: false, errorKind: e.kind, ...(e.hook ? { hook: true, hookEvent: e.hook } : {}) },
+          },
+          id
+        )
         void refresh(id)
       }
       turnEnded()
@@ -2700,4 +2731,94 @@ export function setHooks(directory: string, hooks: Hooks) {
 
 export function dismissNotice() {
   set({ notice: null, noticeLink: null })
+}
+
+// ---------------------------------------------------------------------------
+// Side questions (`/btw`)
+// ---------------------------------------------------------------------------
+
+let asideAsks = 0
+
+function setAside(sessionId: string, aside: Aside | null) {
+  set((s) => {
+    const asides = { ...s.asides }
+    if (aside) asides[sessionId] = aside
+    else delete asides[sessionId]
+    return { asides }
+  })
+}
+
+/** Asks the open session a side question; it replaces the one shown (and one still loading). */
+export async function askAside(question: string) {
+  const open = state.open
+  const q = question.trim()
+  if (!open?.sessionId || !q) return
+  const { directory, sessionId } = open
+  const n = ++asideAsks
+  setAside(sessionId, { n, question: q, state: "loading", text: null, error: null })
+  let result: Awaited<ReturnType<Bridge["aside"]>>
+  try {
+    result = await bridge.aside(directory, sessionId, q)
+  } catch (e) {
+    result = { error: { kind: "other", message: message(e) } }
+  }
+  // Replaced or closed meanwhile: this answer is for nobody.
+  if (state.asides[sessionId]?.n !== n) return
+  if ("text" in result) setAside(sessionId, { n, question: q, state: "done", text: result.text, error: null })
+  else if (result.error.kind === "cancelled") setAside(sessionId, null)
+  else setAside(sessionId, { n, question: q, state: "error", text: null, error: result.error })
+}
+
+/** Closes the session's side question; one still loading is cancelled. */
+export function closeAside(sessionId: string) {
+  const aside = state.asides[sessionId]
+  if (!aside) return
+  setAside(sessionId, null)
+  if (aside.state === "loading") {
+    const directory = state.open?.sessionId === sessionId ? state.open.directory : directoryOf(sessionId)
+    void bridge.asideCancel(directory, sessionId).catch(() => {})
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Import, notes
+// ---------------------------------------------------------------------------
+
+/**
+ * Imports a session export into `directory` (a project's "Import session here…"), else into the
+ * open view's folder, else the default folder, else the app's own folder; then opens it.
+ */
+export async function importSession(directory?: string) {
+  try {
+    const into =
+      directory ?? state.open?.directory ?? getPrefs().general.defaultFolder ?? state.scratch ?? (await bridge.scratchFolder())
+    const row = await bridge.importSession(into)
+    if (!row) return
+    await loadSessions()
+    await openSession(state.sessions.find((r) => r.id === row.id) ?? row)
+  } catch (e) {
+    set({ notice: message(e) })
+  }
+}
+
+/** Where `/memory` notes go for the open view (its session's checkout, or the folder). */
+export function memoryFiles(open: { directory: string; sessionId: string | null }): Promise<MemoryFiles> {
+  return bridge.memoryFiles(open.directory, open.sessionId)
+}
+
+/** Adds a `/memory` note; the notice names the file. */
+export async function addMemory(open: { directory: string; sessionId: string | null }, scope: MemoryScope, text: string) {
+  const { path } = await bridge.addMemory(open.directory, open.sessionId, scope, text)
+  set({ notice: `Added to ${path.replace(/^(\/home\/[^/]+|\/Users\/[^/]+|[A-Z]:\\Users\\[^\\]+)/i, "~")}`, noticeLink: null })
+}
+
+/** Outside Tauri, for screenshots: `?aside=`, `?draft=` (see mock.ts). */
+function screenshotScenes() {
+  const params = new URLSearchParams(location.search)
+  const open = state.open
+  if (!open) return
+  const draft = params.get("draft")
+  if (draft !== null) setDraft(draftKey(open), { text: draft, stamp: ++stamps })
+  if (params.has("aside"))
+    void askAside(params.get("aside") === "long" ? "Which cards read the price, and does each follow the toggle now?" : "What does the yearly toggle change now?")
 }

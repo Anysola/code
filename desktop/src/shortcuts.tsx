@@ -5,7 +5,7 @@
 import { useEffect, useRef } from "react"
 
 import type { SessionRow } from "./bridge"
-import { setReviewing, showPalette, showShortcuts, togglePreview, toggleSidebar, toggleTerminal, useChrome } from "./chrome"
+import { jumpTo, setReviewing, showPalette, showShortcuts, togglePreview, toggleSidebar, toggleTerminal, useChrome } from "./chrome"
 import { usePrefs } from "./prefs"
 import { closeSettings, isRunning, newSession, openSession, openSettings, stop, useStore } from "./store"
 import { btn, folderKey, Kbd, useEscape } from "./ui"
@@ -23,6 +23,8 @@ export function useShortcutList(): { label: string; rows: Shortcut[] }[] {
         { label: "New session", keys: ["Ctrl N"] },
         { label: "New session in this folder", keys: ["Ctrl Shift N"] },
         { label: "Search sessions and commands", keys: ["Ctrl K"] },
+        { label: "Go to a message in this session", keys: ["Ctrl G"] },
+        { label: "Previous or next message", keys: ["Ctrl Shift ↑", "Ctrl Shift ↓"] },
         { label: "Previous or next session", keys: ["Alt ↑", "Alt ↓"] },
         { label: "Show or hide the sidebar", keys: ["Ctrl B"] },
         { label: "Go to the message box", keys: ["Ctrl L"] },
@@ -81,6 +83,7 @@ export function useShortcutList(): { label: string; rows: Shortcut[] }[] {
 export const KEYS = {
   newSession: "Ctrl N",
   palette: "Ctrl K",
+  goToMessage: "Ctrl G",
   sidebar: "Ctrl B",
   stop: "Ctrl .",
   review: "Ctrl Shift D",
@@ -128,8 +131,9 @@ export function useShortcuts() {
   const sheet = useStore((s) => s.auth !== "checking" && !s.fault)
   const shown = useChrome((c) => c.shortcuts)
   const palette = useChrome((c) => c.palette)
-  const now = useRef({ sessions, pinned, open, busy, deleting, ready, sheet, shown, palette })
-  now.current = { sessions, pinned, open, busy, deleting, ready, sheet, shown, palette }
+  const paletteMode = useChrome((c) => c.paletteMode)
+  const now = useRef({ sessions, pinned, open, busy, deleting, ready, sheet, shown, palette, paletteMode })
+  now.current = { sessions, pinned, open, busy, deleting, ready, sheet, shown, palette, paletteMode }
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented) return
@@ -159,6 +163,15 @@ export function useShortcuts() {
           closeSettings()
           showPalette(true)
         })
+      if (ctrl && key === "g" && !e.shiftKey && open) {
+        // Ctrl G again closes it, as Ctrl K does the palette.
+        const again = now.current.palette && now.current.paletteMode === "messages"
+        return run(() => {
+          if (again) return
+          closeSettings()
+          showPalette(true, "messages")
+        })
+      }
       if (ctrl && key === "b") return run(() => toggleSidebar())
       if (ctrl && key === "l")
         return run(() => {
@@ -171,6 +184,13 @@ export function useShortcuts() {
       if (ctrl && e.shiftKey && key === "d" && open) return run(() => setReviewing(true))
       if (ctrl && (key === "`" || e.code === "Backquote") && open) return run(() => toggleTerminal())
       if (ctrl && e.shiftKey && key === "o" && open) return run(() => togglePreview())
+      // Message to message in the open conversation (the box keeps its own Ctrl Shift arrows only
+      // while it has more than one line).
+      if (ctrl && e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown") && open && !now.current.palette) {
+        const box = e.target instanceof HTMLTextAreaElement ? e.target : null
+        if (box && box.value.includes("\n")) return
+        return run(() => jumpTo(e.key === "ArrowUp" ? "previous" : "next"))
+      }
       if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
         const list = sessionOrder(
           sessions.filter((s) => !deleting?.ids.has(s.id)),

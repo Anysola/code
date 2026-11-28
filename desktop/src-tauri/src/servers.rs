@@ -669,6 +669,7 @@ mod tests {
             digest: "d".into(),
             decision,
             standing: false,
+            reasked: false,
             entries: entries
                 .into_iter()
                 .map(|(label, command)| anysola_core::api::TrustEntry {
@@ -748,6 +749,7 @@ mod tests {
             digest: "d".into(),
             decision: None,
             standing: false,
+            reasked: false,
             entries: ["g\u{202e}h"]
                 .into_iter()
                 .map(|label| anysola_core::api::TrustEntry {

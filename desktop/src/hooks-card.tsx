@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 
 import type { HookEvent, TrustEntry, TrustItem, TrustKind } from "./bridge"
 import { message, type Load } from "./settings/controls"
-import { shortPath, when } from "./settings/hooks"
+import { HOOK_EVENTS, NEW_EVENTS, REASKED, shortPath, when } from "./settings/hooks"
 import { currentBridge, setTrust, trustAnswered, useStore } from "./store"
 import { btn, cn, folderKey, Spinner } from "./ui"
 
@@ -147,6 +147,8 @@ function TrustCard({ path, items, directory }: { path: string; items: TrustItem[
   const onlyHooks = items.length === 1 && hooks
   const removed = !!hooks && hooks.entries.length === 0
   const changed = !!hooks?.standing && !removed
+  // Allowed before 1.6.0 and asked again only for the moments it added: nothing of it runs now.
+  const reasked = !!hooks?.reasked && !removed && !changed
   return (
     <section className="rounded-xl bg-surface p-4" aria-label="What this project wants to change">
       <div className="flex items-center gap-2 text-sm">
@@ -155,14 +157,18 @@ function TrustCard({ path, items, directory }: { path: string; items: TrustItem[
           ? "This project’s hooks were removed"
           : onlyHooks && changed
             ? "This project’s hooks changed"
-            : question(items)}
+            : onlyHooks && reasked
+              ? "Allow this project’s hooks again?"
+              : question(items)}
       </div>
       <p className="text-dense mt-1 pl-3.5 text-muted">
         {onlyHooks && removed
           ? "The file below no longer defines hooks. The ones you allowed before keep running until you stop them."
           : onlyHooks && changed
             ? `The ones you allowed before keep running until you allow ${hooks.entries.length === 1 ? "this one" : "these"}. Allow only if you trust the change.`
-            : consequence(items)}
+            : onlyHooks && reasked
+              ? REASKED
+              : consequence(items)}
       </p>
       {/* Not capped: what the answer covers is all on the page, never inside a box of its own that scrolls. */}
       <div className="mt-3 flex flex-col gap-3 rounded-lg bg-background/60 px-3 py-2.5">
@@ -177,16 +183,18 @@ function TrustCard({ path, items, directory }: { path: string; items: TrustItem[
               {(items.length > 1 || item.kind !== "hooks") && (
                 <h3 className="text-2xs font-medium tracking-wide text-muted">{HEADING[item.kind]}</h3>
               )}
-              {item.kind === "hooks" && !onlyHooks && (removed || changed) && (
+              {item.kind === "hooks" && !onlyHooks && (removed || changed || reasked) && (
                 <p className="text-2xs text-muted">
                   {removed
                     ? "Removed from the file. The ones you allowed before keep running until you allow this."
-                    : "Changed. The ones you allowed before keep running until you allow these."}
+                    : changed
+                      ? "Changed. The ones you allowed before keep running until you allow these."
+                      : REASKED}
                 </p>
               )}
               {/* With other kinds the question above says nothing of when: said here. */}
               {item.kind === "remote" && items.length > 1 && <p className="text-2xs text-muted">{WHEN_DOWNLOADED}</p>}
-              {item.entries.length > 0 && <Entries kind={item.kind} entries={item.entries} />}
+              {item.entries.length > 0 && <Entries kind={item.kind} entries={item.entries} reasked={item.kind === "hooks" && reasked} />}
             </div>
           )
         )}
@@ -205,12 +213,10 @@ function TrustCard({ path, items, directory }: { path: string; items: TrustItem[
   )
 }
 
-const EVENTS = new Set<string>(["PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "SessionStart"])
-
 /** A hook's label as the core writes it, `PreToolUse (Bash)`, in the app's words. */
 function hookLabel(label: string): ReactNode {
   const m = /^(\w+)(?: \((.*)\))?$/.exec(label)
-  if (!m || !EVENTS.has(m[1])) return label
+  if (!m || !HOOK_EVENTS.has(m[1])) return label
   return when(m[1] as HookEvent, m[2] ?? null)
 }
 
@@ -330,7 +336,7 @@ function detailParts(detail: string) {
     .map((d) => d.charAt(0).toUpperCase() + d.slice(1))
 }
 
-function Entries({ kind, entries }: { kind: TrustKind; entries: TrustEntry[] }) {
+function Entries({ kind, entries, reasked = false }: { kind: TrustKind; entries: TrustEntry[]; reasked?: boolean }) {
   return (
     <ul className="grid grid-cols-[auto_auto_minmax(0,1fr)] items-baseline gap-x-2.5 gap-y-1.5">
       {entries.map((e, i) => {
@@ -352,7 +358,12 @@ function Entries({ kind, entries }: { kind: TrustKind; entries: TrustEntry[] }) 
                 : kind === "remote"
                   ? remoteLabel(e.label)
                   : kind === "hooks"
-                ? hookLabel(e.label)
+                ? (
+                  <>
+                    {hookLabel(e.label)}
+                    {reasked && NEW_EVENTS.has(e.label.split(" ")[0]) && <span className="text-2xs ml-1.5 text-muted">New</span>}
+                  </>
+                )
                 : kind === "formatter" && e.label === "formatter"
                   ? "Formatters"
                   : kind === "mcp" && e.label === "MCP timeouts"

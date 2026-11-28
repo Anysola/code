@@ -133,11 +133,14 @@ file edit.
 ## Side questions, import and notes
 
 `/btw <question>` asks about the session without adding to it, also while the agent is working: the answer comes
-from what the session already holds, uses no tools, and isn't stored. "Import session…" takes a file written by
-Export: it becomes a new session in the folder you choose, with the conversation only. Nothing in the file carries
-permissions, settings, hooks or approvals, and snapshots from another machine are not taken, so an imported
-session can't revert files. `/memory` adds a line to the project's `AGENTS.md` (in a worktree session, the
-worktree's) or to your own `~/.anysola/AGENTS.md`.
+from what the session already holds, uses no tools, and shows in a card over the message box until you close it
+(Esc); it isn't stored. "Import session…" (the New session menu, the palette, or a project's menu as "Import
+session here…") takes a file written by Export: it becomes a new session, with the conversation only, in that
+project, else the open folder, else your default folder. Nothing in the file carries permissions, settings, hooks
+or approvals, and snapshots from another machine are not taken, so an imported session can't revert files.
+`/memory <note>` adds a line to the project's `AGENTS.md` (in a worktree session, the worktree's) or to your own
+`~/.anysola/AGENTS.md`, whichever you pick; `/memory` alone opens either in your editor. Ctrl G jumps to any of
+the session's messages, Ctrl Shift ↑ / ↓ to the previous or next.
 
 ## Usage limits
 

@@ -21,10 +21,15 @@ import {
 } from "lucide-react"
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 
-import type { Attachment, Palette, Todo } from "./bridge"
+import type { Attachment, MemoryFiles, MemoryScope, Palette, Todo } from "./bridge"
 import { useBlocked } from "./conversation"
 import { isSendKey, usePrefs } from "./prefs"
 import {
+  addMemory,
+  askAside,
+  closeAside,
+  memoryFiles,
+  openInEditor,
   chooseAgent,
   draftKey,
   EMPTY_DRAFT,
@@ -86,11 +91,13 @@ type Row = {
   key: string
   label: string
   detail: string | null
-  kind: "action" | "command" | "skill" | "file" | "folder"
+  kind: "action" | "command" | "skill" | "file" | "folder" | "memory"
   /** Text that replaces the typed `/…` or `@…`. */
   insert: string
   /** Runs at once instead of inserting (the window's own commands). */
   run?: () => void
+  /** A word at the row's end (what Enter does). */
+  tag?: string
 }
 
 /** The window's own commands, for the composer and for Settings' list. `redo` shows only after a
@@ -100,6 +107,8 @@ export const APP_COMMANDS: { name: string; detail: string }[] = [
   { name: "redo", detail: "Put back what the rewind undid" },
   { name: "retry", detail: "Send the last message again" },
   { name: "compact", detail: "Summarize the session so far to free up context" },
+  { name: "btw", detail: "Ask a side question; the answer isn’t kept in the session" },
+  { name: "memory", detail: "Add a line to AGENTS.md, or open it" },
   { name: "new", detail: "Start a new session in this folder" },
   { name: "plan", detail: "Plan before changing anything" },
   { name: "build", detail: "Make changes (the default agent)" },
@@ -118,6 +127,10 @@ function actions(open: Open): Row[] {
     // Before the first message there is nothing to rewind, send again or summarize.
     .filter((a) => open.sessionId || a.name === "new")
     .map((a) => ({ key: `a:${a.name}`, label: `/${a.name}`, detail: a.detail, kind: "action", insert: "", run: a.run }))
+  // These take what follows them: picking one writes it out, ready for the rest.
+  for (const name of ["btw", "memory"])
+    if (name === "memory" || open.sessionId)
+      rows.push({ key: `a:${name}`, label: `/${name}`, detail: detail(name), kind: "action", insert: `/${name} ` })
   if (open.revert)
     rows.splice(1, 0, {
       key: "a:redo",
@@ -180,7 +193,18 @@ function trigger(text: string, caret: number): { kind: "/" | "@"; query: string;
   return null
 }
 
-const ICON = { action: SquareSlash, command: SquareSlash, skill: Sparkles, file: FileText, folder: Folder }
+const ICON = { action: SquareSlash, command: SquareSlash, skill: Sparkles, file: FileText, folder: Folder, memory: FileText }
+
+/** `/memory`, then a space: its two files are the menu, and what follows is the note. */
+const MEMORY = /^\/memory\s([\s\S]*)$/
+
+/** The menu `dismissed` marker for `/memory`'s files (a trigger's is where it starts). */
+const MEMORY_MENU = -1
+
+/** A home folder as `~`. */
+function tilde(path: string) {
+  return path.replace(/^(\/home\/[^/]+|\/Users\/[^/]+|[A-Z]:\\Users\\[^\\]+)/i, "~")
+}
 
 function Menu({
   rows,
@@ -230,6 +254,7 @@ function Menu({
             </span>
             {r.detail && <span className="text-2xs min-w-0 flex-1 truncate text-muted">{r.detail}</span>}
             {r.kind === "skill" && <span className="text-2xs ml-auto shrink-0 text-muted">Skill</span>}
+            {r.tag && <span className="text-2xs ml-auto shrink-0 text-muted">{r.tag}</span>}
           </button>
         )
       })}
@@ -271,12 +296,14 @@ function usePast(at: number | false, ms: number) {
  * box's own menu or the ask it denies. They all mark the key (`preventDefault`) or stop it before
  * the window. True while the first press waits for the second: the box shows the hint.
  */
-function useDoubleEscape(running: boolean, sessionId: string | null) {
+function useDoubleEscape(running: boolean, sessionId: string | null, aside: boolean) {
   const [hint, setHint] = useState(false)
   const at = useRef(0)
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const runningRef = useRef(running)
   runningRef.current = running
+  const asideRef = useRef<string | null>(null)
+  asideRef.current = aside ? sessionId : null
   // Another session, or the turn ended: a press made before counts for nothing.
   useEffect(() => {
     at.current = 0
@@ -287,6 +314,15 @@ function useDoubleEscape(running: boolean, sessionId: string | null) {
     const onKey = (e: KeyboardEvent) => {
       // `anyLayer` too: a layer's close may already have dropped it by now, but not before.
       if (e.key !== "Escape" || e.defaultPrevented || e.repeat || e.isComposing || anyLayer()) return
+      // A side question over the box closes first, and the press counts for nothing more. Not from
+      // the terminal, whose programs (an editor) take Escape themselves.
+      const open = asideRef.current
+      if (open && !(e.target instanceof Element && e.target.closest(".xterm"))) {
+        e.preventDefault()
+        closeAside(open)
+        requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus())
+        return
+      }
       if (!runningRef.current) return
       clearTimeout(timer.current)
       if (Date.now() - at.current < ESC_AGAIN) {
@@ -335,7 +371,8 @@ export function Composer({ open }: { open: Open }) {
   const area = useRef<HTMLTextAreaElement>(null)
   const picker = useRef<HTMLInputElement>(null)
   const running = isRunning(open)
-  const escHint = useDoubleEscape(running, open.sessionId)
+  const asideShown = useStore((s) => !!open.sessionId && !!s.asides[open.sessionId])
+  const escHint = useDoubleEscape(running, open.sessionId, asideShown)
   // A stop that hasn't ended the turn after a few seconds may be pressed again.
   const stopStuck = usePast(open.stopping, STOP_AGAIN)
   const blocked = useBlocked(open)
@@ -356,6 +393,12 @@ export function Composer({ open }: { open: Open }) {
   const empty = !text.trim() && files.length === 0 && comments.length === 0 && pasted.length === 0
   const planning = open.info?.agent === "plan"
   const hasPlan = open.info?.agents.some((a) => a.id === "plan") ?? false
+  const aside = useStore((s) => (open.sessionId ? (s.asides[open.sessionId] ?? null) : null))
+  /** `/memory`'s files once read (null: not yet; "failed": the line under the box says why), and whether a note is being added. */
+  const [memory, setMemory] = useState<MemoryFiles | null | "failed">(null)
+  /** Enter on `/memory` after a failed read reads again. */
+  const [memoryTry, setMemoryTry] = useState(0)
+  const [noting, setNoting] = useState(false)
 
   useEffect(() => area.current?.focus(), [open.sessionId])
   // Text put back by the store (a rewind, a message that didn't send): the caret goes to its end.
@@ -410,7 +453,28 @@ export function Composer({ open }: { open: Open }) {
   }, [loadPalette])
 
   const typed = trigger(text, caret)
-  const menuOpen = typed !== null && dismissed !== typed.start
+  const note = MEMORY.exec(text)
+  const menuOpen = typed !== null ? dismissed !== typed.start : note !== null && dismissed !== MEMORY_MENU
+  // `/memory`'s files: read as its menu opens, for the session (its worktree's file) or the folder.
+  const memoryOpen = note !== null
+  useEffect(() => {
+    if (!memoryOpen) return
+    const directory = open.directory
+    let live = true
+    setMemory(null)
+    memoryFiles(open)
+      .then((m) => live && folder.current === directory && setMemory(m))
+      .catch((e) => {
+        if (!live) return
+        setMemory("failed")
+        setProblem(e instanceof Error ? e.message : String(e))
+      })
+    return () => {
+      live = false
+    }
+    // Once per opening of the menu, per session, and per try after a failure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [memoryOpen, open.directory, open.sessionId, memoryTry])
   useEffect(() => {
     if (!typed) return
     if (typed.kind === "/" ) loadPalette()
@@ -426,7 +490,32 @@ export function Composer({ open }: { open: Open }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [typed?.kind, typed?.start])
 
+  /** Adds the note to `scope`'s file, or with no note opens that file in the editor. */
+  const remember = (scope: MemoryScope) => {
+    const files = memory
+    if (!files || files === "failed" || noting) return
+    const said = (note?.[1] ?? "").trim()
+    if (!said) {
+      clear()
+      void openInEditor(open.directory, scope === "project" ? files.project : files.personal)
+      return
+    }
+    setNoting(true)
+    setProblem(null)
+    addMemory(open, scope, said)
+      .then(clear, (e) => setProblem(e instanceof Error ? e.message : String(e)))
+      .finally(() => setNoting(false))
+  }
+
   const rows = useMemo<Row[]>(() => {
+    if (note && !typed && menuOpen) {
+      if (!memory || memory === "failed") return []
+      const tag = (note[1] ?? "").trim() ? "Add" : "Open"
+      return [
+        { key: "m:project", label: "Project", detail: tilde(memory.project), kind: "memory", insert: "", tag, run: () => remember("project") },
+        { key: "m:personal", label: "Personal", detail: tilde(memory.personal), kind: "memory", insert: "", tag, run: () => remember("personal") },
+      ]
+    }
     if (!typed || !menuOpen) return []
     if (typed.kind === "/") {
       const server: Row[] = (pal?.commands ?? [])
@@ -468,13 +557,18 @@ export function Composer({ open }: { open: Open }) {
       ...filter(skills, typed.query, (r) => r.label.slice(1), 6),
       ...filter(found, typed.query, (r) => r.label, 40),
     ]
-  }, [typed?.kind, typed?.query, menuOpen, pal, paths, open])
-  // The menu on screen: `/` shows only when something matches, `@` also to say nothing does.
-  const menuShown = menuOpen && (rows.length > 0 || typed?.kind === "@")
+    // `remember` reads the same state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [typed?.kind, typed?.query, menuOpen, pal, paths, open, note?.[1], memory, noting])
+  // The menu on screen: `/` shows only when something matches, `@` also to say nothing does,
+  // `/memory` while its files are read.
+  const menuShown = menuOpen && (rows.length > 0 || typed?.kind === "@" || (note !== null && !typed && memory !== "failed"))
   // A bare `/` has no row picked: Enter there must not run whatever comes first.
   useEffect(() => setActive(typed?.kind === "/" && !typed.query ? -1 : 0), [typed?.kind, typed?.query])
 
   const pick = (r: Row) => {
+    // A note stays in the box until it is added (an error keeps it there).
+    if (r.kind === "memory") return r.run?.()
     if (!typed) return
     if (r.run) {
       setText("")
@@ -535,6 +629,26 @@ export function Composer({ open }: { open: Open }) {
       setProblem("Sending waits for your limit to reset.")
       return
     }
+    // `/btw`: answered over the box, also while a turn runs; nothing joins the conversation.
+    const btw = /^\/btw(?:\s+([\s\S]*))?$/.exec(text.trim())
+    if (btw) {
+      const question = [btw[1] ?? "", ...pasted.map((p) => p.text)].filter((t) => t.trim()).join("\n\n").trim()
+      if (!open.sessionId) return setProblem("/btw asks about a session. Send a message first.")
+      if (files.length > 0) return setProblem("A side question can’t take images.")
+      if (!question) return setProblem("Type a question after /btw.")
+      clear()
+      void askAside(question)
+      return
+    }
+    // `/memory` goes through its menu; Enter with the menu put away brings it back.
+    if (note) {
+      setDismissed(null)
+      if (memory === "failed") {
+        setProblem(null)
+        setMemoryTry((n) => n + 1)
+      }
+      return
+    }
     if (closed) {
       setProblem(`${closed}.`)
       return
@@ -576,7 +690,7 @@ export function Composer({ open }: { open: Open }) {
           active={Math.min(active, rows.length - 1)}
           onPick={pick}
           onHover={setActive}
-          empty={paths === null ? "Reading files…" : `Nothing matches “${typed?.query}”`}
+          empty={!typed ? "Finding AGENTS.md…" : paths === null ? "Reading files…" : `Nothing matches “${typed?.query}”`}
         />
       )}
       <div
@@ -689,9 +803,15 @@ export function Composer({ open }: { open: Open }) {
               }
             }
             // Only a menu that shows takes Escape: an unmatched `/foo` has none to close.
-            if (menuShown && e.key === "Escape" && typed) {
+            if (menuShown && e.key === "Escape" && (typed || note)) {
               e.preventDefault()
-              setDismissed(typed.start)
+              setDismissed(typed ? typed.start : MEMORY_MENU)
+              return
+            }
+            // Then the side question over the box, before the waiting ask and a stop.
+            if (e.key === "Escape" && aside && open.sessionId && !anyLayer() && !e.repeat && !e.nativeEvent.isComposing) {
+              e.preventDefault()
+              closeAside(open.sessionId)
               return
             }
             // ArrowUp in an empty box (or on a recalled message) walks back through what was sent.

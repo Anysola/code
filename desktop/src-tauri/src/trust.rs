@@ -31,6 +31,7 @@ fn item_json(item: &TrustItem, theirs: &HashSet<String>) -> Value {
         "digest": item.digest,
         "decision": item.decision.map(|allow| if allow { "allowed" } else { "denied" }),
         "standing": item.standing,
+        "reasked": item.reasked,
         "entries": item.entries.iter().map(|e| {
             let detail = e.detail.as_deref().map(display);
             let replaces = item.kind == TrustKind::Mcp
@@ -140,6 +141,7 @@ mod tests {
             digest: digest.into(),
             decision,
             standing: false,
+            reasked: false,
             entries: vec![TrustEntry {
                 label: "PreToolUse (Bash)".into(),
                 command: "./guard.sh\u{202e}\n".into(),

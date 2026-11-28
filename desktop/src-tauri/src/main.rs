@@ -6,6 +6,7 @@
 
 mod account;
 mod actions;
+mod aside;
 mod branch;
 mod config;
 mod data;
@@ -110,6 +111,9 @@ pub(crate) struct App {
     cores: Mutex<HashMap<PathBuf, Arc<OnceCell<Running>>>>,
     pub(crate) login: Mutex<Option<DeviceLogin>>,
     pub(crate) terminals: terminal::Manager,
+    /// Side questions in flight, by session: which ask it is, and its cancel.
+    pub(crate) asides:
+        std::sync::Mutex<HashMap<String, (u64, anysola_core::api::CancellationToken)>>,
 }
 
 /// One key per folder however it is spelled: Windows hands the same folder over with either
@@ -1256,6 +1260,7 @@ fn main() {
             cores: Mutex::default(),
             login: Mutex::default(),
             terminals: terminal::Manager::default(),
+            asides: std::sync::Mutex::default(),
         })
         // Closing the window while turns run asks first; `quit` then stops them and exits. A
         // second close soon after does the same without the window, which may not be answering.
@@ -1415,6 +1420,11 @@ fn main() {
             data::data_clear,
             data::delete_all_sessions,
             data::export_session,
+            data::import_session,
+            aside::aside,
+            aside::aside_cancel,
+            sources::memory_files,
+            sources::add_memory,
             data::about,
             notify_test,
             discord::discord_status,

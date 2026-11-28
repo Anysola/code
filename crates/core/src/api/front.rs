@@ -95,6 +95,16 @@ fn append_note(path: &Path, inside: Option<&Path>, line: &str) -> Result<(), Cor
         Err(e) => return Err(fail(format!("Can’t read {shown}: {e}"))),
     };
     let Some(meta) = existing else {
+        // A project file goes only into its checkout as it is: a worktree folder that is gone
+        // must not come back as a plain folder holding a note.
+        if let Some(root) = inside
+            && !root.is_dir()
+        {
+            return Err(fail(format!(
+                "{} is gone, so no note was added.",
+                root.display()
+            )));
+        }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| fail(format!("Can’t create {shown}: {e}")))?;
@@ -644,5 +654,9 @@ mod tests {
         let folder = root.join("z/AGENTS.md");
         std::fs::create_dir_all(&folder).unwrap();
         assert!(append_note(&folder, Some(&root), "- no\n").is_err());
+        // A worktree that is gone is not made again as a plain folder for a note.
+        let gone = dir.path().join("worktree");
+        assert!(append_note(&gone.join("AGENTS.md"), Some(&gone), "- no\n").is_err());
+        assert!(!gone.exists());
     }
 }

@@ -11,7 +11,7 @@ use anysola_core::session::message::{InvokedSkill, Message, UserData};
 use anysola_core::session::{Outcome, TurnOptions};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 use tokio::sync::broadcast::error::TryRecvError;
 
 use crate::{
@@ -334,6 +334,15 @@ pub async fn compact(
     }
     tauri::async_runtime::spawn(async move {
         match core.compact(&session_id).await {
+            // The user's PreCompact hook refused it: no turn failed and nothing was written, so
+            // only this says why (the hook's reason).
+            Ok(Outcome::Failed(error)) if error.kind == anysola_core::hooks::BLOCKED => {
+                let _ = handle.emit(
+                    "core",
+                    json!({"type": "refused", "sessionId": session_id, "error": error.message,
+                           "kind": "other", "hook": "PreCompact"}),
+                );
+            }
             Ok(_) => settled(&handle, &core, &session_id),
             Err(error) => refused_by(&handle, &session_id, &error),
         }

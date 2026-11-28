@@ -1,15 +1,16 @@
 /**
  * The palette (Ctrl K, or Search in the sidebar): recent sessions, then commands with their keys.
- * A layer like any panel: Escape closes it and is not a press toward stopping a turn.
+ * Go to message (Ctrl G) lists the open session's messages instead. A layer like any panel:
+ * Escape closes it and is not a press toward stopping a turn.
  */
-import { GitBranch, GitMerge, Globe, Keyboard, MessageSquare, Plus, RotateCcw, Search, Settings as SettingsIcon, SquarePen, Terminal as TerminalIcon, Trash2, Wallet } from "lucide-react"
+import { FileInput, GitBranch, GitMerge, Globe, Keyboard, MessageSquare, MessageSquareText, Plus, RotateCcw, Search, Settings as SettingsIcon, SquarePen, Terminal as TerminalIcon, Trash2, Wallet } from "lucide-react"
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 
-import type { SessionRow } from "./bridge"
-import { askDiscard, editBudget, flash, setReviewing, showPalette, showShortcuts, togglePreview, toggleTerminal, useChrome } from "./chrome"
+import type { Item, SessionRow } from "./bridge"
+import { askDiscard, editBudget, flash, jumpTo, setPaletteMode, setReviewing, showPalette, showShortcuts, togglePreview, toggleTerminal, useChrome } from "./chrome"
 import { modes } from "./composer"
 import { KEYS } from "./shortcuts"
-import { closeSettings, forkSession, isRunning, newSession, notify, openSession, openSettings, pickMode, undoApplyWorktree, useStore, useWorktree, useWorktreeInfo } from "./store"
+import { closeSettings, forkSession, importSession, isRunning, newSession, notify, openSession, openSettings, pickMode, undoApplyWorktree, useStore, useWorktree, useWorktreeInfo } from "./store"
 import { ago, cn, folderName, Kbd, sameFolder, useEscape } from "./ui"
 
 type Row = { key: string; section: string; run: () => void; node: ReactNode }
@@ -37,6 +38,15 @@ function useCommands(): Command[] {
       },
     },
   ]
+  if (open) {
+    list.push({
+      id: "messages",
+      label: "Go to message…",
+      icon: <MessageSquareText className={i} strokeWidth={1.75} />,
+      keys: KEYS.goToMessage,
+      run: () => setTimeout(() => showPalette(true, "messages"), 0),
+    })
+  }
   if (open?.sessionId) {
     const { directory, sessionId } = open
     // A running turn is half written: branching waits for it to end.
@@ -120,6 +130,12 @@ function useCommands(): Command[] {
           run: () => pickMode(m.id),
         })
   }
+  list.push({
+    id: "import",
+    label: "Import session…",
+    icon: <FileInput className={i} strokeWidth={1.75} />,
+    run: () => void importSession(),
+  })
   list.push(
     { id: "settings", label: "Settings", icon: <SettingsIcon className={i} strokeWidth={1.75} />, keys: KEYS.settings, run: () => openSettings() },
     { id: "shortcuts", label: "Keyboard shortcuts", icon: <Keyboard className={i} strokeWidth={1.75} />, keys: KEYS.shortcuts, run: () => showShortcuts(true) }
@@ -134,7 +150,9 @@ function matches(q: string, ...texts: string[]) {
 
 export function Palette() {
   const shown = useChrome((c) => c.palette)
-  return shown ? <Panel /> : null
+  const mode = useChrome((c) => c.paletteMode)
+  if (!shown) return null
+  return mode === "messages" ? <Messages /> : <Panel />
 }
 
 function Panel() {
@@ -254,6 +272,122 @@ function Panel() {
                 </div>
               )
             })
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+type UserItem = Extract<Item, { kind: "user" }>
+
+/** "14:32" today, "Mon" this week, else "3 Nov". */
+function when(ms: number | null | undefined) {
+  if (ms == null) return ""
+  const d = new Date(ms)
+  if (new Date().toDateString() === d.toDateString()) return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
+  if (Date.now() - ms < 6 * 86_400_000) return d.toLocaleDateString("en-GB", { weekday: "short" })
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" })
+}
+
+/** Go to message: the open session's messages, newest first; Enter scrolls there. */
+function Messages() {
+  const [q, setQ] = useState("")
+  const [picked, setPicked] = useState<string | null>(null)
+  const panel = useRef<HTMLDivElement>(null)
+  const list = useRef<HTMLDivElement>(null)
+  const close = () => showPalette(false)
+  useEscape(panel, close)
+  // Focus goes back where it was (the message box, mostly), as from the palette.
+  useEffect(() => {
+    const before = document.activeElement as HTMLElement | null
+    return () => {
+      if (before?.isConnected && (document.activeElement === document.body || !document.activeElement)) before.focus({ preventScroll: true })
+    }
+  }, [])
+  const items = useStore((s) => s.open?.items)
+  const all = useMemo(
+    () => (items ?? []).filter((i): i is UserItem => i.kind === "user").reverse(),
+    [items]
+  )
+  const rows = useMemo(() => all.filter((m) => matches(q, m.command ?? "", m.text)), [all, q])
+  useEffect(() => setPicked(null), [q])
+  const current = Math.max(0, rows.findIndex((r) => r.id === picked))
+  useEffect(() => {
+    list.current?.querySelector<HTMLElement>(`[data-row="${current}"]`)?.scrollIntoView({ block: "nearest" })
+  }, [current])
+  const go = (m: UserItem) => {
+    close()
+    jumpTo(m.id)
+    // Back to typing, at the message's place in view.
+    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus({ preventScroll: true }))
+  }
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault()
+      const step = e.key === "ArrowDown" ? 1 : -1
+      if (rows.length) setPicked(rows[(current + step + rows.length) % rows.length].id)
+    } else if (e.key === "Home" || e.key === "End") {
+      if (!rows.length) return
+      e.preventDefault()
+      setPicked(rows[e.key === "Home" ? 0 : rows.length - 1].id)
+    } else if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+      e.preventDefault()
+      const m = rows[current]
+      if (m) go(m)
+    } else if (e.key === "Backspace" && !q) {
+      // Back to everything the palette lists.
+      e.preventDefault()
+      setPaletteMode("all")
+    }
+  }
+  return (
+    <div className="fixed inset-0 z-40 flex items-start justify-center bg-scrim px-6 pt-[14vh]" onClick={close}>
+      <div
+        ref={panel}
+        role="dialog"
+        aria-label="Go to message"
+        onClick={(e) => e.stopPropagation()}
+        className="flex max-h-[60vh] w-full max-w-[36rem] flex-col overflow-hidden rounded-2xl bg-overlay"
+      >
+        <label className="flex h-12 shrink-0 items-center gap-3 px-4">
+          <MessageSquareText className="size-4 shrink-0 text-muted" strokeWidth={1.75} />
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Go to message"
+            aria-label="Go to message"
+            role="combobox"
+            aria-expanded
+            aria-controls="palette-messages"
+            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted"
+          />
+          {all.length > 0 && <span className="text-2xs shrink-0 text-muted tabular-nums">{rows.length === all.length ? all.length : `${rows.length} of ${all.length}`}</span>}
+          <Kbd>Esc</Kbd>
+        </label>
+        <div ref={list} id="palette-messages" role="listbox" className="min-h-0 overflow-y-auto px-1.5 pb-1.5">
+          {all.length === 0 ? (
+            <p className="text-dense px-2.5 py-3 text-muted">No messages in this session yet.</p>
+          ) : rows.length === 0 ? (
+            <p className="text-dense px-2.5 py-3 text-muted">Nothing matches “{q.trim()}”.</p>
+          ) : (
+            rows.map((m, i) => (
+              <button
+                key={m.id}
+                role="option"
+                data-row={i}
+                aria-selected={i === current}
+                tabIndex={-1}
+                onMouseMove={() => setPicked(m.id)}
+                onClick={() => go(m)}
+                className={cn("text-dense flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left outline-none", i === current && "bg-default-hover")}
+              >
+                <span className={cn("min-w-0 flex-1 truncate", m.command && "font-mono text-xs")}>{m.command ?? (m.text.trim().split("\n")[0] || "(image)")}</span>
+                <span className="text-2xs shrink-0 text-muted tabular-nums">{when(m.time)}</span>
+              </button>
+            ))
           )}
         </div>
       </div>

@@ -470,8 +470,23 @@ export type Repository = {
   error: string | null
 }
 
-/** The moments a hook can run at. */
-export type HookEvent = "PreToolUse" | "PostToolUse" | "UserPromptSubmit" | "Stop" | "SessionStart"
+/**
+ * The moments a hook can run at (core `hooks::EVENTS`; the last four since 1.6.0). Which can block:
+ * PreToolUse, UserPromptSubmit, Stop and SubagentStop (keeps the subagent going); PreCompact only
+ * a manual `/compact` (an automatic one goes on, its block shown as a notice); PostToolUse tells
+ * the agent; SessionStart, Notification and SessionEnd never block (exit 2 shows stderr as a
+ * notice). SessionEnd hooks share one 1.5 s budget whatever their `timeout`.
+ */
+export type HookEvent =
+  | "PreToolUse"
+  | "PostToolUse"
+  | "UserPromptSubmit"
+  | "Stop"
+  | "SubagentStop"
+  | "PreCompact"
+  | "Notification"
+  | "SessionStart"
+  | "SessionEnd"
 
 /**
  * Something a hook did that the user should see. `blocked`: it stopped a tool call or a message;
@@ -537,6 +552,11 @@ export type HookFile = {
    * listed ones: until the change is allowed, or, once it was refused, until the app restarts.
    */
   standing?: boolean
+  /**
+   * Allowed before 1.6.0, asked again only because it has hooks for moments 1.6.0 added (an
+   * earlier approval never covered them). None of its hooks run until it is allowed again.
+   */
+  reasked?: boolean
 }
 
 /**
@@ -561,6 +581,8 @@ export type TrustItem = {
   digest: string
   decision: "allowed" | "denied" | null
   standing: boolean
+  /** Hooks only: as `HookFile.reasked`. */
+  reasked?: boolean
   entries: TrustEntry[]
 }
 
@@ -816,8 +838,11 @@ export type CoreEvent =
    * puts its text back in the composer.
    */
   | { type: "failed"; sessionId: string; error: string; kind?: ErrorKind; unsent?: boolean }
-  /** What the user asked for didn't run; no turn failed. */
-  | { type: "refused"; sessionId: string; error: string; kind?: ErrorKind }
+  /**
+   * What the user asked for didn't run; no turn failed. `hook`: the user's hook of that moment
+   * refused it (`PreCompact`: a `/compact`), and `error` is its reason.
+   */
+  | { type: "refused"; sessionId: string; error: string; kind?: ErrorKind; hook?: HookEvent }
   /** A command or compaction ended with no turn left running. */
   | { type: "settled"; sessionId: string }
   | { type: "interrupted"; sessionId: string; reason: "user" | "budget" | "declined" }
@@ -872,6 +897,22 @@ export type GitStatus =
     }
 
 export type PermissionReply = "once" | "always" | "reject"
+
+/**
+ * Why a side question has no answer (core `AsideKind`): the session's budget is spent, too many
+ * requests at once (after retries), the account's usage window is full, the conversation is too
+ * long for the model, it was cancelled (a newer one replaced it, or `asideCancel`), the model gave
+ * no text, or anything else. `message` is in plain words.
+ */
+export type AsideErrorKind = "budget" | "rate_limit" | "usage_limit" | "too_long" | "cancelled" | "empty" | "other"
+
+/** A side question's answer (trimmed markdown), or why there is none. */
+export type AsideResult = { text: string } | { error: { kind: AsideErrorKind; message: string } }
+
+/** Where `/memory` notes go: `AGENTS.md` at the root of the checkout the session works in (its own worktree for a worktree session), and `~/.anysola/AGENTS.md`. Absolute paths; either may not exist yet. */
+export type MemoryFiles = { project: string; personal: string }
+
+export type MemoryScope = "project" | "personal"
 
 export type Bridge = {
   /** `fault`: the app's own data can't be opened (a broken or locked database); signing in won't help. */
@@ -1105,6 +1146,33 @@ export type Bridge = {
   deleteAllSessions(): Promise<{ deleted: number; kept: number; applying: number }>
   /** Asks where to save the session as JSON; null when cancelled. */
   exportSession(directory: string, sessionId: string): Promise<string | null>
+  /**
+   * Asks for a session export (a JSON file, at most 64 MiB) and imports it as a new root session
+   * of `directory` (a folder on this computer), with fresh ids and nothing that grants anything
+   * (no rules, folders, worktree, budget). Works whether or not the folder's core runs; a
+   * `created` event may follow but only refreshes the list. Null when cancelled. Rejects with a
+   * finished sentence when the file isn't an export it can take; nothing is written then.
+   */
+  importSession(directory: string): Promise<SessionRow | null>
+
+  /**
+   * `/btw`: a one-shot answer to `question` from the session's conversation so far (finished
+   * steps only), also while a turn of it runs. Nothing is stored in the session; its use counts
+   * toward the session's budget. One per session: a new one cancels the one in flight, which then
+   * resolves with `cancelled`. Resolves (never rejects) with the answer or why there is none.
+   */
+  aside(directory: string, sessionId: string, question: string): Promise<AsideResult>
+  /** Cancels the session's side question in flight; false when none was. */
+  asideCancel(directory: string, sessionId: string): Promise<boolean>
+  /** Where `/memory` notes go for the session (null: the folder's project root). Starts the folder's core. */
+  memoryFiles(directory: string, sessionId: string | null): Promise<MemoryFiles>
+  /**
+   * Adds `text` as a line (`- text`, whitespace collapsed) at the end of that `AGENTS.md`, making
+   * the file if it is missing; no permission ask (the user asked). Refuses a file over 4 MiB, one
+   * that isn't text, a project file linking outside its checkout, and a worktree that is gone.
+   * Returns the file written. Sessions read it at their next step.
+   */
+  addMemory(directory: string, sessionId: string | null, scope: MemoryScope, text: string): Promise<{ path: string }>
 
   about(): Promise<About>
   notifyTest(): Promise<void>
@@ -1243,6 +1311,11 @@ function tauriBridge(): Bridge {
     dataClear: (id) => invoke("data_clear", { id }),
     deleteAllSessions: () => invoke("delete_all_sessions"),
     exportSession: (directory, sessionId) => invoke("export_session", { directory, sessionId }),
+    importSession: (directory) => invoke("import_session", { directory }),
+    aside: (directory, sessionId, question) => invoke("aside", { directory, sessionId, question }),
+    asideCancel: (directory, sessionId) => invoke("aside_cancel", { directory, sessionId }),
+    memoryFiles: (directory, sessionId) => invoke("memory_files", { directory, sessionId }),
+    addMemory: (directory, sessionId, scope, text) => invoke("add_memory", { directory, sessionId, scope, text }),
     about: () => invoke("about"),
     notifyTest: () => invoke("notify_test"),
     discordStatus: () => invoke("discord_status"),

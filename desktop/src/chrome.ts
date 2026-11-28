@@ -16,6 +16,13 @@ type Chrome = {
   shortcuts: boolean
   /** The palette (Ctrl K): sessions and commands. */
   palette: boolean
+  /** What the palette lists: sessions and commands, or the open session's messages (Ctrl G). */
+  paletteMode: "all" | "messages"
+  /**
+   * A move the open conversation makes: to a user message by id (it scrolls there and lights it
+   * briefly), or to the previous or next one from where the reader is. `n` makes each new.
+   */
+  jump: { to: string | "previous" | "next"; n: number } | null
   reviewing: boolean
   /** What Review opens with for a worktree session (the palette's Apply and Discard); null: the list. */
   reviewAction: "apply" | null
@@ -71,10 +78,17 @@ function readForkNotes(): Set<string> {
   }
 }
 
+function paletteParam() {
+  return typeof location === "undefined" ? null : new URLSearchParams(location.search).get("palette")
+}
+
 let chrome: Chrome = {
   sidebarHidden: readHidden(),
   shortcuts: false,
-  palette: false,
+  // `?palette=messages` outside Tauri, for screenshots.
+  palette: paletteParam() === "messages",
+  paletteMode: paletteParam() === "messages" ? "messages" : "all",
+  jump: null,
   reviewing: false,
   reviewAction: null,
   terminalOpen: false,
@@ -162,8 +176,19 @@ export function askDiscard(on: boolean) {
   if (chrome.discarding !== on) set({ discarding: on })
 }
 
-export function showPalette(on: boolean) {
-  if (chrome.palette !== on) set({ palette: on })
+export function showPalette(on: boolean, mode: Chrome["paletteMode"] = "all") {
+  if (chrome.palette !== on || (on && chrome.paletteMode !== mode)) set({ palette: on, ...(on ? { paletteMode: mode } : {}) })
+}
+
+export function setPaletteMode(mode: Chrome["paletteMode"]) {
+  if (chrome.paletteMode !== mode) set({ paletteMode: mode })
+}
+
+let jumps = 0
+
+/** Scrolls the open conversation to a user message, or to the previous or next one. */
+export function jumpTo(to: string | "previous" | "next") {
+  set({ jump: { to, n: ++jumps } })
 }
 
 export function editBudget(on: boolean) {

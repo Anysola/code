@@ -78,6 +78,8 @@ pub struct TrustItem {
     pub decision: Option<bool>,
     /// Hooks only: an earlier approved version runs in place of this content in this process.
     pub standing: bool,
+    /// Hooks only: see [`crate::hooks::HookDocument::reasked`].
+    pub reasked: bool,
     pub entries: Vec<TrustEntry>,
 }
 
@@ -640,6 +642,7 @@ fn assemble(config: &Config, hooks: Vec<crate::hooks::HookDocument>) -> Vec<Trus
             digest: document.digest.clone(),
             decision: document.decision,
             standing: document.standing,
+            reasked: document.reasked,
             entries: hook_entries(document),
         })
         .collect();
@@ -649,6 +652,7 @@ fn assemble(config: &Config, hooks: Vec<crate::hooks::HookDocument>) -> Vec<Trus
         digest: section.digest.clone(),
         decision: section.decision,
         standing: false,
+        reasked: false,
         entries: section.entries.clone(),
     }));
     let order: Vec<&str> = config.documents().map(|(path, _)| path).collect();

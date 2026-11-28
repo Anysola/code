@@ -323,6 +323,44 @@ pub async fn personal_instructions(app: State<'_, App>) -> Answer {
     Ok(json!({"path": path.display().to_string(), "text": text}))
 }
 
+/// `/memory`: the instruction files a note can go to for the session (`MemoryFiles` in bridge.ts).
+#[tauri::command]
+pub async fn memory_files(
+    handle: AppHandle,
+    app: State<'_, App>,
+    directory: String,
+    session_id: Option<String>,
+) -> Answer {
+    let core = core_for(&handle, &app, &directory).await?;
+    let files = core
+        .memory_files(session_id.as_deref())
+        .map_err(crate::plain_error)?;
+    Ok(json!({
+        "project": files.project.display().to_string(),
+        "personal": files.personal.display().to_string(),
+    }))
+}
+
+/// `/memory <text>`: adds the note as a line at the end of one of those files.
+#[tauri::command]
+pub async fn add_memory(
+    handle: AppHandle,
+    app: State<'_, App>,
+    directory: String,
+    session_id: Option<String>,
+    scope: anysola_core::api::MemoryScope,
+    text: String,
+) -> Answer {
+    let core = core_for(&handle, &app, &directory).await?;
+    let path = tauri::async_runtime::spawn_blocking(move || {
+        core.add_memory(session_id.as_deref(), scope, &text)
+    })
+    .await
+    .map_err(crate::text)?
+    .map_err(crate::plain_error)?;
+    Ok(json!({"path": path.display().to_string()}))
+}
+
 /// Saves `~/.anysola/AGENTS.md`; empty text removes it. Sessions take it at their next step.
 #[tauri::command]
 pub async fn save_personal_instructions(app: State<'_, App>, text: String) -> Answer {

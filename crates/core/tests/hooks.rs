@@ -1811,8 +1811,17 @@ fn a_project_document_approved_before_1_6_is_asked_again_for_its_new_events() {
     // What 1.5 recorded when the user approved this file: the digest of the whole value.
     let old = anysola_core::hooks::config::digest(&value);
     assert_ne!(document.digest, old);
+    assert!(!document.reasked, "never approved: a first ask");
     core.trust_hooks(&document.path, &old, true).unwrap();
-    assert_eq!(core.hook_documents()[0].decision, None, "asked again");
+    let asked = core.hook_documents().remove(0);
+    assert_eq!(asked.decision, None, "asked again");
+    assert!(asked.reasked, "the window can say why it asks again");
+    let item = core
+        .trust_items()
+        .into_iter()
+        .find(|i| i.kind == anysola_core::api::TrustKind::Hooks)
+        .unwrap();
+    assert!(item.reasked);
     let (session, _) = core.open(&Target::New, false).unwrap();
     runtime
         .block_on(core.prompt(&session.id, prompt("hello"), TurnOptions::default()))

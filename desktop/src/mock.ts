@@ -62,9 +62,19 @@
  * choice. `?setup=hold` keeps a `pnpm install` setup running (preparing stays), `?setup=fail` makes
  * it exit 1 (with a ready scene: a failed run already there). New sessions there start in a worktree
  * (preparing ~2 s, setup output streamed), forks get one with `?restored=kept|edits|now` as the report.
+ *
+ * 1.6.0: `?aside=answer|long|loading|budget|rate_limit|usage_limit|too_long|empty|other` asks a
+ * side question as the session opens (the store reads it outside Tauri) and answers it so;
+ * `?state=many` gives the open session 300 messages; `?palette=messages` opens Go to message;
+ * `?draft=<text>` puts text in the open session's message box (`/memory …`); `?memory=fail`
+ * refuses notes; `?import=cancel|fail` makes Import session… cancel or refuse the file;
+ * `?state=compact-blocked` runs a `/compact` a PreCompact hook refuses as the session opens;
+ * `?state=notebook` has notebook rows; `?hooks=reasked` a project file allowed before 1.6.0
+ * asked again for its new moments; `?hooks=new` your hooks at the four 1.6.0 moments.
  */
 import type {
   About,
+  AsideResult,
   ApplyCheck,
   ForkRestore,
   Account,
@@ -227,6 +237,76 @@ const pricingItems: Item[] = [
   },
   tool("t7", "shell", "pnpm --filter @anysola/web test pricing", { status: "running" }),
 ]
+
+const ASIDE_SHORT =
+  "It sets `cycle` on the page, and since this turn `PlanCard` gets it as a prop and reads `plan.prices[cycle]`. Before, the card read `plan.defaultCycle`, which is always monthly."
+
+const ASIDE_LONG = [
+  "Three places read the price, and only one of them followed the toggle:",
+  "",
+  "1. **`PlanCard`** read `plan.defaultCycle`. It now takes `cycle` as a prop.",
+  "2. **`CheckoutButton`** builds the link with `?cycle=`, from the page's state, so it was already right.",
+  "3. **`TeamCard`** has its own copy of the price lookup:",
+  "",
+  "```tsx",
+  "const price = team.monthly * (cycle === \"yearly\" ? 10 : 1)",
+  "```",
+  "",
+  "That one is not wrong, but it hard-codes the discount. If the yearly discount changes in `plans.ts`, the team card will drift.",
+  "",
+  "| Card | Reads | Follows the toggle |",
+  "| --- | --- | --- |",
+  "| Starter | `plan.prices[cycle]` | Yes |",
+  "| Pro | `plan.prices[cycle]` | Yes |",
+  "| Team | `team.monthly * 10` | Yes, hard-coded |",
+  "",
+  "The test the agent is writing covers the first two. A third case for the team card would catch the drift; it is one more `it()` with the same setup.",
+  "",
+  "Nothing else in `apps/web` imports `defaultCycle`, so it can go once this lands.",
+].join("\n")
+
+/** `?state=notebook`: a notebook read, a cell changed (with its diff), one refused, one being written. */
+const notebookItems: Item[] = [
+  { kind: "user", id: "nb1", text: "In notebooks/churn.ipynb, use the median instead of the mean and add a short note above the chart.", images: 0, time: now - 2 * 60_000 },
+  tool("nb2", "read", "notebooks/churn.ipynb", { output: "Jupyter notebook, nbformat 4.5, python, 6 cells." }),
+  tool("nb3", "notebook", "notebooks/churn.ipynb", {
+    files: [
+      {
+        file: "notebooks/churn.ipynb",
+        status: "modified",
+        additions: 1,
+        deletions: 1,
+        patch:
+          '@@ -41,7 +41,7 @@\n    "source": [\n     "import pandas as pd\\n",\n-    "monthly = df.groupby(\\"month\\").churn.mean()"\n+    "monthly = df.groupby(\\"month\\").churn.median()"\n    ]\n   },\n',
+      },
+    ],
+    output: "Replaced cell 3 (id 9c41d2e0) in churn.ipynb",
+  }),
+  tool("nb4", "notebook", "notebooks/legacy.ipynb", {
+    status: "error",
+    error: "legacy.ipynb is nbformat 3. The notebook tool changes nbformat 4 notebooks only.",
+  }),
+  { kind: "text", id: "nb5:0", text: "The chart now plots the monthly median. Adding the note above it." },
+  tool("nb6", "notebook", "notebooks/churn.ipynb", { status: "streaming" }),
+]
+
+/** `?state=many`: a long session, 300 messages to jump between. */
+const manyItems: Item[] = Array.from({ length: 300 }, (_, i): Item[] => [
+  {
+    kind: "user",
+    id: `mm${i}`,
+    text: [
+      "Rename the price helper and update its callers.",
+      "Why does the team card still read the monthly price?",
+      "Run the pricing tests again.",
+      "Make the toggle keyboard accessible: arrow keys should move between Monthly and Yearly, and Enter should not submit the form it sits in.",
+      "Add a changelog entry.",
+    ][i % 5] + (i % 5 === 2 ? "" : ` (${i + 1})`),
+    images: 0,
+    time: now - (300 - i) * 7 * 60_000,
+  },
+  { kind: "text", id: `mm${i}r:0`, text: i % 3 ? "Done. The change is in and the tests pass." : "Looked into it: the helper is only called from two places, both updated." },
+]).flat()
 
 /** `?state=images` and `done`: an earlier, finished turn above the one shown. */
 const earlierItems: Item[] = [
@@ -744,6 +824,14 @@ const userHooks0: MockHook[] = [
   { id: "hk_3", event: "SessionStart", matcher: "startup", command: "git log --oneline -5", timeout: 600, source: CONFIG, scope: "user" },
 ]
 
+/** `?hooks=new`: your hooks at the moments 1.6.0 added. */
+const newEventHooks: MockHook[] = [
+  { id: "hk_4", event: "SubagentStop", matcher: "explore", command: "./scripts/hooks/check-findings.sh", timeout: 600, source: CONFIG, scope: "user" },
+  { id: "hk_5", event: "PreCompact", matcher: "manual", command: "cp \"$CLAUDE_PROJECT_DIR\"/notes.md /tmp/notes-before-compact.md", timeout: 600, source: CONFIG, scope: "user" },
+  { id: "hk_6", event: "Notification", matcher: "permission_prompt", command: "notify-send 'Anysola Code' 'Needs your approval'", timeout: 600, source: CONFIG, scope: "user" },
+  { id: "hk_7", event: "SessionEnd", matcher: null, command: "./scripts/hooks/archive-session.sh", timeout: 600, source: CONFIG, scope: "user" },
+]
+
 /** Set through a variable, so not this screen's to change. */
 const envHook: MockHook = {
   id: null,
@@ -910,6 +998,8 @@ export function mockBridge(): Bridge {
   if (state === "plan") transcripts.set("ses_pricing", planItems)
   if (state === "long") transcripts.set("ses_pricing", longItems)
   if (state === "hooks") transcripts.set("ses_pricing", hookItems)
+  if (state === "notebook") transcripts.set("ses_pricing", notebookItems)
+  if (state === "many") transcripts.set("ses_pricing", manyItems)
   if (state === "images" || state === "done") transcripts.set("ses_pricing", [...earlierItems, ...pricingItems])
   const review = new Set((new URLSearchParams(location.search).get("review") ?? "").split(","))
   if (review.has("long"))
@@ -1162,7 +1252,8 @@ export function mockBridge(): Bridge {
   const hookScene = empty ? "none" : (params.get("hooks") ?? (allScene ? "waiting" : "user"))
   // `?os=windows`: hooks run in Git Bash, and a hook from the 1.2 PowerShell starter keeps PowerShell.
   const windows = params.get("os") === "windows"
-  let userHooks: MockHook[] = hookScene === "none" ? [] : hookScene === "all" ? [...userHooks0, envHook] : [...userHooks0]
+  let userHooks: MockHook[] =
+    hookScene === "none" ? [] : hookScene === "all" ? [...userHooks0, envHook] : hookScene === "new" ? [...userHooks0, ...newEventHooks] : [...userHooks0]
   if (windows && hookScene !== "none")
     userHooks = [
       {
@@ -1196,6 +1287,18 @@ export function mockBridge(): Bridge {
       off: [projectFile("allowed")],
       all: [projectFile(null), parentFile("allowed")],
       changed: [{ ...projectFile(null), standing: true }],
+      // Allowed under 1.5; asked again for the moments it uses that 1.6.0 added.
+      reasked: [
+        {
+          ...projectFile(null),
+          reasked: true,
+          hooks: [
+            ...projectFile(null).hooks.slice(0, 1),
+            { source: `${WEB}/.anysola/anysola.json`, scope: "project", id: null, event: "Notification", matcher: "permission_prompt", command: "./scripts/hooks/ping-phone.sh", timeout: 600 },
+            { source: `${WEB}/.anysola/anysola.json`, scope: "project", id: null, event: "SessionEnd", matcher: null, command: "./scripts/hooks/save-transcript.sh", timeout: 600 },
+          ],
+        },
+      ],
       emptied: [{ ...projectFile(null), digest: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", hooks: [], standing: true }],
     } as Record<string, ReturnType<typeof projectFile>[]>
   )[hookScene] ?? []
@@ -1330,6 +1433,7 @@ export function mockBridge(): Bridge {
       digest: f.digest,
       decision: f.decision,
       standing: !!f.standing,
+      reasked: !!f.reasked,
       entries: f.hooks.map((h) => ({
         label: h.matcher && h.matcher !== "*" ? `${h.event} (${h.matcher})` : h.event,
         command: h.command,
@@ -1542,6 +1646,23 @@ export function mockBridge(): Bridge {
     }
     emit({ type: "interrupted", sessionId: id, reason: "budget" })
   }
+  /**
+   * `/compact` as the shell sends it: `started`, then (`compact-blocked`) the PreCompact hook's
+   * block and a `refused` that names it, else a summary note and `settled`.
+   */
+  const compactNow = async (id: string) => {
+    emit({ type: "started", sessionId: id })
+    await wait(600)
+    if (state === "compact-blocked") {
+      const reason = "notes.md has unsaved review comments. Commit them before compacting."
+      emit({ type: "hook", sessionId: id, event: "PreCompact", command: "./scripts/hooks/guard-notes.sh", outcome: "blocked", message: reason })
+      emit({ type: "refused", sessionId: id, error: reason, kind: "other", hook: "PreCompact" })
+      return
+    }
+    const after = transcripts.get(id) ?? []
+    transcripts.set(id, [...after, { kind: "note", id: `n${after.length}`, text: "Compacted", failed: false }])
+    emit({ type: "settled", sessionId: id })
+  }
   const overBudget = (sessionId: string) => {
     const u = usageOf(sessionId)
     return u.budget !== null && u.total >= u.budget
@@ -1641,6 +1762,9 @@ export function mockBridge(): Bridge {
     void reply(id, "The toggle is in and its test passes.")
   }
   let cancelLogin = () => {}
+  /** Side questions waiting for their answer, by session. */
+  const asides = new Map<string, (r: AsideResult) => void>()
+  let imports = 0
 
   return {
     async authStatus() {
@@ -1746,6 +1870,7 @@ export function mockBridge(): Bridge {
             500
           )
         if (state === "queue-stopped") emit({ type: "interrupted", sessionId: session.id, reason: "user" })
+        if (state === "compact-blocked") void compactNow(session.id)
         if (state === "closing") setTimeout(() => emit({ type: "closeRequested", busy: 2 }), 400)
         if (state === "running" || state === "background" || state === "context") {
           void reply(session.id, "The tests pass. I’ll also check the yearly prices on the team plan, which reads", false)
@@ -1828,7 +1953,8 @@ export function mockBridge(): Bridge {
       return { sessionId: id }
     },
     async compact(_directory, sessionId) {
-      if (overBudget(sessionId)) await budgetStop(sessionId)
+      if (overBudget(sessionId)) return void (await budgetStop(sessionId))
+      void compactNow(sessionId)
     },
     async selectAgent(_directory, _sessionId, agent) {
       return { ...info, agent }
@@ -2545,6 +2671,66 @@ export function mockBridge(): Bridge {
         return { deleted, kept: kept.length, applying: applying.length }
       }),
     exportSession: (_directory, sessionId) => settle("exportSession", () => `${HOME}/Downloads/${sessionId}.json`),
+    async importSession(directory) {
+      await wait(300)
+      const scene = params.get("import")
+      if (scene === "cancel") return null
+      if (scene === "fail")
+        throw new Error("This isn’t a session export Anysola Code can import: message 14 (assistant) has no \"time\".")
+      const row: SessionRow = {
+        id: `ses_imported${++imports}`,
+        title: "Checkout redirect after login",
+        directory,
+        updated: Date.now(),
+        forkOf: null,
+        worktree: null,
+      }
+      rows.unshift(row)
+      transcripts.set(row.id, [
+        { kind: "user", id: `${row.id}u`, text: "After logging in from /checkout the user lands on /account instead of back on /checkout.", images: 0, time: now - 5 * 86_400_000 },
+        { kind: "text", id: `${row.id}t:0`, text: "The login page drops the `next` parameter when it redirects. I kept it through the OAuth round trip." },
+      ])
+      emit({ type: "created", sessionId: row.id, title: row.title, directory })
+      return { ...row }
+    },
+    async aside(_directory, sessionId, question) {
+      if (!question.trim()) return { error: { kind: "other", message: "Type a question after /btw." } }
+      asides.get(sessionId)?.({ error: { kind: "cancelled", message: "The side question was cancelled." } })
+      const scene = params.get("aside") ?? "answer"
+      return new Promise((resolve) => {
+        asides.set(sessionId, resolve)
+        if (scene === "loading") return
+        setTimeout(() => {
+          if (asides.get(sessionId) !== resolve) return
+          asides.delete(sessionId)
+          const messages: Record<string, string> = {
+            budget: "This session’s budget is spent.",
+            rate_limit: "Too many requests at once. Try again in a moment.",
+            usage_limit: "Your 5-hour limit is reached. It resets at 18:40.",
+            too_long: "The conversation is too long for a side question.",
+            empty: "The model gave no answer. Try asking again.",
+            other: "Anysola Code is temporarily unavailable. Try again shortly.",
+          }
+          if (scene in messages) return resolve({ error: { kind: scene as "budget", message: messages[scene] } })
+          resolve({ text: scene === "long" ? ASIDE_LONG : ASIDE_SHORT })
+        }, 900)
+      })
+    },
+    async asideCancel(_directory, sessionId) {
+      const pending = asides.get(sessionId)
+      asides.delete(sessionId)
+      pending?.({ error: { kind: "cancelled", message: "The side question was cancelled." } })
+      return !!pending
+    },
+    memoryFiles: (directory) =>
+      settle("memoryFiles", () => ({ project: `${directory.replace(/\/$/, "")}/AGENTS.md`, personal: `${HOME}/.anysola/AGENTS.md` })),
+    async addMemory(directory, _sessionId, scope, text) {
+      await wait(200)
+      if (params.get("memory") === "fail")
+        throw new Error(`${directory}/AGENTS.md links outside its project (${HOME}/notes/agents.md), so no note was added.`)
+      if (!text.trim()) throw new Error("Write the note to add.")
+      return { path: scope === "project" ? `${directory.replace(/\/$/, "")}/AGENTS.md` : `${HOME}/.anysola/AGENTS.md` }
+    },
     about: () => settle("about", () => about),
     notifyTest: () => settle("notifyTest", () => undefined),
     discordStatus: () =>

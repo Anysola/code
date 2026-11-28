@@ -12,6 +12,7 @@ import {
   CircleHelp,
   Ellipsis,
   FileDown,
+  FileInput,
   FolderClosed,
   FolderOpen,
   GitBranch,
@@ -39,6 +40,7 @@ import { SearchButton } from "./palette"
 import { KEYS } from "./shortcuts"
 import { usePrefs } from "./prefs"
 import {
+  importSession,
   installUpdate,
   openExternal,
   newScratchSession,
@@ -152,6 +154,10 @@ function NewSessionButton() {
         </MenuItem>
         <MenuItem onSelect={() => go(newScratchSession)}>
           <MessageSquare className="size-3.5 text-muted" /> No project
+        </MenuItem>
+        <MenuSeparator />
+        <MenuItem onSelect={() => go(() => importSession())}>
+          <FileInput className="size-3.5 text-muted" /> Import session…
         </MenuItem>
       </Popover>
     </div>
@@ -358,6 +364,14 @@ function Project({
             }}
           >
             <Plus className="size-3.5 text-muted" /> New session here
+          </MenuItem>
+          <MenuItem
+            onSelect={() => {
+              close()
+              void importSession(directory)
+            }}
+          >
+            <FileInput className="size-3.5 text-muted" /> Import session here…
           </MenuItem>
           {!sameFolder(directory, scratch) && (
             <MenuItem
