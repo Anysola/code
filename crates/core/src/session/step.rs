@@ -1864,6 +1864,45 @@ async fn call(
     (result, entries)
 }
 
+/// A permission gate that notes while one of its questions is unanswered.
+struct Watching {
+    inner: Arc<dyn crate::permission::PermissionGate>,
+    pending: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl crate::permission::PermissionGate for Watching {
+    fn ask(
+        &self,
+        request: crate::permission::PermissionRequest,
+    ) -> futures_util::future::BoxFuture<'_, Result<(), crate::permission::PermissionError>> {
+        Box::pin(async move {
+            self.pending
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            let answer = self.inner.ask(request).await;
+            self.pending
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            answer
+        })
+    }
+
+    fn allows(&self, action: &str, resources: &[String]) -> bool {
+        self.inner.allows(action, resources)
+    }
+
+    fn denies(&self, action: &str, resources: &[String]) -> bool {
+        self.inner.denies(action, resources)
+    }
+
+    fn asking(&self) -> Option<Arc<dyn crate::permission::PermissionGate>> {
+        self.inner.asking().map(|inner| {
+            Arc::new(Watching {
+                inner,
+                pending: self.pending.clone(),
+            }) as Arc<dyn crate::permission::PermissionGate>
+        })
+    }
+}
+
 async fn execute(
     tools: &[Arc<dyn Tool>],
     name: &str,
@@ -1895,14 +1934,27 @@ async fn execute(
     if ctx.cancel.is_cancelled() {
         return Err(ToolError::not_started());
     }
+    // A call waiting for permission has not begun either: the question is the gate's, and
+    // cancelling it leaves it pending.
+    let pending = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut watched = ctx.clone();
+    watched.permissions = Arc::new(Watching {
+        inner: ctx.permissions.clone(),
+        pending: pending.clone(),
+    });
+    let ctx = &watched;
     let started = std::sync::atomic::AtomicBool::new(false);
     let result = tokio::select! {
         biased;
-        _ = ctx.cancel.cancelled() => Err(if started.load(std::sync::atomic::Ordering::SeqCst) {
-            ToolError::interrupted()
-        } else {
-            ToolError::not_started()
-        }),
+        _ = ctx.cancel.cancelled() => Err(
+            if started.load(std::sync::atomic::Ordering::SeqCst)
+                && !pending.load(std::sync::atomic::Ordering::SeqCst)
+            {
+                ToolError::interrupted()
+            } else {
+                ToolError::not_started()
+            },
+        ),
         result = async {
             started.store(true, std::sync::atomic::Ordering::SeqCst);
             tool.execute(input, ctx).await

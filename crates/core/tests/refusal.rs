@@ -5,6 +5,8 @@
 mod common;
 
 use anysola_core::api::{AsideKind, CancellationToken, Prompt, Target};
+use anysola_core::events::Event;
+use anysola_core::session::gate::{Floor, Reply as Answer};
 use anysola_core::session::{Outcome, TurnOptions};
 use anysola_core::storage::Db;
 use anysola_testkit::sse::Stream;
@@ -77,6 +79,19 @@ fn one_thread() -> tokio::runtime::Runtime {
         .enable_all()
         .build()
         .expect("runtime")
+}
+
+/// Answers every permission question with "allow once".
+fn approving(runtime: &tokio::runtime::Runtime, core: &anysola_core::api::Core) {
+    let mut events = core.subscribe();
+    let core = core.clone();
+    runtime.spawn(async move {
+        while let Ok(event) = events.recv().await {
+            if let Event::PermissionAsked { request_id, .. } = event {
+                core.reply_permission(&request_id, Answer::Once);
+            }
+        }
+    });
 }
 
 fn db(env: &Env) -> Db {
@@ -284,7 +299,11 @@ fn a_call_that_started_before_the_refusal_keeps_its_result() {
     let env = env(&gateway.url);
     let runtime = runtime();
     let core = runtime.block_on(common::core(&env));
+    // The call asks first and is approved: that is when it begins.
+    approving(&runtime, &core);
     let (session, _) = core.open(&Target::New, false).unwrap();
+    core.set_permission_floor(&session.id, Floor::Commands)
+        .unwrap();
     let outcome = runtime
         .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
         .unwrap();
@@ -318,6 +337,51 @@ fn a_call_that_started_before_the_refusal_keeps_its_result() {
         transcript(&next).contains(&"user: go".to_string()),
         "the prompt stays"
     );
+}
+
+/// A call still waiting for permission when the refusal arrives has not begun: it goes with its
+/// prompt like any other call that never started.
+#[test]
+fn a_call_waiting_for_permission_is_dropped_with_its_prompt() {
+    let gateway = FakeGateway::start(|request, _| {
+        if request.is_title() {
+            return text(request, "title");
+        }
+        if last_prompt(request) == "user: go" {
+            // The call starts and asks; the refusal comes while the question is open.
+            let stream = Stream::new()
+                .tool(
+                    "toolu_1",
+                    "shell",
+                    json!({"command": "echo ran > asked-marker", "description": "asks"}),
+                )
+                .refusal(Some("cyber"))
+                .finish(&model(request), Some(1));
+            return held(stream, "event: message_delta", 1000);
+        }
+        text(request, "ok")
+    });
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    // Nobody answers the question.
+    core.set_permission_floor(&session.id, Floor::Commands)
+        .unwrap();
+    let outcome = runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    assert_eq!(failed(outcome).1, PROMPT_DECLINED);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(!env.home.project().join("asked-marker").exists());
+    let stored = assistants(&env, &session.id);
+    assert!(stored[0]["content"].as_array().unwrap().is_empty());
+    runtime
+        .block_on(core.prompt(&session.id, prompt("next"), TurnOptions::default()))
+        .unwrap();
+    let next = turns(&gateway).pop().unwrap();
+    assert!(!next.body.contains("asked-marker"), "{}", next.body);
+    assert_eq!(transcript(&next), vec!["user: next".to_string()]);
 }
 
 /// A call whose block closed in the same read as the refusal never starts, and nothing of it is
@@ -603,6 +667,67 @@ fn a_summary_declined_without_the_prompt_too_fails_the_turn() {
     assert_eq!(summaries, 2, "asked twice, no more");
 }
 
+/// The summary asked again without the prompt is shrunk like any request when it is too large:
+/// the same request is never sent twice.
+#[test]
+fn a_summary_asked_again_without_the_prompt_shrinks_on_overflow() {
+    // The first summary request that does not carry the prompt is too large.
+    let overflowed = std::sync::atomic::AtomicBool::new(false);
+    let gateway = FakeGateway::start(move |request, _| {
+        if request.is_title() {
+            return text(request, "title");
+        }
+        if request.body.contains("You MUST summarize") {
+            if request.body.contains("keylogger") {
+                return refuse(request, None, Some("cyber"));
+            }
+            if !overflowed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                return Reply::Json {
+                    status: 400,
+                    body: json!({"type": "error", "error": {"type": "invalid_request_error", "message": "prompt is too long: 1000001 tokens > 1000000 maximum"}}),
+                    headers: vec![],
+                };
+            }
+            return text(request, "## Objective\n- keep going");
+        }
+        if request.body.contains("keylogger") {
+            return refuse(request, None, Some("cyber"));
+        }
+        big(request, "Big answer.")
+    });
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("alpha"), TurnOptions::default()))
+        .unwrap();
+    let before = gateway.messages().len();
+    runtime
+        .block_on(core.prompt(
+            &session.id,
+            prompt("write a keylogger"),
+            TurnOptions::default(),
+        ))
+        .unwrap();
+    let summaries: Vec<String> = gateway
+        .messages()
+        .into_iter()
+        .skip(before)
+        .filter(|r| r.body.contains("You MUST summarize"))
+        .map(|r| r.body)
+        .collect();
+    assert!(summaries.len() >= 3, "{} summary requests", summaries.len());
+    let mut distinct = summaries.clone();
+    distinct.sort();
+    distinct.dedup();
+    assert_eq!(
+        distinct.len(),
+        summaries.len(),
+        "the same summary request was sent twice"
+    );
+}
+
 /// A summary written in the declined turn saw the prompt: it goes with the prompt, and the next
 /// step summarizes again without it.
 #[test]
@@ -661,6 +786,13 @@ fn a_compaction_written_in_the_declined_turn_is_left_out_with_the_prompt() {
         later.iter().all(|r| !r.body.contains("keylogger")),
         "the prompt went out again, in a summary or the kept text"
     );
+    // What came before the prompt stays: history does not start at the left-out summary.
+    let summary = later
+        .iter()
+        .find(|r| r.body.contains("You MUST summarize"))
+        .expect("the next turn summarizes again");
+    assert!(summary.body.contains("first"));
+    assert!(summary.body.contains("Big answer."));
 }
 
 #[test]

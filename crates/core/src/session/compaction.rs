@@ -1254,16 +1254,16 @@ async fn summarize(
     let mut rejected: Option<u64> = None;
     let mut as_text = false;
     // The summary request was declined with the newest exchange in it: it is asked once more
-    // without it (see below).
+    // without it (see below), shrunk like any other request if that is too large.
     let mut without_tail = false;
     let mut retry = Retry::default();
     loop {
         let size_measured = if rejections == 0 { measured } else { None };
         let unchanged = if as_text {
             None
-        } else if without_tail {
-            Some((history.clone(), Sent::History))
-        } else if size_measured.map_or_else(|| prepared.tokens(), |m| m.total()) as f64 <= fit {
+        } else if !without_tail
+            && size_measured.map_or_else(|| prepared.tokens(), |m| m.total()) as f64 <= fit
+        {
             Some((prepared.clone(), Sent::Prepared))
         } else if history.tokens() as f64 <= target_size {
             Some((history.clone(), Sent::History))
