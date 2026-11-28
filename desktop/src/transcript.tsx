@@ -48,6 +48,8 @@ import {
   peekAt,
   redo,
   reply,
+  OWN_COMMAND,
+  OWN_COMMAND_SAID,
   resend,
   retry,
   revealFile,
@@ -267,12 +269,19 @@ function UserMessage({ item, actions, forkable }: { item: UserItem; actions: boo
   const [editing, setEditing] = useState(false)
   const [copied, setCopied] = useState(false)
   const [draft, setDraft] = useState(item.text)
+  const [problem, setProblem] = useState<string | null>(null)
   const [full, setFull] = useState(false)
   const shorten = usePrefs((p) => p.conversation.shorten)
   const long = shorten && (item.text.length > 700 || item.text.split("\n").length > 10)
   const submit = () => {
     if (!draft.trim()) return
+    // As in the message box: a `/memory` or `/btw` line is never sent as a message.
+    if (OWN_COMMAND.test(draft.trimStart())) {
+      setProblem(OWN_COMMAND_SAID)
+      return
+    }
     setEditing(false)
+    setProblem(null)
     void resend(item.id, draft)
     // Enter answers the turn's asks from the composer.
     document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')?.focus()
@@ -283,7 +292,10 @@ function UserMessage({ item, actions, forkable }: { item: UserItem; actions: boo
         <textarea
           autoFocus
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => {
+            setDraft(e.target.value)
+            setProblem(null)
+          }}
           onFocus={(e) => {
             const el = e.currentTarget
             el.setSelectionRange(el.value.length, el.value.length)
@@ -302,11 +314,13 @@ function UserMessage({ item, actions, forkable }: { item: UserItem; actions: boo
               e.stopPropagation()
               setEditing(false)
               setDraft(item.text)
+              setProblem(null)
             }
           }}
           aria-label="Edit message"
           className="text-md block w-full resize-none bg-transparent px-2 pt-1 leading-relaxed outline-none"
         />
+        {problem && <p className="text-dense px-2 pt-1 text-warning">{problem}</p>}
         <div className="flex items-center justify-end gap-2 pt-1">
           <span className="text-2xs mr-auto px-2 text-muted">
             Sends again from here, in place of this message and the turns after it
@@ -315,6 +329,7 @@ function UserMessage({ item, actions, forkable }: { item: UserItem; actions: boo
             onClick={() => {
               setEditing(false)
               setDraft(item.text)
+              setProblem(null)
             }}
             className={btn("ghost", "sm")}
           >

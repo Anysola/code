@@ -232,15 +232,33 @@ pub async fn delete_all_sessions(app: State<'_, App>) -> Answer {
     let mut applying = 0;
     let all = db.all_root_sessions().map_err(text)?;
     // First what may refuse: held or busy sessions, and worktrees being applied, are kept.
-    let mut going: Vec<(String, Option<anysola_core::api::Core>)> = Vec::new();
+    // Each session that goes is closed to new turns (`hold_for_delete`) from this check until
+    // its row is gone: nothing can start it between its SessionEnd hooks and the delete.
+    #[allow(clippy::type_complexity)]
+    let mut going: Vec<(
+        String,
+        Option<anysola_core::api::Core>,
+        Option<anysola_core::api::DeleteHold>,
+    )> = Vec::new();
     for (id, directory, held) in all {
         // A worktree session's core is its main folder's.
         let directory = crate::worktree::folder_of(&db, &directory, &id);
         let core = app.running(&directory).await;
-        if held || core.as_ref().is_some_and(|core| core.is_busy(&id)) {
+        if held {
             kept += 1;
             continue;
         }
+        let hold = match &core {
+            Some(core) => match core.hold_for_delete(&id) {
+                Ok(hold) => Some(hold),
+                // A turn runs: kept, as before anything is let go.
+                Err(_) => {
+                    kept += 1;
+                    continue;
+                }
+            },
+            None => None,
+        };
         // Its worktree goes too (what holds the folder open ends first, as when deleting one);
         // one being applied is kept.
         if crate::worktree::before_delete(core.as_ref(), &db, &app.terminals, &id)
@@ -251,12 +269,12 @@ pub async fn delete_all_sessions(app: State<'_, App>) -> Answer {
             applying += 1;
             continue;
         }
-        going.push((id, core));
+        going.push((id, core, hold));
     }
     // SessionEnd hooks of the sessions nothing refused (those a running core started), every
     // folder at once.
     let mut ending: Vec<(anysola_core::api::Core, Vec<String>)> = Vec::new();
-    for (id, core) in &going {
+    for (id, core, _) in &going {
         let Some(core) = core else { continue };
         match ending
             .iter_mut()
@@ -275,7 +293,7 @@ pub async fn delete_all_sessions(app: State<'_, App>) -> Answer {
     for end in ends {
         let _ = end.await;
     }
-    for (id, core) in going {
+    for (id, core, hold) in going {
         // A running core also drops the session's usage it keeps in memory and cleans sandbox cache.
         let removed = match &core {
             Some(core) => core.delete_session(&id).map_err(text)?,
@@ -290,6 +308,7 @@ pub async fn delete_all_sessions(app: State<'_, App>) -> Answer {
                 removed
             }
         };
+        drop(hold);
         crate::worktree::after_delete(&db, &id).await;
         if removed {
             deleted += 1;

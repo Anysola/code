@@ -56,6 +56,12 @@ pub enum CoreError {
     SessionNotFound,
     #[error("Session {0} is busy in another Anysola Code process.")]
     Busy(String),
+    /// A turn was asked of a session that is being deleted ([`Core::hold_for_delete`]).
+    #[error("This session is being deleted.")]
+    Deleting,
+    /// [`Core::hold_for_delete`] of a session whose turn runs.
+    #[error("Stop the session before deleting it.")]
+    Working,
     #[error("Agent not found: \"{0}\"")]
     AgentNotFound(String),
     #[error(transparent)]
@@ -168,6 +174,9 @@ pub(crate) struct Shared {
     /// `<pid>:<nonce>` for busy markers.
     pub owner: String,
     pub turns: Mutex<std::collections::HashMap<String, CancellationToken>>,
+    /// Sessions being deleted ([`Core::hold_for_delete`]): no turn of theirs starts. Read and
+    /// written under the `turns` lock.
+    pub deleting: Mutex<std::collections::HashSet<String>>,
     /// Sessions whose command waits on a question before its turn starts (a project command's
     /// ``!`cmd` ``): [`Core::interrupt`] cancels the question and the command.
     /// Each with a nonce telling apart the command that registered it.
@@ -374,6 +383,7 @@ impl Core {
             stores: Mutex::default(),
             owner: format!("{}:{}", std::process::id(), crate::ids::part()),
             turns: Mutex::default(),
+            deleting: Mutex::default(),
             preparing: Mutex::default(),
             admitted: Mutex::default(),
             warming: Default::default(),
@@ -1096,6 +1106,26 @@ impl Core {
     }
 
     /// Whether this process is driving a turn of the session right now.
+    /// Closes the session to new turns until the hold is dropped: from before a front end's
+    /// delete refusals until its row is gone, so a delete that got past them (worktree let go,
+    /// SessionEnd run) never meets a turn that started meanwhile. `Working` when a turn runs now.
+    pub fn hold_for_delete(&self, session_id: &str) -> Result<DeleteHold, CoreError> {
+        let turns = self.shared.turns.lock().unwrap_or_else(|e| e.into_inner());
+        if turns.contains_key(session_id) {
+            return Err(CoreError::Working);
+        }
+        self.shared
+            .deleting
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(session_id.to_string());
+        drop(turns);
+        Ok(DeleteHold {
+            shared: self.shared.clone(),
+            session_id: session_id.to_string(),
+        })
+    }
+
     pub fn is_busy(&self, session_id: &str) -> bool {
         self.shared
             .turns
@@ -1321,6 +1351,24 @@ pub(crate) async fn prompt_session(
 /// One turn at a time drives a session in this process: taking and releasing it happen under
 /// the `turns` lock, and so does queueing a prompt for the turn that holds it, so a prompt is
 /// either seen by that turn's last look at the inbox or finds the session free.
+/// A session closed to new turns while it is deleted (see [`Core::hold_for_delete`]); dropping
+/// it opens the session again (a delete that was refused).
+pub struct DeleteHold {
+    shared: Arc<Shared>,
+    session_id: String,
+}
+
+impl Drop for DeleteHold {
+    fn drop(&mut self) {
+        let _turns = self.shared.turns.lock().unwrap_or_else(|e| e.into_inner());
+        self.shared
+            .deleting
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.session_id);
+    }
+}
+
 struct Held<'a> {
     shared: &'a Arc<Shared>,
     session_id: String,
@@ -1341,6 +1389,16 @@ impl<'a> Held<'a> {
         queue: Option<&Prompt>,
     ) -> Result<Option<Self>, CoreError> {
         let mut turns = shared.turns.lock().unwrap_or_else(|e| e.into_inner());
+        // A session being deleted starts no turn (a prompt, a background job's completion, a
+        // schedule, a queued message): `hold_for_delete` closed it under this same lock.
+        if shared
+            .deleting
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(session_id)
+        {
+            return Err(CoreError::Deleting);
+        }
         if turns.contains_key(session_id) {
             if let Some(prompt) = queue {
                 crate::session::inbox::enqueue(&shared.db, session_id, prompt, Delivery::Queue)?;

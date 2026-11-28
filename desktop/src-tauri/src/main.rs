@@ -1174,9 +1174,12 @@ async fn delete_session(app: State<'_, App>, directory: String, session_id: Stri
     let db = app.db()?.clone();
     // A running core also drops the session's usage it keeps in memory.
     let core = app.running(&directory).await;
-    if core.as_ref().is_some_and(|core| core.is_busy(&session_id)) {
-        return Err("Stop the session before deleting it.".into());
-    }
+    // From here until its row is gone the session starts no turn (a prompt, a background job's
+    // completion, a schedule): the only refusal for a running one is this, before anything is let go.
+    let _hold = match &core {
+        Some(core) => Some(core.hold_for_delete(&session_id).map_err(text)?),
+        None => None,
+    };
     // Its worktree and branch go with it (what holds the folder open ends first).
     worktree::before_delete(core.as_ref(), &db, &app.terminals, &session_id).await?;
     // SessionEnd hooks only now that nothing refuses the delete (a worktree session's run from

@@ -51,9 +51,14 @@ branch.
   a link, it is followed only to an `AGENTS.md`/`CLAUDE.md` of the checkout that isn't in Git's data or a file the
   agent's tools always ask about, and the note is written into that file. A worktree that is gone is not made again
   for a note. A project `AGENTS.md` that is a hard link takes no note. A `/memory` or `/btw` line (leading spaces,
-  a dismissed menu, a pasted block) is never sent to the model as a message.
+  a dismissed menu, a pasted block, an edited message, a retry of one) is never sent to the model as a message.
 - **Recalled text runs no command:** ArrowUp brings back earlier messages (an imported session's too), and a rewind
-  puts one back, but a `/` line put there that way opens no menu and runs nothing on Enter until you change it.
+  puts one back, but a `/` line put there that way opens no menu and runs nothing on Enter for as long as its command
+  word is the one put there (kept across a restart and across edits elsewhere in the box; type the command word again
+  to run it). While the box holds text that was put there, a menu opens with no row picked: Enter alone picks nothing.
+- **Deleting a session closes it to new turns** from the first check until its row is gone: a running session is
+  refused (or kept, by Delete all) before anything is let go, and nothing (a prompt, a background job's completion,
+  a schedule) can start it between its SessionEnd hooks and the delete.
 - **Go to message:** Ctrl G (or "Go to message…" in the palette) lists the session's messages, newest first, to
   filter and jump to; Ctrl Shift ↑ / ↓ move to the previous or next one. The view lets go of the bottom there.
 - **A `/compact` your PreCompact hook refuses** now says so with the hook's reason; before, it ended silently.

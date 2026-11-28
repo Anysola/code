@@ -28,7 +28,10 @@ import {
   addMemory,
   askAside,
   closeAside,
+  commandHead,
   memoryFiles,
+  OWN_COMMAND,
+  OWN_COMMAND_SAID,
   openInEditor,
   chooseAgent,
   draftKey,
@@ -199,11 +202,15 @@ const ICON = { action: SquareSlash, command: SquareSlash, skill: Sparkles, file:
  * on the text with its leading spaces trimmed, as `/btw` and commands are). */
 const MEMORY = /^\/memory\s([\s\S]*)$/
 
-/** A line that names `/memory` or `/btw`: never sent as a message, whatever path Enter takes. */
-const OWN_COMMAND = /^\/(memory|btw)(\s|$)/
-
 /** Why a recalled `/` line doesn't run on Enter. */
-const RECALLED = "This line came back from before, so Enter doesn’t run it. Change it, or type it again, to run it."
+const RECALLED = "This line came back from before, so Enter doesn’t run it. Type its command again to run it."
+
+/** How many characters two texts share from the start. */
+function sharedStart(a: string, b: string) {
+  let n = 0
+  while (n < a.length && n < b.length && a[n] === b[n]) n++
+  return n
+}
 
 /** The menu `dismissed` marker for `/memory`'s files (a trigger's is where it starts). */
 const MEMORY_MENU = -1
@@ -361,8 +368,9 @@ export function Composer({ open }: { open: Open }) {
   const key = draftKey(open)
   const draft = useStore((s) => s.drafts[key] ?? EMPTY_DRAFT)
   const text = draft.text
-  // A `/` line the user didn't type here (recalled, put back) opens no menu and runs nothing.
-  const inert = !!draft.recalled && text.trimStart().startsWith("/")
+  // A `/` line the user didn't type here (recalled, put back) opens no menu and runs nothing
+  // while its command word is the one put there.
+  const inert = !!draft.head && commandHead(text)?.word === draft.head
   const files = draft.files
   const pasted = draft.pasted
   const setText = (t: string) => setDraft(key, { text: t })
@@ -573,7 +581,13 @@ export function Composer({ open }: { open: Open }) {
   // `/memory` while its files are read.
   const menuShown = menuOpen && (rows.length > 0 || typed?.kind === "@" || (note !== null && !typed && memory !== "failed"))
   // A bare `/` has no row picked: Enter there must not run whatever comes first.
-  useEffect(() => setActive(typed?.kind === "/" && !typed.query ? -1 : 0), [typed?.kind, typed?.query])
+  // In a box that held text put there (recalled, put back), no row is picked either: Enter alone
+  // picks nothing; the arrows, Tab or a click do.
+  const fromBefore = !!draft.recalled
+  useEffect(
+    () => setActive(fromBefore || (typed?.kind === "/" && !typed.query) ? -1 : 0),
+    [typed?.kind, typed?.query, note !== null, fromBefore]
+  )
 
   const pick = (r: Row) => {
     // A note stays in the box until it is added (an error keeps it there).
@@ -605,7 +619,7 @@ export function Composer({ open }: { open: Open }) {
   }
 
   const clear = () => {
-    setDraft(key, { text: "", files: [], pasted: [], recalled: false })
+    setDraft(key, { text: "", files: [], pasted: [], recalled: false, head: undefined })
     setCaret(0)
     setProblem(null)
     setRecall(null)
@@ -623,7 +637,7 @@ export function Composer({ open }: { open: Open }) {
   const recallTo = (n: number | null) => {
     setRecall(n)
     const t = n === null ? "" : history[n]
-    setDraft(key, { text: t, recalled: n !== null })
+    setDraft(key, { text: t, recalled: n !== null, head: n !== null ? commandHead(t)?.word : undefined })
     requestAnimationFrame(() => {
       const el = area.current
       if (!el) return
@@ -695,7 +709,7 @@ export function Composer({ open }: { open: Open }) {
     // Whatever path got here (a dismissed menu, a pasted chip), `/memory` and `/btw` lines are
     // never sent to the model as a message.
     if (OWN_COMMAND.test(full.trimStart())) {
-      setProblem("/memory and /btw lines aren’t sent as messages. Type the note or question after them in the box.")
+      setProblem(OWN_COMMAND_SAID)
       return
     }
     const skills = (pal?.skills ?? [])
@@ -788,9 +802,14 @@ export function Composer({ open }: { open: Open }) {
             askedAt.current = Date.now()
           }}
           onChange={(e) => {
-            // Typed (or edited) here: no longer recalled.
-            setDraft(key, { text: e.target.value, recalled: false })
-            if (problem === RECALLED) setProblem(null)
+            // The command word put there stays inert until an edit touches it (or the line is
+            // typed again): an edit elsewhere in the box changes nothing about it.
+            const next = e.target.value
+            const before = draft.head ? commandHead(text) : null
+            const kept =
+              !!before && sharedStart(text, next) >= before.end && commandHead(next)?.word === draft.head
+            setDraft(key, { text: next, head: kept ? draft.head : undefined })
+            if (problem === RECALLED && !kept) setProblem(null)
             setCaret(e.target.selectionStart)
             setDismissed(null)
             setRecall(null)

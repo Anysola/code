@@ -109,10 +109,26 @@ export type Draft = {
   comments: Comment[]
   pasted: Pasted[]
   stamp: number
-  /** The text was put there for the user (ArrowUp history, a rewind or a message that didn't
-   * send), not typed in this window, and is unchanged since: a `/` line in it runs nothing on
-   * Enter (an imported session's history must not run commands). */
+  /** Text was put there for the user (ArrowUp history, a rewind, a message that didn't send)
+   * since the box was last empty: a menu then opens with no row picked, so Enter alone picks
+   * nothing. */
   recalled?: boolean
+  /** The command word (`/memory`, `/deploy`) such text began with, while it is still the one
+   * that was put there (an edit that touches it, or a retyped line, clears it): the line runs
+   * nothing on Enter. An imported session's history must not run commands. */
+  head?: string
+}
+
+/** A line that names `/memory` or `/btw`: never sent as a message, whatever path it takes. */
+export const OWN_COMMAND = /^\/(memory|btw)(\s|$)/
+
+/** Why such a line wasn't sent. */
+export const OWN_COMMAND_SAID = "/memory and /btw lines aren’t sent as messages. Type the note or question after them in the message box."
+
+/** The command word a text begins with (after spaces) and where it ends. */
+export function commandHead(text: string): { word: string; end: number } | null {
+  const m = /^(\s*)(\/\S+)/.exec(text)
+  return m ? { word: m[2], end: m[1].length + m[2].length } : null
 }
 
 export const EMPTY_DRAFT: Draft = { text: "", files: [], comments: [], pasted: [], stamp: 0 }
@@ -387,18 +403,20 @@ export function draftKey(open: { sessionId: string | null; directory: string }) 
 }
 
 /** Only the text outlives the window: images can be megabytes, comments point at a diff. Stored
- * as `{ text, at }`; older versions stored the text alone. */
+ * as `{ text, at, recalled?, head? }` (whether text in it was put there, not typed: it must stay
+ * so across a restart); older versions stored the text alone. */
 function readDrafts(): Record<string, Draft> {
   try {
     const raw = JSON.parse(localStorage.getItem(DRAFTS_KEY) ?? "{}") as Record<string, unknown>
     const out: Record<string, Draft> = {}
     const now = Date.now()
     for (const [k, v] of Object.entries(raw)) {
-      const o = v && typeof v === "object" ? (v as { text?: unknown; at?: unknown }) : null
+      const o = v && typeof v === "object" ? (v as { text?: unknown; at?: unknown; recalled?: unknown; head?: unknown }) : null
       const text = typeof v === "string" ? v : typeof o?.text === "string" ? o.text : ""
       const at = typeof o?.at === "number" ? o.at : now
       if (!text || (k.startsWith("new:") && now - at > DRAFT_DAYS * 86_400_000)) continue
-      out[k] = { ...EMPTY_DRAFT, text }
+      const head = typeof o?.head === "string" && commandHead(text)?.word === o.head ? o.head : undefined
+      out[k] = { ...EMPTY_DRAFT, text, recalled: o?.recalled === true || !!head, head }
       draftAt.set(k, at)
     }
     return out
@@ -413,11 +431,17 @@ let saveTimer: ReturnType<typeof setTimeout> | undefined
 function writeDrafts() {
   clearTimeout(saveTimer)
   saveTimer = undefined
-  const texts: Record<string, { text: string; at: number }> = {}
+  const texts: Record<string, { text: string; at: number; recalled?: boolean; head?: string }> = {}
   for (const [k, d] of Object.entries(state.drafts)) {
     // A folded paste is part of what was typed.
     const text = [d.text, ...d.pasted.map((p) => p.text)].filter((t) => t.trim()).join("\n\n")
-    if (text) texts[k] = { text, at: draftAt.get(k) ?? Date.now() }
+    if (text)
+      texts[k] = {
+        text,
+        at: draftAt.get(k) ?? Date.now(),
+        ...(d.recalled ? { recalled: true } : {}),
+        ...(d.head ? { head: d.head } : {}),
+      }
   }
   try {
     localStorage.setItem(DRAFTS_KEY, JSON.stringify(texts))
@@ -461,6 +485,11 @@ export function setDraft(key: string, patch: Partial<Draft> | ((d: Draft) => Par
   set((s) => {
     const d = s.drafts[key] ?? EMPTY_DRAFT
     const next = { ...d, ...(typeof patch === "function" ? patch(d) : patch) }
+    // An empty box holds nothing that was put there.
+    if (!next.text.trim()) {
+      next.recalled = false
+      next.head = undefined
+    }
     const drafts = { ...s.drafts }
     const blank = !next.text && !next.files.length && !next.comments.length && !next.pasted.length
     if (blank) delete drafts[key]
@@ -477,6 +506,8 @@ function restoreDraft(key: string, back: { text: string; files?: Attachment[]; c
   setDraft(key, (d) => ({
     text: d.text.trim() && back.text.trim() ? `${back.text}\n\n${d.text}` : back.text || d.text,
     recalled: d.recalled || !!back.text.trim(),
+    // The text put back leads: its command word is the box's.
+    head: back.text.trim() ? commandHead(back.text)?.word : d.head,
     files: [...(back.files ?? []), ...d.files],
     comments: [...(back.comments ?? []), ...d.comments.filter((c) => !back.comments?.some((b) => b.id === c.id))],
     stamp: ++stamps,
@@ -491,7 +522,18 @@ function moveDraft(from: string, to: string) {
     const d = drafts[from]
     delete drafts[from]
     const into = drafts[to]
-    drafts[to] = into ? { ...into, text: [into.text, d.text].filter(Boolean).join("\n\n"), files: [...into.files, ...d.files], comments: [...into.comments, ...d.comments], pasted: [...into.pasted, ...d.pasted] } : d
+    drafts[to] = into
+      ? {
+          ...into,
+          text: [into.text, d.text].filter(Boolean).join("\n\n"),
+          files: [...into.files, ...d.files],
+          comments: [...into.comments, ...d.comments],
+          pasted: [...into.pasted, ...d.pasted],
+          // What was put there stays so, wherever it moves.
+          recalled: into.recalled || d.recalled,
+          head: into.text.trim() ? into.head : d.head,
+        }
+      : d
     draftAt.set(to, Date.now())
     return { drafts }
   })
@@ -1557,6 +1599,13 @@ const rewound = new Map<string, string>()
 export async function resend(messageId: string, text: string | null) {
   const open = state.open
   if (!open?.sessionId) return
+  // Edited or as stored (an imported session's history too): never sent as a message.
+  const stored = open.items.find((i) => i.id === messageId && i.kind === "user")
+  const sending = text ?? (stored?.kind === "user" ? stored.text : "")
+  if (OWN_COMMAND.test(sending.trimStart())) {
+    set({ notice: OWN_COMMAND_SAID, noticeLink: null })
+    return
+  }
   const sessionId = open.sessionId
   setOpen({ status: { kind: "working" }, live: [], revert: null, started: Date.now(), stopping: false }, sessionId)
   touch(sessionId)

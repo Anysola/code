@@ -641,3 +641,32 @@ fn a_spent_budget_stops_every_model_call_until_it_is_raised() {
     assert_eq!(run(&root.id, "root"), budget);
     assert_eq!(calls(), before);
 }
+
+/// A session being deleted starts no turn (review 3, N4): `hold_for_delete` closes it from the
+/// delete's first check until its row is gone; a session whose turn runs can't be held.
+#[test]
+fn a_session_held_for_delete_starts_no_turn() {
+    let gateway = FakeGateway::start(|request, _| text(request, "ok"));
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    let hold = core.hold_for_delete(&session.id).unwrap();
+    let calls = gateway.messages().len();
+    let refused =
+        runtime.block_on(core.prompt(&session.id, prompt("hello"), TurnOptions::default()));
+    assert!(
+        matches!(refused, Err(anysola_core::api::CoreError::Deleting)),
+        "{refused:?}"
+    );
+    assert_eq!(gateway.messages().len(), calls, "no model call");
+    assert!(!core.is_busy(&session.id));
+    drop(hold);
+    assert_eq!(
+        runtime
+            .block_on(core.prompt(&session.id, prompt("hello"), TurnOptions::default()))
+            .unwrap(),
+        Outcome::Succeeded,
+        "a refused delete opens the session again"
+    );
+}
