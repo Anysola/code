@@ -105,7 +105,7 @@ export function InSession({ open, children }: { open: Open; children: ReactNode 
 }
 
 /** Kinds of failure that sending again won't fix. */
-const FINAL = new Set(["limit", "auth", "model", "elsewhere"])
+const FINAL = new Set(["limit", "auth", "model", "elsewhere", "declined"])
 
 export function Transcript({
   open,
@@ -378,6 +378,8 @@ function UserMessage({ item, actions, forkable }: { item: UserItem; actions: boo
           </button>
         )}
         {item.images > 0 && <Thumbnails item={item} />}
+        {/* The core leaves it out of every request since (`session::refusal::left_out`). */}
+        {item.declined && <div className="text-2xs mt-1.5 text-muted">Declined by the model · not sent again</div>}
       </div>
       {actions && (
         <div className="-mb-3 flex h-8 items-center justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
@@ -1652,6 +1654,8 @@ function StatusLine({ open, waiting, streaming }: { open: Open; waiting: boolean
       )
     case "failed":
       if (status.errorKind && BANNERED.has(status.errorKind)) return null
+      // The failed step's error, read back with the transcript, already says it right above.
+      if (last?.kind === "error" && last.message === status.error) return null
       // The user's own hook said no: their rule at work, not a failure. The line says the text is
       // back only when it is (a queued message the window can't tell apart isn't).
       if (status.hook)

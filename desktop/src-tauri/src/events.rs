@@ -247,6 +247,8 @@ pub fn error_kind(kind: &str, message: &str) -> (&'static str, bool) {
         "busy" => ("elsewhere", true),
         // The same message would be blocked again.
         anysola_core::hooks::BLOCKED => ("other", false),
+        // The model declined it: sent again as it is, it would be declined again.
+        anysola_core::session::refusal::KIND => ("declined", false),
         _ => ("other", true),
     }
 }
@@ -442,6 +444,12 @@ mod tests {
         assert_eq!(
             error_kind(anysola_core::hooks::BLOCKED, "x"),
             ("other", false)
+        );
+        let declined = "Claude Haiku 5.5 declined to answer this message, citing cybersecurity.";
+        assert_eq!(
+            failed("provider.content-filter", declined, false),
+            json!({"type": "failed", "sessionId": "ses_1", "kind": "declined", "unsent": false,
+                   "error": declined})
         );
     }
 

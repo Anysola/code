@@ -253,8 +253,14 @@ fn interrupted_note(idle: &Value) -> Option<&'static str> {
 
 pub fn items(entries: Vec<Entry>, directory: &str) -> Vec<Value> {
     let ends = turn_ends(&entries);
+    // Declined prompts the model is no longer sent (the core's own rule, so the mark and the
+    // request agree).
+    let left_out = {
+        let messages: Vec<&Message> = entries.iter().map(|e| &e.message).collect();
+        anysola_core::session::refusal::left_out(&messages)
+    };
     let mut out = Vec::new();
-    for (entry, end) in entries.into_iter().zip(ends) {
+    for ((entry, end), declined) in entries.into_iter().zip(ends).zip(left_out) {
         let Entry { id, message, idle } = entry;
         if let Some(idle) = idle {
             if let Some(text) = interrupted_note(&idle) {
@@ -271,7 +277,7 @@ pub fn items(entries: Vec<Entry>, directory: &str) -> Vec<Value> {
                     // A command's message shows as the line the user typed.
                     let command = data.extra.get("command").and_then(Value::as_str);
                     let sent = data.time.created;
-                    out.push(json!({
+                    let mut item = json!({
                         "kind": "user",
                         "id": id,
                         "text": data.text,
@@ -279,7 +285,11 @@ pub fn items(entries: Vec<Entry>, directory: &str) -> Vec<Value> {
                         "command": command,
                         "time": sent,
                         "elapsed": end.map(|end| end.saturating_sub(sent)),
-                    }));
+                    });
+                    if declined {
+                        item["declined"] = json!(true);
+                    }
+                    out.push(item);
                 }
             }
             Message::Assistant(data) => {
@@ -664,6 +674,42 @@ mod tests {
                 ("i3", "Interrupted when the app closed."),
                 ("i5", "Interrupted when the app closed.")
             ]
+        );
+    }
+
+    #[test]
+    fn a_declined_prompt_reads_as_not_sent_again() {
+        let declined = |id: &str, error: bool| {
+            let mut data = json!({"time": {"created": 1, "completed": 2}, "agent": "build",
+                "model": {"id": "m", "providerID": "anysola"}, "finish": "content-filter",
+                "content": []});
+            if error {
+                data["error"] = json!({"type": "provider.content-filter",
+                    "message": "Claude Haiku 5.5 declined to answer this message."});
+            }
+            entry(id, "assistant", data)
+        };
+        let entries = vec![
+            user("u1", 1_000),
+            declined("a1", true),
+            idle("i1", 1_500, "failed", None),
+            // Stored before 1.6.1: no error, the mark is all it shows.
+            user("u2", 2_000),
+            declined("a2", false),
+            idle("i2", 2_500, "succeeded", None),
+            user("u3", 3_000),
+        ];
+        let items = items(entries, "/p");
+        let user = |id: &str| items.iter().find(|i| i["id"] == id).unwrap().clone();
+        assert_eq!(user("u1")["declined"], true);
+        assert_eq!(user("u2")["declined"], true);
+        assert_eq!(user("u3").get("declined"), None);
+        let errors: Vec<_> = items.iter().filter(|i| i["kind"] == "error").collect();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0]["errorKind"], "declined");
+        assert_eq!(
+            errors[0]["retry"], false,
+            "sent again, it would be declined again"
         );
     }
 

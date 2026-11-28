@@ -203,14 +203,16 @@ export type FileDiff = {
 /**
  * What went wrong, for the window to pick words and actions by: `limit` a usage window is full,
  * `offline` the service can't be reached, `auth` the sign-in is gone, `model` the model isn't
- * available, `elsewhere` another Anysola Code process drives the session.
+ * available, `elsewhere` another Anysola Code process drives the session, `declined` the model
+ * declined the request (sent again as it is, it would be declined again).
  */
-export type ErrorKind = "limit" | "offline" | "auth" | "model" | "elsewhere" | "other"
+export type ErrorKind = "limit" | "offline" | "auth" | "model" | "elsewhere" | "declined" | "other"
 
 export type Item =
   /**
    * `command`: the `/name args` line a command's text was rendered from. `time`: when it was sent
    * (ms). `elapsed`: how long its turn worked (ms); null while it runs or when unknown.
+   * `declined`: the model declined it, and it is no longer sent with the conversation.
    */
   | {
       kind: "user"
@@ -220,6 +222,7 @@ export type Item =
       command?: string | null
       time?: number | null
       elapsed?: number | null
+      declined?: boolean
     }
   | { kind: "text"; id: string; text: string }
   | { kind: "reasoning"; id: string; text: string }
@@ -904,9 +907,9 @@ export type PermissionReply = "once" | "always" | "reject"
  * Why a side question has no answer (core `AsideKind`): the session's budget is spent, too many
  * requests at once (after retries), the account's usage window is full, the conversation is too
  * long for the model, it was cancelled (a newer one replaced it, or `asideCancel`), the model gave
- * no text, or anything else. `message` is in plain words.
+ * no text, the model declined the question, or anything else. `message` is in plain words.
  */
-export type AsideErrorKind = "budget" | "rate_limit" | "usage_limit" | "too_long" | "cancelled" | "empty" | "other"
+export type AsideErrorKind = "budget" | "rate_limit" | "usage_limit" | "too_long" | "cancelled" | "empty" | "declined" | "other"
 
 /** A side question's answer (trimmed markdown), or why there is none. */
 export type AsideResult = { text: string } | { error: { kind: AsideErrorKind; message: string } }

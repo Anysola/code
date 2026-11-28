@@ -459,6 +459,11 @@ async fn triggered(
 pub(crate) enum GenerateError {
     /// The request is larger than the model takes.
     Overflow,
+    /// The model (named) declined the request; what it wrote before that does not count.
+    Declined {
+        model: String,
+        refusal: super::refusal::Refusal,
+    },
     Failed(SessionError),
 }
 
@@ -565,13 +570,35 @@ pub(crate) async fn generate_with(
         }
     };
     let mut assembly = Assembly::default();
+    let mut cut = None;
     while let Some(item) = stream.next().await {
-        match item.map_err(generate_error)? {
-            StreamItem::Usage(usage) => shared.usage.record(&session.id, &usage),
-            StreamItem::Event(event) => {
-                assembly.on_event(&event).map_err(generate_error)?;
+        let event = match item {
+            Ok(StreamItem::Usage(usage)) => {
+                shared.usage.record(&session.id, &usage);
+                continue;
             }
+            Ok(StreamItem::Event(event)) => event,
+            Err(error) => {
+                cut = Some(error);
+                break;
+            }
+        };
+        if let Err(error) = assembly.on_event(&event) {
+            cut = Some(error);
+            break;
         }
+    }
+    // A stream cut after the refusal is still a refusal.
+    if let Some(error) = cut
+        && assembly.refusal().is_none()
+    {
+        return Err(generate_error(error));
+    }
+    if let Some(refusal) = assembly.refusal() {
+        return Err(GenerateError::Declined {
+            model: selection.model.name.clone(),
+            refusal,
+        });
     }
     Ok(assembly
         .parts
@@ -610,7 +637,11 @@ async fn step(
         Ok(ctx) => ctx,
         Err(error) => return StepEnd::Failed(error),
     };
-    let history = compaction::history(shared, &session.id).messages;
+    let loaded = compaction::history(shared, &session.id);
+    // This step's thinking is written without the declined prompts the history leaves out: from
+    // now on they stay out.
+    compaction::mark_left_out(shared, &loaded);
+    let history = loaded.messages;
     let target = Target {
         provider: &selection.reference.provider,
         id: &selection.model.id,
@@ -1063,6 +1094,10 @@ async fn run_stream(
                 break;
             }
         };
+        // A declined step's calls do not run: the ones still running stop now.
+        if assembly.refusal().is_some() && !tool_cancel.is_cancelled() {
+            tool_cancel.cancel();
+        }
         // A call about to run is stored first: a front end that reads the transcript on
         // `ToolCalled` then finds the step's text and the call, running, while it works. A call
         // that starts streaming is stored too, so its row shows while its input is written.
@@ -1102,6 +1137,13 @@ async fn run_stream(
         tool_cancel.cancel();
         let unsettled = collect(shared, &mut running, &mut tasks).await;
         return interrupt(shared, running, unsettled, InterruptReason::User);
+    }
+    // Ahead of the stream's end: a declined answer is never sent again nor continued, even when
+    // its stream was cut after the refusal.
+    if let Some(refusal) = assembly.refusal() {
+        tool_cancel.cancel();
+        collect(shared, &mut running, &mut tasks).await;
+        return declined(shared, session, selection, running, &assembly, refusal);
     }
     if !ended_ok {
         let error = stream_error
@@ -1202,6 +1244,103 @@ async fn run_stream(
     } else {
         StepEnd::Stop
     }
+}
+
+/// Ends a step the model declined (`stop_reason: "refusal"`): its partial output goes (text,
+/// reasoning, calls that never started), and the turn fails with an error that says so. A call
+/// that started before the refusal arrived stays with its result: it ran (or was stopped), and
+/// its `tool_use` keeps its `tool_result`. Nothing is retried and no step follows.
+fn declined(
+    shared: &Shared,
+    session: &SessionRow,
+    selection: &Selection,
+    mut running: Running,
+    assembly: &Assembly,
+    refusal: super::refusal::Refusal,
+) -> StepEnd {
+    running.data.content.retain(|part| {
+        matches!(
+            part,
+            Part::Tool {
+                executed: Some(false) | None,
+                state: ToolState::Completed { .. } | ToolState::Error { .. },
+                ..
+            }
+        )
+    });
+    // The prompt is what was declined when nothing of the turn stays before this reply: then the
+    // request leaves it out from now on (`refusal::left_out`), which the message promises.
+    let what = if running.data.content.is_empty() && answers_prompt(shared, &running) {
+        super::refusal::Declined::Prompt
+    } else {
+        super::refusal::Declined::MidTurn
+    };
+    let error = refusal.error(&selection.model.name, what);
+    crate::log::info(
+        "declined",
+        &[
+            ("session", &session.id),
+            ("model", &selection.model.id),
+            ("category", refusal.category.as_deref().unwrap_or("none")),
+            (
+                "explanation",
+                refusal.explanation.as_deref().unwrap_or_default(),
+            ),
+        ],
+    );
+    running.data.finish = Some(assembly.finish().into());
+    running.data.raw_finish = assembly.stop_reason.clone();
+    running.data.cost = Some(0.0);
+    running.data.error = Some(error.clone());
+    running.data.time.completed = Some(now_ms());
+    let _ = shared.db.add_tokens(
+        &session.id,
+        crate::storage::TokenTotals {
+            input: assembly.tokens.input,
+            output: assembly.tokens.output,
+            reasoning: assembly.tokens.reasoning,
+            cache_read: assembly.tokens.cache.read,
+            cache_write: assembly.tokens.cache.write,
+        },
+    );
+    // Calls that ran may have changed files.
+    let end = end_snapshot(shared, &mut running);
+    running.save(shared);
+    send(
+        shared,
+        Event::StepEnded {
+            session_id: session.id.clone(),
+            message_id: running.message_id.clone(),
+            event_id: crate::ids::event(),
+            finish: assembly.finish().into(),
+            tokens: assembly.tokens,
+            last: true,
+            snapshot: end,
+        },
+    );
+    send(
+        shared,
+        Event::StepFailed {
+            session_id: session.id.clone(),
+            message_id: running.message_id.clone(),
+            error: error.clone(),
+        },
+    );
+    StepEnd::Failed(error)
+}
+
+/// Whether the running step's reply answers a message the person sent directly
+/// (`refusal::answers_prompt`, over the stored rows before it).
+fn answers_prompt(shared: &Shared, running: &Running) -> bool {
+    let rows = shared.db.messages(&running.session_id).unwrap_or_default();
+    let Some(at) = rows.iter().position(|r| r.id == running.message_id) else {
+        return false;
+    };
+    let before: Vec<Message> = rows[..=at]
+        .iter()
+        .map(|r| Message::decode(&r.kind, &r.data))
+        .collect();
+    super::refusal::answers_prompt(&before, at)
 }
 
 /// Fails the calls the response left without an outcome (`Assembly::unfinished`).

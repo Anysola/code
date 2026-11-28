@@ -2489,7 +2489,7 @@ async function findUnsent(directory: string, sessionId: string) {
 }
 
 /** Kinds of failure that sending the same message again won't fix. */
-const NO_RETRY = new Set<ErrorKind>(["limit", "auth", "model", "elsewhere"])
+const NO_RETRY = new Set<ErrorKind>(["limit", "auth", "model", "elsewhere", "declined"])
 
 /** A session's turn is over: the install that waited for it may go ahead. */
 function turnEnded() {

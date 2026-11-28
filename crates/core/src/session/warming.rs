@@ -220,11 +220,16 @@ async fn keep_warm(shared: Arc<Shared>, session_id: String, id: u64) {
                         .map(drop),
                     None => return,
                 };
-                if let Err(super::step::GenerateError::Failed(error)) = result {
-                    crate::log::warn(
+                match result {
+                    Err(super::step::GenerateError::Failed(error)) => crate::log::warn(
                         "failed to warm session",
                         &[("session", &session_id), ("error", &error.message)],
-                    );
+                    ),
+                    Err(super::step::GenerateError::Declined { .. }) => crate::log::warn(
+                        "failed to warm session",
+                        &[("session", &session_id), ("error", "declined")],
+                    ),
+                    _ => {}
                 }
                 let mut sessions = shared
                     .warming

@@ -14,7 +14,8 @@
  * back from `pending`), `form` (an MCP server's form) and `form-url` (one that opens a page),
  * `closing` (the window was closed mid-turn), `fault` (the database can't be opened), `gone`
  * (every answer finds its request no longer waiting), `images` (a message with images),
- * `failed&kind=limit|offline|auth|model|elsewhere` (a turn failed for that reason), `updating`
+ * `failed&kind=limit|offline|auth|model|elsewhere|declined` (a turn failed for that reason; with
+ * `declined` the last message reads as not sent again), `updating`
  * (an update while a turn runs). `?fail=replyPermission,setMode,queueSteer,changes,gitStatus…` makes
  * those calls throw. `?slow=1500` makes a new session's first prompt take that long; `?hang=1`
  * makes Stop send nothing while the turn goes on. `window.__mockEmit(event)` sends a core event.
@@ -63,7 +64,7 @@
  * it exit 1 (with a ready scene: a failed run already there). New sessions there start in a worktree
  * (preparing ~2 s, setup output streamed), forks get one with `?restored=kept|edits|now` as the report.
  *
- * 1.6.0: `?aside=answer|long|loading|budget|rate_limit|usage_limit|too_long|empty|other` asks a
+ * 1.6.0: `?aside=answer|long|loading|budget|rate_limit|usage_limit|too_long|empty|declined|other` asks a
  * side question as the session opens (the store reads it outside Tauri) and answers it so;
  * `?state=many` gives the open session 300 messages; `?palette=messages` opens Go to message;
  * `?draft=<text>` puts text in the open session's message box (`/memory …`); `?memory=fail`
@@ -237,6 +238,10 @@ const pricingItems: Item[] = [
   },
   tool("t7", "shell", "pnpm --filter @anysola/web test pricing", { status: "running" }),
 ]
+
+/** The core's words for a prompt the model declined (`session::refusal`). */
+const DECLINED_PROMPT =
+  "Claude Haiku 5.5 declined to answer this message, citing cybersecurity. It won’t be sent again in this session; rephrase it, or start a new session if this keeps happening."
 
 const ASIDE_SHORT =
   "It sets `cycle` on the page, and since this turn `PlanCard` gets it as a prop and reads `plan.prices[cycle]`. Before, the card read `plan.defaultCycle`, which is always monthly."
@@ -1027,6 +1032,15 @@ export function mockBridge(): Bridge {
       transcripts.get("ses_pricing")!.map((i) => (i.kind === "user" && i.id === "m1" ? { ...i, elapsed: 3 * 60_000 + 5_000 } : i))
     )
   const kind = (new URLSearchParams(location.search).get("kind") ?? undefined) as ErrorKind | undefined
+  // The model declined the last message: it reads as not sent again.
+  if (state === "failed" && kind === "declined") {
+    const list = transcripts.get("ses_pricing")!
+    const last = list.map((i) => i.kind).lastIndexOf("user")
+    transcripts.set(
+      "ses_pricing",
+      list.slice(0, last + 1).map((i, n) => (n === last && i.kind === "user" ? { ...i, declined: true } : i))
+    )
+  }
   const BUSY = ["hook-blocked-queued", "crowded", "approval", "gone", "running", "question", "long", "queue", "background", "context", "updating", "closing", "restored"]
   /** Sessions with a turn running, and what waits in their queues. */
   const running = new Set<string>(BUSY.includes(state) ? ["ses_pricing"] : [])
@@ -1865,7 +1879,9 @@ export function mockBridge(): Bridge {
                       ? "Opus 5.5 isn’t available on your plan right now."
                       : kind === "elsewhere"
                         ? "This session is running in another Anysola Code app."
-                        : "Anysola Code is temporarily unavailable. Try again shortly.",
+                        : kind === "declined"
+                          ? DECLINED_PROMPT
+                          : "Anysola Code is temporarily unavailable. Try again shortly.",
           })
         if (state === "hooks")
           setTimeout(
@@ -2731,6 +2747,7 @@ export function mockBridge(): Bridge {
             usage_limit: "Your 5-hour limit is reached. It resets at 18:40.",
             too_long: "The conversation is too long for a side question.",
             empty: "The model gave no answer. Try asking again.",
+            declined: "Claude Haiku 5.5 declined to answer this question, citing cybersecurity. Try asking it another way.",
             other: "Anysola Code is temporarily unavailable. Try again shortly.",
           }
           if (scene in messages) return resolve({ error: { kind: scene as "budget", message: messages[scene] } })

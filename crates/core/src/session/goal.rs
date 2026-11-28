@@ -477,6 +477,8 @@ enum Judged {
     Verdict(Verdict),
     Unusable,
     Overflow,
+    /// The model declined to review the goal: asking again would be declined too.
+    Declined(String),
 }
 
 async fn judge(shared: &Arc<Shared>, session_id: &str, goal: &Goal, shells: &[String]) -> Judged {
@@ -487,6 +489,13 @@ async fn judge(shared: &Arc<Shared>, session_id: &str, goal: &Goal, shells: &[St
     for _ in 0..2 {
         match super::step::generate(shared, &session, &prompt).await {
             Err(super::step::GenerateError::Overflow) => return Judged::Overflow,
+            Err(super::step::GenerateError::Declined { model, refusal }) => {
+                let citing = refusal
+                    .topic()
+                    .map(|topic| format!(", citing {topic}"))
+                    .unwrap_or_default();
+                return Judged::Declined(format!("{model} declined to review the goal{citing}"));
+            }
             Err(super::step::GenerateError::Failed(error)) => {
                 crate::log::warn(
                     "goal reviewer failed",
@@ -606,6 +615,7 @@ pub(crate) async fn idle(shared: &Arc<Shared>, session_id: &str) -> bool {
             return inbox::enqueue_compaction(db, session_id).is_ok();
         }
         Judged::Unusable => return pause("The goal reviewer gave no usable verdict"),
+        Judged::Declined(reason) => return pause(&reason),
         Judged::Verdict(verdict) => verdict,
     };
     match verdict.verdict.as_str() {

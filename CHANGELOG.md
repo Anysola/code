@@ -4,6 +4,23 @@ Anysola Code releases, newest first. OpenCode's changelog up to 2.2.5 is in
 [UPSTREAM-CHANGELOG.md](https://github.com/Anysola/code/blob/legacy-0.5/UPSTREAM-CHANGELOG.md) on the `legacy-0.5`
 branch.
 
+## Unreleased
+
+- **A declined answer is said, not swallowed:** when the model's safety checks decline a request, the turn fails
+  with a line naming the model, the reason it gave (cybersecurity, biology, AI model development, the usage
+  policy, reasoning extraction) and what you can do, instead of an empty reply. What it wrote before declining
+  is dropped, a tool call it had not started never runs, and nothing is retried.
+- **A declined message is not sent again:** it stays in the conversation, marked "Declined by the model · not sent
+  again", and later requests leave it and its empty reply out, so one refusal no longer makes every later answer
+  come back empty. This also frees sessions that got stuck this way in earlier versions, unless an earlier version
+  answered after it with signed reasoning (that answer keeps the history it was written with). Edit the message to
+  send it reworded, or start a new session if it keeps happening. A refusal later in a turn keeps the turn's
+  earlier steps.
+- **Other calls the model declines fail plainly too:** a declined `/compact` or automatic compaction changes
+  nothing (a partial summary is never used, and it isn't asked for twice); a declined title leaves the session's
+  title as it is; a declined side question says so without offering to ask again; a declined subagent fails with
+  the same line, which its parent's tool result carries; a declined goal review pauses the goal and says why.
+
 ## 1.6.0 (2026-11-28)
 
 - **Four more hook events, in Claude Code's format:** `SubagentStop` (keeps a subagent going like `Stop`, same

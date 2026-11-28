@@ -19,6 +19,7 @@ const SAYS: Record<Exclude<AsideErrorKind, "cancelled">, string | null> = {
   usage_limit: null,
   too_long: "The conversation is too long for a side question.",
   empty: "No answer came back.",
+  declined: null,
   other: null,
 }
 

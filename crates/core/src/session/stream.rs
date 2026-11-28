@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use serde_json::{Map, Value};
 
 use super::message::{Cache, Part, PartTime, Tokens, ToolState};
+use super::refusal::Refusal;
 use crate::gateway::error::{ApiError, SessionError};
 use crate::gateway::sse::SseEvent;
 use crate::time::now_ms;
@@ -96,6 +97,8 @@ pub struct Assembly {
     reasonings: usize,
     pub tokens: Tokens,
     pub stop_reason: Option<String>,
+    /// `stop_details` of `message_delta` (a refusal's category and explanation).
+    stop_details: Option<Value>,
     pub finished: bool,
     /// Client calls whose complete arguments were not valid JSON, with the raw arguments.
     malformed: Vec<(usize, String)>,
@@ -131,12 +134,19 @@ impl Assembly {
             "content_block_delta" => self.delta(index, data.get("delta").unwrap_or(&Value::Null)),
             "content_block_stop" => self.stop(index),
             "message_delta" => {
-                if let Some(reason) = data
-                    .get("delta")
+                let delta = data.get("delta");
+                if let Some(reason) = delta
                     .and_then(|d| d.get("stop_reason"))
                     .and_then(Value::as_str)
                 {
                     self.stop_reason = Some(reason.to_string());
+                }
+                if let Some(details) = delta
+                    .and_then(|d| d.get("stop_details"))
+                    .or_else(|| data.get("stop_details"))
+                    .filter(|d| d.is_object())
+                {
+                    self.stop_details = Some(details.clone());
                 }
                 self.usage(data.get("usage"));
                 Vec::new()
@@ -515,6 +525,13 @@ impl Assembly {
         out
     }
 
+    /// The model declined the request (`stop_reason: "refusal"`), with what it said about it.
+    /// Known by the stop reason alone: `stop_details` may be null or missing.
+    pub fn refusal(&self) -> Option<Refusal> {
+        (self.stop_reason.as_deref() == Some("refusal"))
+            .then(|| Refusal::from_details(self.stop_details.as_ref()))
+    }
+
     /// The step's finish reason as stored and reported.
     pub fn finish(&self) -> &'static str {
         match self.stop_reason.as_deref() {
@@ -678,6 +695,51 @@ mod tests {
             ended.unwrap().as_slice(),
             [Action::ToolReady { raw: r, .. }] if r == raw
         ));
+    }
+
+    #[test]
+    fn a_refusal_is_known_by_its_stop_reason() {
+        let delta = |assembly: &mut Assembly, delta: Value| {
+            feed(
+                assembly,
+                "message_delta",
+                serde_json::json!({"type": "message_delta", "delta": delta, "usage": {"output_tokens": 0}}),
+            )
+        };
+        let mut assembly = Assembly::default();
+        delta(
+            &mut assembly,
+            serde_json::json!({"stop_reason": "refusal", "stop_details": {"type": "refusal", "category": "cyber", "explanation": "flagged"}}),
+        );
+        assert_eq!(assembly.finish(), "content-filter");
+        assert_eq!(
+            assembly.refusal(),
+            Some(Refusal {
+                category: Some("cyber".into()),
+                explanation: Some("flagged".into())
+            })
+        );
+        for details in [
+            serde_json::json!(null),
+            serde_json::json!({"type": "refusal", "category": null, "explanation": null}),
+        ] {
+            let mut assembly = Assembly::default();
+            delta(
+                &mut assembly,
+                serde_json::json!({"stop_reason": "refusal", "stop_details": details}),
+            );
+            assert_eq!(assembly.refusal(), Some(Refusal::default()));
+        }
+        let mut assembly = Assembly::default();
+        delta(&mut assembly, serde_json::json!({"stop_reason": "refusal"}));
+        assert_eq!(assembly.refusal(), Some(Refusal::default()));
+        // Details without the stop reason are not a refusal.
+        let mut assembly = Assembly::default();
+        delta(
+            &mut assembly,
+            serde_json::json!({"stop_reason": "end_turn", "stop_details": {"type": "refusal", "category": "bio"}}),
+        );
+        assert_eq!(assembly.refusal(), None);
     }
 
     #[test]

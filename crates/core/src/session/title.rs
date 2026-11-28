@@ -192,13 +192,23 @@ fn candidates(shared: &Shared, session: &SessionRow) -> Vec<(Model, Option<Strin
 /// timeout of its own on the title path, and the turn must not hang on it).
 const TITLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// What one title call came back with.
+enum Asked {
+    Title(String),
+    /// No usable answer: the next candidate may try.
+    Nothing,
+    /// The model declined to name the session: the title it has stays, and no other model is
+    /// asked the same.
+    Declined,
+}
+
 async fn ask(
     shared: &Shared,
     session: &SessionRow,
     model: &Model,
     variant: Option<&str>,
     text: &str,
-) -> Option<String> {
+) -> Asked {
     let (body, mut headers) = build(Request {
         model,
         variant: variant.and_then(|v| model.variant(v)),
@@ -215,17 +225,35 @@ async fn ask(
     let mut stream = loop {
         match shared.gateway.messages(body.clone(), &headers).await {
             Ok(stream) => break stream,
-            Err(error) => tokio::time::sleep(retry.next_one_shot(&error)?).await,
+            Err(error) => match retry.next_one_shot(&error) {
+                Some(delay) => tokio::time::sleep(delay).await,
+                None => return Asked::Nothing,
+            },
         }
     };
     let mut assembly = super::stream::Assembly::default();
+    let mut cut = false;
     while let Some(item) = stream.next().await {
-        match item.ok()? {
-            StreamItem::Usage(usage) => shared.usage.record(&session.id, &usage),
-            StreamItem::Event(event) => {
-                assembly.on_event(&event).ok()?;
+        match item {
+            Ok(StreamItem::Usage(usage)) => shared.usage.record(&session.id, &usage),
+            Ok(StreamItem::Event(event)) => {
+                if assembly.on_event(&event).is_err() {
+                    cut = true;
+                    break;
+                }
+            }
+            Err(_) => {
+                cut = true;
+                break;
             }
         }
+    }
+    // A partial line of a declined answer is no title.
+    if assembly.refusal().is_some() {
+        return Asked::Declined;
+    }
+    if cut {
+        return Asked::Nothing;
     }
     let answer: String = assembly
         .parts
@@ -235,7 +263,7 @@ async fn ask(
             _ => None,
         })
         .collect();
-    first_line(&answer)
+    first_line(&answer).map_or(Asked::Nothing, Asked::Title)
 }
 
 /// Names the session (or renames it, when it already has a title) unless its title changes
@@ -252,6 +280,13 @@ pub(crate) async fn generate(shared: Arc<Shared>, session: SessionRow) {
         .iter()
         .map(|r| Message::decode(&r.kind, &r.data))
         .collect();
+    // A declined prompt is not sent again, to name the session either.
+    let left_out = super::refusal::left_out(&messages);
+    let messages: Vec<Message> = messages
+        .into_iter()
+        .zip(left_out)
+        .filter_map(|(message, out)| (!out).then_some(message))
+        .collect();
     let Some(text) = prompt(&messages, super::is_fallback_title(&session)) else {
         return;
     };
@@ -261,8 +296,10 @@ pub(crate) async fn generate(shared: Arc<Shared>, session: SessionRow) {
             ask(&shared, &session, &model, variant.as_deref(), &text),
         )
         .await;
-        let Some(title) = asked.ok().flatten() else {
-            continue;
+        let title = match asked {
+            Ok(Asked::Title(title)) => title,
+            Ok(Asked::Declined) => return,
+            Ok(Asked::Nothing) | Err(_) => continue,
         };
         let title = truncate(&title);
         let current = shared.db.session(&session.id).ok().flatten();

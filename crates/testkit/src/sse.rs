@@ -7,6 +7,8 @@ pub struct Stream {
     events: Vec<String>,
     index: u64,
     stop_reason: Option<&'static str>,
+    /// `stop_details` of `message_delta` (a refusal's).
+    stop_details: Option<Value>,
     output_tokens: u64,
     usage: Option<Value>,
 }
@@ -148,6 +150,19 @@ impl Stream {
         self
     }
 
+    /// The model's safety checks decline the request here: `stop_reason: "refusal"` with
+    /// `stop_details` naming `category` (`None`: a null category). With no content before it,
+    /// nothing is output.
+    pub fn refusal(mut self, category: Option<&str>) -> Self {
+        self.stop_reason = Some("refusal");
+        self.stop_details = Some(json!({"type": "refusal", "category": category,
+            "explanation": "This request was declined by a safety classifier."}));
+        if self.events.is_empty() {
+            self.output_tokens = 0;
+        }
+        self
+    }
+
     /// The complete stream; `used` appends the gateway's closing usage event, this call taking
     /// `used` percent of the 5-hour window.
     pub fn finish(self, model: &str, used: Option<u64>) -> String {
@@ -159,9 +174,13 @@ impl Stream {
             json!({"message": {"id": "msg_fake", "type": "message", "role": "assistant", "model": model, "content": [], "stop_reason": null, "usage": usage}}),
         );
         out.extend(self.events);
+        let mut delta = json!({"stop_reason": self.stop_reason.unwrap_or("end_turn")});
+        if let Some(details) = self.stop_details {
+            delta["stop_details"] = details;
+        }
         out.push_str(&event(
             "message_delta",
-            json!({"delta": {"stop_reason": self.stop_reason.unwrap_or("end_turn")}, "usage": {"output_tokens": self.output_tokens}}),
+            json!({"delta": delta, "usage": {"output_tokens": self.output_tokens}}),
         ));
         out.push_str(&event("message_stop", json!({})));
         if let Some(used) = used {

@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::Selection;
 use super::lower::{Entry, Target, checkpoint, lower};
-use super::message::{CompactionData, Message, StoredModel, Tokens};
+use super::message::{AssistantData, CompactionData, Message, StoredModel, Tokens};
 use super::recent::message_to_text;
 use super::request::{Request, build, output_limit};
 use super::stream::Assembly;
@@ -132,10 +132,14 @@ fn summary_room(window: Option<u64>, output: u64) -> u64 {
 }
 
 /// The history a request is built from: the latest completed compaction and everything after
-/// it, with that compaction's kept text rebuilt from the messages it references.
+/// it, with that compaction's kept text rebuilt from the messages it references. Declined prompts
+/// and their replies are left out ([`super::refusal::left_out`]), in the kept text too.
 pub struct History {
     pub ids: Vec<String>,
     pub messages: Vec<Message>,
+    /// Declined replies left out that no request has marked yet ([`super::refusal::unmarked`]):
+    /// their row ids and data.
+    pub unmarked: Vec<(String, AssistantData)>,
 }
 
 pub(crate) fn history(shared: &Shared, session_id: &str) -> History {
@@ -144,18 +148,27 @@ pub(crate) fn history(shared: &Shared, session_id: &str) -> History {
         .iter()
         .map(|r| Message::decode(&r.kind, &r.data))
         .collect();
+    let left_out = super::refusal::left_out(&decoded);
+    let unmarked = super::refusal::unmarked(&decoded, &left_out)
+        .into_iter()
+        .filter_map(|at| match &decoded[at] {
+            Message::Assistant(step) => Some((rows[at].id.clone(), step.clone())),
+            _ => None,
+        })
+        .collect();
     let start = decoded
         .iter()
         .rposition(|m| matches!(m, Message::Compaction(c) if c.completed()))
         .unwrap_or(0);
-    let mut messages = decoded[start..].to_vec();
+    let kept: Vec<usize> = (start..decoded.len()).filter(|at| !left_out[*at]).collect();
+    let mut messages: Vec<Message> = kept.iter().map(|at| decoded[*at].clone()).collect();
     if let Some(Message::Compaction(compaction)) = messages.first_mut()
         && let Some(keep) = compaction.keep_id()
         && let Some(from) = rows.iter().position(|r| r.id == keep)
     {
-        let recent = decoded[from..start]
-            .iter()
-            .map(message_to_text)
+        let recent = (from..start)
+            .filter(|at| !left_out[*at])
+            .map(|at| message_to_text(&decoded[at]))
             .filter(|t| !t.is_empty())
             .collect::<Vec<_>>()
             .join("\n\n");
@@ -163,8 +176,19 @@ pub(crate) fn history(shared: &Shared, session_id: &str) -> History {
         metadata["recent"] = Value::String(recent);
     }
     History {
-        ids: rows[start..].iter().map(|r| r.id.clone()).collect(),
+        ids: kept.iter().map(|at| rows[*at].id.clone()).collect(),
         messages,
+        unmarked,
+    }
+}
+
+/// Marks the declined replies `history` left out for the first time, before a step whose thinking
+/// would be written without them ([`super::refusal::left_out`]).
+pub(crate) fn mark_left_out(shared: &Shared, history: &History) {
+    for (id, step) in &history.unmarked {
+        let mut step = step.clone();
+        super::refusal::mark(&mut step);
+        let _ = shared.db.update_message(id, &super::message::encode(&step));
     }
 }
 
@@ -649,13 +673,29 @@ impl Call<'_> {
             .await
             .map_err(Failure::Api)?;
         let mut assembly = Assembly::default();
+        let mut cut = None;
         while let Some(item) = stream.next().await {
-            match item.map_err(Failure::Api)? {
-                StreamItem::Usage(usage) => self.shared.usage.record(&self.session.id, &usage),
-                StreamItem::Event(event) => {
-                    assembly.on_event(&event).map_err(Failure::Api)?;
+            let event = match item {
+                Ok(StreamItem::Usage(usage)) => {
+                    self.shared.usage.record(&self.session.id, &usage);
+                    continue;
                 }
+                Ok(StreamItem::Event(event)) => event,
+                Err(error) => {
+                    cut = Some(error);
+                    break;
+                }
+            };
+            if let Err(error) = assembly.on_event(&event) {
+                cut = Some(error);
+                break;
             }
+        }
+        // A stream cut after the refusal is still a refusal (below), never retried.
+        if let Some(error) = cut
+            && assembly.refusal().is_none()
+        {
+            return Err(Failure::Api(error));
         }
         let t = assembly.tokens;
         let _ = self.shared.db.add_tokens(
@@ -673,6 +713,13 @@ impl Call<'_> {
         self.tokens.reasoning += t.reasoning;
         self.tokens.cache.read += t.cache.read;
         self.tokens.cache.write += t.cache.write;
+        // A declined summary is never used, not even a partial one that looks filled in, and not
+        // asked for again.
+        if let Some(refusal) = assembly.refusal() {
+            return Err(Failure::Unusable(
+                refusal.error(&self.model.name, super::refusal::Declined::Summary),
+            ));
+        }
         if !assembly.finished {
             return Err(Failure::Api(ApiError::incomplete(
                 "The provider response ended with an unknown finish reason.",

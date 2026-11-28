@@ -50,6 +50,8 @@ pub enum AsideKind {
     Cancelled,
     /// The model answered with no text (only a tool call, say).
     Empty,
+    /// The model declined to answer (`stop_reason: "refusal"`): asking the same again won't help.
+    Declined,
     Other,
 }
 
@@ -73,6 +75,7 @@ impl AsideError {
             "budget" => AsideKind::Budget,
             "provider.rate-limit" => AsideKind::RateLimit,
             crate::gateway::error::USAGE_LIMIT_KIND => AsideKind::UsageLimit,
+            crate::session::refusal::KIND => AsideKind::Declined,
             _ if error.status == Some(413) => AsideKind::TooLong,
             _ => AsideKind::Other,
         };
@@ -383,6 +386,12 @@ impl Core {
                 kind: AsideKind::TooLong,
                 message: "The conversation is too long for a side question.".into(),
             }),
+            Err(crate::session::step::GenerateError::Declined { model, refusal }) => {
+                Err(AsideError {
+                    kind: AsideKind::Declined,
+                    message: refusal.message(&model, crate::session::refusal::Declined::Question),
+                })
+            }
             Err(crate::session::step::GenerateError::Failed(error)) => Err(AsideError::of(error)),
         }
     }
