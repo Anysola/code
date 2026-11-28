@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
@@ -50,6 +50,12 @@ impl Recorded {
 pub enum Reply {
     /// `text/event-stream`.
     Sse { body: String },
+    /// `text/event-stream` sent in two parts: `head`, then `tail` after `hold_ms`.
+    SseHeld {
+        head: String,
+        hold_ms: u64,
+        tail: String,
+    },
     Json {
         status: u16,
         body: Value,
@@ -211,12 +217,66 @@ pub fn default_tokens() -> Value {
     ]})
 }
 
-fn respond(reply: Reply) -> Response<Full<Bytes>> {
+/// A body that sends `head`, waits, then sends `tail`.
+struct Held {
+    head: Option<Bytes>,
+    tail: Option<Bytes>,
+    wait: std::pin::Pin<Box<tokio::time::Sleep>>,
+}
+
+impl hyper::body::Body for Held {
+    type Data = Bytes;
+    type Error = Infallible;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, Infallible>>> {
+        use std::task::Poll;
+        if let Some(head) = self.head.take() {
+            return Poll::Ready(Some(Ok(hyper::body::Frame::data(head))));
+        }
+        if self.tail.is_none() {
+            return Poll::Ready(None);
+        }
+        if self.wait.as_mut().poll(cx).is_pending() {
+            return Poll::Pending;
+        }
+        let tail = self.tail.take().expect("checked");
+        Poll::Ready(Some(Ok(hyper::body::Frame::data(tail))))
+    }
+}
+
+type Body = BoxBody<Bytes, Infallible>;
+
+fn full(bytes: impl Into<Bytes>) -> Body {
+    Full::new(bytes.into()).boxed()
+}
+
+fn respond(reply: Reply) -> Response<Body> {
     match reply {
         Reply::Sse { body } => Response::builder()
             .status(200)
             .header("content-type", "text/event-stream")
-            .body(Full::new(Bytes::from(body)))
+            .body(full(body))
+            .expect("valid response"),
+        Reply::SseHeld {
+            head,
+            hold_ms,
+            tail,
+        } => Response::builder()
+            .status(200)
+            .header("content-type", "text/event-stream")
+            .body(
+                Held {
+                    head: Some(Bytes::from(head)),
+                    tail: Some(Bytes::from(tail)),
+                    wait: Box::pin(tokio::time::sleep(std::time::Duration::from_millis(
+                        hold_ms,
+                    ))),
+                }
+                .boxed(),
+            )
             .expect("valid response"),
         Reply::Json {
             status,
@@ -230,7 +290,7 @@ fn respond(reply: Reply) -> Response<Full<Bytes>> {
                 response = response.header(name, value);
             }
             response
-                .body(Full::new(Bytes::from(body.to_string())))
+                .body(full(body.to_string()))
                 .expect("valid response")
         }
     }
@@ -239,7 +299,7 @@ fn respond(reply: Reply) -> Response<Full<Bytes>> {
 async fn handle(
     state: Arc<State>,
     request: Request<hyper::body::Incoming>,
-) -> Result<Response<Full<Bytes>>, Infallible> {
+) -> Result<Response<Body>, Infallible> {
     let at = Instant::now();
     let method = request.method().to_string();
     let path = request.uri().path().to_string();
@@ -348,7 +408,7 @@ async fn handle(
             return Ok(Response::builder()
                 .status(200)
                 .header("content-type", "text/plain")
-                .body(Full::new(Bytes::from(text.clone())))
+                .body(full(text.clone()))
                 .expect("valid response"));
         }
         _ => Reply::Json {

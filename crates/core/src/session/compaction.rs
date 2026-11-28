@@ -156,9 +156,11 @@ pub(crate) fn history(shared: &Shared, session_id: &str) -> History {
             _ => None,
         })
         .collect();
+    // A compaction left out with the declined prompt it was written for does not start the history.
     let start = decoded
         .iter()
-        .rposition(|m| matches!(m, Message::Compaction(c) if c.completed()))
+        .enumerate()
+        .rposition(|(at, m)| matches!(m, Message::Compaction(c) if c.completed()) && !left_out[at])
         .unwrap_or(0);
     let kept: Vec<usize> = (start..decoded.len()).filter(|at| !left_out[*at]).collect();
     let mut messages: Vec<Message> = kept.iter().map(|at| decoded[*at].clone()).collect();
@@ -1251,11 +1253,16 @@ async fn summarize(
     let mut rejections = 0;
     let mut rejected: Option<u64> = None;
     let mut as_text = false;
+    // The summary request was declined with the newest exchange in it: it is asked once more
+    // without it (see below).
+    let mut without_tail = false;
     let mut retry = Retry::default();
     loop {
         let size_measured = if rejections == 0 { measured } else { None };
         let unchanged = if as_text {
             None
+        } else if without_tail {
+            Some((history.clone(), Sent::History))
         } else if size_measured.map_or_else(|| prepared.tokens(), |m| m.total()) as f64 <= fit {
             Some((prepared.clone(), Sent::Prepared))
         } else if history.tokens() as f64 <= target_size {
@@ -1286,6 +1293,21 @@ async fn summarize(
         };
         let error = match call.send(&draft, &prompt, size).await {
             Ok(summary) => return Ok((summary, keep_at)),
+            // A declined summary request that carried the newest exchange (the prompt of the turn
+            // that is starting, which the classifier may be refusing) is asked once more without
+            // it: that exchange stays verbatim beside the summary. Only after a refusal, so the
+            // requests of a session that never had one are unchanged. Declined again, the cause
+            // is in the older history.
+            Err(Failure::Unusable(error))
+                if error.kind == super::refusal::KIND
+                    && sent == Sent::Prepared
+                    && keep_at.is_some()
+                    && trigger != Trigger::Manual
+                    && !without_tail =>
+            {
+                without_tail = true;
+                continue;
+            }
             Err(Failure::Unusable(error)) => return Err(error),
             Err(Failure::Api(error)) => error,
         };

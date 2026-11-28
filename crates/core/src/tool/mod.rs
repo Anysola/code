@@ -98,6 +98,9 @@ pub enum ToolErrorKind {
     Declined,
     /// `aborted`: the turn was interrupted while the tool ran.
     Interrupted,
+    /// `aborted`: the turn was cancelled before the tool began (a refused step's call, a Stop
+    /// that came first). Nothing ran.
+    NotStarted,
 }
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -129,12 +132,21 @@ impl ToolError {
         }
     }
 
+    pub fn not_started() -> Self {
+        ToolError {
+            kind: ToolErrorKind::NotStarted,
+            message: "Tool execution interrupted".into(),
+        }
+    }
+
     pub fn type_tag(&self) -> &'static str {
         match self.kind {
             ToolErrorKind::Execution => "tool.execution",
             ToolErrorKind::Unknown => "unknown",
             ToolErrorKind::Blocked | ToolErrorKind::PermissionRejected => "permission.rejected",
-            ToolErrorKind::Declined | ToolErrorKind::Interrupted => "aborted",
+            ToolErrorKind::Declined | ToolErrorKind::Interrupted | ToolErrorKind::NotStarted => {
+                "aborted"
+            }
         }
     }
 }

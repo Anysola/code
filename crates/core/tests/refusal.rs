@@ -69,6 +69,16 @@ fn turns(gateway: &FakeGateway) -> Vec<Recorded> {
         .collect()
 }
 
+/// A runtime whose tool tasks cannot run beside the stream reader: a call the stream finished
+/// right before its refusal is then not started by a free worker before the refusal is read (that
+/// call would really have started, and is kept), so a run that finds one has found the bug.
+fn one_thread() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime")
+}
+
 fn db(env: &Env) -> Db {
     Db::open(&env.home.home().join(".anysola/anysola.db")).unwrap()
 }
@@ -238,6 +248,18 @@ fn a_refusal_after_a_tool_step_keeps_the_earlier_steps() {
     assert_eq!(transcript(&next).last().unwrap(), "user: next");
 }
 
+/// A stream that sends everything up to its `message_delta`, waits, then ends. The refusal is in
+/// the first part when `refused` is built into `stream` before the split point.
+fn held(stream: String, split: &str, hold_ms: u64) -> Reply {
+    let at = stream.find(split).expect("split point in the stream");
+    Reply::SseHeld {
+        head: stream[..at].to_string(),
+        hold_ms,
+        tail: stream[at..].to_string(),
+    }
+}
+
+/// A call that was running when the refusal arrived keeps its `tool_use` and its result: it ran.
 #[test]
 fn a_call_that_started_before_the_refusal_keeps_its_result() {
     let gateway = FakeGateway::start(|request, _| {
@@ -245,13 +267,17 @@ fn a_call_that_started_before_the_refusal_keeps_its_result() {
             return text(request, "title");
         }
         if last_prompt(request) == "user: go" {
-            return Reply::Sse {
-                body: Stream::new()
-                    .text("Let me look.")
-                    .tool("toolu_1", "glob", json!({"pattern": "*"}))
-                    .refusal(Some("cyber"))
-                    .finish(&model(request), Some(1)),
-            };
+            // The call is complete and starts; the refusal comes a moment later.
+            let stream = Stream::new()
+                .text("Let me look.")
+                .tool(
+                    "toolu_1",
+                    "shell",
+                    json!({"command": "touch started-marker && sleep 30", "description": "slow"}),
+                )
+                .refusal(Some("cyber"))
+                .finish(&model(request), Some(1));
+            return held(stream, "event: message_delta", 1500);
         }
         text(request, "ok")
     });
@@ -267,6 +293,10 @@ fn a_call_that_started_before_the_refusal_keeps_its_result() {
             .1
             .contains("declined to continue, citing cybersecurity.")
     );
+    assert!(
+        env.home.project().join("started-marker").exists(),
+        "the call really started"
+    );
     assert_eq!(turns(&gateway).len(), 1, "no step follows the call");
     let stored = assistants(&env, &session.id);
     let content = stored[0]["content"].as_array().unwrap();
@@ -277,7 +307,7 @@ fn a_call_that_started_before_the_refusal_keeps_its_result() {
     );
     assert_eq!(content[0]["type"], "tool");
     let status = content[0]["state"]["status"].as_str().unwrap();
-    assert!(status == "completed" || status == "error", "{status}");
+    assert_eq!(status, "error", "stopped while it ran");
     runtime
         .block_on(core.prompt(&session.id, prompt("next"), TurnOptions::default()))
         .unwrap();
@@ -287,6 +317,343 @@ fn a_call_that_started_before_the_refusal_keeps_its_result() {
     assert!(
         transcript(&next).contains(&"user: go".to_string()),
         "the prompt stays"
+    );
+}
+
+/// A call whose block closed in the same read as the refusal never starts, and nothing of it is
+/// kept: the step is a declined prompt (skipped with its prompt).
+#[test]
+fn a_call_that_never_started_is_dropped_with_its_prompt() {
+    let gateway = FakeGateway::start(|request, _| {
+        if request.is_title() {
+            return text(request, "title");
+        }
+        if last_prompt(request) == "user: go" {
+            return Reply::Sse {
+                body: Stream::new()
+                    .tool(
+                        "toolu_1",
+                        "shell",
+                        json!({"command": "touch flagged-marker", "description": "flagged"}),
+                    )
+                    .refusal(Some("cyber"))
+                    .finish(&model(request), Some(1)),
+            };
+        }
+        text(request, "ok")
+    });
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    let outcome = runtime
+        .block_on(core.prompt(&session.id, prompt("go"), TurnOptions::default()))
+        .unwrap();
+    assert_eq!(failed(outcome).1, PROMPT_DECLINED);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(!env.home.project().join("flagged-marker").exists());
+    let stored = assistants(&env, &session.id);
+    assert!(stored[0]["content"].as_array().unwrap().is_empty());
+    runtime
+        .block_on(core.prompt(&session.id, prompt("next"), TurnOptions::default()))
+        .unwrap();
+    let next = turns(&gateway).pop().unwrap();
+    assert!(!next.body.contains("flagged-marker"), "{}", next.body);
+    assert!(!next.body.contains("toolu_1"));
+    assert_eq!(transcript(&next), vec!["user: next".to_string()]);
+}
+
+/// No tool call of a refused step starts after the refusal: a background subagent's child (its
+/// own cancel token; it starts on the tool's first poll) never sends a request.
+#[test]
+fn a_refused_steps_background_subagent_never_starts_in_40_runs() {
+    let gateway = FakeGateway::start(|request, _| {
+        if request.is_title() {
+            return text(request, "title");
+        }
+        if request.header("x-opencode-parent-session-id").is_some() {
+            return text(request, "child ran");
+        }
+        let last = last_prompt(request);
+        if last.starts_with("user: go ") {
+            return Reply::Sse {
+                body: Stream::new()
+                    .tool(
+                        "toolu_1",
+                        "subagent",
+                        json!({"agent": "general", "description": "Do it", "prompt": "child task from a declined step", "background": true}),
+                    )
+                    .refusal(Some("cyber"))
+                    .finish(&model(request), Some(1)),
+            };
+        }
+        text(request, "ok")
+    });
+    let env = env(&gateway.url);
+    let runtime = one_thread();
+    let core = runtime.block_on(common::core(&env));
+    let runs = 40;
+    for i in 0..runs {
+        let (session, _) = core.open(&Target::New, false).unwrap();
+        let outcome = runtime
+            .block_on(core.prompt(
+                &session.id,
+                prompt(&format!("go {i}")),
+                TurnOptions::default(),
+            ))
+            .unwrap();
+        assert_eq!(failed(outcome).1, PROMPT_DECLINED, "run {i}");
+    }
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    let children = gateway
+        .messages()
+        .into_iter()
+        .filter(|r| r.header("x-opencode-parent-session-id").is_some())
+        .count();
+    assert_eq!(children, 0, "{children} child request(s) in {runs} runs");
+}
+
+/// The same for a shell call: it never starts, so no file appears.
+#[test]
+fn a_refused_steps_shell_call_never_starts_in_40_runs() {
+    let gateway = FakeGateway::start(|request, _| {
+        if request.is_title() {
+            return text(request, "title");
+        }
+        let last = last_prompt(request);
+        if let Some(name) = last.strip_prefix("user: go ") {
+            return Reply::Sse {
+                body: Stream::new()
+                    .tool(
+                        "toolu_1",
+                        "shell",
+                        json!({"command": format!("touch {name}"), "description": "touch"}),
+                    )
+                    .refusal(Some("cyber"))
+                    .finish(&model(request), Some(1)),
+            };
+        }
+        text(request, "ok")
+    });
+    let env = env(&gateway.url);
+    let runtime = one_thread();
+    let core = runtime.block_on(common::core(&env));
+    let mut ran = Vec::new();
+    for i in 0..40 {
+        let (session, _) = core.open(&Target::New, false).unwrap();
+        let name = format!("marker-{i}");
+        let outcome = runtime
+            .block_on(core.prompt(
+                &session.id,
+                prompt(&format!("go {name}")),
+                TurnOptions::default(),
+            ))
+            .unwrap();
+        assert_eq!(failed(outcome).1, PROMPT_DECLINED, "run {i}");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if env.home.project().join(&name).exists() {
+            ran.push(i);
+        }
+    }
+    assert!(ran.is_empty(), "shell calls ran in runs {ran:?}");
+}
+
+/// Stop after the refusal arrived (the stream still open) is a declined answer, not an
+/// interruption: nothing of the step is kept.
+#[test]
+fn a_stop_after_the_refusal_still_drops_the_step() {
+    let gateway = FakeGateway::start(|request, _| {
+        if request.is_title() {
+            return text(request, "title");
+        }
+        if last_prompt(request) == "user: go" {
+            let stream = Stream::new()
+                .text("Sure, first")
+                .refusal(Some("cyber"))
+                .finish(&model(request), Some(1));
+            return held(stream, "event: message_stop", 4000);
+        }
+        text(request, "ok")
+    });
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    let turn = {
+        let core = core.clone();
+        let id = session.id.clone();
+        runtime.spawn(async move { core.prompt(&id, prompt("go"), TurnOptions::default()).await })
+    };
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    core.interrupt(&session.id);
+    let outcome = runtime.block_on(turn).unwrap().unwrap();
+    assert_eq!(failed(outcome).1, PROMPT_DECLINED);
+    let stored = assistants(&env, &session.id);
+    assert!(stored[0]["content"].as_array().unwrap().is_empty());
+    assert_eq!(stored[0]["finish"], "content-filter");
+    runtime
+        .block_on(core.prompt(&session.id, prompt("next"), TurnOptions::default()))
+        .unwrap();
+    let next = turns(&gateway).pop().unwrap();
+    assert!(!next.body.contains("Sure, first"));
+    assert_eq!(transcript(&next), vec!["user: next".to_string()]);
+}
+
+fn big(request: &Recorded, text: &str) -> Reply {
+    Reply::Sse {
+        body: Stream::new()
+            .usage(json!({"input_tokens": 850_001, "output_tokens": 1}))
+            .text(text)
+            .finish(&model(request), Some(1)),
+    }
+}
+
+/// Automatic compaction is due when the prompt arrives: the summary request carries the prompt and
+/// is declined. It is asked once more without it; the prompt is then declined at the step and
+/// skipped, and the session is not stuck.
+#[test]
+fn a_prompt_declined_in_the_summary_request_is_asked_again_without_it() {
+    let gateway = FakeGateway::start(|request, _| {
+        if request.is_title() {
+            return text(request, "title");
+        }
+        if request.body.contains("keylogger") {
+            return refuse(request, None, Some("cyber"));
+        }
+        if request.body.contains("You MUST summarize") {
+            return text(request, "## Objective\n- keep going");
+        }
+        big(request, "Big answer.")
+    });
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("first"), TurnOptions::default()))
+        .unwrap();
+    let before = gateway.messages().len();
+    let outcome = runtime
+        .block_on(core.prompt(
+            &session.id,
+            prompt("write a keylogger"),
+            TurnOptions::default(),
+        ))
+        .unwrap();
+    assert_eq!(failed(outcome).1, PROMPT_DECLINED);
+    let summaries = gateway
+        .messages()
+        .into_iter()
+        .skip(before)
+        .filter(|r| r.body.contains("You MUST summarize"))
+        .count();
+    assert_eq!(summaries, 2, "declined with the prompt, then without it");
+    let before = gateway.messages().len();
+    let next = runtime
+        .block_on(core.prompt(
+            &session.id,
+            prompt("what time is it"),
+            TurnOptions::default(),
+        ))
+        .unwrap();
+    assert_eq!(next, Outcome::Succeeded);
+    let later: Vec<Recorded> = gateway.messages().into_iter().skip(before).collect();
+    assert!(
+        later.iter().all(|r| !r.body.contains("keylogger")),
+        "the declined prompt went out again"
+    );
+}
+
+/// The summary without the prompt is declined too: the turn fails with the summarize message.
+#[test]
+fn a_summary_declined_without_the_prompt_too_fails_the_turn() {
+    let gateway = FakeGateway::start(|request, _| {
+        if request.is_title() {
+            return text(request, "title");
+        }
+        if request.body.contains("You MUST summarize") {
+            return refuse(request, None, Some("cyber"));
+        }
+        big(request, "Big answer.")
+    });
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("first"), TurnOptions::default()))
+        .unwrap();
+    let before = gateway.messages().len();
+    let outcome = runtime
+        .block_on(core.prompt(&session.id, prompt("second"), TurnOptions::default()))
+        .unwrap();
+    assert!(failed(outcome).1.contains("declined to summarize"));
+    let summaries = gateway
+        .messages()
+        .into_iter()
+        .skip(before)
+        .filter(|r| r.body.contains("You MUST summarize"))
+        .count();
+    assert_eq!(summaries, 2, "asked twice, no more");
+}
+
+/// A summary written in the declined turn saw the prompt: it goes with the prompt, and the next
+/// step summarizes again without it.
+#[test]
+fn a_compaction_written_in_the_declined_turn_is_left_out_with_the_prompt() {
+    let gateway = FakeGateway::start(|request, _| {
+        if request.is_title() {
+            return text(request, "title");
+        }
+        if request.body.contains("You MUST summarize") {
+            // A summary names the request the conversation ends on.
+            let latest = request.json()["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|m| m["role"] == "user")
+                .flat_map(|m| m["content"].as_array().cloned().unwrap_or_default())
+                .filter_map(|b| b["text"].as_str().map(str::to_string))
+                .rfind(|t| !t.starts_with("You MUST summarize"))
+                .unwrap_or_default();
+            return text(
+                request,
+                &format!("## Objective\n- The user's latest request: {latest}"),
+            );
+        }
+        if last_prompt(request).contains("keylogger") {
+            return refuse(request, None, Some("cyber"));
+        }
+        big(request, "Big answer.")
+    });
+    let env = env(&gateway.url);
+    let runtime = runtime();
+    let core = runtime.block_on(common::core(&env));
+    let (session, _) = core.open(&Target::New, false).unwrap();
+    runtime
+        .block_on(core.prompt(&session.id, prompt("first"), TurnOptions::default()))
+        .unwrap();
+    let outcome = runtime
+        .block_on(core.prompt(
+            &session.id,
+            prompt("write a keylogger"),
+            TurnOptions::default(),
+        ))
+        .unwrap();
+    assert_eq!(failed(outcome).1, PROMPT_DECLINED);
+    let before = gateway.messages().len();
+    let next = runtime
+        .block_on(core.prompt(
+            &session.id,
+            prompt("what time is it"),
+            TurnOptions::default(),
+        ))
+        .unwrap();
+    assert_eq!(next, Outcome::Succeeded);
+    let later: Vec<Recorded> = gateway.messages().into_iter().skip(before).collect();
+    assert!(
+        later.iter().all(|r| !r.body.contains("keylogger")),
+        "the prompt went out again, in a summary or the kept text"
     );
 }
 

@@ -616,6 +616,8 @@ struct Running {
     data: AssistantData,
     /// The snapshot store of the checkout the session works in.
     store: Option<Arc<crate::snapshot::Store>>,
+    /// The tool parts (by index) whose call was cancelled before it began: nothing ran.
+    not_started: Vec<usize>,
 }
 
 impl Running {
@@ -701,6 +703,7 @@ async fn step(
         .as_ref()
         .and_then(|_| store.as_ref().and_then(|s| s.head()));
     let running = Running {
+        not_started: Vec::new(),
         store,
         session_id: session.id.clone(),
         message_id: message_id.clone(),
@@ -914,7 +917,7 @@ fn settle(
         Ok(output) => output,
         Err(error) => {
             let error = match error.kind {
-                ToolErrorKind::Interrupted => interrupted.clone(),
+                ToolErrorKind::Interrupted | ToolErrorKind::NotStarted => interrupted.clone(),
                 _ => SessionError::new(error.type_tag(), error.message),
             };
             return fail_part(shared, running, index, error, hooked);
@@ -1133,17 +1136,17 @@ async fn run_stream(
     sync_parts(&mut running, &assembly);
     running.data.tokens = Some(assembly.tokens);
 
-    if cancel.is_cancelled() {
-        tool_cancel.cancel();
-        let unsettled = collect(shared, &mut running, &mut tasks).await;
-        return interrupt(shared, running, unsettled, InterruptReason::User);
-    }
-    // Ahead of the stream's end: a declined answer is never sent again nor continued, even when
-    // its stream was cut after the refusal.
+    // Ahead of the Stop check and the stream's end: a declined answer is never sent again nor
+    // continued, even when its stream was cut after the refusal or the person stopped it by then.
     if let Some(refusal) = assembly.refusal() {
         tool_cancel.cancel();
         collect(shared, &mut running, &mut tasks).await;
         return declined(shared, session, selection, running, &assembly, refusal);
+    }
+    if cancel.is_cancelled() {
+        tool_cancel.cancel();
+        let unsettled = collect(shared, &mut running, &mut tasks).await;
+        return interrupt(shared, running, unsettled, InterruptReason::User);
     }
     if !ended_ok {
         let error = stream_error
@@ -1247,9 +1250,9 @@ async fn run_stream(
 }
 
 /// Ends a step the model declined (`stop_reason: "refusal"`): its partial output goes (text,
-/// reasoning, calls that never started), and the turn fails with an error that says so. A call
-/// that started before the refusal arrived stays with its result: it ran (or was stopped), and
-/// its `tool_use` keeps its `tool_result`. Nothing is retried and no step follows.
+/// reasoning, calls that never started, with their results), and the turn fails with an error that
+/// says so. A call that started before the refusal arrived stays with its result: it ran (or was
+/// stopped), and its `tool_use` keeps its `tool_result`. Nothing is retried and no step follows.
 fn declined(
     shared: &Shared,
     session: &SessionRow,
@@ -1258,15 +1261,20 @@ fn declined(
     assembly: &Assembly,
     refusal: super::refusal::Refusal,
 ) -> StepEnd {
+    let never = std::mem::take(&mut running.not_started);
+    let mut at = 0;
     running.data.content.retain(|part| {
-        matches!(
-            part,
-            Part::Tool {
-                executed: Some(false) | None,
-                state: ToolState::Completed { .. } | ToolState::Error { .. },
-                ..
-            }
-        )
+        let keep = !never.contains(&at)
+            && matches!(
+                part,
+                Part::Tool {
+                    executed: Some(false) | None,
+                    state: ToolState::Completed { .. } | ToolState::Error { .. },
+                    ..
+                }
+            );
+        at += 1;
+        keep
     });
     // The prompt is what was declined when nothing of the turn stays before this reply: then the
     // request leaves it out from now on (`refusal::left_out`), which the message promises.
@@ -1470,6 +1478,9 @@ fn settle_joined(
     match joined {
         // `settle` stores the result before announcing it.
         Ok((index, result, hooks)) => {
+            if matches!(&result, Err(e) if e.kind == ToolErrorKind::NotStarted) {
+                running.not_started.push(index);
+            }
             settle(shared, running, index, result, hooks, &interrupted_error())
         }
         // A tool task that panicked: its part would stay running and the next request
@@ -1753,6 +1764,10 @@ async fn call(
             Vec::new(),
         )
     };
+    // A refused step's call (or one a Stop overtook) never starts: not even its hooks run.
+    if ctx.cancel.is_cancelled() {
+        return (Err(ToolError::not_started()), Vec::new());
+    }
     let identity = (!capped).then(|| hook_identity(tools, name)).flatten();
     let Some((anysola, hook)) = identity else {
         return plain(input, ctx).await;
@@ -1807,7 +1822,7 @@ async fn call(
     let result = execute(tools, name, input, &run, capped).await.map(finish);
     // A declined or interrupted call ends the step as it is: `run_stream` recognizes a decline by
     // its exact message, and nothing ran for PostToolUse to look at.
-    let ended = matches!(&result, Err(e) if matches!(e.kind, ToolErrorKind::Interrupted | ToolErrorKind::Declined)
+    let ended = matches!(&result, Err(e) if matches!(e.kind, ToolErrorKind::Interrupted | ToolErrorKind::NotStarted | ToolErrorKind::Declined)
         || e.message == crate::tool::question::DISMISSED);
     if ended || ctx.cancel.is_cancelled() {
         return (result, entries);
@@ -1875,9 +1890,23 @@ async fn execute(
         },
         None => return Err(not_available(name)),
     };
+    // Nothing of a cancelled turn starts: a refused step's call must not run, and a tool that
+    // starts work on its first poll (a background subagent) must not get that poll.
+    if ctx.cancel.is_cancelled() {
+        return Err(ToolError::not_started());
+    }
+    let started = std::sync::atomic::AtomicBool::new(false);
     let result = tokio::select! {
-        result = tool.execute(input, ctx) => result,
-        _ = ctx.cancel.cancelled() => Err(ToolError::interrupted()),
+        biased;
+        _ = ctx.cancel.cancelled() => Err(if started.load(std::sync::atomic::Ordering::SeqCst) {
+            ToolError::interrupted()
+        } else {
+            ToolError::not_started()
+        }),
+        result = async {
+            started.store(true, std::sync::atomic::Ordering::SeqCst);
+            tool.execute(input, ctx).await
+        } => result,
     };
     let result = match result {
         Err(error)

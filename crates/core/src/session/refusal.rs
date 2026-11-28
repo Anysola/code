@@ -132,37 +132,64 @@ fn signed_thinking(step: &AssistantData) -> bool {
     })
 }
 
-/// The prompt a reply at `at` answered directly, with what came with it: from the oldest of the
-/// user messages right before the reply (a prompt and the notes steered with it) to the reply,
-/// with the synthetic messages among them (a hook's context for the prompt). What came before the
-/// prompt stays: a background completion, a plan reminder, a hook's session context. Instruction
-/// updates and a compaction at the start of the turn (its kept text holds the prompt;
-/// [`super::compaction::history`] rebuilds it without what is left out) are stepped over and
-/// stay. Empty when the reply answered no user message (a later step of the turn, a turn a
-/// completion woke): then only the reply is left out.
-fn answered<M: Borrow<Message>>(messages: &[M], at: usize) -> Vec<usize> {
+/// What a reply at `at` answered directly: the user messages right before it (a prompt and the
+/// notes steered with it), the hook context rows UserPromptSubmit added for them, and a
+/// compaction that completed in between (its summary was written with the prompt in the request,
+/// so it goes with the prompt; the next step compacts again without it). What came with the input
+/// but is not part of it stays: a background completion, a plan reminder, a session-start hook's
+/// context, instruction updates, a failed compaction. Empty when the reply answered no user
+/// message (a later step of the turn, a turn a completion woke): then only the reply is left out.
+struct Answered {
+    rows: Vec<usize>,
+    /// The input opens its turn: no step of the same turn came before it. A steer that arrived
+    /// after a step is part of a turn that already ran.
+    opens_turn: bool,
+}
+
+fn answered<M: Borrow<Message>>(messages: &[M], at: usize) -> Answered {
     let mut run = Vec::new();
+    let mut compactions = Vec::new();
+    let mut opens_turn = true;
     for before in (0..at).rev() {
         match messages[before].borrow() {
-            Message::User(_) | Message::Synthetic(_) => run.push(before),
-            Message::System(_) | Message::Compaction(_) => {}
+            Message::User(_) => run.push(before),
+            Message::Synthetic(data)
+                if data.description.as_deref() == Some(crate::hooks::fire::CONTEXT) =>
+            {
+                run.push(before)
+            }
+            Message::Compaction(c) if c.completed() => compactions.push(before),
+            Message::Synthetic(_) | Message::System(_) | Message::Compaction(_) => {}
+            Message::Assistant(_) => {
+                opens_turn = false;
+                break;
+            }
             _ => break,
         }
     }
     let oldest = run
         .iter()
         .rposition(|i| matches!(messages[*i].borrow(), Message::User(_)));
-    match oldest {
-        Some(oldest) => run.truncate(oldest + 1),
-        None => run.clear(),
+    let Some(oldest) = oldest else {
+        return Answered {
+            rows: Vec::new(),
+            opens_turn: false,
+        };
+    };
+    run.truncate(oldest + 1);
+    let first = run[oldest];
+    run.extend(compactions.into_iter().filter(|i| *i > first));
+    Answered {
+        rows: run,
+        opens_turn,
     }
-    run
 }
 
-/// Whether a declined reply at `at` (with nothing in it) answered a message the person sent: then
-/// that message is what was declined, and it is left out from now on.
+/// Whether a declined reply at `at` (with nothing in it) answered a message the person sent that
+/// opened its turn: then that message is what was declined, and it is left out from now on.
 pub fn answers_prompt<M: Borrow<Message>>(messages: &[M], at: usize) -> bool {
-    !answered(messages, at).is_empty()
+    let answered = answered(messages, at);
+    !answered.rows.is_empty() && answered.opens_turn
 }
 
 /// The messages every request leaves out (true at their index): each declined reply with nothing
@@ -181,7 +208,7 @@ pub fn left_out<M: Borrow<Message>>(messages: &[M]) -> Vec<bool> {
         };
         if empty_refusal(step) && (marked(step) || !thinking_after) {
             out[at] = true;
-            for before in answered(messages, at) {
+            for before in answered(messages, at).rows {
                 out[before] = true;
             }
         }
@@ -215,6 +242,20 @@ mod tests {
 
     fn synthetic(text: &str) -> Message {
         Message::decode("synthetic", &json!({"time": {"created": 1}, "text": text}))
+    }
+
+    fn context(text: &str) -> Message {
+        Message::decode(
+            "synthetic",
+            &json!({"time": {"created": 1}, "text": text, "description": crate::hooks::fire::CONTEXT}),
+        )
+    }
+
+    fn compacted(status: &str) -> Message {
+        Message::decode(
+            "compaction",
+            &json!({"time": {"created": 1}, "status": status, "reason": "auto", "summary": "S"}),
+        )
     }
 
     fn system() -> Message {
@@ -314,21 +355,43 @@ mod tests {
     fn what_came_with_the_prompt_goes_with_it() {
         // A steered note promoted with the prompt, a hook's context after it, an instruction update
         // recorded before the step: the update stays, the rest goes. What came before the prompt
-        // (a background completion, a plan reminder, a session-start hook's context) stays.
+        // (a background completion, a plan reminder, a session-start hook's context) stays, and so
+        // does a background completion promoted after it.
         let messages = vec![
             answer("earlier"),
             idle(),
             synthetic("background subagent done"),
             synthetic("plan reminder"),
-            system(),
+            context("session start"),
             user("queued"),
             user("steered"),
-            synthetic("hook context"),
+            synthetic("background shell done"),
+            context("hook context"),
             system(),
             declined(),
         ];
-        assert_eq!(left(&messages), vec![5, 6, 7, 9]);
-        assert!(answers_prompt(&messages, 9));
+        assert_eq!(left(&messages), vec![5, 6, 8, 10]);
+        assert!(answers_prompt(&messages, 10));
+    }
+
+    #[test]
+    fn a_steer_after_a_step_is_left_out_but_the_turn_is_not_a_declined_prompt() {
+        let tool = step(
+            "tool-calls",
+            json!([{"type": "tool", "id": "t", "name": "shell",
+                    "state": {"status": "completed", "input": {}, "content": [{"type": "text", "text": "x"}]},
+                    "time": {"created": 1}}]),
+            None,
+        );
+        let messages = vec![
+            user("build it"),
+            tool,
+            user("also this"),
+            synthetic("background shell done"),
+            declined(),
+        ];
+        assert_eq!(left(&messages), vec![2, 4]);
+        assert!(!answers_prompt(&messages, 4));
     }
 
     #[test]
@@ -344,19 +407,23 @@ mod tests {
     }
 
     #[test]
-    fn a_compaction_at_the_start_of_the_turn_is_stepped_over() {
-        let compaction = Message::decode(
-            "compaction",
-            &json!({"time": {"created": 1}, "status": "completed", "reason": "auto", "summary": "S"}),
-        );
+    fn a_compaction_written_in_the_declined_turn_goes_with_the_prompt() {
         let messages = vec![
             answer("earlier"),
             idle(),
             user("bad"),
-            compaction,
+            compacted("completed"),
             declined(),
         ];
-        assert_eq!(left(&messages), vec![2, 4]);
+        assert_eq!(left(&messages), vec![2, 3, 4]);
+        // One before the prompt, and a failed one, stay.
+        let messages = vec![
+            compacted("completed"),
+            user("bad"),
+            compacted("failed"),
+            declined(),
+        ];
+        assert_eq!(left(&messages), vec![1, 3]);
     }
 
     #[test]

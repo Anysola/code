@@ -9,15 +9,18 @@ branch.
 - **A declined answer is said, not swallowed:** when the model's safety checks decline a request, the turn fails
   with a line naming the model, the reason it gave (cybersecurity, biology, AI model development, the usage
   policy, reasoning extraction) and what you can do, instead of an empty reply. What it wrote before declining
-  is dropped, a tool call it had not started never runs, and nothing is retried.
+  is dropped, a tool call it had not started never runs (one already running is stopped and keeps its result), and
+  nothing is retried.
 - **A declined message is not sent again:** it stays in the conversation, marked "Declined by the model · not sent
   again", and later requests leave it and its empty reply out, so one refusal no longer makes every later answer
   come back empty. This also frees sessions that got stuck this way in earlier versions, unless an earlier version
   answered after it with signed reasoning (that answer keeps the history it was written with). Edit the message to
-  send it reworded, or start a new session if it keeps happening. A refusal later in a turn keeps the turn's
-  earlier steps.
+  send it reworded, or start a new session if it keeps happening. If your message arrives when the conversation is
+  due for automatic compaction and the summary is declined, the summary is asked once more without it; a summary
+  written in a turn that ends declined goes with the message. A refusal later in a turn keeps the turn's earlier
+  steps.
 - **Other calls the model declines fail plainly too:** a declined `/compact` or automatic compaction changes
-  nothing (a partial summary is never used, and it isn't asked for twice); a declined title leaves the session's
+  nothing (a partial summary is never used, and `/compact` is asked once); a declined title leaves the session's
   title as it is; a declined side question says so without offering to ask again; a declined subagent fails with
   the same line, which its parent's tool result carries; a declined goal review pauses the goal and says why.
 
